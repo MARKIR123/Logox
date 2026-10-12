@@ -256,14 +256,18 @@ export function App({store, authentication, surfaces, getCommandContext, session
     void onClose().then(() => exit(), error => exit(error));
   };
   const scroll = (amount: number) => {
-    const maxStart = Math.max(0, messageRows.length - timelineHeight);
-    const start = Math.max(0, Math.min(maxStart, view.start + amount));
-    if (demoScene || stage) {
-      setAnchor({messageId: '__top__', line: start});
-      return;
-    }
-    const row = messageRows[start];
-    setAnchor(start >= maxStart ? null : row ? {messageId: row.messageId, line: row.line} : null);
+    setAnchors(previous => {
+      const maxStart = Math.max(0, messageRows.length - timelineHeight);
+      const current = viewport(messageRows, timelineHeight, previous[currentView]);
+      const start = Math.max(0, Math.min(maxStart, current.start + amount));
+      let readableIndex = start;
+      while (readableIndex < start + timelineHeight && messageRows[readableIndex]?.noSelect) readableIndex++;
+      const readable = messageRows[readableIndex];
+      const next: Anchor | null = start >= maxStart ? null : readable ? {messageId: readable.messageId, line: readable.line,
+        screenOffset: readableIndex - start,
+        ...(readable.sourceStart !== undefined ? {sourceOffset: readable.sourceStart} : {})} : {messageId: '__top__', line: start};
+      return {...previous, [currentView]: next};
+    });
   };
 
   const confirmScenePermission = () => {

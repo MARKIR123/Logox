@@ -4,6 +4,7 @@ import stringWidth from 'string-width';
 import type {ActorId} from '../actors/ensemble.js';
 import {actorCardPalette, choiceStyle, mixHex, palette, safeText} from './cards.js';
 import type {Row} from './viewport.js';
+import {layoutMarkdown} from './markdown.js';
 
 export interface SceneSegment {
   readonly text: string;
@@ -168,6 +169,7 @@ interface RowBuilder {
   pushBlank(railColor?: string, frame?: FrameWrap, action?: SceneAction): void;
   pushTurnHeader(id: string, who: 'user' | ActorId, origin?: string, clock?: string): void;
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
+  pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap): void;
   pushFramedLine(
     id: string,
     railColor: string,
@@ -288,6 +290,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
   const pushProse: RowBuilder['pushProse'] = (id, text, railColor, tone = 'body', frame, action, color) => {
     const f = frame ?? topFrame();
     let line = 0;
+    let sourceStart = 0;
     for (const paragraph of safeText(text).split('\n')) {
       const wrapped = wrapAnsi(paragraph, f.innerWidth, {hard: true, trim: false}).split('\n');
       for (let index = 0; index < wrapped.length; index++) {
@@ -296,6 +299,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
         rows.push({
           messageId: id, line: line++, text: value, railColor, gutterCols: baseGutterCols + f.leftCols,
           softWrap: index < wrapped.length - 1, noSelect: false, tone,
+          sourceStart, sourceEnd: sourceStart + value.length,
           ...(color ? {color} : {}),
           ...(f.bg ? {bg: f.bg} : {}),
           ...(f.leftCols ? {prefixSegments: f.leftSegments} : {}),
@@ -304,7 +308,26 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
           ]} : {}),
           ...(action ? {action} : {}),
         });
+        sourceStart += value.length;
       }
+      sourceStart++;
+    }
+  };
+
+  const pushMarkdown: RowBuilder['pushMarkdown'] = (id, text, railColor, frame) => {
+    const f = frame ?? topFrame();
+    for (const [line, value] of layoutMarkdown(text, f.innerWidth).entries()) {
+      rows.push({messageId: id, line, text: value.text, railColor, gutterCols: baseGutterCols + f.leftCols,
+        softWrap: value.softWrap, noSelect: false, tone: 'body', sourceText: text,
+        sourceStart: value.start, sourceEnd: value.end, sourceCells: value.cells,
+        ...(f.bg ? {bg: f.bg} : {}),
+        ...(f.leftCols ? {prefixSegments: f.leftSegments} : {}),
+        ...(f.bg || f.rightCols ? {suffixSegments: [{text: ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text))), ...(f.bg ? {bg: f.bg} : {})}, ...f.rightSegments]} : {}),
+        segments: [...f.leftSegments, ...value.pieces.map(piece => ({text: piece.text,
+          ...(piece.bold ? {bold: true} : {}), ...(piece.italic ? {italic: true} : {}),
+          color: piece.muted ? palette.muted : piece.code ? railColor : palette.fg})),
+          ...(f.bg || f.rightCols ? [{text: ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text)))}, ...f.rightSegments] : [])],
+      });
     }
   };
 
@@ -384,7 +407,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
     if (!opts.open) markHover(rows, firstRow, opts.id, baseGutterCols + pf.leftCols, width - pf.rightCols);
   };
 
-  return {rows, width, baseGutterCols, contentWidth, hoveredFoldId, pushBlank, pushTurnHeader, pushProse, pushFramedLine, pushCardCap, pushCardHeader, pushOrdinaryCard};
+  return {rows, width, baseGutterCols, contentWidth, hoveredFoldId, pushBlank, pushTurnHeader, pushProse, pushMarkdown, pushFramedLine, pushCardCap, pushCardHeader, pushOrdinaryCard};
 }
 
 function markHover(rows: SceneRow[], start: number, foldId: string, startCol: number, endCol: number) {

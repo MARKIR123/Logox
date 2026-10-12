@@ -2,6 +2,7 @@ import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type {Message} from '../runtime/contracts.js';
 import {ownerColor, ownerHeader, palette, safeText} from './cards.js';
+import type {SourceCell} from './markdown.js';
 
 export interface Row {
   readonly messageId: string;
@@ -12,8 +13,12 @@ export interface Row {
   readonly softWrap: boolean;
   readonly noSelect: boolean;
   readonly tone: 'header' | 'direction' | 'body' | 'spacer';
+  readonly sourceText?: string;
+  readonly sourceStart?: number;
+  readonly sourceEnd?: number;
+  readonly sourceCells?: readonly SourceCell[];
 }
-export interface Anchor {readonly messageId: string; readonly line: number}
+export interface Anchor {readonly messageId: string; readonly line: number; readonly sourceOffset?: number; readonly screenOffset?: number}
 export interface SelectionPoint {readonly x: number; readonly y: number}
 export interface SelectionRange {readonly anchor: SelectionPoint; readonly focus: SelectionPoint}
 export interface SgrMouseEvent {
@@ -93,9 +98,11 @@ export function viewport(rows: readonly Row[], height: number, anchor: Anchor | 
     if (anchor.messageId === '__top__') {
       start = Math.min(maxStart, Math.max(0, anchor.line));
     } else {
-      const index = rows.findIndex(row => row.messageId === anchor.messageId && row.line >= anchor.line);
+      const index = rows.findIndex(row => row.messageId === anchor.messageId && (anchor.sourceOffset !== undefined && row.sourceEnd !== undefined
+        ? row.sourceEnd > anchor.sourceOffset || row.sourceStart === anchor.sourceOffset
+        : row.line >= anchor.line));
       const last = rows.findLastIndex(row => row.messageId === anchor.messageId);
-      if (index >= 0 || last >= 0) start = Math.min(maxStart, index >= 0 ? index : last);
+      if (index >= 0 || last >= 0) start = Math.max(0, Math.min(maxStart, (index >= 0 ? index : last) - (anchor.screenOffset ?? 0)));
     }
   }
   return {rows: rows.slice(start, start + height), start, following: anchor === null};
@@ -160,7 +167,11 @@ export function extractSelection(rows: readonly Row[], selection: SelectionRange
     if (!row) continue;
     const bounds = rowSelectionBounds(row, y, selection);
     if (!bounds) continue;
-    const {selected} = sliceRowText(row.text, bounds[0], bounds[1]);
+    const cells = row.sourceCells?.filter(cell => cell.column < bounds[1] && cell.column + cell.width > bounds[0]);
+    const selected = row.sourceText !== undefined && cells?.length
+      ? row.sourceText.slice(cells[0]!.start, cells.at(-1)!.end)
+      : row.sourceText !== undefined && !row.text ? row.sourceText.slice(row.sourceStart, row.sourceEnd)
+      : sliceRowText(row.text, bounds[0], bounds[1]).selected;
     if (!hasPiece) {
       result = selected;
       hasPiece = true;
