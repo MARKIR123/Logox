@@ -142,20 +142,22 @@ test('流式表格从未完成分隔行转成布局，代码围栏内的表格�
   assert.ok(!layoutMarkdown('| A | B |\n| --- | --- |\n| \x1b[2J | ok |', 40).some(row => row.text.includes('\x1b')));
 });
 
-test('短表格的完整上下框线铺满正文宽度，缩放与纵向布局仍保留原文复制', () => {
+test('短表格只占内容需要的宽度，完整上下框线、缩放与原文复制保留', () => {
   const source = '| A | B |\r\n| :--- | ---: |\r\n| x | 42 |';
   const store = new RuntimeStore();
   const id = store.message('s', 'logox', 'assistant', source);
   for (const width of [8, 16, 40, 180]) {
     const rows = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
     const contentWidth = width - 2;
-    assert.equal(stringWidth(rows[0]!.text), contentWidth, '顶部框线铺满正文');
-    assert.equal(stringWidth(rows.at(-1)!.text), contentWidth, '底部框线铺满正文');
+    const tableWidth = width >= 16 ? 13 : contentWidth;
+    assert.equal(stringWidth(rows[0]!.text), tableWidth, '顶部框线跟随实际表格宽度');
+    assert.equal(stringWidth(rows.at(-1)!.text), tableWidth, '底部框线跟随实际表格宽度');
     if (width >= 16) {
       assert.match(rows[0]!.text, /^┌─+┬─+┐$/);
       assert.match(rows.at(-1)!.text, /^└─+┴─+┘$/);
-      assert.ok(rows.every(row => stringWidth(row.text) === contentWidth), '列边界与上下框线等宽');
+      assert.ok(rows.every(row => stringWidth(row.text) === tableWidth), '列边界与上下框线等宽');
       assert.equal(extractSelection(rows, {anchor: {x: 2, y: 0}, focus: {x: width - 1, y: 0}}), '', '新增装饰框线不进入复制');
+      assert.equal(extractSelection(rows, {anchor: {x: 20, y: 2}, focus: {x: 30, y: 2}}), '', '表格外的空白不会复制表头分隔行');
     }
     assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), source);
   }

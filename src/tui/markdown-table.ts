@@ -59,9 +59,6 @@ export function layoutTable(input: readonly TableInputLine[], index: number, wid
       for (let col = 0; col < columnCount && remaining; col++) if (widths[col]! < desired[col]!) {widths[col]!++; remaining--; grew = true;}
       if (!grew) break;
     }
-    // Short tables still occupy the whole body width; share unused columns evenly.
-    const extra = Math.floor(remaining / columnCount), remainder = remaining % columnCount;
-    for (let col = 0; col < columnCount; col++) widths[col]! += extra + (col < remainder ? 1 : 0);
   }
   function block(line: TableInputLine): {start: number; end: number} {return {start: line.offset, end: line.offset + line.raw.length};}
   function addRule(edge: 'top' | 'header' | 'bottom'): void {
@@ -69,7 +66,7 @@ export function layoutTable(input: readonly TableInputLine[], index: number, wid
     const text = vertical ? '─'.repeat(width) : left + '─' + widths.map(value => '─'.repeat(value)).join('─' + join + '─') + '─' + right;
     const boundary = edge === 'top' ? headerLine!.offset : block(records.at(-1)!.line).end;
     const source = edge === 'header' ? block(separator!) : {start: boundary, end: boundary};
-    rows.push({text, pieces: [{text, muted: true}], cells: edge === 'header' ? [{column: 0, width, ...source}] : [],
+    rows.push({text, pieces: [{text, muted: true}], cells: edge === 'header' ? [{column: 0, width: stringWidth(text), ...source}] : [],
       ...source, softWrap: false, ...(edge === 'header' ? {sourceBlock: source} : {noSelect: true})});
   }
   addRule('top');
