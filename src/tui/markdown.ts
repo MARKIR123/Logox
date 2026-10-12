@@ -1,5 +1,6 @@
 import stringWidth from 'string-width';
 import {safeText} from './cards.js';
+import {layoutTable, type TableInputLine} from './markdown-table.js';
 
 export interface MarkdownStyle {readonly bold?: boolean; readonly italic?: boolean; readonly code?: boolean; readonly muted?: boolean}
 interface Piece extends MarkdownStyle {text: string; start: number; end: number}
@@ -11,6 +12,8 @@ export interface MarkdownLine {
   readonly start: number;
   readonly end: number;
   readonly softWrap: boolean;
+  readonly sourceBlock?: {readonly start: number; readonly end: number};
+  readonly noSelect?: boolean;
 }
 const graphemes = new Intl.Segmenter('zh', {granularity: 'grapheme'});
 const glyphWidths = new Map<string, number>();
@@ -26,11 +29,12 @@ function glyphWidth(glyph: string): number {
 // Only complete inline delimiters are interpreted. An unfinished streaming tail stays readable.
 function inline(text: string, offset: number, style: MarkdownStyle = {}): Piece[] {
   const result: Piece[] = [];
-  const pattern = /(`+)([^`]+?)\1|\*\*([^\n]+?)\*\*|__([^\n]+?)__|\*([^*\n]+?)\*|_([^_\n]+?)_|\[([^\]\n]+)\]\(([^)\n]+)\)/g;
+  const pattern = /(`+)([^`]+?)\1|\*\*([^\n]+?)\*\*|__([^\n]+?)__|\*([^*\n]+?)\*|_([^_\n]+?)_|\[([^\]\n]+)\]\(([^)\n]+)\)|\\([\\`*_|])/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index;
     if (index > cursor) result.push({...style, text: text.slice(cursor, index), start: offset + cursor, end: offset + index});
+    if (match[9]) {result.push({...style, text: match[9], start: offset + index, end: offset + index + match[0].length}); cursor = index + match[0].length; continue;}
     const content = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7]!;
     const leading = match[1]?.length ?? (match[3] || match[4] ? 2 : 1);
     const nested = match[1]
@@ -54,13 +58,52 @@ function inline(text: string, offset: number, style: MarkdownStyle = {}): Piece[
   return result;
 }
 
+function wrapPieces(source: string, pieces: readonly Piece[], width: number, offset: number, sourceEnd: number): MarkdownLine[] {
+  const rows: MarkdownLine[] = [];
+  let cells: SourceCell[] = [], linePieces: (MarkdownStyle & {text: string})[] = [], used = 0;
+  let start = offset, end = offset;
+  const flush = (softWrap: boolean) => {
+    rows.push({text: linePieces.map(piece => piece.text).join(''), pieces: linePieces, cells, start, end, softWrap});
+    cells = []; linePieces = []; used = 0; start = end;
+  };
+  for (const piece of pieces) {
+    const parts = [...graphemes.segment(piece.text)];
+    const contentIndex = source.slice(piece.start, piece.end).indexOf(piece.text);
+    for (const [index, part] of parts.entries()) {
+      const displayed = part.segment === '\t' ? ' '.repeat(Math.min(width, 4)) : part.segment;
+      const cellWidth = glyphWidth(displayed);
+      if (used && used + cellWidth > width) flush(true);
+      // Transformations (list markers, tabs, fence labels) map to the whole original token.
+      const cellStart = index === 0 ? piece.start : contentIndex >= 0 ? piece.start + contentIndex + part.index : end;
+      const cellEnd = index === parts.length - 1 ? piece.end : contentIndex >= 0 ? piece.start + contentIndex + part.index + part.segment.length : cellStart;
+      const last = linePieces.at(-1);
+      if (last && last.bold === piece.bold && last.italic === piece.italic && last.code === piece.code && last.muted === piece.muted) last.text += displayed;
+      else linePieces.push({...piece, text: displayed});
+      cells.push({column: used, width: cellWidth, start: cellStart, end: cellEnd});
+      used += cellWidth; end = cellEnd;
+    }
+  }
+  end = sourceEnd;
+  if (cells.length) cells[cells.length - 1] = {...cells.at(-1)!, end};
+  flush(false);
+  return rows;
+}
+
 /** A terminal view of common Markdown, with display cells mapped back to the untouched source. */
 export function layoutMarkdown(source: string, width: number): readonly MarkdownLine[] {
   width = Math.max(1, width);
   const rows: MarkdownLine[] = [];
   let offset = 0;
   let fence: {marker: string; length: number} | undefined;
-  for (const raw of source.split('\n')) {
+  const input: TableInputLine[] = [];
+  for (const raw of source.split('\n')) {input.push({raw, offset}); offset += raw.length + 1;}
+  for (let lineIndex = 0; lineIndex < input.length; lineIndex++) {
+    const {raw, offset} = input[lineIndex]!;
+    if (!fence) {
+      const table = layoutTable(input, lineIndex, width, (text, start, cellWidth, bold = false) =>
+        wrapPieces(source, inline(safeText(text), start, bold ? {bold: true} : {}), cellWidth, start, start + text.length));
+      if (table) {rows.push(...table.rows); lineIndex += table.consumed - 1; continue;}
+    }
     const text = safeText(raw);
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
     let pieces: Piece[];
@@ -87,32 +130,7 @@ export function layoutMarkdown(source: string, width: number): readonly Markdown
       else if (prefix && pieces.length) pieces[0] = {...pieces[0]!, start: offset};
       if (!pieces.length && raw.length) pieces = [{text, start: offset, end: offset + raw.length}];
     }
-    let cells: SourceCell[] = [], linePieces: (MarkdownStyle & {text: string})[] = [], used = 0;
-    let start = offset, end = offset;
-    const flush = (softWrap: boolean) => {
-      rows.push({text: linePieces.map(piece => piece.text).join(''), pieces: linePieces, cells, start, end, softWrap});
-      cells = []; linePieces = []; used = 0; start = end;
-    };
-    for (const piece of pieces) {
-      const parts = [...graphemes.segment(piece.text)];
-      const contentIndex = source.slice(piece.start, piece.end).indexOf(piece.text);
-      for (const [index, part] of parts.entries()) {
-        const cellWidth = glyphWidth(part.segment);
-        if (used && used + cellWidth > width) flush(true);
-        // Transformations (list markers, tabs, fence labels) map to the whole original token.
-        const cellStart = index === 0 ? piece.start : contentIndex >= 0 ? piece.start + contentIndex + part.index : end;
-        const cellEnd = index === parts.length - 1 ? piece.end : contentIndex >= 0 ? piece.start + contentIndex + part.index + part.segment.length : cellStart;
-        const last = linePieces.at(-1);
-        if (last && last.bold === piece.bold && last.italic === piece.italic && last.code === piece.code && last.muted === piece.muted) last.text += part.segment;
-        else linePieces.push({...piece, text: part.segment});
-        cells.push({column: used, width: cellWidth, start: cellStart, end: cellEnd});
-        used += cellWidth; end = cellEnd;
-      }
-    }
-    end = offset + raw.length;
-    if (cells.length) cells[cells.length - 1] = {...cells.at(-1)!, end};
-    flush(false);
-    offset += raw.length + 1;
+    rows.push(...wrapPieces(source, pieces, width, offset, offset + raw.length));
   }
   return rows;
 }

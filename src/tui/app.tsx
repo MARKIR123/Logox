@@ -1,6 +1,7 @@
-import {useEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
+import {useContext, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useStdout, useWindowSize, type DOMElement} from 'ink';
 import stringWidth from 'string-width';
+import {TerminalPlaneContext} from './terminal.js';
 import {RuntimeStore} from '../runtime/store.js';
 import {emptyCommandContext, type CommandContext} from '../commands.js';
 import {applyCommandSuggestion, commandSuggestions, completionQuery, type CommandSuggestion} from './completion.js';
@@ -94,7 +95,9 @@ export function App({store, authentication, surfaces, getCommandContext, session
     kalon: emptyDraft,
   }));
   const topAnchor: Anchor | null = demoScene ? {messageId: '__top__', line: 0} : null;
-  const [anchors, setAnchors] = useState<Record<ActorId, Anchor | null>>({
+  const plane = useContext(TerminalPlaneContext);
+  const [, refreshReading] = useState(0);
+  const anchors = useRef<Record<ActorId, Anchor | null>>({
     logox: topAnchor,
     aletheia: topAnchor,
     techne: topAnchor,
@@ -114,12 +117,13 @@ export function App({store, authentication, surfaces, getCommandContext, session
 
   const currentView: ActorId = demoScene ? scene.view : activeWindow;
   const draft = drafts[currentView];
-  const anchor = anchors[currentView];
+  const anchor = anchors.current[currentView];
   const setDraft = (fn: (current: Draft) => Draft) => {
     setDrafts(prev => ({...prev, [currentView]: fn(prev[currentView])}));
   };
   const setAnchor = (next: Anchor | null) => {
-    setAnchors(prev => ({...prev, [currentView]: next}));
+    anchors.current[currentView] = next;
+    presentReading();
   };
   const switchView = (target: ActorId) => {
     if (demoScene) setScene(prev => ({...prev, view: target}));
@@ -255,19 +259,32 @@ export function App({store, authentication, surfaces, getCommandContext, session
     setClosing(true);
     void onClose().then(() => exit(), error => exit(error));
   };
+  const presentReading = () => {
+    if (plane) plane.present({...viewport(messageRows, timelineHeight, anchors.current[currentView]), width, height: timelineHeight, selection});
+    else refreshReading(value => value + 1);
+  };
+  // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
+  useInsertionEffect(() => {
+    if (!plane) return;
+    if (surface?.kind === 'page') plane.hide();
+    else plane.present({...view, width, height: timelineHeight, selection});
+  });
+  const readingRows = () => {
+    if (!plane) return view.rows;
+    plane.flush();
+    return plane.rows;
+  };
   const scroll = (amount: number) => {
-    setAnchors(previous => {
-      const maxStart = Math.max(0, messageRows.length - timelineHeight);
-      const current = viewport(messageRows, timelineHeight, previous[currentView]);
-      const start = Math.max(0, Math.min(maxStart, current.start + amount));
-      let readableIndex = start;
-      while (readableIndex < start + timelineHeight && messageRows[readableIndex]?.noSelect) readableIndex++;
-      const readable = messageRows[readableIndex];
-      const next: Anchor | null = start >= maxStart ? null : readable ? {messageId: readable.messageId, line: readable.line,
-        screenOffset: readableIndex - start,
-        ...(readable.sourceStart !== undefined ? {sourceOffset: readable.sourceStart} : {})} : {messageId: '__top__', line: start};
-      return {...previous, [currentView]: next};
-    });
+    const maxStart = Math.max(0, messageRows.length - timelineHeight);
+    const current = viewport(messageRows, timelineHeight, anchors.current[currentView]);
+    const start = Math.max(0, Math.min(maxStart, current.start + amount));
+    if (start === current.start && !(amount > 0 && start === maxStart && anchors.current[currentView] !== null)) return;
+    let readableIndex = start;
+    while (readableIndex < start + timelineHeight && messageRows[readableIndex]?.noSelect) readableIndex++;
+    const readable = messageRows[readableIndex];
+    setAnchor(start >= maxStart ? null : readable ? {messageId: readable.messageId, line: readable.line,
+      screenOffset: readableIndex - start,
+      ...(readable.sourceStart !== undefined ? {sourceOffset: readable.sourceStart} : {})} : {messageId: '__top__', line: start});
   };
 
   const confirmScenePermission = () => {
@@ -324,7 +341,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
     if (event.action === 'wheel_down') { if (event.y < timelineHeight) scroll(3); return; }
     if (event.action === 'move') {
       const target = (demoScene || stage) && event.y < timelineHeight
-        ? hoveredCardAt(view.rows[event.y] as SceneRow | undefined, event.x)
+        ? hoveredCardAt(readingRows()[event.y] as SceneRow | undefined, event.x)
         : !demoScene && activity && !expanded && event.y >= timelineHeight && event.y < timelineHeight + activityHeight && event.x < width
           ? activity.activityId : null;
       setHoveredFoldId(prev => prev === target ? prev : target);
@@ -353,7 +370,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
         return;
       }
       if (event.y < timelineHeight) {
-        const clickedRow = view.rows[event.y] as SceneRow | undefined;
+        const clickedRow = readingRows()[event.y] as SceneRow | undefined;
         if ((demoScene || stage) && clickedRow?.action) {
           setSelection(null);
           const act = clickedRow.action;
@@ -477,7 +494,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
           anchor: prev.anchor,
           focus: {x: event.x, y: Math.max(0, Math.min(Math.max(0, timelineHeight - 1), event.y))},
         };
-        const copied = extractSelection(view.rows, next);
+        const copied = extractSelection(readingRows(), next);
         if (copied) {
           stdout?.write(osc52Clipboard(copied));
           setNotice('已复制选区（不含左侧轨道）');
@@ -759,7 +776,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
-      {view.rows.map((rawRow, index) => {
+      {!plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;
         const textColor = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
         const bounds = rowSelectionBounds(row, index, selection);

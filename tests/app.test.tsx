@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PassThrough, Writable} from 'node:stream';
+import {PassThrough} from 'node:stream';
+import {TerminalScreen} from './terminal-screen.js';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {render} from 'ink';
+import {renderTerminal as render} from '../src/tui/terminal.js';
 import chalk from 'chalk';
 import {buildDemoSceneRows, initialDemoSceneState} from '../src/tui/scene.js';
 import {RuntimeStore} from '../src/runtime/store.js';
@@ -23,16 +24,7 @@ class TerminalInput extends PassThrough {
   ref(): this { return this; }
   unref(): this { return this; }
 }
-class TerminalOutput extends Writable {
-  isTTY = true;
-  columns = 80;
-  rows = 24;
-  text = '';
-  override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    this.text += chunk.toString();
-    callback();
-  }
-}
+class TerminalOutput extends TerminalScreen {}
 test('全屏真实 Ink 接线：主草稿在提问期间可编辑，稍后回答不取消，回答后恢复主输入', {timeout: 8000}, async () => {
   const input = new TerminalInput();
   const output = new TerminalOutput();
@@ -241,7 +233,7 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
     await act(async () => { input.write(text); await delay(30); });
     await instance.waitUntilRenderFlush();
   };
-  const line = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.split('\n')[rowIndex]!;
+  const line = () => output.backgroundColors[rowIndex] ?? [];
   try {
     await act(async () => {
       instance = render(<App store={new RuntimeStore()} sessionId="hover" demoScene onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/>, {
@@ -250,12 +242,12 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
     });
     await instance.waitUntilRenderFlush();
     assert.ok(output.text.includes('\x1b[?1003h'));
-    assert.ok(line().includes('\x1b[48;2;61;90;79m'), '收起使用透亮主题色 #3d5a4f');
+    assert.ok(line().includes('#3d5a4f'), '收起使用透亮主题色 #3d5a4f');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('\x1b[48;2;75;110;97m'), '悬停使用展开透亮色 #4b6e61');
-    assert.doesNotMatch(output.text.split('\x1b[1;1H\x1b[J').at(-1)!, /翻看刚读完的三份源码/);
+    assert.ok(line().includes('#4b6e61'), '悬停使用展开透亮色 #4b6e61');
+    assert.doesNotMatch(output.lines.join('\n'), /翻看刚读完的三份源码/);
     await key('\x1b[<35;1;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('\x1b[48;2;61;90;79m'), '移到轨道恢复收起色');
+    assert.ok(line().includes('#3d5a4f'), '移到轨道恢复收起色');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
     await key('\x1b[<0;8;' + (rowIndex + 1) + 'M');
     await act(async () => { await delay(200); });

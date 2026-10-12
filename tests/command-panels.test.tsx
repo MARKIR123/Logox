@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PassThrough, Writable} from 'node:stream';
+import {PassThrough} from 'node:stream';
+import {TerminalScreen} from './terminal-screen.js';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {render} from 'ink';
+import {renderTerminal as render} from '../src/tui/terminal.js';
 import {createServer} from 'node:http';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -17,11 +18,8 @@ Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 class TerminalInput extends PassThrough {
   isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}
 }
-class TerminalOutput extends Writable {
-  isTTY = true; columns = 80; rows = 24; text = '';
-  override _write(chunk: Buffer, _encoding: BufferEncoding, callback: () => void): void {this.text += chunk.toString(); callback();}
-}
-function frame(output: TerminalOutput): string {return output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');}
+class TerminalOutput extends TerminalScreen {}
+function frame(output: TerminalOutput): string {return output.lines.join('\n');}
 async function press(input: TerminalInput, instance: ReturnType<typeof render>, value: string): Promise<void> {
   await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();
 }
@@ -85,13 +83,28 @@ test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 
     getCommandContext={app.commandContext} onSubmit={app.submit} onCancel={app.cancel} onClose={app.close}/>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
   const key = async (value: string) => press(input, instance, value);
-  const loaded = async () => {for (let i = 0; i < 100; i++) {const state = app.surfaces.getSnapshot(); if (state?.kind === 'picker' && state.status === 'ready') return; await act(async () => {await delay(10);});} throw new Error('模型目录未完成');};
+  const openModels = async () => {
+    await key('/model');
+    await act(async () => {
+      input.write('\r');
+      for (let i = 0; i < 100; i++) {const state = app.surfaces.getSnapshot(); if (state?.kind === 'picker' && state.status === 'ready') return; await delay(10);}
+      throw new Error('模型目录未完成');
+    });
+    await instance.waitUntilRenderFlush();
+  };
+  const selected = async () => {
+    await act(async () => {
+      for (let i = 0; i < 100; i++) {if (!app.surfaces.getSnapshot()) return; await delay(10);}
+      throw new Error('模型选择未完成');
+    });
+    await instance.waitUntilRenderFlush();
+  };
   try {
-    await key('/model'); await key('\r'); await loaded(); await instance.waitUntilRenderFlush();
+    await openModels();
     assert.match(frame(output), /选择模型/); assert.match(frame(output), /same · 当前/);
-    await key('beta'); assert.doesNotMatch(frame(output), /alpha-only/); await key('\r');
+    await key('beta'); assert.doesNotMatch(frame(output), /alpha-only/); await key('\r'); await selected();
     assert.equal(app.commandContext().models[0], 'beta-only');
-    await key('/model'); await key('\r'); await loaded(); await key('alpha'); await key('\x1b');
+    await openModels(); await key('alpha'); await key('\x1b');
     assert.equal(app.commandContext().models[0], 'beta-only');
     await key('/status'); await key('\r'); assert.match(frame(output), /提供商：beta/);
     await key('\x1b[C'); assert.match(frame(output), /最大输出 token/);
