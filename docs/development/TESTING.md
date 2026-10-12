@@ -80,7 +80,7 @@ Windows Terminal 人工检查按改动选择：
 
 [bench-scroll.mjs](../../scripts/bench-scroll.mjs) 重放完整 App/React/Ink/模拟 TTY 滚动，记录 React 更新、Ink 绘制、帧间隔、事件循环停顿和 stdout 字节；运行 `node scripts/bench-scroll.mjs`，可传入已构建的 app.js 和帧率上限做对照。CLI 使用独立会话画布后，historyDraw/historyFrameGaps 记录会话帧耗时和间隔，commits/inkDraw 只记录周边界面；纯滚动应为零，hardwareScrolls 记录使用局部滚动的次数。该脚本是性能诊断，不代替真实终端验收；结果归终端舞台设计。
 
-[terminal-scroll.test.tsx](../../tests/terminal-scroll.test.tsx) 使用 VT 屏幕模型检查局部滚动后的可见内容、输入区稳定、页面空白无残影、缩放、原文复制、异步 stdout、屏幕阅读器和退出，并核对表格与代码块框线在宽窄窗口延伸到最右侧可用列；[stage-reading.test.ts](../../tests/stage-reading.test.ts) 检查表格测宽/换行/对齐、全宽上下框线、流式补齐、代码语言标签截断与复制映射。既有 App 和命令界面测试使用 CLI 的 renderTerminal 边界，悬停按实际屏幕背景色验证。
+[terminal-scroll.test.tsx](../../tests/terminal-scroll.test.tsx) 使用 VT 屏幕模型检查局部滚动后的可见内容、输入区稳定、页面空白无残影、缩放、原文复制、异步 stdout、屏幕阅读器和退出，并核对短表格在宽窗口保持内容宽度、代码块框线延伸到最右侧可用列；[stage-reading.test.ts](../../tests/stage-reading.test.ts) 检查表格测宽/换行/对齐、完整上下框线、表格外空白不进入复制、流式补齐、代码语言标签截断与复制映射。既有 App 和命令界面测试使用 CLI 的 renderTerminal 边界，悬停按实际屏幕背景色验证。
 
 `tests/tui-stream.test.tsx` 有意不使用 React act：以正式全屏增量渲染重放同批思考/文本分片，检查更新深度错误、完整尾段、再次发送与缩放。原 act 测试保留验证审批和编辑；两者不能互相替代。`tests/completion.test.ts` 验证公开候选、替换光标与后缀、中文模型、查询缓存及提供商切换；`tests/app.test.tsx` 覆盖实际方向键、Tab/Enter/Esc、补全进入持久登录、审批焦点及窄屏。
 

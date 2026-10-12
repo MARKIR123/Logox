@@ -18,7 +18,7 @@ class Input extends PassThrough {
   unref(): this {return this;}
 }
 
-test('实际会话屏幕中的表格和代码块框线延伸到右侧，缩放后重新铺满', {timeout: 5000}, async () => {
+test('实际会话屏幕中的表格保持内容宽度，代码框线铺满，缩放后仍正确', {timeout: 5000}, async () => {
   const input = new Input(), output = new TerminalScreen(), store = new RuntimeStore();
   output.columns = 80; output.rows = 24;
   store.message('s', 'logox', 'assistant', '| 阶段 | 状态 |\n| --- | --- |\n| 基本功能 | 进行中 |\n\n```powershell\nnpm ci --ignore-scripts\nnpm run build\nnpm start\n```');
@@ -33,7 +33,8 @@ test('实际会话屏幕中的表格和代码块框线延伸到右侧，缩放�
       const codeTop = output.lines.find(line => line.includes('── powershell'));
       const codeBottom = output.lines.find(line => /^▎ ─+$/.test(line));
       assert.ok(top && bottom && codeTop && codeBottom, '上下框线都出现在实际屏幕');
-      for (const line of [top, bottom, codeTop, codeBottom]) assert.equal(stringWidth(line), width - 1, '保留最后一列终端安全边距，其余宽度铺满');
+      for (const line of [top, bottom]) assert.equal(stringWidth(line), 23, '宽窗口不拉伸短表格');
+      for (const line of [codeTop, codeBottom]) assert.equal(stringWidth(line), width - 1, '代码横线继续铺满可用宽度');
       assert.ok(top.endsWith('┐') && bottom.endsWith('┘'), '右侧角点未被终端裁掉');
       assert.ok(output.lines.some(line => line.includes('npm start')), '代码正文没有被框线覆盖');
     }
