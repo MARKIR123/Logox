@@ -4,6 +4,7 @@ import stringWidth from 'string-width';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {buildStageRows} from '../src/tui/stage.js';
 import {extractSelection, viewport} from '../src/tui/viewport.js';
+import {layoutMarkdown} from '../src/tui/markdown.js';
 
 test('正式舞台渲染 Markdown，软折行复制恢复原文，用户和工具保持原样', () => {
   const store = new RuntimeStore();
@@ -79,4 +80,48 @@ test('消息原文位置作为阅读锚点：缩放与新增消息保持位置�
   const bottom = viewport(narrow, 8, null);
   assert.equal(bottom.start, narrow.length - 8);
   assert.equal(bottom.following, true);
+});
+
+test('表格按中文字形分配列宽、对齐和换行，整表复制保留 CRLF、竖线及原始语法', () => {
+  const source = '表格前\r\n| 项目 | 数量 | 说明 |\r\n| :--- | ---: | :---: |\r\n| **中文🙂** | 42 | `a|b` 和转义\\|文本以及更多内容👩‍💻 |\r\n| 后续 | 7 | 完成 |\r\n表格后';
+  for (const width of [80, 36, 16, 8]) {
+    const store = new RuntimeStore();
+    const id = store.message('s', 'logox', 'assistant', source);
+    const body = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
+    assert.ok(body.every(row => stringWidth(row.text) <= width - 2), '每行都在窗口内');
+    assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: body.length - 1}}), source);
+    assert.ok(body.some(row => row.text.includes('│') || row.text.includes('：')));
+    assert.ok(!body.some(row => row.text.includes('\\|')));
+    assert.equal(body.map(row => row.text).join('').match(/👩‍💻/g)?.length, 1);
+  }
+  const lines = layoutMarkdown('| L | R | C |\n| :--- | ---: | :---: |\n| xx | 1 | a |\n| x | 100 | abc |', 50);
+  assert.equal(lines[2]?.text, '│ xx  │   1 │  a  │');
+  const rows = buildStageRows((() => {const store = new RuntimeStore(); store.message('s', 'logox', 'assistant', '| 项目 | 值 |\n| --- | --- |\n| **中文** | 42 |'); return store.getSnapshot();})(), 's', 'logox', 40, {}, null);
+  const y = rows.findIndex(row => row.text.includes('中文'));
+  assert.equal(extractSelection(rows, {anchor: {x: 4, y}, focus: {x: 7, y}}), '**中文**', '单元格选择不含边框或填充');
+});
+
+test('流式表格从未完成分隔行转成布局，代码围栏内的表格保持代码', () => {
+  const store = new RuntimeStore();
+  const id = store.message('s', 'logox', 'assistant', '| A | B |\n| --- | --');
+  let rows = buildStageRows(store.getSnapshot(), 's', 'logox', 40, {}, null).filter(row => row.messageId === id);
+  assert.ok(rows.some(row => row.text.includes('| ---')));
+  store.appendMessage(id, '- |\n| 中文 |');
+  rows = buildStageRows(store.getSnapshot(), 's', 'logox', 40, {}, null).filter(row => row.messageId === id);
+  assert.ok(rows.some(row => row.text.includes('├')));
+  assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), store.getSnapshot().messages[0]!.text);
+  assert.ok(layoutMarkdown('```\n| A | B |\n| --- | --- |\n```', 40).some(row => row.text === '| --- | --- |'));
+  assert.ok(!layoutMarkdown('| A | B |\n| --- | --- |\n| \x1b[2J | ok |', 40).some(row => row.text.includes('\x1b')));
+});
+
+test('长表格的单元格折行逐行可滚动，缩放锚点定位到同一原文字形', () => {
+  const store = new RuntimeStore();
+  const id = store.message('s', 'logox', 'assistant', '| A | B |\n| --- | --- |\n| ' + '甲乙'.repeat(30) + ' | ' + '中文🙂'.repeat(40) + ' |\n\n后续\n'.repeat(10));
+  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 24, {}, null);
+  const chosen = rows.find(row => row.messageId === id && row.line === 5)!;
+  const anchor = {messageId: id, line: chosen.line, sourceOffset: chosen.sourceStart!};
+  assert.equal(viewport(rows, 3, anchor).rows[0], chosen);
+  const wider = buildStageRows(store.getSnapshot(), 's', 'logox', 40, {}, null);
+  const restored = viewport(wider, 3, anchor).rows[0]!;
+  assert.ok(restored.sourceCells?.some(cell => cell.start <= anchor.sourceOffset && cell.end > anchor.sourceOffset));
 });

@@ -17,6 +17,7 @@ export interface Row {
   readonly sourceStart?: number;
   readonly sourceEnd?: number;
   readonly sourceCells?: readonly SourceCell[];
+  readonly sourceBlock?: {readonly start: number; readonly end: number};
 }
 export interface Anchor {readonly messageId: string; readonly line: number; readonly sourceOffset?: number; readonly screenOffset?: number}
 export interface SelectionPoint {readonly x: number; readonly y: number}
@@ -99,7 +100,9 @@ export function viewport(rows: readonly Row[], height: number, anchor: Anchor | 
       start = Math.min(maxStart, Math.max(0, anchor.line));
     } else {
       const index = rows.findIndex(row => row.messageId === anchor.messageId && (anchor.sourceOffset !== undefined && row.sourceEnd !== undefined
-        ? row.sourceEnd > anchor.sourceOffset || row.sourceStart === anchor.sourceOffset
+        ? row.sourceBlock && row.sourceCells?.length
+          ? row.sourceCells.some(cell => cell.start <= anchor.sourceOffset! && cell.end > anchor.sourceOffset!)
+          : row.sourceEnd > anchor.sourceOffset || row.sourceStart === anchor.sourceOffset
         : row.line >= anchor.line));
       const last = rows.findLastIndex(row => row.messageId === anchor.messageId);
       if (index >= 0 || last >= 0) start = Math.max(0, Math.min(maxStart, (index >= 0 ? index : last) - (anchor.screenOffset ?? 0)));
@@ -154,6 +157,7 @@ export function rowSelectionBounds(row: Row, rowIndex: number, selection: Select
 
 export function extractSelection(rows: readonly Row[], selection: SelectionRange | null): string {
   if (!selection) return '';
+  if (rows.some(row => row.sourceBlock)) return extractTableSelection(rows, selection);
   const {start, end} = normalizeSelection(selection);
   if (start.x === end.x && start.y === end.y) return '';
   let result = '';
@@ -184,6 +188,44 @@ export function extractSelection(rows: readonly Row[], selection: SelectionRange
     prevSoftWrap = row.softWrap;
   }
   return result;
+}
+
+function extractTableSelection(rows: readonly Row[], selection: SelectionRange): string {
+  const chunks: {source?: string; id: string; ranges: {start: number; end: number}[]; text: string}[] = [];
+  const {start, end} = normalizeSelection(selection);
+  let previousSoftWrap = false;
+  for (let y = Math.max(0, start.y); y <= Math.min(rows.length - 1, end.y); y++) {
+    const row = rows[y]!, bounds = rowSelectionBounds(row, y, selection);
+    if (!bounds) continue;
+    let chunk = chunks.at(-1);
+    if (!chunk || chunk.id !== row.messageId || chunk.source !== row.sourceText) {
+      chunk = {id: row.messageId, ranges: [], text: '', ...(row.sourceText !== undefined ? {source: row.sourceText} : {})}; chunks.push(chunk);
+      previousSoftWrap = false;
+    }
+    if (chunk.source !== undefined) {
+      const fullRow = bounds[0] === 0 && bounds[1] >= stringWidth(row.text);
+      if (fullRow && row.sourceBlock) chunk.ranges.push(row.sourceBlock);
+      else {
+        const selected = row.sourceCells?.filter(cell => cell.end > cell.start && cell.column < bounds[1] && cell.column + cell.width > bounds[0]);
+        if (selected?.length) chunk.ranges.push({start: Math.min(...selected.map(cell => cell.start)), end: Math.max(...selected.map(cell => cell.end))});
+        else if (!row.text) chunk.ranges.push({start: row.sourceStart ?? 0, end: row.sourceEnd ?? 0});
+      }
+    } else {
+      const text = sliceRowText(row.text, bounds[0], bounds[1]).selected;
+      chunk.text += (chunk.text && !previousSoftWrap ? '\n' : '') + text;
+    }
+    previousSoftWrap = row.softWrap;
+  }
+  return chunks.map(chunk => {
+    if (chunk.source === undefined) return chunk.text;
+    const merged: {start: number; end: number}[] = [];
+    for (const range of chunk.ranges.sort((a, b) => a.start - b.start)) {
+      const last = merged.at(-1);
+      if (last && (range.start <= last.end || /^\r?\n$/.test(chunk.source.slice(last.end, range.start)))) last.end = Math.max(last.end, range.end);
+      else merged.push({...range});
+    }
+    return merged.map(range => chunk.source!.slice(range.start, range.end)).join('\n');
+  }).filter(Boolean).join('\n');
 }
 
 const sgrMouseRe = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;

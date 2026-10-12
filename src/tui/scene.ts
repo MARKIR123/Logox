@@ -318,8 +318,9 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
     const f = frame ?? topFrame();
     for (const [line, value] of layoutMarkdown(text, f.innerWidth).entries()) {
       rows.push({messageId: id, line, text: value.text, railColor, gutterCols: baseGutterCols + f.leftCols,
-        softWrap: value.softWrap, noSelect: false, tone: 'body', sourceText: text,
+        softWrap: value.softWrap, noSelect: Boolean(value.noSelect), tone: 'body', sourceText: text,
         sourceStart: value.start, sourceEnd: value.end, sourceCells: value.cells,
+        ...(value.sourceBlock ? {sourceBlock: value.sourceBlock} : {}),
         ...(f.bg ? {bg: f.bg} : {}),
         ...(f.leftCols ? {prefixSegments: f.leftSegments} : {}),
         ...(f.bg || f.rightCols ? {suffixSegments: [{text: ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text))), ...(f.bg ? {bg: f.bg} : {})}, ...f.rightSegments]} : {}),

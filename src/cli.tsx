@@ -1,5 +1,5 @@
 import {parseArgs} from 'node:util';
-import {render} from 'ink';
+import {renderTerminal} from './tui/terminal.js';
 import {createDemo} from './demo.js';
 import {createApplication} from './application.js';
 import {loadConfig} from './config/config.js';
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     ...(values.session ? {sessionId: values.session} : {}), ...(values.resume ? {resume: true} : {})});
   const runtime = demo ?? application!;
   const sessionId = demo ? values.session ?? 'demo' : application!.sessionId;
-  const instance = render(<App store={runtime.store} sessionId={sessionId} {...(demo ? {demoScene: true, scenario: demo.scenario} : {stage: true, authentication: application!.authentication, surfaces: application!.surfaces, getCommandContext: application!.commandContext})}
+  const instance = renderTerminal(<App store={runtime.store} sessionId={sessionId} {...(demo ? {demoScene: true, scenario: demo.scenario} : {stage: true, authentication: application!.authentication, surfaces: application!.surfaces, getCommandContext: application!.commandContext})}
     onSubmit={runtime.submit} onDraft={runtime.noteDraft} onCancel={runtime.cancel} onClose={runtime.close}/>, {
     alternateScreen: true, incrementalRendering: true, maxFps: 30, exitOnCtrlC: false,
   });
