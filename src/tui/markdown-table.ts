@@ -59,13 +59,20 @@ export function layoutTable(input: readonly TableInputLine[], index: number, wid
       for (let col = 0; col < columnCount && remaining; col++) if (widths[col]! < desired[col]!) {widths[col]!++; remaining--; grew = true;}
       if (!grew) break;
     }
+    // Short tables still occupy the whole body width; share unused columns evenly.
+    const extra = Math.floor(remaining / columnCount), remainder = remaining % columnCount;
+    for (let col = 0; col < columnCount; col++) widths[col]! += extra + (col < remainder ? 1 : 0);
   }
   function block(line: TableInputLine): {start: number; end: number} {return {start: line.offset, end: line.offset + line.raw.length};}
-  function addRule(): void {
-    const text = '├─' + widths.map(value => '─'.repeat(value)).join('─┼─') + '─┤';
-    rows.push({text, pieces: [{text, muted: true}], cells: [{column: 0, width: stringWidth(text), ...block(separator!)}],
-      ...block(separator!), softWrap: false, sourceBlock: block(separator!)});
+  function addRule(edge: 'top' | 'header' | 'bottom'): void {
+    const [left, join, right] = edge === 'top' ? ['┌', '┬', '┐'] : edge === 'bottom' ? ['└', '┴', '┘'] : ['├', '┼', '┤'];
+    const text = vertical ? '─'.repeat(width) : left + '─' + widths.map(value => '─'.repeat(value)).join('─' + join + '─') + '─' + right;
+    const boundary = edge === 'top' ? headerLine!.offset : block(records.at(-1)!.line).end;
+    const source = edge === 'header' ? block(separator!) : {start: boundary, end: boundary};
+    rows.push({text, pieces: [{text, muted: true}], cells: edge === 'header' ? [{column: 0, width, ...source}] : [],
+      ...source, softWrap: false, ...(edge === 'header' ? {sourceBlock: source} : {noSelect: true})});
   }
+  addRule('top');
   for (const record of records) {
     const sourceBlock = block(record.line);
     if (vertical) {
@@ -102,12 +109,8 @@ export function layoutTable(input: readonly TableInputLine[], index: number, wid
           softWrap: false, sourceBlock});
       }
     }
-    if (record.header) {
-      if (vertical) {
-        // Retain the separator's original source even when there is no horizontal grid.
-        rows.push({text: '─'.repeat(width), pieces: [{text: '─'.repeat(width), muted: true}], cells: [], ...block(separator), softWrap: false, sourceBlock: block(separator)});
-      } else addRule();
-    }
+    if (record.header) addRule('header');
   }
+  addRule('bottom');
   return {rows, consumed};
 }

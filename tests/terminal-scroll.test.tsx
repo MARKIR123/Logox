@@ -9,6 +9,7 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {buildStageRows} from '../src/tui/stage.js';
 import {TerminalScreen} from './terminal-screen.js';
 import {CommandSurfaces} from '../src/commands/surfaces.js';
+import stringWidth from 'string-width';
 
 class Input extends PassThrough {
   isTTY = true;
@@ -16,6 +17,29 @@ class Input extends PassThrough {
   ref(): this {return this;}
   unref(): this {return this;}
 }
+
+test('实际会话屏幕中的表格和代码块框线延伸到右侧，缩放后重新铺满', {timeout: 5000}, async () => {
+  const input = new Input(), output = new TerminalScreen(), store = new RuntimeStore();
+  output.columns = 80; output.rows = 24;
+  store.message('s', 'logox', 'assistant', '| 阶段 | 状态 |\n| --- | --- |\n| 基本功能 | 进行中 |\n\n```powershell\nnpm ci --ignore-scripts\nnpm run build\nnpm start\n```');
+  const instance = renderTerminal(<App stage sessionId="s" store={store} onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/>,
+    {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, incrementalRendering: true, maxFps: 30, patchConsole: false, exitOnCtrlC: false});
+  try {
+    for (const width of [80, 180, 24]) {
+      output.resize(width, 24);
+      await delay(65); await instance.waitUntilRenderFlush();
+      const top = output.lines.find(line => line.startsWith('▎ ┌'));
+      const bottom = output.lines.find(line => line.startsWith('▎ └'));
+      const codeTop = output.lines.find(line => line.includes('── powershell'));
+      const codeBottom = output.lines.find(line => /^▎ ─+$/.test(line));
+      assert.ok(top && bottom && codeTop && codeBottom, '上下框线都出现在实际屏幕');
+      for (const line of [top, bottom, codeTop, codeBottom]) assert.equal(stringWidth(line), width - 1, '保留最后一列终端安全边距，其余宽度铺满');
+      assert.ok(top.endsWith('┐') && bottom.endsWith('┘'), '右侧角点未被终端裁掉');
+      assert.ok(output.lines.some(line => line.includes('npm start')), '代码正文没有被框线覆盖');
+    }
+  } finally {instance.unmount(); await instance.waitUntilExit(); input.destroy(); output.destroy();}
+});
+
 test('独立滚动画布：实际屏幕正确，纯滚轮不更新 React，输入/缩放/窗口/流式/复制/退出一致', {timeout: 12000}, async () => {
   const input = new Input(), output = new TerminalScreen(), store = new RuntimeStore();
   output.columns = 180; output.rows = 65;
