@@ -76,7 +76,7 @@ Windows Terminal 人工检查按改动选择：
 
 ## 连续回复与命令补全回归
 
-[stage-reading.test.ts](../../tests/stage-reading.test.ts) 验证正式行构建的 Markdown、原文复制、字形、流式未闭合结构、布局复用与缩放锚点；[tui-stream.test.tsx](../../tests/tui-stream.test.tsx) 同时验证实际 Ink 同批滚轮累加、阅读期间追加、翻页及到底恢复跟随。性能比较先构建，再运行 `node scripts/bench-stage.mjs`；可传入另一份已构建的 stage.js 以重放相同合成输入。该脚本测量行构建，Ink 接线与真实 Windows Terminal 现场分别验收。
+[stage-reading.test.ts](../../tests/stage-reading.test.ts) 验证正式行构建的 Markdown、原文复制、字形、流式未闭合结构、布局复用与缩放锚点，并检查运行活动不追加过程诊断、行动消息与失败/取消结果保留；[tui-stream.test.tsx](../../tests/tui-stream.test.tsx) 同时验证实际 Ink 同批滚轮累加、阅读期间追加、翻页及到底恢复跟随。性能比较先构建，再运行 `node scripts/bench-stage.mjs`；可传入另一份已构建的 stage.js 以重放相同合成输入。该脚本测量行构建，Ink 接线与真实 Windows Terminal 现场分别验收。
 
 [bench-scroll.mjs](../../scripts/bench-scroll.mjs) 重放完整 App/React/Ink/模拟 TTY 滚动，记录 React 更新、Ink 绘制、帧间隔、事件循环停顿和 stdout 字节；运行 `node scripts/bench-scroll.mjs`，可传入已构建的 app.js 和帧率上限做对照。CLI 使用独立会话画布后，historyDraw/historyFrameGaps 记录会话帧耗时和间隔，commits/inkDraw 只记录周边界面；纯滚动应为零，hardwareScrolls 记录使用局部滚动的次数。该脚本是性能诊断，不代替真实终端验收；结果归终端舞台设计。
 

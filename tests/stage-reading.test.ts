@@ -6,6 +6,34 @@ import {buildStageRows} from '../src/tui/stage.js';
 import {extractSelection, viewport} from '../src/tui/viewport.js';
 import {layoutMarkdown} from '../src/tui/markdown.js';
 
+test('运行中不追加模型过程块，行动消息和 Actor 状态保留，失败及取消仍可见', () => {
+  for (const ownerId of ['logox', 'techne'] as const) {
+    const store = new RuntimeStore(), activityId = ownerId + '-task';
+    store.activities.create({sessionId: 's', activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
+      title: '读取项目', status: 'queued', stage: '等待登场', detail: '读取 README'});
+    store.message('s', ownerId, 'user', '读取项目', {activityId});
+    store.message('s', ownerId, 'assistant', '先了解项目结构', {activityId, kind: 'thinking'});
+    store.message('s', ownerId, 'assistant', 'read README.md', {activityId, kind: 'tool'});
+    for (const stage of ['模型处理中', '工具执行', '等待重试']) {
+      store.activities.update('s', activityId, {status: 'running', stage, detail: '第 2 次往返'});
+      for (const view of ['logox', ownerId] as const) {
+        const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true}, null);
+        assert.ok(!rows.some(row => row.text.includes('第 2 次往返') || row.text.includes('处理中 · ')), '过程诊断不进入对话');
+        assert.ok(rows.some(row => row.text.includes('先了解项目结构')), '思考消息保留');
+        assert.ok(rows.some(row => row.text.includes('read README.md')), '工具消息保留');
+        if (view === 'logox' && ownerId === 'techne') assert.ok(rows.some(row => row.text.includes('处理中')), 'Actor 任务卡仍显示真实运行状态');
+      }
+      assert.equal(store.activities.get('s', activityId)?.detail, '第 2 次往返', '内部诊断保留');
+    }
+    const status = ownerId === 'logox' ? 'failed' : 'cancelled';
+    store.activities.update('s', activityId, {status, stage: status === 'failed' ? '执行失败' : '已中断', detail: '任务停止的实际原因'});
+    for (const view of ['logox', ownerId] as const) {
+      const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true}, null);
+      assert.ok(rows.some(row => row.text.includes('任务停止的实际原因')), '失败和取消仍可见');
+    }
+  }
+});
+
 test('正式舞台渲染 Markdown，软折行复制恢复原文，用户和工具保持原样', () => {
   const store = new RuntimeStore();
   const source = '# 中文标题🙂\n- **第一项** 和 `代码`\n1. 第二项\n> 引用\n[链接](https://example.com)\n```ts\n\tconst value = "中文👩‍💻";\n```';

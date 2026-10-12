@@ -120,7 +120,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       builder.pushOrdinaryCard({id: activity.activityId, kind: '入梦', title: activity.stage,
         status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail], ownerId: 'anamnesis',
         open: open(activity.activityId), railColor: palette.accent});
-    } else if (activity.ownerId === view && ['failed', 'cancelled', 'running'].includes(activity.status)) {
+    } else if (activity.ownerId === view && ['failed', 'cancelled'].includes(activity.status)) {
       builder.pushBlank();
       builder.pushProse(activity.activityId + '-state', (statuses[activity.status] ?? activity.status) + ' · ' + activity.stage + (activity.detail ? '\n' + activity.detail : ''), ownerColor(view));
     }
