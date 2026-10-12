@@ -110,7 +110,19 @@ export function layoutMarkdown(source: string, width: number): readonly Markdown
     if (marker && (!fence || (marker[1]![0] === fence.marker && marker[1]!.length >= fence.length && !marker[2]!.trim()))) {
       const closing = Boolean(fence);
       fence = closing ? undefined : {marker: marker[1]![0]!, length: marker[1]!.length};
-      pieces = [{text: closing ? '──' : '── ' + (marker[2]!.trim() || '代码'), start: offset, end: offset + raw.length, muted: true}];
+      // Keep the fence on one full-width row, even when its language label is long.
+      let label = '', used = 0;
+      if (!closing) for (const {segment} of graphemes.segment('── ' + (marker[2]!.trim() || '代码'))) {
+        const size = glyphWidth(segment);
+        if (used + size > width) break;
+        label += segment; used += size;
+      }
+      const gap = label && used < width ? ' ' : '';
+      const display = label + gap + '─'.repeat(width - used - gap.length);
+      rows.push({text: display, pieces: [{text: display, muted: true}],
+        cells: label ? [{column: 0, width: used, start: offset, end: offset + raw.length}] : [],
+        start: offset, end: offset + raw.length, softWrap: false, sourceBlock: {start: offset, end: offset + raw.length}});
+      continue;
     } else if (fence || (/^ {4}|^\t/.test(text) && !/^\s*(?:[-+*]|\d+[.)])\s+/.test(text))) {
       pieces = [];
       let cursor = 0;

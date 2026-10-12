@@ -65,7 +65,7 @@ RuntimeStore 为流式消息保留稳定 ID，并发布不可变快照。TUI 只
 
 真实 stage 与 demo 使用 scene 的同一个行构建器和角色卡。stage 根据实际消息/活动生成行，不读取作品集样本。审批与多问题内联到所属角色卡；自由答案使用现有输入编辑器。折叠、悬停、窗口草稿和阅读位置属于界面状态。颜色与布局的当前规则见 [UI-SPEC](../UI-SPEC.md)。
 
-[markdown.ts](../../src/tui/markdown.ts) 将 Assistant 正文的标题、列表、引用、围栏及行内强调/代码/链接转换为带样式的字形行，并保存显示列到原文位置（UTF-16 索引）的映射。[markdown-table.ts](../../src/tui/markdown-table.ts) 识别表格、分配列宽、对齐和折行，窄屏纵向呈现；复制合并同一原文行的映射，保留源语法并排除填充。stage 使用 WeakMap 按不可变 Message 缓存正文和工具卡布局，每条消息最多保存两个布局；流式消息替换后只重建变化项，活动与所属消息按身份索引。viewport 只取可见行，阅读锚点用消息和原文位置；表格折行通过单元格字形映射定位，避免跨列原文范围重叠导致回跳。运行时消息、账本和模型协议没有新增字段。
+[markdown.ts](../../src/tui/markdown.ts) 将 Assistant 正文的标题、列表、引用、围栏及行内强调/代码/链接转换为带样式的字形行，并保存显示列到原文位置（UTF-16 索引）的映射；代码围栏保留单行语言标签并补满上下横线。[markdown-table.ts](../../src/tui/markdown-table.ts) 识别表格、分配完整正文宽度、绘制上下框线、对齐和折行，窄屏纵向呈现；复制合并同一原文行的映射，保留源语法并排除新增装饰和填充。stage 使用 WeakMap 按不可变 Message 缓存正文和工具卡布局，每条消息最多保存两个布局；流式消息替换后只重建变化项，活动与所属消息按身份索引。viewport 只取可见行，阅读锚点用消息和原文位置；表格折行通过单元格字形映射定位，避免跨列原文范围重叠导致回跳。运行时消息、账本和模型协议没有新增字段。
 
 [terminal.tsx](../../src/tui/terminal.tsx) 是 CLI 全屏输出边界，串行衔接 Ink 写出和 [TerminalPlane](../../src/tui/terminal-plane.ts) 会话画布。Ink 保留固定高度的空白历史区域，继续负责输入、状态栏与对话框；App 在提交阶段交接区域，各窗口用引用累计滚轮锚点，纯滚动不更新 React。画布缓存行样式，以独立帧调度和局部 SU/SD 平移旧内容，只补新行；Ink 重画、缩放和区域大小变化后恢复画布，整页命令界面交还区域时先清空，退出取消调度并移除监听。鼠标命中和复制读取当前画布。非全屏、非交互及屏幕阅读器使用 Ink 正文路径。回归入口为 [terminal-scroll.test.tsx](../../tests/terminal-scroll.test.tsx)、[stage-reading.test.ts](../../tests/stage-reading.test.ts) 与现有 App/命令界面测试。
 

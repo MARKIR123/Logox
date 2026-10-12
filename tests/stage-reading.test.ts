@@ -94,8 +94,8 @@ test('表格按中文字形分配列宽、对齐和换行，整表复制保留 C
     assert.ok(!body.some(row => row.text.includes('\\|')));
     assert.equal(body.map(row => row.text).join('').match(/👩‍💻/g)?.length, 1);
   }
-  const lines = layoutMarkdown('| L | R | C |\n| :--- | ---: | :---: |\n| xx | 1 | a |\n| x | 100 | abc |', 50);
-  assert.equal(lines[2]?.text, '│ xx  │   1 │  a  │');
+  const lines = layoutMarkdown('| L | R | C |\n| :--- | ---: | :---: |\n| xx | 1 | a |\n| x | 100 | abc |', 19);
+  assert.equal(lines[3]?.text, '│ xx  │   1 │  a  │');
   const rows = buildStageRows((() => {const store = new RuntimeStore(); store.message('s', 'logox', 'assistant', '| 项目 | 值 |\n| --- | --- |\n| **中文** | 42 |'); return store.getSnapshot();})(), 's', 'logox', 40, {}, null);
   const y = rows.findIndex(row => row.text.includes('中文'));
   assert.equal(extractSelection(rows, {anchor: {x: 4, y}, focus: {x: 7, y}}), '**中文**', '单元格选择不含边框或填充');
@@ -112,6 +112,40 @@ test('流式表格从未完成分隔行转成布局，代码围栏内的表格�
   assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), store.getSnapshot().messages[0]!.text);
   assert.ok(layoutMarkdown('```\n| A | B |\n| --- | --- |\n```', 40).some(row => row.text === '| --- | --- |'));
   assert.ok(!layoutMarkdown('| A | B |\n| --- | --- |\n| \x1b[2J | ok |', 40).some(row => row.text.includes('\x1b')));
+});
+
+test('短表格的完整上下框线铺满正文宽度，缩放与纵向布局仍保留原文复制', () => {
+  const source = '| A | B |\r\n| :--- | ---: |\r\n| x | 42 |';
+  const store = new RuntimeStore();
+  const id = store.message('s', 'logox', 'assistant', source);
+  for (const width of [8, 16, 40, 180]) {
+    const rows = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
+    const contentWidth = width - 2;
+    assert.equal(stringWidth(rows[0]!.text), contentWidth, '顶部框线铺满正文');
+    assert.equal(stringWidth(rows.at(-1)!.text), contentWidth, '底部框线铺满正文');
+    if (width >= 16) {
+      assert.match(rows[0]!.text, /^┌─+┬─+┐$/);
+      assert.match(rows.at(-1)!.text, /^└─+┴─+┘$/);
+      assert.ok(rows.every(row => stringWidth(row.text) === contentWidth), '列边界与上下框线等宽');
+      assert.equal(extractSelection(rows, {anchor: {x: 2, y: 0}, focus: {x: width - 1, y: 0}}), '', '新增装饰框线不进入复制');
+    }
+    assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), source);
+  }
+});
+
+test('代码块上下横线铺满正文宽度，语言标签不换行，整块复制恢复围栏', () => {
+  for (const label of ['powershell', '中文👩‍💻'.repeat(20), '']) {
+    const source = '```' + label + '\r\nnpm start\r\n```';
+    const store = new RuntimeStore();
+    const id = store.message('s', 'logox', 'assistant', source);
+    for (const width of [6, 18, 80, 180]) {
+      const rows = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
+      assert.equal(stringWidth(rows[0]!.text), width - 2, '顶部横线铺满正文');
+      assert.equal(rows.at(-1)!.text, '─'.repeat(width - 2), '底部横线铺满正文');
+      assert.equal(rows.slice(1, -1).map(row => row.text).join(''), 'npm start', '语言标签不溢出到代码正文');
+      assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), source);
+    }
+  }
 });
 
 test('长表格的单元格折行逐行可滚动，缩放锚点定位到同一原文字形', () => {
