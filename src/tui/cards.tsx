@@ -1,0 +1,155 @@
+import {memo, type ReactNode} from 'react';
+import {Box, Text} from 'ink';
+import stringWidth from 'string-width';
+import type {Activity, Interaction} from '../runtime/contracts.js';
+import {cast} from '../actors/ensemble.js';
+
+export const palette = {
+  bg: '#1b1c1d',
+  cardBase: '#3d5266',
+  cardCollapsed: '#3d5266',
+  cardExpanded: '#4b657d',
+  dreamCollapsed: '#c4cbd2',
+  dreamExpanded: '#dce2e8',
+  fg: '#ebeef2',
+  accent: '#9ec488',
+  user: '#8ab0d8',
+  anamnesis: '#dce2e8',
+  dreamText: '#1e262e',
+  dreamMuted: '#4b5660',
+  muted: '#b8c4ce',
+  borderMuted: '#3e4450',
+  line: '#3b3e3c',
+  error: '#e08b90',
+  question: '#f4b8e8',
+  selectionBg: '#2b3b4e',
+};
+export const actorCardPalette = {
+  aletheia: {closed: '#3d5a4f', open: '#4b6e61', highlight: '#a8f0d4'},
+  techne: {closed: '#3d5266', open: '#4b657d', highlight: '#a8d8ff'},
+  kalon: {closed: '#544359', open: '#66526c', highlight: '#f4b8e8'},
+} as const;
+export function ownerSurface(ownerId: string, expanded: boolean): string | undefined {
+  if (ownerId === 'anamnesis') return expanded ? palette.dreamExpanded : palette.dreamCollapsed;
+  if (Object.hasOwn(actorCardPalette, ownerId)) {
+    const colors = actorCardPalette[ownerId as keyof typeof actorCardPalette];
+    return expanded ? colors.open : colors.closed;
+  }
+  return undefined;
+}
+const labels = {
+  queued: '排队',
+  running: '运行中',
+  waiting_input: '等待回答',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+export function safeText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+}
+function parseHex(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  const num = Number.parseInt(clean, 16);
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+export function mixHex(fgHex: string, bgHex = palette.cardBase, ratio = 0.22): string {
+  const [fr, fg, fb] = parseHex(fgHex);
+  const [br, bg, bb] = parseHex(bgHex);
+  const channel = (f: number, b: number) => Math.max(0, Math.min(255, Math.round(b + (f - b) * ratio))).toString(16).padStart(2, '0');
+  return `#${channel(fr, br)}${channel(fg, bg)}${channel(fb, bb)}`;
+}
+export function ownerColor(ownerId: string): string {
+  if (ownerId === 'user') return palette.user;
+  if (ownerId === 'anamnesis') return palette.anamnesis;
+  return Object.hasOwn(cast, ownerId) ? cast[ownerId as keyof typeof cast].color : palette.accent;
+}
+export function ownerHeader(ownerId: string): string {
+  if (ownerId === 'user') return '你';
+  if (ownerId === 'anamnesis') return 'Anamnesis · 入梦';
+  if (Object.hasOwn(cast, ownerId)) {
+    const actor = cast[ownerId as keyof typeof cast];
+    return `${actor.symbol} ${actor.name}`;
+  }
+  return ownerId;
+}
+export function Card({title, color = palette.accent, bg, paddingY = 0, children}: {
+  title: string;
+  color?: string;
+  bg?: string;
+  paddingY?: number;
+  children: ReactNode;
+}) {
+  return <Box flexDirection="column" flexShrink={0} paddingX={2} paddingY={paddingY} {...(bg ? {backgroundColor: bg} : {})}>
+    <Text bold color={color} {...(bg ? {backgroundColor: bg} : {})}>{safeText(title)}</Text>
+    {children}
+  </Box>;
+}
+export const ActivityCard = memo(function ActivityCard({activity, expanded = false, hovered = false}: {activity: Activity; expanded?: boolean; hovered?: boolean}) {
+  const isDream = activity.kind === 'anamnesis' || activity.ownerId === 'anamnesis';
+  const bright = expanded || hovered;
+  const color = isDream ? palette.dreamText : ownerColor(activity.ownerId);
+  const textColor = isDream ? palette.dreamText : bright ? color : palette.fg;
+  const mutedColor = isDream ? palette.dreamMuted : palette.muted;
+  const bg = isDream
+    ? ownerSurface('anamnesis', bright)
+    : activity.kind === 'actor'
+      ? ownerSurface(activity.ownerId, bright)
+      : undefined;
+  const prefix = Object.hasOwn(cast, activity.ownerId)
+    ? `${cast[activity.ownerId as keyof typeof cast].symbol} `
+    : '';
+  const heading = activity.title.startsWith(prefix.trim()) ? activity.title : prefix + activity.title;
+  return <Card title={`${heading} · ${labels[activity.status]}`} paddingY={0} color={color} {...(bg ? {bg} : {})}>
+    <Text color={activity.status === 'failed' ? palette.error : textColor} {...(bg ? {backgroundColor: bg} : {})}>{safeText(activity.stage)}</Text>
+    {expanded && activity.detail && <Text color={mutedColor} {...(bg ? {backgroundColor: bg} : {})}>{safeText(activity.detail)}</Text>}
+  </Card>;
+});
+// All choice controls share a marker and text highlight; their surface stays unchanged.
+export function choiceStyle(selected: boolean, accent = palette.accent, textColor = palette.fg, mutedColor = palette.muted) {
+  const marker = '❯ ';
+  const indent = stringWidth(marker);
+  return {marker: selected ? marker : ' '.repeat(indent), indent,
+    color: selected ? accent : textColor, descriptionColor: selected ? accent : mutedColor};
+}
+export interface QuestionDraft {questionIndex: number; selected: number; text: string; error: string}
+export const InteractionCard = memo(function InteractionCard({request, draft, focused}: {
+  request: Interaction; draft: QuestionDraft; focused: boolean;
+}) {
+  const isDream = request.ownerId === 'anamnesis';
+  const color = isDream ? palette.dreamText : ownerColor(request.ownerId);
+  const textColor = isDream ? palette.dreamText : palette.fg;
+  const mutedColor = isDream ? palette.dreamMuted : palette.muted;
+  const bg = ownerSurface(request.ownerId, focused) ?? (focused ? palette.cardExpanded : palette.cardCollapsed);
+  const title = `${ownerHeader(request.ownerId)} · ${request.title}`;
+  if (request.kind === 'permission') return <Card title={title} color={color} bg={bg}>
+    <Text color={textColor} backgroundColor={bg}>{safeText(request.reason)}</Text>
+    <Text color={mutedColor} backgroundColor={bg}>工具：{safeText(request.tool)} · {safeText(JSON.stringify(request.arguments))}</Text>
+    {[{label: '仅本次允许', description: '只允许这一次工具执行。'}, {label: '拒绝（默认）', description: '保留建议，不执行该工具。'}].map((option, index) => {
+      const style = choiceStyle(draft.selected === index, color, textColor, mutedColor);
+      return <Box key={option.label} flexDirection="column" backgroundColor={bg} marginTop={1} marginBottom={index === 1 ? 1 : 0}>
+        <Text color={style.color}>{style.marker}{option.label}</Text>
+        <Box paddingLeft={style.indent}><Text color={style.descriptionColor}>{option.description}</Text></Box>
+      </Box>;
+    })}
+    <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ 选择 · Enter 确认许可 · Esc 稍后回答 · Ctrl+X 取消' : 'Tab 聚焦回答 · 主输入仍可编辑'}</Text>
+  </Card>;
+  const question = request.questions[draft.questionIndex];
+  if (!question) return null;
+  const options = question.options ?? [];
+  return <Card title={title} color={color} bg={bg}>
+    <Text color={mutedColor} backgroundColor={bg}>{question.header} · {draft.questionIndex + 1}/{request.questions.length}</Text>
+    <Text color={textColor} backgroundColor={bg}>{safeText(question.question)}</Text>
+    {options.map((option, index) => {
+      const style = choiceStyle(draft.selected === index, color, textColor, mutedColor);
+      return <Box key={option.id} flexDirection="column" backgroundColor={bg} marginTop={1}>
+        <Text color={style.color}>{style.marker}{safeText(option.label)}</Text>
+        <Box paddingLeft={style.indent}><Text color={style.descriptionColor}>{safeText(option.description)}</Text></Box>
+      </Box>;
+    })}
+    <Text color={choiceStyle(draft.selected === options.length, color, textColor, mutedColor).color} backgroundColor={bg}>{choiceStyle(draft.selected === options.length, color, textColor, mutedColor).marker}自由输入：{safeText(draft.text) || '…'}</Text>
+    {draft.error && <Text color={palette.error} backgroundColor={bg}>{draft.error}</Text>}
+    <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ 选择 · Enter 确认回答 · Esc 稍后回答 · Ctrl+X 取消' : 'Tab 聚焦回答 · 主输入仍可编辑'}</Text>
+  </Card>;
+});

@@ -1,0 +1,31 @@
+{
+  "name": "logox-ts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",
+  "dependencies": {
+    "ink": "8.0.0",
+    "react": "19.3.0",
+    "smol-toml": "1.9.1",
+    "string-width": "8.3.0",
+    "wrap-ansi": "10.0.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "typescript": "7.0.2"
+  },
+  "scripts": {
+    "check": "npm run check:docs && tsc --noEmit",
+    "start": "node dist/src/cli.js",
+    "test": "npm run check:docs && npm run build && node --test dist/tests/*.test.js",
+    "build": "tsc",
+    "demo": "npm run build && node dist/src/cli.js --demo",
+    "check:docs": "node scripts/check-docs.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
