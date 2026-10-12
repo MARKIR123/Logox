@@ -30,6 +30,36 @@ Logox 的思考/工具无背景，Actor 内部工具和已答记录透出父卡�
 
 ## 实现、参考与验收
 
+## 会话阅读打磨
+
+状态：已实现，真实 Windows Terminal 待现场验收。范围限于会话呈现、Markdown 阅读与滚动，不扩展会话命令或运行时协议。
+
+2026-10-12 基线 08577fa 的合成复现：400 条消息，每条含标题、列表、代码围栏与 100 次中文/emoji 段落；80 列下生成 11200 行。反复调用正式 buildStageRows，8 次耗时为 4565、4212、4410、4460、4722、3908、4026、4003 ms；标题仍显示原始 `#`，代码围栏原样出现。属于自动行构建测量，不是 Windows Terminal 现场结果。
+
+确认方案：TUI 缓存不可变消息的正文布局，流式更新只重建变化消息；活动和消息按身份建立索引，避免逐消息重复扫描。现有视口只挂载可见行，保留卡片主题与所有交互。正文增加标题、列表、引用、代码围栏及行内强调/代码/链接的终端呈现，工具原文和用户输入保持原样。显示行保留原文映射，复制使用原文，账本和模型消息不改变。阅读锚点使用消息与原文位置，缩放或新增内容保持该位置；滚到末尾重新自动跟随。
+
+验收：原始 Markdown 显示复现转绿；中文/emoji 不拆字形，代码缩进和未闭合围栏可读；跨软折行复制恢复原始 Markdown；缩放、流式更新与滚到末尾有回归。用相同合成输入比较冷启动、热布局与单条流更新耗时，另以实际 Ink 模拟 TTY 检查翻页、滚轮和输出。真实 Windows Terminal 的字体、输入法和鼠标流畅度留待现场验收。
+
+实现结果：`stage.ts` 使用不可变消息的弱引用布局缓存，活动/消息/请求建立身份索引；`markdown.ts` 按字形映射原文，并缓存有界字形宽度。原先对重复中文和 emoji 逐字调用 string-width 是冷构建的大头，字形宽度复用同时改善首次打开和缩放。`app.tsx` 的滚轮改为函数式累计，修复同一 stdin 批次因捕获旧视口而丢掉后续滚动；阅读时按消息/原文锚定，到底恢复跟随。
+
+参考核对：本机 Claude Code 的 `src/components/Markdown.tsx`、`src/utils/markdown.ts`、`src/hooks/useVirtualScroll.ts`、`src/ink/components/ScrollBox.tsx` 和 `src/components/ScrollKeybindingHandler.tsx`。采用缓存历史解析、仅显示可见行、累计滚动和明确底部跟随的做法；其 ScrollBox 依赖自有 Ink DOM/调度扩展，LOGOX 保留现有公共 Ink 接口。另核对 [PI 当前 Markdown 源码](https://github.com/badlogic/pi-mono/blob/main/packages/tui/src/components/markdown.ts) 的文本/宽度缓存和流式围栏处理。
+
+2026-10-12 未提交工作树性能记录：`node scripts/bench-stage.mjs`，400 条上述合成消息；基线通过 `git archive 08577fa` 在忽略目录独立构建，并将该 stage.js 路径作为脚本参数。同一脚本、相同输入与列数，基线与修改结果如下（毫秒，热构建取 7 次中位数）：
+
+| 行构建 | 08577fa | 本次修改 |
+|---|---:|---:|
+| 首次 80 列 | 3663.59 | 317.95 |
+| 80 列热构建/悬停 | 3542.66 | 28.97 |
+| 单条流式消息替换 | 3605.98 | 30.10 |
+| 首次缩到 40 列 | 3858.20 | 303.95 |
+| 40 列热构建 | 4079.28 | 21.54 |
+
+这是行构建时间，不含 RuntimeStore 发布、React/Ink 布局和终端绘制。`stage-reading.test.ts` 的首批 4 项在基线独立构建全部失败，在修改后通过；另覆盖深层列表、CRLF、未完成标题和嵌套强调的原文复制。实际 Ink 模拟 TTY 覆盖同批两次滚轮、流式阅读、滚到底恢复跟随、PageUp 与 Ctrl+E；既有 demo 的主题、折叠、悬停、选择和输入回归继续保留。全量结果见本节交付验收。
+
+交付验收：`npm test` 全量 103 项通过，包含原 97 项和新增 6 项；`npm run check:docs` 通过，21 份 Markdown、318 个本地链接。首次沙箱运行 102 项通过、Shell 回收测试 1 项超时取消；确认合成子进程未被 taskkill 回收后仅清理本次测试进程，在允许回收子进程的环境重新全量运行通过。未修改进程运行模块。新增同批滚轮 Ink 用例在独立基线构建失败，本次修改通过。WORKFLOW 的三条仓库外相对链接在独立 worktree 中失效，已改为原仓库内路径说明。
+
+上述开发验收在独立 worktree、基线 `08577fa` 的未提交修改上执行。交付合入主目录后，从主目录运行同一测试与 demo。Windows Terminal 现场未执行，按 TESTING 检查字体、输入法、系统剪贴板、长历史滚轮/翻页和缩放。当前 Markdown 呈现覆盖本节列出的常见结构，表格和其他扩展语法继续按文本显示；代码有主题区分，语言语法高亮未接入。
+
 入口：[cards](../../../src/tui/cards.tsx)、[scene](../../../src/tui/scene.ts)、[stage](../../../src/tui/stage.ts)、[editor](../../../src/tui/editor.ts)、[viewport](../../../src/tui/viewport.ts)、[App](../../../src/tui/app.tsx)。真实舞台与 demo 共用行构建器和主题，业务状态由[运行时](2026-10-11-runtime-interactions.md)提供。
 
 Claude Code 参考 theme、PermissionDialog、PromptInput、useTextInput 和 Cursor；PI 参考[编辑器的视觉行映射](https://github.com/badlogic/pi-mono/blob/main/packages/tui/src/components/editor.ts)。曾交付的 [Gemini 交接](../handoffs/2026-10-11-ui-gemini/HANDOFF.md)与[离线 HTML](../handoffs/2026-10-11-ui-gemini/logox-ui-demo.html)保留当时场景，当前规则查 UI-SPEC。

@@ -126,4 +126,4 @@ STATUS 只保留待完成事项：写清影响、下一步和验收方式；已�
 
 ## 参考与适配
 
-参考原 LOGOX 当前 [WORKFLOW](../../../Logox/docs/development/WORKFLOW.md)、[TESTING](../../../Logox/docs/development/TESTING.md) 和[文档组织设计](../../../Logox/docs/development/designs/2026-10-09-documentation-organization.md)。本项目采用其流程闭环与文档分工，执行步骤以本 TS 项目的实际实现为准；日常开发不需要原项目在旁边才能遵循本文。
+参考原 LOGOX 当前 `docs/development/WORKFLOW.md`、`docs/development/TESTING.md` 和 `docs/development/designs/2026-10-09-documentation-organization.md`（从原 LOGOX 仓库根目录查阅）。本项目采用其流程闭环与文档分工，执行步骤以本 TS 项目的实际实现为准；日常开发不需要原项目在旁边才能遵循本文。
