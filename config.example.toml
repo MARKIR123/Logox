@@ -1,0 +1,46 @@
+# 在舞台用 /login 保存 API key；重启自动读取。
+# 模型名从 /models 或 --list-models 返回值填写。
+[provider]
+name = "deepseek"
+model = ""
+temperature = 0.2
+max_tokens = 16384
+timeout = 120
+
+# 上下文整理参数，输出上限仍由 provider.max_tokens 控制。
+[context]
+keep_recent_rounds = 2
+keep_recent_tools = 2
+reserve_tokens = 32768
+low_watermark_ratio = 0.5
+# max_budget_tokens = 6000
+# target_budget_tokens = 4000
+# summary_provider = "deepseek"
+# summary_model = "从模型目录选择的真实名称"
+
+# 未知模型必须填写真实窗口；不要把累计用量当窗口。
+# 本地 num_ctx=8192 的模型示例：
+# [models."ollama/logox-qwen3.8:27b"]
+# context_window = 8192
+# max_output_tokens = 2048
+
+[kernel]
+max_iterations = 50
+max_retries = 3
+
+# 可选：只读 pi 已有的 API key 文件，不复制密钥。
+# [providers.deepseek]
+# kind = "openai_compat"
+# base_url = "https://api.deepseek.com"
+# api_key_env = "DEEPSEEK_API_KEY"
+# auth_file = "~/.pi/agent/auth.json"
+# default_model = "从 --list-models 查询并选择的名称"
+
+# 自定义 OpenAI 兼容服务：
+# [providers.work]
+# kind = "openai_compat"
+# base_url = "https://example.com/v1"
+# api_key_env = "WORK_MODEL_API_KEY"
+# default_model = "实际模型名称"
+# 然后设置 [provider] name = "work"。
+# TOML 不保存 api_key。

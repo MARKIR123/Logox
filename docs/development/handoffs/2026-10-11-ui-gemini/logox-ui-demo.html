@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>LOGOX UI — Gemini handoff</title>
+<style>
+:root { color-scheme: light dark; background: light-dark(#f5f4ed, #141413); }
+html, body { margin: 0; height: 100%; }
+body { font-size: 14px; line-height: 1.6; overflow: hidden; -webkit-font-smoothing: antialiased; }
+</style>
+</head>
+<body>
+<!-- Standalone scenario demo. No services, models, file edits or memory writes. -->
+<style>
+#logox-actor-windows {
+  --lx-bg: light-dark(#f5f4ed, #141413);
+  --lx-fg: light-dark(#181816, #e8e6dc);
+  --lx-muted: light-dark(#6b6960, #918f87);
+  --lx-line: light-dark(#dedad0, #292825);
+  --lx-user: light-dark(#3b6491, #8ab0d8);
+  --lx-logox: light-dark(#486d43, #9ec488);
+  --lx-a: light-dark(#3d6e5b, #82bca3);
+  --lx-t: light-dark(#456985, #89b0cb);
+  --lx-k: light-dark(#8c4270, #cf89b2);
+  --lx-m: light-dark(#7a6034, #cbb082);
+  --lx-danger: light-dark(#a33b42, #e08b90);
+  --lx-expanded: 18%;
+  --lx-collapsed: 7%;
+  --lx-gap: 8px;
+  color: var(--lx-fg);
+  background: var(--lx-bg);
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Microsoft YaHei UI', 'PingFang SC', monospace;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 120ch;
+  margin: 0 auto;
+}
+#logox-actor-windows * { box-sizing: border-box; }
+#logox-actor-windows [hidden] { display: none !important; }
+#logox-actor-windows ::selection {
+  background: color-mix(in srgb, var(--lx-user) 28%, transparent);
+  color: var(--lx-fg);
+}
+
+#logox-actor-windows .lx-muted,
+#logox-actor-windows .lx-origin,
+#logox-actor-windows .lx-direction {
+  color: var(--lx-muted);
+}
+
+/* Scrollable main stage */
+#logox-actor-windows .lx-stage {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lx-line) transparent;
+}
+
+/* Decorative left rail (non-copyable) */
+#logox-actor-windows .lx-turn {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 16px;
+  --lx-rail: var(--lx-logox);
+}
+#logox-actor-windows .lx-turn:last-child {
+  margin-bottom: 4px;
+}
+#logox-actor-windows .lx-turn::before {
+  content: "";
+  position: absolute;
+  inset: 2px auto 2px 0;
+  width: 2px;
+  background: var(--lx-rail);
+  user-select: none;
+  pointer-events: none;
+}
+#logox-actor-windows .lx-user { --lx-rail: var(--lx-user); }
+#logox-actor-windows .lx-kalon { --lx-rail: var(--lx-k); }
+#logox-actor-windows .lx-aletheia { --lx-rail: var(--lx-a); }
+#logox-actor-windows .lx-techne { --lx-rail: var(--lx-t); }
+
+#logox-actor-windows .lx-who {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--lx-rail);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.35;
+  margin-bottom: 4px;
+  user-select: none;
+}
+#logox-actor-windows .lx-origin,
+#logox-actor-windows .lx-clock {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--lx-muted);
+}
+#logox-actor-windows .lx-clock {
+  margin-left: auto;
+}
+
+/* Direct prose along the rail (never boxed in a card) */
+#logox-actor-windows p {
+  margin: 0 0 8px;
+}
+#logox-actor-windows .lx-prose {
+  color: var(--lx-fg);
+  line-height: 1.6;
+  max-width: 88ch;
+}
+#logox-actor-windows .lx-prose:last-child {
+  margin-bottom: 0;
+}
+#logox-actor-windows .lx-direction {
+  font-style: italic;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+/* Ordinary collapsible process cards (tools, thinking, anamnesis) — borderless background fill */
+#logox-actor-windows .lx-message {
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--lx-fg) 4%, transparent);
+  margin: 7px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+#logox-actor-windows .lx-message[open] {
+  background: color-mix(in srgb, var(--lx-fg) 11%, transparent);
+}
+#logox-actor-windows .lx-message[data-kind="入梦"] {
+  background: color-mix(in srgb, var(--lx-m) 7%, transparent);
+}
+#logox-actor-windows .lx-message[data-kind="入梦"][open] {
+  background: color-mix(in srgb, var(--lx-m) 18%, transparent);
+}
+#logox-actor-windows .lx-actor .lx-message {
+  background: color-mix(in srgb, var(--lx-fg) 5%, transparent);
+}
+#logox-actor-windows .lx-actor .lx-message[open] {
+  background: color-mix(in srgb, var(--lx-fg) 12%, transparent);
+}
+
+#logox-actor-windows summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+#logox-actor-windows summary::-webkit-details-marker { display: none; }
+#logox-actor-windows summary::marker { content: ""; }
+#logox-actor-windows summary:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--lx-actor, var(--lx-user)) 65%, transparent);
+  outline-offset: -1px;
+}
+
+#logox-actor-windows .lx-kind {
+  color: var(--lx-muted);
+  min-width: 4.2em;
+  flex-shrink: 0;
+}
+#logox-actor-windows .lx-message[data-kind="入梦"] .lx-kind {
+  color: var(--lx-m);
+  font-weight: 500;
+}
+#logox-actor-windows .lx-message-title {
+  color: var(--lx-fg);
+  flex: 1;
+  min-width: 140px;
+}
+#logox-actor-windows .lx-state {
+  margin-left: auto;
+  color: var(--lx-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+#logox-actor-windows .lx-state[data-tone="pending"] {
+  color: var(--lx-actor, var(--lx-logox));
+  font-weight: 600;
+}
+#logox-actor-windows .lx-state[data-tone="verify"] {
+  color: var(--lx-m);
+  font-weight: 500;
+}
+#logox-actor-windows .lx-body {
+  padding: 2px 12px 10px;
+}
+#logox-actor-windows .lx-body p:last-child {
+  margin-bottom: 0;
+}
+#logox-actor-windows .lx-tool-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  margin: 0;
+  color: var(--lx-muted);
+  line-height: 1.5;
+}
+
+/* Actor stage cards — borderless background fill with airy gap */
+#logox-actor-windows .lx-actors {
+  display: grid;
+  gap: var(--lx-gap);
+  margin-top: 8px;
+}
+#logox-actor-windows .lx-actor-card {
+  --lx-actor: var(--lx-logox);
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--lx-actor) var(--lx-collapsed), transparent);
+}
+#logox-actor-windows .lx-actor-card:has(> .lx-actor[open]) {
+  background: color-mix(in srgb, var(--lx-actor) var(--lx-expanded), transparent);
+}
+#logox-actor-windows .lx-actor-card.lx-a { --lx-actor: var(--lx-a); }
+#logox-actor-windows .lx-actor-card.lx-t { --lx-actor: var(--lx-t); }
+#logox-actor-windows .lx-actor-card.lx-k { --lx-actor: var(--lx-k); }
+
+#logox-actor-windows .lx-actor {
+  background: transparent;
+  border: 0;
+  font-size: 14px;
+}
+#logox-actor-windows .lx-actor > summary {
+  padding: 8px 12px;
+  gap: 7px;
+}
+#logox-actor-windows .lx-actor-symbol,
+#logox-actor-windows .lx-name {
+  color: var(--lx-actor);
+  font-weight: 600;
+}
+#logox-actor-windows .lx-task {
+  flex: 1;
+  min-width: 120px;
+  color: var(--lx-fg);
+}
+#logox-actor-windows .lx-actor[open] > summary .lx-task {
+  font-weight: 500;
+}
+#logox-actor-windows .lx-separator {
+  color: var(--lx-muted);
+}
+#logox-actor-windows .lx-actor > .lx-body {
+  padding: 2px 11px 11px;
+}
+
+/* Async interaction card (permission & question) */
+#logox-actor-windows .lx-interaction {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--lx-actor, var(--lx-line)) 28%, var(--lx-bg));
+  background: transparent;
+}
+#logox-actor-windows fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+#logox-actor-windows legend {
+  padding: 0;
+  margin-bottom: 5px;
+  color: var(--lx-fg);
+  font-weight: 600;
+}
+#logox-actor-windows .lx-files {
+  display: grid;
+  gap: 2px;
+  color: var(--lx-fg);
+  font-size: 13px;
+  padding: 4px 8px;
+  margin: 4px 0 6px;
+  background: color-mix(in srgb, var(--lx-fg) 4.5%, transparent);
+}
+#logox-actor-windows .lx-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 8px;
+  margin: 1px 0;
+  cursor: pointer;
+}
+#logox-actor-windows .lx-option:hover {
+  background: color-mix(in srgb, var(--lx-actor, var(--lx-fg)) 5%, transparent);
+}
+#logox-actor-windows .lx-option:has(input:checked) {
+  background: color-mix(in srgb, var(--lx-actor, var(--lx-fg)) 10%, var(--lx-bg));
+}
+#logox-actor-windows .lx-option input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1ch;
+  height: 1.4em;
+  margin: 0;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-content: center;
+  color: var(--lx-muted);
+  font: inherit;
+}
+#logox-actor-windows .lx-option input[type="radio"]::before {
+  content: "·";
+}
+#logox-actor-windows .lx-option input[type="radio"]:checked {
+  color: var(--lx-actor, var(--lx-logox));
+  font-weight: 700;
+}
+#logox-actor-windows .lx-option input[type="radio"]:checked::before {
+  content: "›";
+}
+#logox-actor-windows .lx-option small {
+  display: block;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--lx-muted);
+  margin-top: 1px;
+}
+#logox-actor-windows .lx-text-label {
+  display: block;
+  color: var(--lx-muted);
+  font-size: 12.5px;
+  margin: 7px 0 2px;
+}
+#logox-actor-windows input[type="text"] {
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--lx-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--lx-fg);
+  padding: 4px 4px;
+}
+#logox-actor-windows input[type="text"]:focus {
+  outline: none;
+  border-bottom-color: var(--lx-actor, var(--lx-user));
+}
+#logox-actor-windows .lx-actions {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  font-size: 13px;
+}
+#logox-actor-windows .lx-actions button {
+  font: inherit;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--lx-actor, var(--lx-logox));
+  font-weight: 500;
+  padding: 2px 0;
+  cursor: pointer;
+}
+#logox-actor-windows .lx-actions button:hover,
+#logox-actor-windows .lx-actions button:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  outline: none;
+}
+#logox-actor-windows .lx-actions .lx-later {
+  color: var(--lx-muted);
+  font-weight: 400;
+}
+#logox-actor-windows .lx-error {
+  color: var(--lx-danger);
+  font-size: 12.5px;
+  margin-top: 5px;
+}
+#logox-actor-windows .lx-finish {
+  margin-top: 10px;
+}
+
+/* Bottom terminal composer */
+#logox-actor-windows .lx-composer {
+  margin: 0 22px;
+  padding-top: 2px;
+  flex-shrink: 0;
+  background: var(--lx-bg);
+}
+#logox-actor-windows .lx-input-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#logox-actor-windows .lx-compose-row {
+  position: relative;
+  border-top: 1px solid var(--lx-line);
+  border-bottom: 1px solid var(--lx-line);
+  padding: 8px 0 5px;
+}
+#logox-actor-windows .lx-compose-row::before {
+  content: "❯";
+  position: absolute;
+  top: 9px;
+  left: 0;
+  color: var(--lx-user);
+  user-select: none;
+  pointer-events: none;
+}
+#logox-actor-windows textarea {
+  font: inherit;
+  width: 100%;
+  min-width: 0;
+  resize: none;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 0 2px 0 20px;
+  border: 0;
+  border-radius: 0;
+  color: var(--lx-fg);
+  background: transparent;
+  line-height: 1.5;
+}
+#logox-actor-windows textarea:focus {
+  outline: none;
+}
+#logox-actor-windows .lx-footer {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 9px;
+  font-size: 12px;
+  color: var(--lx-muted);
+  user-select: none;
+}
+#logox-actor-windows .lx-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+#logox-actor-windows .lx-back {
+  font: inherit;
+  color: var(--lx-logox);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+#logox-actor-windows .lx-back:hover,
+#logox-actor-windows .lx-back:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  outline: none;
+}
+
+/* Narrow terminal / 80-col & mobile adaptation */
+@media (max-width: 560px) {
+  #logox-actor-windows .lx-stage { padding: 14px 14px 8px; }
+  #logox-actor-windows .lx-composer { margin: 0 14px; }
+  #logox-actor-windows .lx-turn { padding-left: 12px; margin-bottom: 14px; }
+  #logox-actor-windows .lx-actor > summary,
+  #logox-actor-windows summary { padding-left: 9px; padding-right: 9px; }
+  #logox-actor-windows .lx-actor > summary .lx-state {
+    flex-basis: 100%;
+    margin-left: 19px;
+  }
+  #logox-actor-windows .lx-message-title { min-width: 110px; }
+  #logox-actor-windows .lx-clock { margin-left: 0; }
+}
+@media (pointer: coarse) {
+  #logox-actor-windows summary,
+  #logox-actor-windows button,
+  #logox-actor-windows .lx-option { min-height: 42px; }
+  #logox-actor-windows textarea,
+  #logox-actor-windows input[type="text"] { font-size: 16px; }
+}
+</style>
+<div id="logox-actor-windows" aria-label="Logox 终端对话">
+ <main id="lx-content" class="lx-stage"></main>
+ <form id="lx-compose" class="lx-composer">
+  <label id="lx-compose-label" for="lx-input" class="lx-input-label">在 Logox 中说话，或 @角色 快速派发任务</label>
+  <div class="lx-compose-row"><textarea id="lx-input" aria-label="当前窗口输入" rows="2"></textarea></div>
+  <div class="lx-footer"><span id="lx-status" aria-live="polite"></span><span class="lx-footer-right"><button id="lx-back" type="button" class="lx-back cursor-interaction" hidden>Esc 返回 Logox</button><span id="lx-keys">Enter 发送 · Shift+Enter 换行</span></span></div>
+ </form>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('logox-actor-windows');
+  const byId = id => root.querySelector('#' + id);
+  const roles = {
+    aletheia: { name: 'Aletheia', role: '澄明 · 侦察者', symbol: '◇', css: 'lx-a', task: '勘察首页结构与问题坐标' },
+    techne: { name: 'Techne', role: '精工 · 构建匠人', symbol: '⊞', css: 'lx-t', task: '调整首屏层级与项目排列' },
+    kalon: { name: 'Kalon', role: '雅正 · 审美官', symbol: '✧', css: 'lx-k', task: '校准首页的字体、颜色和留白' }
+  };
+  const initialDraft = '@kalon 看一下首页配色。只给建议，先别改文件。';
+  let state = {
+    view: 'logox',
+    opened: ['logox'],
+    permission: null,
+    permissionChoice: 'deny',
+    style: null,
+    choice: 'minimal',
+    custom: '',
+    folds: {},
+    scrolls: { logox: 0, aletheia: 0, techne: 0, kalon: 0 },
+    drafts: { logox: initialDraft, aletheia: '', techne: '', kalon: '' },
+    events: [],
+    next: 1
+  };
+  const settings = { gap: 8, kalon: '#cf89b2' };
+  let foldTimer = null;
+  const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function save() { /* Demo state stays in this page; reload resets the scene. */ }
+  function isOpen(id, fallback = false) { return (id in state.folds ? state.folds[id] : fallback) ? ' open' : ''; }
+  function stateTone(status) {
+    if (!status) return '';
+    if (/待授权|待回答|等待/.test(status)) return ' data-tone="pending"';
+    if (/待核验/.test(status)) return ' data-tone="verify"';
+    return '';
+  }
+  function message(id, kind, title, body, status = '', open = false) {
+    return `<details id="${id}" class="lx-message" data-kind="${escape(kind)}"${isOpen(id, open)}><summary class="cursor-interaction"><span class="lx-kind">${escape(kind)}</span><span class="lx-message-title">${escape(title)}</span>${status ? `<span class="lx-state"${stateTone(status)}>${escape(status)}</span>` : ''}</summary><div class="lx-body">${body}</div></details>`;
+  }
+  function textMessage(id, kind, title, text, status = '', open = false) {
+    if (kind === '消息' || kind === '回复') return `<p id="${id}" class="lx-prose">${escape(text)}</p>`;
+    return message(id, kind, title, `<p>${escape(text)}</p>`, status, open);
+  }
+  function turn(who, body, origin = '', time = '') {
+    const name = who === 'user' ? '你' : who === 'logox' ? '◈ Logox' : (roles[who] ? roles[who].symbol + ' ' + roles[who].name : who);
+    const css = who === 'user' ? 'lx-user' : who === 'logox' ? '' : 'lx-' + who;
+    return `<article class="lx-turn ${css}"><div class="lx-who">${escape(name)}${origin ? `<span class="lx-origin">${escape(origin)}</span>` : ''}${time ? `<span class="lx-clock">${escape(time)}</span>` : ''}</div>${body}</article>`;
+  }
+  function permission(context) {
+    if (state.permission) {
+      return textMessage('permission-done-' + context, '权限', '修改文件许可', state.permission === 'allow' ? '你已允许本次修改。' : '你已拒绝本次修改，保留建议。', '已回答');
+    }
+    return `<form class="lx-interaction" data-request="permission" aria-label="修改文件权限"><fieldset><legend>允许修改这两个文件吗？</legend><div class="lx-files"><span>src/pages/index.tsx:18-34</span><span>src/styles/home.css:96-112</span></div><label class="lx-option cursor-interaction"><input type="radio" name="permission" value="allow"${state.permissionChoice === 'allow' ? ' checked' : ''}><span>允许这一次<small>只执行本次首屏布局与留白收敛。</small></span></label><label class="lx-option cursor-interaction"><input type="radio" name="permission" value="deny"${state.permissionChoice !== 'allow' ? ' checked' : ''}><span>不允许<small>保留建议，不修改源码文件。</small></span></label></fieldset><div class="lx-actions"><button type="button" data-answer="permission" class="cursor-interaction">Enter 确认</button><button type="button" data-later class="lx-later cursor-interaction">Esc 稍后</button></div></form>`;
+  }
+  function question(context) {
+    if (state.style) {
+      return textMessage('question-done-' + context, '提问', '首页气质', state.style, '已回答');
+    }
+    const option = (value, title, note) => `<label class="lx-option cursor-interaction"><input type="radio" name="style" value="${value}"${state.choice === value ? ' checked' : ''}><span>${title}${note ? `<small>${note}</small>` : ''}</span></label>`;
+    return `<form class="lx-interaction" data-request="style" aria-label="审美偏好提问"><fieldset><legend>你希望首页更接近哪种气质？</legend>${option('minimal', '克制的文字作品集', '让项目和文字成为重点，装饰少一点。')}${option('editorial', '温暖的编辑部', '用柔和的配色和有阅读感的版式。')}${option('custom', '我有自己的想法', '')}<label class="lx-text-label" for="custom-${context}">补充偏好</label><input type="text" id="custom-${context}" data-custom value="${escape(state.custom)}" placeholder="像独立杂志，但不要复古装饰"><p class="lx-error" role="alert" data-error hidden>请写下你的想法，或选择一个方向。</p></fieldset><div class="lx-actions"><button type="button" data-answer="style" class="cursor-interaction">Enter 确认</button><button type="button" data-later class="lx-later cursor-interaction">Esc 稍后</button></div></form>`;
+  }
+  function actor(id, owner, task, status, body, open = false) {
+    const role = roles[owner];
+    const shortStatus = status.split(' · ')[0].replace('等待你授权', '待授权').replace('等待你回答', '待回答');
+    return `<section class="lx-actor-card ${role.css}" data-actor-card="${owner}" aria-label="${role.name} 任务卡片"><details id="${id}" class="lx-actor" data-owner="${owner}"${isOpen(id, open)}><summary class="cursor-interaction" aria-label="${role.name}，${escape(task)}，${escape(shortStatus)}"><span class="lx-actor-symbol" aria-hidden="true">${role.symbol}</span><span class="lx-name">${role.name}</span><span class="lx-separator">·</span><span class="lx-task">${escape(task)}</span><span class="lx-state"${stateTone(shortStatus)}>${escape(shortStatus)}</span></summary><div class="lx-body">${body}</div></details></section>`;
+  }
+  function main() {
+    const a = actor(
+      'main-aletheia',
+      'aletheia',
+      roles.aletheia.task,
+      '已完成 · 读取 3 个文件',
+      '<p class="lx-direction">（翻看刚读完的三份源码）</p><p class="lx-prose">定位清楚了：首屏三个元素字重相同、互相抢视线，移动端还有三层多余的内边距叠加。行号已经发给 Techne，剩下的色彩和细节留给 Kalon 处理。</p>' +
+        message('main-aletheia-reads', '工具调用', 'Read · 3 个首页相关文件', '<pre class="lx-tool-output">src/pages/index.tsx:18             首屏标题、标签组与按钮字重同级，焦点分散\nsrc/components/ProjectCard.tsx:42  项目简介重复首屏第三行导语\nsrc/styles/home.css:96             移动端三层容器留白叠加至 48px</pre>', '已完成')
+    );
+    const tStatus = state.permission ? (state.permission === 'allow' ? '已完成 · 修改 2 个文件' : '已结束 · 未修改文件') : '等待你授权';
+    let tBody = '<p class="lx-direction">（核对完行号，把改动范围收在两个文件内）</p><p class="lx-prose">Aletheia 给的位置很准。不动项目文案，只去掉多余容器、对齐首屏间距——先把结构理顺，免得又被 Kalon 挑毛病。</p>' + permission('main');
+    if (state.permission === 'allow') {
+      tBody += message('main-edit', '工具调用', 'Edit · 布局与样式', '<pre class="lx-tool-output">src/pages/index.tsx:18 — 收束首屏主副层级，移除重复导语节点\nsrc/styles/home.css:96 — 合并窄屏嵌套留白（48px → 18px），网格断言通过</pre>', '已完成');
+    }
+    const t = actor('main-techne', 'techne', roles.techne.task, tStatus, tBody, !state.permission);
+    const kStatus = state.style ? '已完成 · 偏好已记录' : state.permission ? '等待你回答' : '排队中 · 等待 Techne';
+    const kBody = '<p class="lx-direction">' + (state.permission ? '（端详着刚改完的首屏版式）' : '（扫过首屏样式表，轻轻叹了口气）') + '</p><p class="lx-prose">' + (state.permission ? '先生，Techne 总算把结构理干净了。接下来定个基调吧——你希望这个页面更偏向哪种气质？' : '先生，等 Techne 先把底下的布局骨架收拾妥当，我再来调字重、配色和留白。') + '</p>' + (state.permission ? question('main') : '');
+    const k = actor('main-kalon', 'kalon', roles.kalon.task, kStatus, kBody, !!state.permission && !state.style);
+    let body = turn('user', textMessage('main-user', '消息', '打磨作品集首页', '保留项目内容，让它更像一个有审美的开发者作品，少一点模板感。', '', true));
+    body += turn(
+      'logox',
+      textMessage('main-reply', '回复', '工作安排', '我们先找准问题，再改布局结构，最后调整视觉细节。Aletheia 先去核对源码位置，Techne 负责收敛首屏结构，Kalon 最后打磨字体、配色与留白。', '', true) +
+        textMessage('main-thinking', '思考', '先确认信息层级', '项目内容本身够扎实，问题在于首屏几个元素同时抢视线。先把层级理顺，不用大改。', '已结束') +
+        message('main-tool', '工具调用', 'Read · package.json', '<pre class="lx-tool-output">确认首页入口与构建工具链配置。</pre>', '已完成') +
+        `<div class="lx-actors">${a}${t}${k}</div>` +
+        (state.style ? textMessage('main-memory', '入梦', 'Anamnesis · 偏好候选', '作品集首页采用「' + state.style + '」。依据本轮回答，尚未写入长期档案。', '待核验') : '') +
+        (state.style ? '<p class="lx-prose lx-finish">结构与审美校准均已收束完毕。</p>' : ''),
+      '执导者'
+    );
+    for (const event of state.events) {
+      if (event.type === 'dispatch') {
+        body += turn('user', textMessage('main-user-' + event.id, '消息', '快速指派给 ' + roles[event.actor].name, event.text, '', true), '→ ' + roles[event.actor].name + ' · 在 Logox 中指派');
+        body += turn(event.actor, actor('dispatch-' + event.id, event.actor, event.text.replace(/^@\w+\s*/, ''), '任务已接收', `<p class="lx-direction">${escape(event.direction || '（记下补充要求）')}</p><p class="lx-prose">${escape(event.reply)}</p>`), '快速派发任务');
+      } else if (event.type === 'main') {
+        body += turn('user', textMessage('main-user-' + event.id, '消息', '补充要求', event.text, '', true));
+        body += turn('logox', textMessage('main-reply-' + event.id, '回复', '补充已收到', event.reply, '', true), '执导者');
+      }
+    }
+    return body;
+  }
+  function historyEntry(owner, id, from, kind, title, text, status = '', time = '', originOverride = '') {
+    const origin = originOverride || (from === 'logox' ? '→ ' + roles[owner].name : from === 'user' ? '→ ' + roles[owner].name + ' · 本窗口' : '');
+    return turn(from, textMessage(owner + '-' + id, kind, title, text, status, kind === '消息' || kind === '回复'), origin, time);
+  }
+  function actorHistory(owner) {
+    let body = '';
+    if (owner === 'kalon') {
+      body += historyEntry(owner, 'previous-director', 'logox', '消息', '请检查首页视觉', '先只读检查首页配色和信息层级，看看模板感出在哪里。', '', '上一轮 · 10:02');
+      body += turn(
+        'kalon',
+        textMessage(owner + '-previous-read', '工具调用', 'Read · src/styles/home.css', 'L14-L52：同一高饱和强调色同时涂在标题、卡片描边与按钮上，显得杂乱。', '已完成') +
+          textMessage(owner + '-previous-thinking', '思考', '剥离廉价装饰', '去掉模板化的发光边框，靠字重对比与留白立起秩序。', '已结束'),
+        '审美官',
+        '10:03'
+      );
+      body += historyEntry(owner, 'previous-user', 'user', '消息', '用户补充偏好', '我喜欢克制的文字作品集，但不希望它冷得像产品文档。', '', '10:04');
+      body += turn(
+        'kalon',
+        '<p class="lx-direction">（在色板旁记下一笔暖灰）</p>' +
+          textMessage(owner + '-previous-reply', '回复', '像有人认真写过', '明白。把名字、简短的自述和代表作留在视觉中心，底色微调暖一点，强调色只留给真正需要点击的地方。', '', true),
+        '审美官',
+        '10:05'
+      );
+      body += historyEntry(owner, 'current-director', 'logox', '消息', '本轮任务', 'Techne 正在按 Aletheia 的坐标改结构。这轮请你收尾字体、颜色和留白，等他的骨架确定后继续。', '', '当前轮');
+    } else if (owner === 'aletheia') {
+      body += historyEntry(owner, 'director', 'logox', '消息', '检查首页', '摸清首页的层级症结、重复内容和移动端留白，给出精确到行号的坐标。', '', '当前轮');
+      let reads = '';
+      for (const [i, path] of ['src/pages/index.tsx:18', 'src/components/ProjectCard.tsx:42', 'src/styles/home.css:96'].entries()) {
+        reads += textMessage(owner + '-read-' + i, '工具调用', 'Read · ' + path, ['L18-L34：h1、.tag-list 与 .cta-btn 字重与对比度同级，首屏无主次。', 'L42-L58：项目卡片副标题原样复述了首屏导语。', 'L96-L112：@media (max-width: 560px) 三层容器内边距叠加至 48px。'][i], '已完成');
+      }
+      reads += '<p class="lx-direction">（整理好三处行号清单）</p>' +
+        textMessage(owner + '-reply', '回复', '检查结果', '三处问题的源码位置已核实完毕（index.tsx:18、ProjectCard.tsx:42、home.css:96），已同步给 Logox 与 Techne。', '', true);
+      body += turn(owner, reads, '侦察者', '当前轮');
+    } else {
+      body += historyEntry(owner, 'director', 'logox', '消息', '布局任务', '按 Aletheia 给出的精确坐标调整首屏骨架，保留用户原有的项目内容。', '', '当前轮');
+      body += turn(
+        owner,
+        textMessage(owner + '-read', '工具调用', 'Read · src/pages/index.tsx:18', '核对 L18-L34 组件树与样式引用，确认修改切口无外部副作用。', '已完成') +
+          textMessage(owner + '-thinking', '思考', '缩小修改范围', '只改结构层级与响应式内边距，改动控制在两个文件以内。', '已结束') +
+          message('history-techne-question', '权限', '允许修改文件', state.permission ? '<p>本次许可已回答，裁决记录保留在下方。</p>' : permission('history'), state.permission ? '已回答' : '等待回答', !state.permission),
+        '向用户请求修改许可',
+        '当前轮'
+      );
+    }
+    for (const event of state.events) {
+      if (['dispatch', 'direct'].includes(event.type) && event.actor === owner) {
+        const origin = event.type === 'dispatch' ? '→ ' + roles[owner].name + ' · 来源 Logox 窗口 @' + owner : '→ ' + roles[owner].name + ' · 本窗口';
+        body += turn('user', textMessage('history-user-' + event.id, '消息', event.type === 'dispatch' ? '快速派发的任务' : '直接对话', event.text, '', true), origin);
+        body += turn(owner, `<p class="lx-direction">${escape(event.direction || '（记下要求）')}</p>` + textMessage('history-reply-' + event.id, '回复', '任务与补充已收到', event.reply, '', true));
+      } else if (event.type === 'permission' && owner === 'techne') {
+        body += historyEntry(owner, 'permission-user-' + event.id, 'user', '消息', '权限回答', event.value === 'allow' ? '允许这一次修改。' : '不允许修改文件。', '', '', '→ Techne · ' + (event.from || '裁决'));
+        let followup = '';
+        if (event.value === 'allow') {
+          followup += textMessage(owner + '-edit-' + event.id, '工具调用', 'Edit · 布局与样式', 'src/pages/index.tsx:18：收束首屏主副层级。src/styles/home.css:96：合并窄屏嵌套留白。', '已完成');
+          followup += '<p class="lx-direction">（确认布局测试通过）</p>';
+        } else {
+          followup += '<p class="lx-direction">（保持原文件未动）</p>';
+        }
+        followup += textMessage(owner + '-permission-reply-' + event.id, '回复', '交接给 Kalon', event.value === 'allow' ? '结构已改好，留白按要求收拢了，接下来交给 Kalon。' : '文件未改动，结构调整方案已整理成建议交给 Kalon。', '', true);
+        body += turn(owner, followup);
+      } else if (event.type === 'permission' && owner === 'kalon') {
+        body += historyEntry(owner, 'handoff-' + event.id, 'logox', '消息', '开始校准气质', event.value === 'allow' ? 'Techne 已完成首屏骨架修改，继续你的审美校准。' : '用户选择暂不改动源码文件，请继续给出只读审美诊断。');
+        body += turn(owner, message('history-kalon-question', '提问', '你希望首页更接近哪种气质？', state.style ? '<p>本次提问已回答，用户偏好保留在下方。</p>' : question('history'), state.style ? '已回答' : '等待回答', !state.style), '向用户询问首页气质');
+      } else if (event.type === 'style' && owner === 'kalon') {
+        body += historyEntry(owner, 'answer-' + event.id, 'user', '消息', '审美偏好回答', event.text, '', '', '→ Kalon · ' + (event.from || '回答'));
+        body += turn(
+          owner,
+          '<p class="lx-direction">（记下选定的方向）</p>' +
+            textMessage(owner + '-style-reply-' + event.id, '回复', '最终方向', '已按「' + event.text + '」调好字体、配色与留白比例，交回给先生过目。', '', true)
+        );
+      }
+    }
+    return body;
+  }
+  function actorReplyFor(owner) {
+    if (owner === 'kalon') {
+      return {
+        direction: '（记下配色思路，暂不改文件）',
+        reply: '行，先不动文件。主色收进柔和的暗灰与暖白，强调色只留给作品标题——等你和先生点头了再落笔。'
+      };
+    }
+    if (owner === 'techne') {
+      return {
+        direction: '（记下补充约束）',
+        reply: '收到。这处边界已并入当前修改范围，测试通过后一起提交。'
+      };
+    }
+    return {
+      direction: '（标出对应源码行）',
+      reply: '已记录。我会核对相关调用链并附上具体的 path:line 位置。'
+    };
+  }
+  function render(scrollToBottom = false) {
+    const stage = byId('lx-content');
+    root.style.setProperty('--lx-gap', settings.gap + 'px');
+    root.style.setProperty('--lx-k', 'light-dark(#8c4270,' + settings.kalon + ')');
+    const own = state.view !== 'logox';
+    byId('lx-back').hidden = !own;
+    stage.innerHTML = own ? actorHistory(state.view) : main();
+    byId('lx-compose-label').textContent = own ? '直接发给 ' + roles[state.view].name : '在 Logox 中说话，或 @角色 快速派发任务';
+    byId('lx-input').value = state.drafts[state.view] || '';
+    byId('lx-input').placeholder = own ? '给 ' + roles[state.view].name + ' 的补充…' : '@kalon 看一下首页配色…';
+    const statusEl = byId('lx-status');
+    statusEl.textContent = own
+      ? roles[state.view].symbol + ' ' + roles[state.view].name + ' · ' + roles[state.view].role + ' · 独立对话'
+      : state.style
+        ? '◈ Logox · 本轮完成 · Anamnesis 整理候选'
+        : state.permission
+          ? '◈ Logox · Kalon 等待回答'
+          : '◈ Logox · Techne 等待授权';
+    statusEl.style.color = own ? 'var(--lx-' + (state.view === 'kalon' ? 'k' : state.view === 'techne' ? 't' : 'a') + ')' : 'var(--lx-muted)';
+    byId('lx-keys').textContent = own ? 'Enter 发送' : 'Enter 发送 · Shift+Enter 换行 · @角色 派发';
+    if (scrollToBottom) {
+      stage.scrollTop = stage.scrollHeight;
+      state.scrolls[state.view] = stage.scrollTop;
+    } else {
+      stage.scrollTop = state.scrolls[state.view] || 0;
+    }
+  }
+  function addEvent(event) { state.events.push({ id: state.next++, ...event }); }
+  function openView(owner) {
+    clearTimeout(foldTimer);
+    foldTimer = null;
+    const stage = byId('lx-content');
+    state.scrolls[state.view] = stage.scrollTop;
+    state.drafts[state.view] = byId('lx-input').value;
+    if (!state.opened.includes(owner)) state.opened.push(owner);
+    state.view = owner;
+    render();
+    save();
+    if (owner !== 'logox') byId('lx-input').focus();
+  }
+  function toggle(details) {
+    const stage = byId('lx-content');
+    state.scrolls[state.view] = stage.scrollTop;
+    details.open = !details.open;
+    state.folds[details.id] = details.open;
+    save();
+  }
+  function answer(button) {
+    const stage = byId('lx-content');
+    state.scrolls[state.view] = stage.scrollTop;
+    const form = button.closest('form');
+    const fromLabel = state.view === 'logox' ? '来源 Logox 窗口' : '本窗口';
+    if (button.dataset.answer === 'permission') {
+      if (state.permission) return;
+      state.permission = new FormData(form).get('permission');
+      addEvent({ type: 'permission', value: state.permission, from: fromLabel });
+      state.folds['main-techne'] = false;
+      state.folds['main-kalon'] = true;
+    } else {
+      if (state.style) return;
+      const choice = new FormData(form).get('style');
+      const custom = form.querySelector('[data-custom]').value.trim();
+      if (choice === 'custom' && !custom) {
+        form.querySelector('[data-error]').hidden = false;
+        form.querySelector('[data-custom]').focus();
+        return;
+      }
+      state.style = (choice === 'minimal' ? '克制的文字作品集' : choice === 'editorial' ? '温暖的编辑部' : custom) + (choice !== 'custom' && custom ? '，' + custom : '');
+      state.style = state.style.slice(0, 500);
+      addEvent({ type: 'style', text: state.style, from: fromLabel });
+      state.folds['main-kalon'] = false;
+    }
+    render();
+    save();
+  }
+  function send() {
+    const text = byId('lx-input').value.trim().slice(0, 2000);
+    if (!text) return;
+    state.drafts[state.view] = '';
+    const match = /^@(kalon|techne|aletheia)\b/i.exec(text);
+    if (state.view === 'logox' && match) {
+      const owner = match[1].toLowerCase();
+      const { direction, reply } = actorReplyFor(owner);
+      addEvent({ type: 'dispatch', actor: owner, text, direction, reply });
+    } else if (state.view !== 'logox') {
+      const { direction, reply } = actorReplyFor(state.view);
+      addEvent({ type: 'direct', actor: state.view, text, direction, reply });
+    } else {
+      addEvent({ type: 'main', text, reply: '补充已记下。待处理的角色卡片仍在原位，随时可以展开裁决。' });
+    }
+    render(true);
+    save();
+    byId('lx-input').focus();
+  }
+  byId('lx-content').addEventListener('scroll', event => {
+    state.scrolls[state.view] = event.target.scrollTop;
+  }, { passive: true });
+  root.addEventListener('click', event => {
+    const target = event.target;
+    const button = target.closest('[data-answer]');
+    if (button) { event.preventDefault(); answer(button); return; }
+    const later = target.closest('[data-later]');
+    if (later) {
+      const details = later.closest('details');
+      if (details) { details.open = false; state.folds[details.id] = false; }
+      else later.closest('form').hidden = true;
+      byId('lx-input').focus();
+      save();
+      return;
+    }
+    const summary = target.closest('summary');
+    if (summary) {
+      event.preventDefault();
+      const details = summary.parentElement;
+      if (details.classList.contains('lx-actor') && event.detail > 0) {
+        clearTimeout(foldTimer);
+        if (event.detail === 1) foldTimer = setTimeout(() => toggle(details), 200);
+      } else {
+        toggle(details);
+      }
+    }
+  });
+  root.addEventListener('dblclick', event => {
+    const card = event.target.closest('[data-actor-card]');
+    if (card && !event.target.closest('button,input,textarea,.lx-message')) {
+      event.preventDefault();
+      openView(card.dataset.actorCard);
+    }
+  });
+  root.addEventListener('input', event => {
+    if (event.target === byId('lx-input')) { state.drafts[state.view] = event.target.value.slice(0, 2000); save(); }
+    if (event.target.matches('[data-custom]')) {
+      state.custom = event.target.value.slice(0, 500);
+      state.choice = 'custom';
+      event.target.closest('form').querySelector('input[value=custom]').checked = true;
+      event.target.closest('form').querySelector('[data-error]').hidden = true;
+      save();
+    }
+  });
+  root.addEventListener('change', event => {
+    if (event.target.name === 'style') { state.choice = event.target.value; save(); }
+    if (event.target.name === 'permission') { state.permissionChoice = event.target.value; save(); }
+  });
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      const form = event.target.closest('[data-request]');
+      if (form) { event.preventDefault(); answer(form.querySelector('[data-answer]')); }
+    }
+  });
+  byId('lx-back').addEventListener('click', () => openView('logox'));
+  byId('lx-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !event.ctrlKey && !event.metaKey && event.keyCode !== 229) {
+      event.preventDefault();
+      send();
+    }
+  });
+  byId('lx-compose').addEventListener('submit', event => { event.preventDefault(); send(); });
+  root.addEventListener('keydown', event => {
+    const summary = event.target.closest('summary');
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && summary?.parentElement.dataset.owner) {
+      event.preventDefault();
+      openView(summary.parentElement.dataset.owner);
+      return;
+    }
+    if (event.key === 'Escape') {
+      const form = event.target.closest('[data-request]');
+      if (form) {
+        event.preventDefault();
+        const details = form.closest('details');
+        if (details) { details.open = false; state.folds[details.id] = false; }
+        else form.hidden = true;
+        byId('lx-input').focus();
+        save();
+      } else if (state.view !== 'logox') {
+        event.preventDefault();
+        openView('logox');
+        byId('lx-input').focus();
+      }
+    }
+  });
+  render();
+})();
+</script>
+</body>
+</html>
