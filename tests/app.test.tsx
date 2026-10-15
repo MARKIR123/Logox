@@ -25,6 +25,18 @@ class TerminalInput extends PassThrough {
   unref(): this { return this; }
 }
 class TerminalOutput extends TerminalScreen {}
+async function flushRender(instance: ReturnType<typeof render>): Promise<void> {
+  // Renderer flushing yields to async runtime work, which also belongs to this test action.
+  await act(async () => {await instance.waitUntilRenderFlush();});
+}
+function captureActWarnings(): {restore(): void; assertClean(): void} {
+  const original = console.error, warnings: string[] = [];
+  console.error = (...args: unknown[]) => {
+    if (String(args[0]).includes('not wrapped in act')) warnings.push(args.map(String).join(' '));
+    else original(...args);
+  };
+  return {restore: () => {console.error = original;}, assertClean: () => assert.equal(warnings.length, 0, warnings.join('\n'))};
+}
 test('全屏真实 Ink 接线：主草稿在提问期间可编辑，稍后回答不取消，回答后恢复主输入', {timeout: 8000}, async () => {
   const input = new TerminalInput();
   const output = new TerminalOutput();
@@ -45,7 +57,7 @@ test('全屏真实 Ink 接线：主草稿在提问期间可编辑，稍后回答
   });
   const key = async (text: string) => {
     await act(async () => { input.write(text); if (text === '\x1b') await delay(40); });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   try {
     assert.equal(input.isRaw, true);
@@ -67,16 +79,16 @@ test('全屏真实 Ink 接线：主草稿在提问期间可编辑，稍后回答
     await act(async () => {
       store.message('s', 'kalon', 'assistant', '我的大哲学家，这段正文的左侧轨道不会被复制进去。');
     });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     await key('\x1b[<0;1;1M\x1b[<32;60;3M\x1b[<0;60;3m');
     const oscMatch = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(output.text);
     assert.ok(oscMatch, 'SGR 鼠标拖拽释放后写出 OSC 52 剪贴板序列');
     const copied = Buffer.from(oscMatch![1]!, 'base64').toString('utf8');
-    assert.equal(copied, '我的大哲学家，这段正文的左侧轨道不会被复制进去。');
+    assert.equal(copied, '✧ Kalon · 台词\n我的大哲学家，这段正文的左侧轨道不会被复制进去。\n');
     assert.ok(!copied.includes('▎'), '复制结果不含左轨字符');
     output.rows = 12; output.columns = 30;
     await act(async () => { output.emit('resize'); });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   } finally {
     store.interactions.close();
     await act(async () => { instance.unmount(); });
@@ -106,7 +118,7 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
   });
   const key = async (text: string) => {
     await act(async () => { input.write(text); await delay(40); });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   try {
     assert.match(output.text, /保留项目内容，让它更像一个有审美的开发者作品/);
@@ -136,6 +148,11 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
     await key('\t');
     await key('\r');
     assert.equal(store.interactions.list()[0]!.status, 'answered');
+    await act(async () => {
+      await waitForSnapshot(store, snapshot => snapshot.interactions.some(request =>
+        request.activityId === runtime.scenario.kalon && request.status === 'pending'));
+    });
+    await flushRender(instance);
     await key('\x1b'); // 返回主窗口，同一请求已同步
     await key('\t'); // 聚焦实际提问，并定位到对应卡片
     assert.match(output.text, /你希望首页更接近哪种气质？/);
@@ -145,7 +162,7 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
     await key('\r');
     assert.match(output.text, /Anamnesis · 偏好候选/);
     await act(async () => {await waitForSnapshot(store, snapshot => snapshot.activities.some(activity => activity.activityId === accepted.activityId && activity.status === 'completed'));});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     assert.match(output.text, /结构与审美校准均已收束完毕/);
     assert.equal(store.activities.get('demo', accepted.activityId)!.status, 'completed');
     assert.match(output.text, /行，先不动文件/);
@@ -181,7 +198,7 @@ test('多行输入真实 Ink 接线：Shift+Enter、粘贴、五行视口、缩�
   });
   const key = async (text: string) => {
     await act(async () => {input.write(text);});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   const latestFrame = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   try {
@@ -199,7 +216,7 @@ test('多行输入真实 Ink 接线：Shift+Enter、粘贴、五行视口、缩�
     assert.equal(store.interactions.list()[0]!.status, 'pending', '输入焦点上下移动不提交许可');
     output.columns = 20; output.rows = 8;
     await act(async () => {output.emit('resize');});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     assert.ok(latestFrame().split('\n').length <= 8, '缩放后底部区不超出终端');
     await key('\r');
     assert.deepEqual(submissions, ['first\nsecond\n三🙂\n四\n五\n六\n七!\n八']);
@@ -231,7 +248,7 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
   const rowIndex = rows.findIndex(r => r.messageId === 'main-aletheia');
   const key = async (text: string) => {
     await act(async () => { input.write(text); await delay(30); });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   const line = () => output.backgroundColors[rowIndex] ?? [];
   try {
@@ -240,18 +257,18 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
         stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100,
       });
     });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     assert.ok(output.text.includes('\x1b[?1003h'));
-    assert.ok(line().includes('#3d5a4f'), '收起使用透亮主题色 #3d5a4f');
+    assert.ok(line().includes('#2c473d'), '收起使用透亮主题色 #2c473d');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('#4b6e61'), '悬停使用展开透亮色 #4b6e61');
+    assert.ok(line().includes('#395c4f'), '悬停使用展开透亮色 #395c4f');
     assert.doesNotMatch(output.lines.join('\n'), /翻看刚读完的三份源码/);
     await key('\x1b[<35;1;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('#3d5a4f'), '移到轨道恢复收起色');
+    assert.ok(line().includes('#2c473d'), '移到轨道恢复收起色');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
-    await key('\x1b[<0;8;' + (rowIndex + 1) + 'M');
+    await key('\x1b[<0;8;' + (rowIndex + 1) + 'M\x1b[<0;8;' + (rowIndex + 1) + 'm');
     await act(async () => { await delay(200); });
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     assert.match(output.text, /翻看刚读完的三份源码/);
   } finally {
     if (instance) {await act(async () => { instance.unmount(); }); await instance.waitUntilExit();}
@@ -262,6 +279,7 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
 });
 
 test('demo 实际请求：Ctrl+X 取消许可后继续提问，自由回答从输入区进入运行时', {timeout: 8000}, async () => {
+  const actWarnings = captureActWarnings();
   const directory = await mkdtemp(join(tmpdir(), 'logox-scene-answer-'));
   const runtime = createDemo('answer', directory);
   await runtime.ready;
@@ -271,7 +289,7 @@ test('demo 实际请求：Ctrl+X 取消许可后继续提问，自由回答从�
   let instance!: ReturnType<typeof render>;
   const key = async (text: string) => {
     await act(async () => {input.write(text); await delay(40);});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   try {
     await act(async () => {
@@ -304,6 +322,7 @@ test('demo 实际请求：Ctrl+X 取消许可后继续提问，自由回答从�
     if (instance) await instance.waitUntilExit();
     input.destroy(); output.destroy();
     await rm(directory, {recursive: true, force: true});
+    actWarnings.restore(); actWarnings.assertClean();
   }
 });
 test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒绝不写文件，角色窗口可继续', {timeout: 10000}, async () => {
@@ -314,7 +333,7 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
   output.rows = 36; output.columns = 100;
   const directory = await mkdtemp(join(tmpdir(), 'logox-real-ui-'));
   let round = 0;
-  const runtime = await createApplication({cwd: directory, sessionId: 'real-ui',
+  const runtime = await createApplication({cwd: directory, resourceOptions: {home: directory, boundary: directory}, sessionId: 'real-ui',
     config: await loadConfig(directory, {provider: {model: 'test', context_window: 131072}}, {}, directory, directory),
     provider: {async respond(_request, onDelta) {
       round++;
@@ -336,12 +355,12 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
   });
   const key = async (text: string) => {
     await act(async () => {input.write(text); await delay(45);});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   try {
     await key('@techne 写文件'); await key('\r');
     await act(async () => {await waitForSnapshot(runtime.store, snapshot => snapshot.interactions.some(item => item.status === 'pending'));});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
     assert.match(output.text, /允许执行 write/);
     assert.ok(!output.text.includes('首屏布局'));
     await key('保留的主草稿');
@@ -359,7 +378,7 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
     assert.equal(runtime.store.getSnapshot().activities.at(-1)?.ownerId, 'aletheia');
     output.columns = 32; output.rows = 12;
     await act(async () => {output.emit('resize');});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   } finally {
     await act(async () => {await runtime.close(); instance.unmount();});
     await instance.waitUntilExit();
@@ -388,7 +407,7 @@ test('真实舞台的多问题可逐项选择和自由输入，回答不会覆�
       patchConsole: false, exitOnCtrlC: false, maxFps: 100,
     });
   });
-  const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await instance.waitUntilRenderFlush();};
+  const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await flushRender(instance);};
   try {
     await key('主草稿');
     await key('\t'); await key('\r');
@@ -411,10 +430,11 @@ import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 
 test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消与草稿恢复', {timeout: 8000}, async () => {
+  const actWarnings = captureActWarnings();
   const cwd = await mkdtemp(join(tmpdir(), 'logox-login-tui-'));
   const authPath = join(cwd, 'user-auth.json');
   const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
-  const app = await createApplication({cwd, config, authPath, sessionId: 'login-ui'});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, authPath, sessionId: 'login-ui'});
   const input = new TerminalInput(), output = new TerminalOutput();
   const submissions: string[] = [];
   let instance!: ReturnType<typeof render>;
@@ -428,14 +448,14 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   });
   const key = async (value: string) => {
     await act(async () => {input.write(value);await delay(value === '\x1b' ? 40 : 10);});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   const phase = async (expected: string | null) => {
     await act(async () => {
       for (let i = 0; i < 100 && (app.authentication.getSnapshot()?.phase ?? null) !== expected; i++) await delay(10);
     });
     assert.equal(app.authentication.getSnapshot()?.phase ?? null, expected);
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   try {
     await key('/lo');await key('\r');await phase('provider');
@@ -452,7 +472,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await key('ordinary-draft');
     await act(async () => {await app.submit('/login deepseek');});await phase('key');
     output.columns = 32;output.rows = 12;
-    await act(async () => {output.emit('resize');});await instance.waitUntilRenderFlush();
+    await act(async () => {output.emit('resize');});await flushRender(instance);
     await key('cancelled-secret');await key('\x1b');await phase(null);
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!output.text.includes('cancelled-secret'));
@@ -461,6 +481,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   } finally {
     await act(async () => {await app.close();instance.unmount();});await instance.waitUntilExit();
     await rm(cwd, {recursive: true, force: true});
+    actWarnings.restore(); actWarnings.assertClean();
   }
 });
 
@@ -478,7 +499,7 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
   });
   const key = async (value: string) => {
     await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);});
-    await instance.waitUntilRenderFlush();
+    await flushRender(instance);
   };
   const frame = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   try {
@@ -506,7 +527,7 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
     await key('g'); await key('\x7f');
     assert.match(frame(), /登录并保存 API key/, '回到曾经关闭的前缀也重新联想');
     output.columns = 32; output.rows = 12;
-    await act(async () => output.emit('resize')); await instance.waitUntilRenderFlush();
+    await act(async () => output.emit('resize')); await flushRender(instance);
     assert.match(frame(), /❯ \/login/);
     await key('\r'); assert.equal(submissions.at(-1), '/login');
     await key('/sta'); await key('\x1b\r');

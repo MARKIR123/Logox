@@ -17,6 +17,7 @@ export function runProcess(command: string, args: readonly string[], cwd: string
       if (process.platform === 'win32') {
         const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore'});
         killer.on('error', () => child.kill());
+        killer.once('close', code => {if (code !== 0) child.kill();});
       } else {try {process.kill(-child.pid, 'SIGKILL');} catch {child.kill('SIGKILL');}}
     };
     const stop = (reason: Error) => {

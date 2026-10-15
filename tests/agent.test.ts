@@ -23,7 +23,7 @@ function call(name: string, args: unknown, id = 'c'): ModelTurn {
 async function fixture(provider: Provider, iterations = 50) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-agent-'));
   const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}}}, {}, cwd, cwd);
-  const app = await createApplication({cwd, sessionId: 'test', config, provider});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, config, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
 function scripted(turns: Array<ModelTurn | ((request: ModelRequest) => ModelTurn)>): Provider {
@@ -80,7 +80,7 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     assert.deepEqual(entries.map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant']);
     assert.equal(entries[1]?.message?.role, 'assistant');
     await f.app.close();
-    const restored = await createApplication({cwd: f.cwd, sessionId: 'test', config: f.config, provider});
+    const restored = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, sessionId: 'test', config: f.config, provider});
     try {
       assert.ok(restored.store.getSnapshot().messages.some(message => message.text === '文件已写入。'));
       await restored.submit('/undo');
@@ -194,7 +194,7 @@ test('达到循环额度由用户续做或停止，不自动假装完成', async
   } finally {await f.cleanup();}
 });
 
-test('重试只发生在可见增量之前，已显示的中断回复保存到历史', async () => {
+test('未识别的暂时故障只在可见增量之前重试，已显示的中断回复保存到历史', async () => {
   let count = 0;
   const f = await fixture({async respond(_request, onDelta) {
     count++;
@@ -209,6 +209,13 @@ test('重试只发生在可见增量之前，已显示的中断回复保存到�
     assert.equal(f.app.store.activities.get('test', handle.activityId)?.status, 'failed');
     assert.equal((await f.app.journal.load('test', 'logox')).at(-1)?.text, '半段回复');
   } finally {await f.cleanup();}
+});
+
+test('Windows 进程树终止失败时仍及时回收直属子进程', {timeout: 5000}, async () => {
+  const start = Date.now();
+  await assert.rejects(runProcess(process.execPath, ['-e', 'setTimeout(()=>process.exit(),2500)'],
+    process.cwd(), new AbortController().signal, 100), /超时/);
+  assert.ok(Date.now() - start < 1500, '超时后必须回收子进程，不能等待它自行结束');
 });
 
 test('真实 Shell 成功、非零退出、取消和超时均回收进程', {timeout: 10000}, async () => {
@@ -243,7 +250,7 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     assert.equal(round, 5);
     assert.deepEqual((await f.app.journal.load('test', 'aletheia')).map(entry => entry.role), ['user', 'assistant']);
     const rows = buildStageRows(f.app.store.getSnapshot(), 'test', 'logox', 80, {}, null);
-    assert.ok(rows.some(row => row.text.includes('查资料')));
+    assert.ok(rows.some(row => row.text.includes('侦察结果')), '完成卡片复用成果摘要标题');
     assert.ok(!rows.some(row => row.text.includes('保留项目内容')), '真实场景不含 portfolio 演示正文');
   } finally {await f.cleanup();}
 });

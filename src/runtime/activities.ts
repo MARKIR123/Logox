@@ -1,10 +1,10 @@
 import {activitySchema, immutable, type Activity, type ActivityStatus} from './contracts.js';
 
 const transitions: Record<ActivityStatus, readonly ActivityStatus[]> = {
-  queued: ['running', 'cancelled', 'failed'],
+  queued: ['running', 'paused', 'cancelled', 'failed'],
   running: ['waiting_input', 'paused', 'completed', 'failed', 'cancelled'],
   waiting_input: ['running', 'paused', 'failed', 'cancelled'],
-  paused: ['running', 'cancelled', 'failed'],
+  paused: ['queued', 'running', 'cancelled', 'failed'],
   completed: [], failed: [], cancelled: [],
 };
 export function activityKey(sessionId: string, activityId: string): string {
@@ -14,6 +14,12 @@ export class Activities {
   private readonly records = new Map<string, Activity>();
   constructor(private readonly onChange: () => void) {}
   list(): readonly Activity[] { return Object.freeze([...this.records.values()]); }
+  clearSession(sessionId: string): void {
+    const entries = [...this.records].filter(([, activity]) => activity.sessionId === sessionId);
+    if (entries.some(([, activity]) => transitions[activity.status].length > 0)) throw new Error('活动未结束，不能清空显示');
+    for (const [key] of entries) this.records.delete(key);
+    this.onChange();
+  }
   get(sessionId: string, activityId: string): Activity | undefined {
     return this.records.get(activityKey(sessionId, activityId));
   }
@@ -25,7 +31,7 @@ export class Activities {
     this.onChange();
     return record;
   }
-  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail'>>): Activity {
+  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'phase' | 'progress'>>): Activity {
     const key = activityKey(sessionId, activityId);
     const current = this.records.get(key);
     if (!current) throw new Error('活动不存在');

@@ -1,10 +1,13 @@
-import type {ActivityStatus, Interaction} from '../runtime/contracts.js';
+import type {ActivityStatus, Interaction, Step} from '../runtime/contracts.js';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type {ActorId} from '../actors/ensemble.js';
-import {actorCardPalette, choiceStyle, mixHex, palette, safeText} from './cards.js';
+import {actorCardPalette, choiceStyle, mixHex, palette, safeText, ownerColor, ownerHeader, ownerSurface, type ActorStyles} from './cards.js';
+import {cast} from '../actors/ensemble.js';
 import type {Row} from './viewport.js';
+import type {ContentCell} from './selection.js';
 import {layoutMarkdown} from './markdown.js';
+import {stepStatus, stepIcon, thinkingDuration} from './row-presentation.js';
 
 export interface SceneSegment {
   readonly text: string;
@@ -12,6 +15,8 @@ export interface SceneSegment {
   readonly bg?: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
+  readonly selectionKey?: string;
+  readonly selectionOffset?: number;
 }
 
 export interface SceneAction {
@@ -26,10 +31,11 @@ export interface SceneAction {
     | 'confirm_style'
     | 'select_answer'
     | 'confirm_answer'
+    | 'stop_actor'
     | 'later';
   readonly requestId?: string;
   readonly foldId?: string;
-  readonly owner?: ActorId;
+  readonly owner?: string;
   readonly value?: string;
 }
 
@@ -41,6 +47,9 @@ export interface SceneRow extends Row {
   readonly suffixSegments?: readonly SceneSegment[];
   readonly segments?: readonly SceneSegment[];
   readonly action?: SceneAction;
+  readonly hits?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction}[];
+  readonly animation?: {readonly step?: Step; readonly thinking?: boolean; readonly highlighted?: boolean; readonly actorBg?: string; readonly actorColor?: string; readonly active?: boolean};
+  readonly controls?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction; readonly disabled?: boolean}[];
 }
 
 export interface DemoEvent {
@@ -131,17 +140,18 @@ function portfolioTaskStatus(state: DemoSceneState, owner: 'techne' | 'kalon'): 
   return state.style ? '已完成 · 偏好已记录' : state.permission || request?.status === 'pending' ? '等待你回答' : '排队中 · 等待 Techne';
 }
 
-function railColorFor(who: 'user' | ActorId): string {
+function railColorFor(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return palette.user;
+  if (who === 'system') return palette.muted;
   if (who === 'logox') return palette.accent;
-  return demoRoles[who].color;
+  return ownerColor(who, roles);
 }
 
-function whoLabel(who: 'user' | ActorId): string {
+function whoLabel(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return '你';
+  if (who === 'system') return '系统';
   if (who === 'logox') return '◈ Logox';
-  const r = demoRoles[who];
-  return `${r.symbol} ${r.name}`;
+  return ownerHeader(who, roles);
 }
 
 
@@ -167,7 +177,7 @@ interface RowBuilder {
   contentWidth: number;
   hoveredFoldId: string | null;
   pushBlank(railColor?: string, frame?: FrameWrap, action?: SceneAction): void;
-  pushTurnHeader(id: string, who: 'user' | ActorId, origin?: string, clock?: string): void;
+  pushTurnHeader(id: string, who: string, origin?: string, clock?: string): void;
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
   pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap): void;
   pushFramedLine(
@@ -196,7 +206,11 @@ interface RowBuilder {
     open: boolean;
     railColor: string;
     parentFrame?: FrameWrap;
-    ownerId?: ActorId | 'anamnesis';
+    ownerId?: string;
+    toneColor?: string;
+    step?: Step;
+    tokens?: number;
+    renderBody?(frame: FrameWrap): void;
   }): void;
 }
 
@@ -219,6 +233,7 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
   let used = 0;
   const segmenter = new Intl.Segmenter('zh', {granularity: 'grapheme'});
   for (const segment of segments) {
+    let offset = segment.selectionOffset ?? 0;
     for (const {segment: part} of segmenter.segment(safeText(segment.text))) {
       if (part === '\n' || (used > 0 && used + stringWidth(part) > width)) {
         lines.push([]); used = 0;
@@ -226,8 +241,9 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
       }
       const line = lines.at(-1)!;
       const last = line.at(-1);
-      const value = {...segment, text: part};
-      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic) {
+      const value = {...segment, text: part, selectionOffset: offset};
+      offset += part.length;
+      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic && last.selectionKey === value.selectionKey) {
         line[line.length - 1] = {...last, text: last.text + part};
       } else line.push(value);
       used += stringWidth(part);
@@ -236,7 +252,7 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
   return lines;
 }
 
-export function createBuilder(width: number, hoveredFoldId: string | null): RowBuilder {
+export function createBuilder(width: number, hoveredFoldId: string | null, roles: ActorStyles = cast): RowBuilder {
   const rows: SceneRow[] = [];
   const baseGutterCols = width >= 6 ? 2 : 0;
   const contentWidth = Math.max(1, width - baseGutterCols);
@@ -259,28 +275,38 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
   const pushFramedLine: RowBuilder['pushFramedLine'] = (id, railColor, innerSegments, frame, action, lineBg) => {
     const bg = lineBg ?? frame.bg;
     const wrapped = wrapSegments(innerSegments, frame.innerWidth);
+    let offset = 0;
     for (let index = 0; index < wrapped.length; index++) {
       const inner = wrapped[index]!;
       const used = inner.reduce((sum, s) => sum + stringWidth(s.text), 0);
+      const segments = [...frame.leftSegments,
+        ...inner.map(s => bg && !s.bg ? {...s, bg} : s),
+        {text: ' '.repeat(Math.max(0, frame.innerWidth - used)), ...(bg ? {bg} : {})},
+        ...frame.rightSegments];
+      const selectionCells: ContentCell[] = [];
+      let column = 0;
+      for (const [partIndex, segment] of segments.entries()) {
+        let fieldOffset = segment.selectionOffset ?? offset;
+        const key = segment.selectionKey ?? (partIndex >= frame.leftSegments.length && partIndex < frame.leftSegments.length + inner.length ? id : id + ':frame:' + index);
+        for (const {segment: glyph} of new Intl.Segmenter('zh', {granularity: 'grapheme'}).segment(segment.text)) {
+          const width = Math.max(1, stringWidth(glyph));
+          selectionCells.push({column, width, key, offset: fieldOffset});
+          column += width; fieldOffset += glyph.length;
+        }
+        if (partIndex >= frame.leftSegments.length && partIndex < frame.leftSegments.length + inner.length) offset += segment.text.length;
+      }
       rows.push({
-        messageId: id, line: index, text: inner.map(s => s.text).join(''), railColor,
+        messageId: id, line: index, text: inner.map(s => s.text).join(''), displayText: segments.map(s => s.text).join(''), selectionCells, railColor,
         gutterCols: baseGutterCols + frame.leftCols, softWrap: index < wrapped.length - 1, noSelect: true, tone: 'body',
-        ...(bg ? {bg} : {}),
-        segments: [
-          ...frame.leftSegments,
-          ...inner.map(s => bg && !s.bg ? {...s, bg} : s),
-          {text: ' '.repeat(Math.max(0, frame.innerWidth - used)), ...(bg ? {bg} : {})},
-          ...frame.rightSegments,
-        ],
-        ...(action ? {action} : {}),
+        ...(bg ? {bg} : {}), segments, ...(action ? {action} : {}),
       });
     }
   };
 
   const pushTurnHeader: RowBuilder['pushTurnHeader'] = (id, who, origin = '', clock = '') => {
-    const railColor = railColorFor(who);
-    const name = whoLabel(who);
-    const pieces: SceneSegment[] = [{text: name, color: railColor, bold: true}];
+    const railColor = railColorFor(who, roles);
+    const name = whoLabel(who, roles);
+    const pieces: SceneSegment[] = [{text: name, color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
     if (origin) pieces.push({text: '  ' + origin, color: palette.muted});
     const used = pieces.reduce((sum, s) => sum + stringWidth(s.text), 0);
     if (clock && used + stringWidth(clock) + 2 <= contentWidth) pieces.push({text: ' '.repeat(contentWidth - used - stringWidth(clock)) + clock, color: palette.muted});
@@ -297,7 +323,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
         const value = wrapped[index]!;
         const padTail = Math.max(0, f.innerWidth - stringWidth(value));
         rows.push({
-          messageId: id, line: line++, text: value, railColor, gutterCols: baseGutterCols + f.leftCols,
+          messageId: id, line: line++, text: value, displayText: f.leftSegments.map(s => s.text).join('') + value + (f.bg || f.rightCols ? ' '.repeat(padTail) + f.rightSegments.map(s => s.text).join('') : ''), railColor, gutterCols: baseGutterCols + f.leftCols,
           softWrap: index < wrapped.length - 1, noSelect: false, tone,
           sourceStart, sourceEnd: sourceStart + value.length,
           ...(color ? {color} : {}),
@@ -317,7 +343,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
   const pushMarkdown: RowBuilder['pushMarkdown'] = (id, text, railColor, frame) => {
     const f = frame ?? topFrame();
     for (const [line, value] of layoutMarkdown(text, f.innerWidth).entries()) {
-      rows.push({messageId: id, line, text: value.text, railColor, gutterCols: baseGutterCols + f.leftCols,
+      rows.push({messageId: id, line, text: value.text, displayText: f.leftSegments.map(s => s.text).join('') + value.text + (f.bg || f.rightCols ? ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text))) + f.rightSegments.map(s => s.text).join('') : ''), railColor, gutterCols: baseGutterCols + f.leftCols,
         softWrap: value.softWrap, noSelect: Boolean(value.noSelect), tone: 'body', sourceText: text,
         sourceStart: value.start, sourceEnd: value.end, sourceCells: value.cells,
         ...(value.sourceBlock ? {sourceBlock: value.sourceBlock} : {}),
@@ -341,6 +367,9 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
   };
 
   const pushCardHeader: RowBuilder['pushCardHeader'] = (id, label, title, status, frame, railColor, action, statusTint = palette.muted, textTint = palette.fg, textBold = false) => {
+    label = label.map((segment, index) => ({...segment, selectionKey: id + ':label:' + index, selectionOffset: 0}));
+    const titleSegment = {text: title, color: textTint, bold: textBold, selectionKey: id + ':title', selectionOffset: 0};
+    const statusSegment = {text: status, color: statusTint, selectionKey: id + ':status', selectionOffset: 0};
     const labelW = label.reduce((sum, s) => sum + stringWidth(s.text), 0);
     const statusW = stringWidth(status);
     const titleW = stringWidth(title);
@@ -350,22 +379,22 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
       pushFramedLine(id, railColor, [
         ...label,
         {text: separator, color: palette.muted},
-        {text: title, color: textTint, bold: textBold},
+        titleSegment,
         {text: ' '.repeat(Math.max(0, frame.innerWidth - used - statusW))},
-        {text: status, color: statusTint},
+        statusSegment,
       ], frame, action);
       return;
     }
     // Keep identity and status visible; the complete task gets its own wrapped rows.
     const header = [...label];
     if (labelW + statusW + 1 <= frame.innerWidth) {
-      header.push({text: ' '.repeat(frame.innerWidth - labelW - statusW)}, {text: status, color: statusTint});
+      header.push({text: ' '.repeat(frame.innerWidth - labelW - statusW)}, statusSegment);
       pushFramedLine(id, railColor, header, frame, action);
     } else {
       pushFramedLine(id, railColor, header, frame, action);
-      if (status) pushFramedLine(id + '-status', railColor, [{text: status, color: statusTint}], frame, action);
+      if (status) pushFramedLine(id + '-status', railColor, [statusSegment], frame, action);
     }
-    if (title) pushFramedLine(id + '-task', railColor, [{text: title, color: textTint, bold: textBold}], frame, action);
+    if (title) pushFramedLine(id + '-task', railColor, [titleSegment], frame, action);
   };
 
   const pushOrdinaryCard: RowBuilder['pushOrdinaryCard'] = opts => {
@@ -373,8 +402,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
     const isDream = opts.kind === '入梦';
     const firstRow = rows.length;
     const bright = opts.open || hoveredFoldId === opts.id;
-    // 仅入梦卡有白日梦雾白灰底色；思考、工具调用及内联已回答记录均不设独立灰底，直接透出父容器底色
-    const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : pf.bg;
+    const simple = opts.kind === '思考' || opts.kind === 'Thinking' || opts.kind === '工具调用';
+    const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : opts.open && simple ? palette.toolExpanded : pf.bg;
     const frame = insetFrame(pf, cardBg);
     const action: SceneAction = {kind: 'toggle_fold', foldId: opts.id};
     if (isDream) {
@@ -383,29 +412,47 @@ export function createBuilder(width: number, hoveredFoldId: string | null): RowB
     const highlightColor = isDream
       ? palette.dreamText
       : opts.ownerId && opts.ownerId !== 'anamnesis'
-        ? railColorFor(opts.ownerId)
+        ? railColorFor(opts.ownerId, roles)
         : opts.railColor || palette.accent;
-    const labelColor = isDream ? palette.dreamText : bright ? highlightColor : palette.muted;
-    const titleColor = isDream ? palette.dreamText : bright ? highlightColor : palette.fg;
-    pushCardHeader(
-      opts.id,
-      [{text: opts.kind, color: labelColor, bold: isDream}],
-      opts.title,
-      opts.status ?? '',
-      frame,
-      opts.railColor,
-      action,
-      isDream ? palette.dreamMuted : statusColor(opts.status ?? '', highlightColor),
-      titleColor,
-      false,
-    );
+    const labelColor = opts.toneColor ?? (isDream ? palette.dreamText : bright ? highlightColor : palette.muted);
+    const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
+    if (simple) {
+      const thinking = opts.kind !== '工具调用';
+      const terminal = opts.step && ['completed', 'failed', 'cancelled'].includes(opts.step.state);
+      const title = thinking ? terminal ? 'Thought for' : 'Thinking...' : opts.title;
+      const status = thinking ? (opts.step ? thinkingDuration(opts.step, Date.now()) : '') : opts.step ? stepStatus(opts.step, Date.now()) : opts.status ?? '';
+      const icon = thinking && opts.step ? stepIcon(opts.step, Date.now(), false) : '▮';
+      const fault = opts.step?.disposition === 'denied' ? 'Denied' : opts.step?.disposition === 'error' || opts.step?.state === 'failed' ? 'Error' : '';
+      pushFramedLine(opts.id, opts.railColor, [
+        {text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0},
+        {text: title, color: titleColor, selectionKey: opts.id + ':title', selectionOffset: 0},
+        {text: status ? thinking ? terminal ? ' ' : ' · ' : '  ' : ''},
+        {text: status, color: palette.muted, selectionKey: opts.id + ':status', selectionOffset: 0},
+        ...(thinking ? [{text: ' · ' + (opts.tokens ?? 0) + ' Tokens' + (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? '等待中') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
+        ...(fault ? [{text: '  ' + fault, color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
+      ], frame, action);
+      if (opts.step) for (let index = firstRow; index < rows.length; index++) {
+        const row = rows[index]!;
+        rows[index] = {...row, animation: {step: opts.step, thinking, highlighted: hoveredFoldId === opts.id, actorColor: highlightColor}};
+      }
+    } else pushCardHeader(opts.id, [{text: opts.kind, color: labelColor, bold: isDream}],
+      opts.title, opts.status ?? '', frame, opts.railColor, action,
+      isDream ? palette.dreamMuted : statusColor(opts.status ?? '', highlightColor), titleColor, false);
     if (opts.open) {
-      opts.bodyLines.forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === '工具调用' ? 'direction' : 'body', frame, action, isDream ? palette.dreamText : undefined));
+      opts.bodyLines.forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === '工具调用' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
+      opts.renderBody?.(frame);
     }
     if (isDream) {
       pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, pf, action);
     }
-    if (!opts.open) markHover(rows, firstRow, opts.id, baseGutterCols + pf.leftCols, width - pf.rightCols);
+    for (let index = firstRow; index < rows.length; index++) {
+      const row = rows[index]!;
+      const startCol = opts.open || isDream ? baseGutterCols + pf.leftCols : row.gutterCols;
+      const titleCells = row.selectionCells?.filter(cell => cell.key === opts.id + ':title' || cell.key === opts.id + ':icon') ?? [];
+      const endCol = opts.open || isDream ? width - pf.rightCols : simple ? baseGutterCols + Math.max(startCol - baseGutterCols, ...titleCells.map(cell => cell.column + cell.width)) : row.gutterCols + stringWidth(row.text.trimEnd());
+      rows[index] = {...row, hits: [...row.hits ?? [], {startCol, endCol, action}],
+        ...(!opts.open ? {hover: {foldId: opts.id, startCol, endCol}} : {})};
+    }
   };
 
   return {rows, width, baseGutterCols, contentWidth, hoveredFoldId, pushBlank, pushTurnHeader, pushProse, pushMarkdown, pushFramedLine, pushCardCap, pushCardHeader, pushOrdinaryCard};
@@ -415,6 +462,13 @@ function markHover(rows: SceneRow[], start: number, foldId: string, startCol: nu
   for (let index = start; index < rows.length; index++) {
     rows[index] = {...rows[index]!, hover: {foldId, startCol, endCol}};
   }
+}
+
+export function actionAt(row: SceneRow | undefined, x: number): SceneAction | undefined {
+  const control = row?.controls?.find(item => x >= item.startCol && x < item.endCol);
+  if (control) return control.disabled ? undefined : control.action;
+  if (row?.hits) return row.hits.find(hit => x >= hit.startCol && x < hit.endCol)?.action;
+  return row?.action;
 }
 
 export function hoveredCardAt(row: SceneRow | undefined, x: number): string | null {
@@ -492,19 +546,23 @@ export function appendActorCard(
   builder: RowBuilder,
   opts: {
     id: string;
-    owner: 'aletheia' | 'techne' | 'kalon';
+    owner: string;
+    roles?: ActorStyles;
     task: string;
     status: string;
     open: boolean;
     railColor: string;
+    active?: boolean;
+    stop?: {readonly disabled: boolean; readonly focused: boolean; readonly hovered: boolean};
     renderBody(frame: FrameWrap, actorColor: string, bodyAction: SceneAction): void;
   },
 ) {
-  const role = demoRoles[opts.owner];
+  const roles: ActorStyles = opts.roles ?? cast;
+  const role = roles[opts.owner] ?? {symbol: '◇', name: opts.owner, color: palette.accent};
   const shortStatus = opts.status.split(' · ')[0]!.replace('等待你授权', '待授权').replace('等待你回答', '待回答');
   const firstRow = builder.rows.length;
   const bright = opts.open || builder.hoveredFoldId === opts.id;
-  const cardBg = bright ? actorCardPalette[opts.owner].open : actorCardPalette[opts.owner].closed;
+  const cardBg = ownerSurface(opts.owner, bright, opts.roles);
   const outerFrame: FrameWrap = {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth};
   const frame = insetFrame(outerFrame, cardBg);
   const action: SceneAction = {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
@@ -514,7 +572,7 @@ export function appendActorCard(
     opts.id,
     [{text: role.symbol + ' ' + role.name, color: role.color, bold: true}],
     opts.task,
-    shortStatus,
+    shortStatus + (opts.stop ? opts.stop.disabled ? ' · 停止中…' : ' · ■ 停止' : ''),
     frame,
     opts.railColor,
     action,
@@ -522,10 +580,33 @@ export function appendActorCard(
     bright ? role.color : palette.fg,
     false,
   );
-  if (opts.open) {
-    opts.renderBody(frame, role.color, {kind: 'actor_body', owner: opts.owner});
+  if (opts.stop) {
+    const label = opts.stop.disabled ? '停止中…' : '■ 停止';
+    for (let index = firstRow; index < builder.rows.length; index++) {
+      const row = builder.rows[index]!, at = row.text.lastIndexOf(label);
+      if (at < 0) continue;
+      const startCol = row.gutterCols + stringWidth(row.text.slice(0, at));
+      const tint = opts.stop.focused || opts.stop.hovered ? role.color : palette.muted;
+      const segments = row.segments?.flatMap(segment => {
+        // The status is a dedicated segment; only its stop label uses focus color.
+        if (!segment.text.includes(label)) return [segment];
+        const split = segment.text.lastIndexOf(label);
+        return [{...segment, text: segment.text.slice(0, split)}, {...segment, text: label, color: tint, bold: Boolean(opts.stop?.focused)},
+          {...segment, text: segment.text.slice(split + label.length)}];
+      });
+      builder.rows[index] = {...row, ...(segments ? {segments} : {}), controls: [{startCol, endCol: startCol + stringWidth(label),
+        action: {kind: 'stop_actor', foldId: opts.id, owner: opts.owner}, disabled: opts.stop.disabled}]};
+    }
   }
-  builder.pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, outerFrame, opts.open ? {kind: 'actor_body', owner: opts.owner} : action);
+  if (opts.open) {
+    opts.renderBody(frame, role.color, action);
+  }
+  builder.pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, outerFrame, action);
+  for (let index = firstRow; index < builder.rows.length; index++) {
+    const row = builder.rows[index]!;
+    builder.rows[index] = {...row, hits: [...row.hits ?? [], {startCol: builder.baseGutterCols, endCol: builder.width, action}],
+      animation: {...row.animation, ...(cardBg ? {actorBg: cardBg} : {}), actorColor: role.color, active: opts.active ?? false}};
+  }
   if (!opts.open) markHover(builder.rows, firstRow, opts.id, builder.baseGutterCols, builder.width);
 }
 
@@ -579,13 +660,13 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
     task: demoRoles.aletheia.task,
     status: '已完成 · 读取 3 个文件',
     open: isFoldOpen(state, 'main-aletheia', false),
-    railColor: logoxRail,
+    railColor: demoRoles.aletheia.color,
     renderBody(frame, _actorColor, bodyAction) {
-      builder.pushProse('main-aletheia-dir', '（翻看刚读完的三份源码）', logoxRail, 'direction', frame, bodyAction);
+      builder.pushProse('main-aletheia-dir', '（翻看刚读完的三份源码）', demoRoles.aletheia.color, 'direction', frame, bodyAction);
       builder.pushProse(
         'main-aletheia-prose',
         '三处问题位置都标出来了：首屏三个元素在抢视觉重心，窄屏下还有三层多余的嵌套内边距。坐标已经发给 Techne，视觉细节留给 Kalon 收尾。',
-        logoxRail,
+        demoRoles.aletheia.color,
         'body',
         frame,
         bodyAction,
@@ -602,7 +683,7 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
         ],
         status: '已完成',
         open: isFoldOpen(state, 'main-aletheia-reads', false),
-        railColor: logoxRail,
+        railColor: demoRoles.aletheia.color,
         parentFrame: frame,
       });
     },
@@ -616,18 +697,18 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
     task: demoRoles.techne.task,
     status: tStatus,
     open: isFoldOpen(state, 'main-techne', defaultSceneFoldOpen(state, 'main-techne')),
-    railColor: logoxRail,
+    railColor: demoRoles.techne.color,
     renderBody(frame, actorColor, bodyAction) {
-      builder.pushProse('main-techne-dir', '（核对完行号，把改动范围收在两个文件内）', logoxRail, 'direction', frame, bodyAction);
+      builder.pushProse('main-techne-dir', '（核对完行号，把改动范围收在两个文件内）', demoRoles.techne.color, 'direction', frame, bodyAction);
       builder.pushProse(
         'main-techne-prose',
         'Aletheia 给的位置很准。项目文案我不动，只拆掉多余容器、对齐首屏网格——免得一会儿又被 Kalon 嫌像没刷漆的毛坯房。',
-        logoxRail,
+        demoRoles.techne.color,
         'body',
         frame,
         bodyAction,
       );
-      appendPermissionInteraction(builder, state, logoxRail, frame, actorColor, 'main-techne');
+      appendPermissionInteraction(builder, state, demoRoles.techne.color, frame, actorColor, 'main-techne');
       if (state.permission === 'allow') {
         builder.pushOrdinaryCard({
           id: 'main-edit',
@@ -640,7 +721,7 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
           ],
           status: '已完成',
           open: isFoldOpen(state, 'main-edit', false),
-          railColor: logoxRail,
+          railColor: demoRoles.techne.color,
           parentFrame: frame,
         });
       }
@@ -656,12 +737,12 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
     task: demoRoles.kalon.task,
     status: kStatus,
     open: isFoldOpen(state, 'main-kalon', defaultSceneFoldOpen(state, 'main-kalon')),
-    railColor: logoxRail,
+    railColor: demoRoles.kalon.color,
     renderBody(frame, actorColor, bodyAction) {
       builder.pushProse(
         'main-kalon-dir',
         state.runtime ? '（端详当前首屏的版式方案）' : state.permission ? '（端详着刚改完的首屏版式）' : '（扫了眼首屏当前的样式表）',
-        logoxRail,
+        demoRoles.kalon.color,
         'direction',
         frame,
         bodyAction,
@@ -671,13 +752,13 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
         kalonReady
           ? state.runtime ? '先生，布局方案的许可已收束。接下来定个调吧——首页你更想要哪种感觉？' : '先生，Techne 这回总算把底子收拾干净了。接下来定个调吧——首页你更想要哪种感觉？'
           : '等 Techne 先把布局骨架改利落，我再来调字距、配色和留白。',
-        logoxRail,
+        demoRoles.kalon.color,
         'body',
         frame,
         bodyAction,
       );
       if (kalonReady) {
-        appendQuestionInteraction(builder, state, logoxRail, frame, actorColor, 'main-kalon');
+        appendQuestionInteraction(builder, state, demoRoles.kalon.color, frame, actorColor, 'main-kalon');
       }
     },
   });
@@ -812,6 +893,7 @@ function buildActorHistoryRows(
     for (let i = 0; i < paths.length; ++i) {
       builder.pushOrdinaryCard({
         id: `aletheia-read-${i}`,
+        ownerId: 'aletheia',
         kind: '工具调用',
         title: `Read · ${paths[i]}`,
         bodyLines: [notes[i]!],
@@ -836,6 +918,7 @@ function buildActorHistoryRows(
     builder.pushTurnHeader('techne-work-turn', 'techne', '向用户请求修改许可', '当前轮');
     builder.pushOrdinaryCard({
       id: 'techne-read',
+      ownerId: 'techne',
       kind: '工具调用',
       title: 'Read · src/pages/index.tsx:18',
       bodyLines: ['核对 L18-L34 组件树与样式引用，确认修改切口无外部副作用。'],
@@ -845,6 +928,7 @@ function buildActorHistoryRows(
     });
     builder.pushOrdinaryCard({
       id: 'techne-thinking',
+      ownerId: 'techne',
       kind: '思考',
       title: '缩小修改范围',
       bodyLines: ['只动结构咬合与响应式内边距，切口严格控制在两处文件以内。'],
@@ -856,6 +940,7 @@ function buildActorHistoryRows(
     if (state.permission || !permOpen) {
       builder.pushOrdinaryCard({
         id: 'history-techne-question',
+        ownerId: 'techne',
         kind: '权限',
         title: '允许修改文件',
         bodyLines: [state.permission ? '本次许可已回答，裁决记录保留在下方。' : '展开卡片以回答修改许可。'],

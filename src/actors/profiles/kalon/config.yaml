@@ -1,0 +1,20 @@
+id: kalon
+name: Kalon
+title: 雅正 · 审美官
+description: 打磨界面、文案、提示词与代码表达，让结构与形式恰如其分。
+color: "#e8a8dc"
+card_closed: "#544359"
+card_open: "#66526c"
+symbol: ✧
+context:
+  keep_recent_rounds: 0
+  keep_recent_tools: 0
+  reserve_tokens: 32768
+  low_watermark_ratio: 0.5
+skills:
+  - ui-ux-pro-max
+  - impeccable
+  - ui-styling
+  - minimalist-ui
+  - high-end-visual-design
+  - design-system

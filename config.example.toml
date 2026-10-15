@@ -4,8 +4,16 @@
 name = "deepseek"
 model = ""
 temperature = 0.2
+thinking_effort = "auto"
 max_tokens = 16384
-timeout = 120
+timeout = 120 # 连续无有效模型进展的秒数；持续输出不受总时长限制
+
+# 全局界面主题与角色强调色（均可选，默认采用 LOGOX TS 官方配色）
+# [theme]
+# user = "#5282b5"             # 用户自身主题色（沉稳深海蓝）
+# accent = "#d97757"           # Logox 执导者与界面主高亮色（Claude 暖陶橙）
+# dream_collapsed = "#c4cbd2" # 入梦折叠底色（白日梦柔雾灰白）
+# dream_expanded = "#dce2e8"  # 入梦展开底色（云母白灰）
 
 # 上下文整理参数，输出上限仍由 provider.max_tokens 控制。
 [context]
@@ -44,3 +52,37 @@ max_retries = 3
 # default_model = "实际模型名称"
 # 然后设置 [provider] name = "work"。
 # TOML 不保存 api_key。
+
+# 思考能力只在服务支持时声明；费用是每百万 token 静态价格。
+# [models."work/实际模型"]
+# context_window = 32768
+# thinking_protocol = "reasoning-effort"
+# thinking_levels = ["auto", "off", "low", "medium", "high"]
+# [models."work/实际模型".prices]
+# currency = "USD"
+# input = 2
+# output = 4
+# cache_read = 0.5
+# cache_write = 3
+# MCP stdio：首次 list/call 时才启动。远端 call 按当前权限模式裁决。
+# [mcp.servers.local]
+# command = "node"
+# args = ["C:/tools/local-mcp.mjs"]
+# timeout = 30
+# startup_timeout_s = 10
+# enabled = true
+
+# 观察 hooks：可执行文件 + 参数数组，JSON 事件从 stdin 读取。
+# [hooks]
+# enabled = true
+# timeout_s = 5
+# [[hooks.entries]]
+# event = "post_tool_use"
+# tool = "read"
+# command = "powershell.exe"
+# args = ["-NoProfile", "-File", "C:/tools/observe.ps1"]
+
+[permissions]
+# default 灰色：人工审批；auto 蓝色：会话模型审批；creative 紫色：危险过滤后默认允许
+mode = "default"
+readonly_concurrency = 4

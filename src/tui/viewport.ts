@@ -3,8 +3,11 @@ import stringWidth from 'string-width';
 import type {Message} from '../runtime/contracts.js';
 import {ownerColor, ownerHeader, palette, safeText} from './cards.js';
 import type {SourceCell} from './markdown.js';
+import {railColumns, visibleText, type ContentCell} from './selection.js';
 
 export interface Row {
+  readonly displayText?: string;
+  readonly selectionCells?: readonly ContentCell[];
   readonly messageId: string;
   readonly line: number;
   readonly text: string;
@@ -46,18 +49,22 @@ export function timelineRows(messages: readonly Message[], width: number): reado
     const headerText = safeText(`${ownerHeader(message.ownerId)} · ${roleLabel}`);
     const headerLines = wrapAnsi(headerText, contentWidth, {hard: true, trim: false}).split('\n');
     const built: Row[] = [];
+    let headerOffset = 0;
     for (let i = 0; i < headerLines.length; ++i) {
       built.push({
-        messageId: message.id,
+        messageId: message.id + ':header',
         line: built.length,
         text: headerLines[i]!,
+        sourceStart: headerOffset, sourceEnd: headerOffset + headerLines[i]!.length,
         railColor,
         gutterCols,
         softWrap: i < headerLines.length - 1,
         noSelect: true,
         tone: 'header',
       });
+      headerOffset += headerLines[i]!.length;
     }
+    let sourceOffset = 0;
     const logicalLines = safeText(message.text).split('\n');
     for (const logical of logicalLines) {
       const trimmed = logical.trim();
@@ -68,13 +75,16 @@ export function timelineRows(messages: readonly Message[], width: number): reado
           messageId: message.id,
           line: built.length,
           text: segments[i]!,
+          sourceStart: sourceOffset, sourceEnd: sourceOffset + segments[i]!.length,
           railColor,
           gutterCols,
           softWrap: i < segments.length - 1,
           noSelect: false,
           tone,
         });
+        sourceOffset += segments[i]!.length;
       }
+      sourceOffset++;
     }
     built.push({
       messageId: message.id,
@@ -144,20 +154,19 @@ export function sliceRowText(text: string, startCol: number, endCol: number): {b
 }
 
 export function rowSelectionBounds(row: Row, rowIndex: number, selection: SelectionRange | null): [number, number] | null {
-  if (!selection || row.noSelect) return null;
+  if (!selection) return null;
   const {start, end} = normalizeSelection(selection);
   if (start.x === end.x && start.y === end.y) return null;
   if (rowIndex < start.y || rowIndex > end.y) return null;
   const rawStart = rowIndex === start.y ? start.x : 0;
   const rawEnd = rowIndex === end.y ? end.x + 1 : Infinity;
-  const startCol = Math.max(0, rawStart - row.gutterCols);
-  const endCol = Math.max(0, rawEnd - row.gutterCols);
+  const startCol = Math.max(0, rawStart - railColumns(row));
+  const endCol = Math.max(0, rawEnd - railColumns(row));
   return endCol > startCol ? [startCol, endCol] : null;
 }
 
 export function extractSelection(rows: readonly Row[], selection: SelectionRange | null): string {
   if (!selection) return '';
-  if (rows.some(row => row.sourceBlock)) return extractTableSelection(rows, selection);
   const {start, end} = normalizeSelection(selection);
   if (start.x === end.x && start.y === end.y) return '';
   let result = '';
@@ -171,11 +180,12 @@ export function extractSelection(rows: readonly Row[], selection: SelectionRange
     if (!row) continue;
     const bounds = rowSelectionBounds(row, y, selection);
     if (!bounds) continue;
-    const cells = row.sourceCells?.filter(cell => cell.column < bounds[1] && cell.column + cell.width > bounds[0]);
-    const selected = row.sourceText !== undefined && cells?.length
-      ? row.sourceText.slice(cells[0]!.start, cells.at(-1)!.end)
-      : row.sourceText !== undefined && !row.text ? row.sourceText.slice(row.sourceStart, row.sourceEnd)
-      : sliceRowText(row.text, bounds[0], bounds[1]).selected;
+    const inset = Math.max(0, row.gutterCols - railColumns(row));
+    let selected = sliceRowText(visibleText(row), bounds[0], Math.min(bounds[1], inset + stringWidth(row.text))).selected;
+    if (prevSoftWrap && prevRowIndex === y - 1) {
+      const inset = Math.max(0, row.gutterCols - railColumns(row));
+      if (bounds[0] === 0 && inset) selected = sliceRowText(selected, inset, Infinity).selected;
+    }
     if (!hasPiece) {
       result = selected;
       hasPiece = true;
@@ -188,44 +198,6 @@ export function extractSelection(rows: readonly Row[], selection: SelectionRange
     prevSoftWrap = row.softWrap;
   }
   return result;
-}
-
-function extractTableSelection(rows: readonly Row[], selection: SelectionRange): string {
-  const chunks: {source?: string; id: string; ranges: {start: number; end: number}[]; text: string}[] = [];
-  const {start, end} = normalizeSelection(selection);
-  let previousSoftWrap = false;
-  for (let y = Math.max(0, start.y); y <= Math.min(rows.length - 1, end.y); y++) {
-    const row = rows[y]!, bounds = rowSelectionBounds(row, y, selection);
-    if (!bounds) continue;
-    let chunk = chunks.at(-1);
-    if (!chunk || chunk.id !== row.messageId || chunk.source !== row.sourceText) {
-      chunk = {id: row.messageId, ranges: [], text: '', ...(row.sourceText !== undefined ? {source: row.sourceText} : {})}; chunks.push(chunk);
-      previousSoftWrap = false;
-    }
-    if (chunk.source !== undefined) {
-      const fullRow = bounds[0] === 0 && bounds[1] >= stringWidth(row.text);
-      if (fullRow && row.sourceBlock) chunk.ranges.push(row.sourceBlock);
-      else {
-        const selected = row.sourceCells?.filter(cell => cell.end > cell.start && cell.column < bounds[1] && cell.column + cell.width > bounds[0]);
-        if (selected?.length) chunk.ranges.push({start: Math.min(...selected.map(cell => cell.start)), end: Math.max(...selected.map(cell => cell.end))});
-        else if (!row.text) chunk.ranges.push({start: row.sourceStart ?? 0, end: row.sourceEnd ?? 0});
-      }
-    } else {
-      const text = sliceRowText(row.text, bounds[0], bounds[1]).selected;
-      chunk.text += (chunk.text && !previousSoftWrap ? '\n' : '') + text;
-    }
-    previousSoftWrap = row.softWrap;
-  }
-  return chunks.map(chunk => {
-    if (chunk.source === undefined) return chunk.text;
-    const merged: {start: number; end: number}[] = [];
-    for (const range of chunk.ranges.sort((a, b) => a.start - b.start)) {
-      const last = merged.at(-1);
-      if (last && (range.start <= last.end || /^\r?\n$/.test(chunk.source.slice(last.end, range.start)))) last.end = Math.max(last.end, range.end);
-      else merged.push({...range});
-    }
-    return merged.map(range => chunk.source!.slice(range.start, range.end)).join('\n');
-  }).filter(Boolean).join('\n');
 }
 
 const sgrMouseRe = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;

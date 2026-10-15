@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createProvider} from '../src/providers/http.js';
+import {createProvider, ProviderError} from '../src/providers/http.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import {loadConfig} from '../src/config/config.js';
@@ -109,7 +109,60 @@ test('模型查询与回复复用相同认证，缺认证和取消不发送请�
 
 import {createServer} from 'node:http';
 
-test('已收到 HTTP 流头后总超时仍明确报告，用户取消保留原原因', async () => {
+test('真实模型流断连保留传输阶段和底层错误码，已收到增量不丢失', async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {'content-type': 'text/event-stream'});
+    response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    const timer = setTimeout(() => response.destroy(), 50);
+    response.on('close', () => clearTimeout(timer));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  const provider = createProvider({kind: 'openai_compat', baseUrl: 'http://127.0.0.1:' + address.port,
+    model: 'test', key: '', temperature: 0, maxTokens: 100, timeoutMs: 2000});
+  try {
+    let partial = '';
+    await assert.rejects(provider.respond({system: '', messages: [], tools: []}, delta => {partial += delta.text;}, new AbortController().signal), error => {
+      assert.ok(error instanceof ProviderError && error.retryable && error.category === 'temporary');
+      const diagnostic = error.diagnostic;
+      assert.equal(diagnostic?.code, 'UND_ERR_SOCKET'); assert.equal(diagnostic?.phase, 'stream'); assert.equal(diagnostic?.status, 200);
+      assert.match(error.message, /UND_ERR_SOCKET/);
+      assert.ok(diagnostic && 'elapsedMs' in diagnostic && typeof diagnostic.elapsedMs === 'number');
+      assert.ok('progressIdleMs' in diagnostic && typeof diagnostic.progressIdleMs === 'number' && diagnostic.progressIdleMs <= diagnostic.elapsedMs);
+      assert.ok('transportIdleMs' in diagnostic && typeof diagnostic.transportIdleMs === 'number' && diagnostic.transportIdleMs <= diagnostic.elapsedMs);
+      assert.ok('receivedBytes' in diagnostic && diagnostic.receivedBytes === Buffer.byteLength('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+      assert.match(error.message, /传输诊断：/);
+      return true;
+    });
+    assert.equal(partial, 'partial');
+  } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
+});
+
+test('建立连接失败保留公开原因，不输出未知异常回显；协议错误不误报网络问题', async () => {
+  const settings = {kind: 'openai_compat' as const, baseUrl: 'https://example.com/v1', model: 'fixture', key: '',
+    temperature: 0, maxTokens: 100, timeoutMs: 2000};
+  for (const code of ['ECONNRESET', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'private-key']) {
+    const fetcher: typeof fetch = async () => {
+      throw new TypeError('private-request', {cause: Object.assign(new Error('private-address'), {code})});
+    };
+    const provider = createProvider(settings, fetcher);
+    await assert.rejects(provider.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal), error => {
+      assert.ok(error instanceof ProviderError);
+      assert.match(error.message, /模型连接失败/);
+      assert.ok(!JSON.stringify(error).includes('private-'));
+      assert.equal(error.diagnostic?.code, code === 'private-key' ? undefined : code);
+      assert.equal(error.diagnostic?.phase, 'connection');
+      assert.equal(error.diagnostic?.status, undefined, '尚未建立连接，不虚构 HTTP 状态');
+      if (code !== 'private-key') assert.ok(error.message.includes(code));
+      return true;
+    });
+  }
+  const malformed = createProvider(settings, async () => new Response('data: {invalid}\n\n'));
+  await assert.rejects(malformed.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal),
+    error => error instanceof ProviderError && error.category === 'protocol' && error.message === '模型流事件格式无效');
+});
+
+test('已收到 HTTP 流头后无进展超时明确报告，用户取消保留原原因', async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, {'content-type': 'text/event-stream'});
     response.write('data: ' + JSON.stringify({choices: [{delta: {content: 'partial'}}], usage: null}) + '\n\n');
@@ -125,5 +178,74 @@ test('已收到 HTTP 流头后总超时仍明确报告，用户取消保留原�
     const controller = new AbortController();
     const reason = new Error('fixture cancellation');
     await assert.rejects(provider.respond(request, () => controller.abort(reason), controller.signal), error => error === reason);
+  } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
+});
+
+test('持续有效输出可以超过 timeout，总期限不会切断正文、思考和工具参数', {timeout: 8000}, async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {'content-type': 'text/event-stream'});
+    let index = 0;
+    const timer = setInterval(() => {
+      const delta = index < 4 ? {reasoning_content: '想'} : index < 8 ? {content: '文'}
+        : {tool_calls: [{index: 0, ...(index === 8 ? {id: 'call', function: {name: 'read', arguments: '{'}}
+          : {function: {arguments: index === 11 ? '}' : ' '}})}]};
+      response.write('data: ' + JSON.stringify({choices: [{delta, finish_reason: ++index === 12 ? 'tool_calls' : null}]}) + '\n\n');
+      if (index === 12) {clearInterval(timer); response.end('data: [DONE]\n\n');}
+    }, 80);
+    response.on('close', () => clearInterval(timer));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  const provider = createProvider({kind: 'openai_compat', baseUrl: 'http://127.0.0.1:' + address.port, model: 'test', key: '',
+    temperature: 0.2, maxTokens: 100, timeoutMs: 400});
+  try {
+    const turn = await provider.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal);
+    assert.equal(turn.message.reasoning, '想'.repeat(4)); assert.equal(turn.message.text, '文'.repeat(4));
+    assert.equal(turn.stop, 'tools'); assert.equal(turn.message.toolCalls?.[0]?.arguments, '{  }');
+  } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
+});
+
+test('空事件和心跳不能无限延长无进展期限，首包停滞也会超时', {timeout: 8000}, async () => {
+  for (const heartbeat of [false, true]) {
+    const server = createServer((_request, response) => {
+      if (!heartbeat) return;
+      response.writeHead(200, {'content-type': 'text/event-stream'});
+      const timer = setInterval(() => response.write(': ping\n\ndata: {"choices":[]}\n\n'), 40);
+      response.on('close', () => clearInterval(timer));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const provider = createProvider({kind: 'openai_compat', baseUrl: 'http://127.0.0.1:' + address.port, model: 'test', key: '',
+      temperature: 0.2, maxTokens: 100, timeoutMs: 250});
+    try {
+      await assert.rejects(provider.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal),
+        error => error instanceof ProviderError && error.diagnostic?.code === 'idle_timeout');
+    } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
+  }
+});
+
+test('Anthropic 思考增量和协议进展也刷新无进展期限', {timeout: 8000}, async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {'content-type': 'text/event-stream'});
+    let count = 0;
+    response.write('data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n');
+    const timer = setInterval(() => {
+      response.write('data: ' + JSON.stringify({type: 'content_block_delta', index: 0,
+        delta: {type: 'thinking_delta', thinking: '想'}}) + '\n\n');
+      if (++count === 12) {
+        clearInterval(timer);
+        response.end('data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}\n\n');
+      }
+    }, 80);
+    response.on('close', () => clearInterval(timer));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  const provider = createProvider({kind: 'anthropic', baseUrl: 'http://127.0.0.1:' + address.port, model: 'test', key: '',
+    temperature: 0.2, maxTokens: 100, timeoutMs: 400});
+  try {
+    const turn = await provider.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal);
+    assert.equal(turn.message.reasoning, '想'.repeat(12)); assert.equal(turn.stop, 'complete');
+    assert.deepEqual(turn.usage, {input: 1, output: 12});
   } finally {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
 });

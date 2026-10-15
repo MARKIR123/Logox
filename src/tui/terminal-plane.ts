@@ -2,9 +2,10 @@ import {performance} from 'node:perf_hooks';
 import stringWidth from 'string-width';
 import type {SceneRow, SceneSegment} from './scene.js';
 import {palette} from './cards.js';
-import {rowSelectionBounds, sliceRowText, type Row, type SelectionRange} from './viewport.js';
+import {decorateRow, presentedSegments} from './row-presentation.js';
+import {rowSelectionBounds, type Row, type SelectionRange} from './viewport.js';
 
-export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null}
+export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean}
 export interface PlaneMetrics {readonly renderTime: number; readonly scrolled: number; readonly paintedRows: number}
 const reset = '\x1b[0m';
 function rgb(color: string | undefined, background = false): string {
@@ -43,17 +44,8 @@ export function encodeRow(raw: Row, index: number, selection: SelectionRange | n
   const bounds = rowSelectionBounds(raw, index, selection);
   if (!bounds) {const known = encoded.get(raw); if (known?.width === width) return known.text;}
   const row = raw as SceneRow;
-  const color = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
   const rail = row.gutterCols > 0 ? styled({text: '▎ ', color: row.railColor}) : '';
-  const prefix = row.prefixSegments?.map(segment => styled(segment, palette.fg)).join('') ?? '';
-  const suffix = row.suffixSegments?.map(segment => styled(segment, palette.fg)).join('') ?? '';
-  let body: string;
-  if (bounds) {
-    const parts = sliceRowText(row.text, bounds[0], bounds[1]);
-    body = prefix + styled({text: parts.before, bold: row.tone === 'header', italic: row.tone === 'direction'}, color, row.bg) +
-      styled({text: parts.selected, color: palette.fg, bg: palette.selectionBg}) + styled({text: parts.after}, color, row.bg) + suffix;
-  } else if (row.segments?.length) body = row.segments.map(segment => styled(segment, palette.fg, row.bg)).join('');
-  else body = prefix + styled({text: row.text || ' ', bold: row.tone === 'header', italic: row.tone === 'direction'}, color, row.bg) + suffix;
+  const body = presentedSegments(row, index, selection).map(segment => styled(segment, palette.fg, row.bg)).join('');
   const result = clipEncoded(rail + body + reset, width);
   if (!bounds) encoded.set(raw, {width, text: result});
   return result;
@@ -66,16 +58,21 @@ export class TerminalPlane {
   private previousLines: readonly string[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private queued = false;
+  private animationTimer: ReturnType<typeof setTimeout> | undefined;
+  private displayedRows: readonly Row[] = [];
+  private clock = Date.now();
   private lastPaint = -Infinity;
   private active = false;
   private closed = false;
+  private outputHeld = false;
   constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {}
 
-  get rows(): readonly Row[] {return this.frame?.rows ?? [];}
+  get rows(): readonly Row[] {return this.displayedRows;}
+  get time(): number {return this.clock;}
   present(frame: PlaneFrame): void {
     if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height)) this.erase();
     this.frame = frame;
-    if (this.timer || this.queued || !this.active || this.closed) return;
+    if (this.timer || this.queued || !this.active || this.closed || this.outputHeld) return;
     const wait = 16 - (performance.now() - this.lastPaint);
     if (wait <= 0) {
       this.queued = true;
@@ -93,22 +90,33 @@ export class TerminalPlane {
     this.flush();
   }
   invalidate(): void {this.previous = undefined; this.previousLines = [];}
+  beginOutput(): void {this.outputHeld = true; this.cancel();}
+  endOutput(): void {this.outputHeld = false; this.flush();}
   private erase(): void {
-    if (this.active && !this.closed && this.frame?.height) {
+    if (this.active && !this.closed && !this.outputHeld && this.frame?.height) {
       const rows = Array.from({length: this.frame.height}, (_, i) => `\x1b[${i + 1};1H\x1b[2K`).join('');
       this.write('\x1b[?2026h\x1b7' + reset + rows + '\x1b8\x1b[?2026l');
     }
     this.invalidate();
   }
-  hide(): void {this.erase(); this.frame = undefined; this.cancel();}
-  private cancel(): void {if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
+  hide(): void {this.erase(); this.frame = undefined; this.displayedRows = []; this.cancel();}
+  private cancelAnimation(): void {if (this.animationTimer) clearTimeout(this.animationTimer); this.animationTimer = undefined;}
+  private armAnimation(): void {
+    this.cancelAnimation();
+    if (!this.active || this.closed || !this.frame?.rows.some(raw => {const a = (raw as SceneRow).animation; return a?.step?.state === 'running' || this.frame?.motion !== false && a?.active;})) return;
+    this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame.motion === false ? 100 : 80);
+    this.animationTimer.unref?.();
+  }
+  private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
   dispose(): void {this.closed = true; this.cancel(); this.frame = undefined;}
   flush(): void {
     this.cancel();
     const frame = this.frame;
-    if (!frame || !this.active || this.closed) return;
+    if (!frame || !this.active || this.closed || this.outputHeld) return;
     const began = performance.now();
-    const lines = Array.from({length: frame.height}, (_, index) => frame.rows[index] ? encodeRow(frame.rows[index]!, index, frame.selection, frame.width) : '');
+    this.clock = Date.now();
+    this.displayedRows = frame.rows.map(row => decorateRow(row, this.clock, frame.motion !== false));
+    const lines = Array.from({length: frame.height}, (_, index) => this.displayedRows[index] ? encodeRow(this.displayedRows[index]!, index, frame.selection, frame.width) : '');
     const previous = this.previous;
     let shifted = [...this.previousLines], scrolled = 0;
     const delta = previous ? frame.start - previous.start : 0;
@@ -136,5 +144,6 @@ export class TerminalPlane {
       this.lastPaint = performance.now();
       this.onFrame?.({renderTime: performance.now() - began, scrolled, paintedRows});
     }
+    this.armAnimation();
   }
 }

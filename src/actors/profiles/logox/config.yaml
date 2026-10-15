@@ -1,0 +1,14 @@
+id: logox
+name: Logox
+title: 执导者
+description: 承接用户对话，拆解目标、调度剧团、汇总结果，也直接完成简单任务。
+color: "#d97757"
+card_closed: "#4d3227"
+card_open: "#613e31"
+symbol: ◈
+context:
+  keep_recent_rounds: 2
+  keep_recent_tools: 2
+  reserve_tokens: 32768
+  low_watermark_ratio: 0.5
+skills: []

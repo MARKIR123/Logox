@@ -47,7 +47,7 @@ test('手动扬弃运行期间阻止新输入和切换，取消/关闭解除汇�
       throw new Error('取消后不能到达这里');
     }};
     const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 4096}, context: {keep_recent_rounds: 0}}, {}, cwd, cwd);
-    const app = await createApplication({cwd, config, provider, sessionId: 'manual', env: {}, authPath: join(cwd, 'auth.json')});
+    const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'manual', env: {}, authPath: join(cwd, 'auth.json')});
     try {
       await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId: 'old', role: 'user', text: '过去要求'.repeat(2200)});
       await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId: 'old', role: 'assistant', text: '【轮次摘要】\n标题：已处理\n报告：保留确认要求。'});
@@ -74,7 +74,7 @@ test('未知模型窗口在调用前说明配置方法，终态与重启后的�
   let calls = 0;
   const provider: Provider = {async respond() {calls++; throw new Error('未知窗口不能发送');}};
   const config = await loadConfig(cwd, {provider: {model: 'unknown-fixture'}}, {}, cwd, cwd);
-  let app = await createApplication({cwd, config, provider, sessionId: 'unknown', env: {}, authPath: join(cwd, 'auth.json')});
+  let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'unknown', env: {}, authPath: join(cwd, 'auth.json')});
   try {
     const task = app.ensemble.dispatch('logox', '你好');
     await task.done;
@@ -82,7 +82,7 @@ test('未知模型窗口在调用前说明配置方法，终态与重启后的�
     assert.equal(app.store.activities.get('unknown', task.activityId)?.status, 'failed');
     assert.match(app.store.activities.get('unknown', task.activityId)!.detail, /context_window/);
     await app.close();
-    app = await createApplication({cwd, config, provider, sessionId: 'unknown', env: {}, authPath: join(cwd, 'auth.json')});
+    app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'unknown', env: {}, authPath: join(cwd, 'auth.json')});
     assert.equal(calls, 0);
     assert.equal(app.store.activities.get('unknown', task.activityId)?.status, 'failed');
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}

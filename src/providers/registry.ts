@@ -7,7 +7,9 @@ import type {Provider} from '../runtime/messages.js';
 import {modelSettings, presets, type Config, type ModelSettings} from '../config/config.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
+import type {ThinkingEffort} from '../config/model-preferences.js';
 import {AuthStorage} from './auth.js';
+import {createHttpTransport} from './transport.js';
 
 const credentialSchema = z.object({type: z.literal('api_key'), key: z.string(), env: z.record(z.string(), z.string()).optional()});
 const modelsSchema = z.object({data: z.array(z.object({id: z.string().min(1),
@@ -35,10 +37,21 @@ async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv)
 /** 统一提供商选择与请求时认证；不拥有 Agent 历史或任务状态。 */
 export class ProviderRegistry {
   private config: Config;
+  private transport: ReturnType<typeof createHttpTransport> | undefined;
+  private readonly fetcher: typeof fetch;
+  private closed = false;
   private readonly capabilities = new Map<string, {window?: number; maxOutput?: number}>();
   constructor(config: Config, private readonly env: NodeJS.ProcessEnv = process.env,
-    private readonly fetcher: typeof fetch = fetch,
-    readonly auth = new AuthStorage()) {this.config = config;}
+    fetcher?: typeof fetch,
+    readonly auth = new AuthStorage()) {
+    this.config = config;
+    this.fetcher = fetcher ?? ((input, init) => {
+      if (this.closed) return Promise.reject(new ProviderError('模型网络服务已关闭'));
+      this.transport ??= createHttpTransport(this.env);
+      return this.transport.fetch(input, init);
+    });
+  }
+  async close(): Promise<void> {this.closed = true; await this.transport?.close();}
 
   names(): string[] {return [...new Set([...Object.keys(presets), ...Object.keys(this.config.providers), this.config.provider.name])];}
   loginNames(): string[] {
@@ -56,8 +69,24 @@ export class ProviderRegistry {
     const current = this.config.provider;
     return {...this.config, provider: name === current.name
       ? {...current, ...(model !== undefined ? {model, ...(model !== current.model ? {context_window: undefined, max_output_tokens: undefined} : {})} : {})}
-      : {name, model: model ?? '', temperature: current.temperature, max_tokens: current.max_tokens, timeout: current.timeout}};
+      : {name, model: model ?? '', temperature: current.temperature, max_tokens: current.max_tokens, timeout: current.timeout, thinking_effort: current.thinking_effort}};
   }
+  thinking(): {effort: ThinkingEffort; levels: readonly ThinkingEffort[]} {
+    const settings = modelSettings(this.config, this.env);
+    return {effort: this.config.provider.thinking_effort, levels: settings.thinkingLevels ?? ['auto']};
+  }
+  selectEffort(effort: ThinkingEffort): void {
+    if (!this.thinking().levels.includes(effort)) throw new ProviderError('当前模型未声明支持此思考档位');
+    this.config = {...this.config, provider: {...this.config.provider, thinking_effort: effort}};
+  }
+  candidate(name: string, model?: string): ProviderRegistry {
+    const next = new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth);
+    for (const [key, value] of this.capabilities) next.capabilities.set(key, {...value});
+    const settings = modelSettings(next.config, this.env);
+    if (!settings.thinkingLevels?.includes(next.config.provider.thinking_effort)) next.config.provider.thinking_effort = 'auto';
+    return next;
+  }
+  adopt(next: ProviderRegistry): void {this.config = next.config;}
   select(name: string, model?: string): void {
     const next = this.configFor(name, model);
     modelSettings(next, this.env);
@@ -66,12 +95,15 @@ export class ProviderRegistry {
   async settings(requireAuth = true): Promise<ModelSettings> {return this.settingsFor(this.config.provider.name, requireAuth);}
   private async settingsFor(name: string, requireAuth: boolean): Promise<ModelSettings> {
     const config = this.configFor(name), settings = modelSettings(config, this.env), provider = config.provider;
+    const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
+    const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
+    settings.maxTokens = Math.min(settings.maxTokens, config.provider.max_output_tokens ?? config.models[name + '/' + settings.model]?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? Infinity);
     settings.key = await this.auth.key(name) || settings.key;
     const selected = config.providers[name] ?? presets[name];
     const file = provider.auth_file ?? config.providers[name]?.auth_file;
     if (!settings.key && file) settings.key = await storedKey(file, provider.auth_provider ?? config.providers[name]?.auth_provider ?? name, this.env);
     const keyEnv = provider.api_key_env ?? selected?.api_key_env;
-    if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('提供商 ' + name + ' 未登录；使用 /login，或设置 ' + (keyEnv ?? 'api_key_env') + ' 或检查 auth_file');
+    if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('提供商 ' + name + ' 未登录；使用 /login，或设置 ' + (keyEnv ?? 'api_key_env') + ' 或检查 auth_file', false, 'authentication');
     return settings;
   }
   capacity(name = this.config.provider.name, model?: string): ModelCapacity {
@@ -82,12 +114,12 @@ export class ProviderRegistry {
     const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
     const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window;
     const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput;
-    if (!window) throw new ProviderError('模型 ' + name + '/' + settings.model + ' 的上下文窗口未知；在 [models."' + name + '/' + settings.model + '"] 配置 context_window 后重启（本地填实际 num_ctx）。');
+    if (!window) throw new ProviderError('模型 ' + name + '/' + settings.model + ' 的上下文窗口未知；在 [models."' + name + '/' + settings.model + '"] 配置 context_window 后重启（本地填实际 num_ctx）。', false, 'capacity');
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};
   }
   providerFor(name: string, model?: string): Provider {
-    return new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth).provider();
+    return this.candidate(name, model).provider();
   }
   provider(): Provider {
     return {respond: async (request, onDelta, signal) => {
@@ -148,6 +180,7 @@ export class ProviderRegistry {
     const turn = await createProvider({...settings, maxTokens: Math.min(settings.maxTokens, 512)}, this.fetcher).respond({
       system: 'This is a connection check. Answer briefly.',
       messages: [{role: 'user', text: 'Reply with exactly LOGOX_PROVIDER_READY.'}], tools: [],
+      thinking: false,
     }, () => {}, signal);
     if (turn.stop !== 'complete' || !turn.message.text.trim()) throw new ProviderError('连接检查未取得完整正文；停止原因：' + turn.stop);
     return {text: turn.message.text, elapsedMs: Date.now() - started};

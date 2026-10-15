@@ -3,17 +3,28 @@ import {Box, Text} from 'ink';
 import stringWidth from 'string-width';
 import type {Activity, Interaction} from '../runtime/contracts.js';
 import {cast} from '../actors/ensemble.js';
+import {deriveActorCardColors} from '../actors/definitions.js';
+export interface ActorStyle {
+  readonly symbol: string;
+  readonly name: string;
+  readonly title: string;
+  readonly color: string;
+  readonly cardClosed?: string | undefined;
+  readonly cardOpen?: string | undefined;
+}
+export type ActorStyles = Readonly<Record<string, ActorStyle>>;
 
 export const palette = {
+  toolExpanded: '#22252a',
   bg: '#1b1c1d',
-  cardBase: '#3d5266',
-  cardCollapsed: '#3d5266',
-  cardExpanded: '#4b657d',
+  cardBase: '#483c27',
+  cardCollapsed: '#483c27',
+  cardExpanded: '#5c4d32',
   dreamCollapsed: '#c4cbd2',
   dreamExpanded: '#dce2e8',
   fg: '#ebeef2',
-  accent: '#9ec488',
-  user: '#8ab0d8',
+  accent: '#d97757',
+  user: '#5282b5',
   anamnesis: '#dce2e8',
   dreamText: '#1e262e',
   dreamMuted: '#4b5660',
@@ -21,16 +32,41 @@ export const palette = {
   borderMuted: '#3e4450',
   line: '#3b3e3c',
   error: '#e08b90',
-  question: '#f4b8e8',
+  question: '#e8a8dc',
   selectionBg: '#2b3b4e',
 };
+
+export function applyTheme(themeOverrides?: Partial<{user: string; accent: string; dream_collapsed: string; dream_expanded: string}>): typeof palette {
+  if (themeOverrides) {
+    if (themeOverrides.user) (palette as any).user = themeOverrides.user;
+    if (themeOverrides.accent) (palette as any).accent = themeOverrides.accent;
+    if (themeOverrides.dream_collapsed) (palette as any).dreamCollapsed = themeOverrides.dream_collapsed;
+    if (themeOverrides.dream_expanded) (palette as any).dreamExpanded = themeOverrides.dream_expanded;
+  }
+  return palette;
+}
+
 export const actorCardPalette = {
-  aletheia: {closed: '#3d5a4f', open: '#4b6e61', highlight: '#a8f0d4'},
-  techne: {closed: '#3d5266', open: '#4b657d', highlight: '#a8d8ff'},
-  kalon: {closed: '#544359', open: '#66526c', highlight: '#f4b8e8'},
+  logox: {closed: '#4d3227', open: '#613e31', highlight: '#d97757'},
+  aletheia: {closed: '#2c473d', open: '#395c4f', highlight: '#7ee7c4'},
+  techne: {closed: '#483c27', open: '#5c4d32', highlight: '#e5b567'},
+  kalon: {closed: '#544359', open: '#66526c', highlight: '#e8a8dc'},
 } as const;
-export function ownerSurface(ownerId: string, expanded: boolean): string | undefined {
+
+export function ownerSurface(ownerId: string, expanded: boolean, roles: ActorStyles = cast): string | undefined {
   if (ownerId === 'anamnesis') return expanded ? palette.dreamExpanded : palette.dreamCollapsed;
+  if (ownerId !== 'logox' && roles[ownerId]) {
+    const role = roles[ownerId]!;
+    if (role.cardClosed && role.cardOpen) {
+      return expanded ? role.cardOpen : role.cardClosed;
+    }
+    if (Object.hasOwn(actorCardPalette, ownerId)) {
+      const colors = actorCardPalette[ownerId as keyof typeof actorCardPalette];
+      return expanded ? colors.open : colors.closed;
+    }
+    const derived = deriveActorCardColors(role.color, role.cardClosed, role.cardOpen);
+    return expanded ? derived.open : derived.closed;
+  }
   if (Object.hasOwn(actorCardPalette, ownerId)) {
     const colors = actorCardPalette[ownerId as keyof typeof actorCardPalette];
     return expanded ? colors.open : colors.closed;
@@ -60,16 +96,16 @@ export function mixHex(fgHex: string, bgHex = palette.cardBase, ratio = 0.22): s
   const channel = (f: number, b: number) => Math.max(0, Math.min(255, Math.round(b + (f - b) * ratio))).toString(16).padStart(2, '0');
   return `#${channel(fr, br)}${channel(fg, bg)}${channel(fb, bb)}`;
 }
-export function ownerColor(ownerId: string): string {
+export function ownerColor(ownerId: string, roles: ActorStyles = cast): string {
   if (ownerId === 'user') return palette.user;
   if (ownerId === 'anamnesis') return palette.anamnesis;
-  return Object.hasOwn(cast, ownerId) ? cast[ownerId as keyof typeof cast].color : palette.accent;
+  return roles[ownerId]?.color ?? palette.accent;
 }
-export function ownerHeader(ownerId: string): string {
+export function ownerHeader(ownerId: string, roles: ActorStyles = cast): string {
   if (ownerId === 'user') return '你';
   if (ownerId === 'anamnesis') return 'Anamnesis · 入梦';
-  if (Object.hasOwn(cast, ownerId)) {
-    const actor = cast[ownerId as keyof typeof cast];
+  if (roles[ownerId]) {
+    const actor = roles[ownerId];
     return `${actor.symbol} ${actor.name}`;
   }
   return ownerId;

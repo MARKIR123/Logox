@@ -72,7 +72,7 @@ test('页签命令和提供商选择不触发模型、不进账本；确认才�
     alpha: {base_url: 'http://127.0.0.1:7777/v1'}, beta: {base_url: 'http://127.0.0.1:8888/v1', default_model: 'second'},
   }}, {}, cwd, cwd);
   let calls = 0;
-  const app = await createApplication({cwd, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不该调用模型');}}});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不该调用模型');}}});
   try {
     const before = app.store.getSnapshot().messages.length;
     for (const [command, tab] of [['/status', 'status'], ['/config', 'config'], ['/help', 'commands']]) {

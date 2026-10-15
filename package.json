@@ -3,13 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "logox-ts": "./dist/src/cli.js"
+  },
   "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",
   "dependencies": {
+    "ajv": "8.18.0",
+    "ajv-formats": "3.0.1",
     "ink": "8.0.0",
     "react": "19.3.0",
     "smol-toml": "1.9.1",
     "string-width": "8.3.0",
+    "undici": "8.10.2",
     "wrap-ansi": "10.0.2",
+    "yaml": "2.9.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -21,7 +28,7 @@
     "check": "npm run check:docs && tsc --noEmit",
     "start": "node dist/src/cli.js",
     "test": "npm run check:docs && npm run build && node --test dist/tests/*.test.js",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-actor-profiles.mjs",
     "demo": "npm run build && node dist/src/cli.js --demo",
     "check:docs": "node scripts/check-docs.mjs"
   },

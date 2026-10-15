@@ -13,13 +13,42 @@ export function renderTerminal(node: ReactNode, options: TerminalOptions = {}): 
   if (!options.alternateScreen || options.interactive === false || !terminal.isTTY || options.debug ||
       (options.interactive === undefined && process.env['CI'] && process.env['CI'] !== 'false') ||
       options.isScreenReaderEnabled || process.env['INK_SCREEN_READER'] === 'true') return render(node, options);
-  const plane = new TerminalPlane(text => {terminal.write(text);}, options.onHistoryFrame);
+  const synchronized = /\x1b\[\?2026[hl]/g;
+  let restoration: string[] | undefined;
+  const plane = new TerminalPlane(text => {
+    if (restoration) restoration.push(text.replace(synchronized, ''));
+    else terminal.write(text);
+  }, options.onHistoryFrame);
   const output = new class extends Writable {
+    private batch: string[] | undefined;
     get isTTY(): boolean {return Boolean(terminal.isTTY);}
     get columns(): number {return terminal.columns ?? 80;}
     get rows(): number {return terminal.rows ?? 24;}
     override _write(chunk: Buffer, _encoding: BufferEncoding, done: (error?: Error | null) => void): void {
-      terminal.write(chunk, error => {if (!error) plane.afterInkWrite(chunk.toString()); done(error);});
+      const text = chunk.toString();
+      if (text.includes('\x1b[?2026h') && !this.batch) {this.batch = []; plane.beginOutput();}
+      if (this.batch) {
+        this.batch.push(text.replace(synchronized, ''));
+        if (!text.includes('\x1b[?2026l')) {done(); return;}
+        const batch = this.batch.join(''); this.batch = undefined;
+        this.commit(batch, done);
+      } else this.commit(text, done);
+    }
+    private commit(text: string, done: (error?: Error | null) => void): void {
+      // Ink writes BSU, content and ESU as separate chunks. Restore history before
+      // the sole ESU; a nested plane ESU would expose Ink's cleared middle frame.
+      plane.beginOutput(); restoration = [];
+      try {
+        plane.afterInkWrite(text); plane.endOutput();
+        const content = text.replace(synchronized, '') + restoration.join('');
+        restoration = undefined;
+        if (content) terminal.write('\x1b[?2026h' + content + '\x1b[?2026l', done);
+        else done();
+      } catch (error) {restoration = undefined; done(error instanceof Error ? error : new Error(String(error)));}
+    }
+    override _final(done: (error?: Error | null) => void): void {
+      if (this.batch) {const text = this.batch.join(''); this.batch = undefined; this.commit(text, done);}
+      else done();
     }
   }();
   const resize = () => {plane.hide(); output.emit('resize');};

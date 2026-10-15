@@ -49,7 +49,7 @@ test('阅读锚点在新消息到来时保持，底部跟随更新', () => {
   assert.equal(viewport(expanded, 3, anchor).rows[0]!.text, original[1]!.text);
   assert.ok(viewport(expanded, 3, null).rows.some(item => item.messageId === 'second'));
 });
-test('左侧轨道与正文分离：框选过滤左轨与标题，自动拼接软折行并保留真实硬换行', () => {
+test('左侧轨道与正文分离：框选只过滤左轨并包含标题，自动拼接软折行并保留真实硬换行', () => {
   const msg: Message = {
     id: 'm1',
     sessionId: 's',
@@ -58,13 +58,13 @@ test('左侧轨道与正文分离：框选过滤左轨与标题，自动拼接�
     text: '第一段长文在窄屏下被自动折行到下一行。\n第二段独立成行。',
   };
   const rows = timelineRows([msg], 18);
-  assert.equal(rows[0]!.noSelect, true, '角色名牌行不进入正文复制');
+  assert.equal(rows[0]!.noSelect, true, '名牌不是正文阅读锚点，仍可选择复制');
   assert.ok(rows.some(r => r.softWrap), '存在自动软折行');
   for (const r of rows) {
     assert.ok(!r.text.includes('▎'), 'row.text 绝不包含左侧轨道字符');
   }
   const copied = extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 40, y: rows.length - 1}});
-  assert.equal(copied, '第一段长文在窄屏下被自动折行到下一行。\n第二段独立成行。');
+  assert.equal(copied, '✧ Kalon · 台词\n第一段长文在窄屏下被自动折行到下一行。\n第二段独立成行。\n');
   const events = parseSgrMouse('\x1b[<0;1;1M\x1b[<32;18;4M\x1b[<0;18;4m');
   assert.deepEqual(events.map(e => e.action), ['press', 'drag', 'release']);
   const osc = osc52Clipboard(copied);

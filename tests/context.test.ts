@@ -256,7 +256,7 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
     return {message: {role: 'assistant', text: '完成'.repeat(3200) + '\n【轮次摘要】\n标题：已完成核对\n报告：保留确认决定与结果，尚未执行额外验证。'}, stop: 'complete'};
   }};
   const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 16384}, context: {keep_recent_rounds: 0, keep_recent_tools: 0}}, {}, cwd, cwd);
-  let app = await createApplication({cwd, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
+  let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
   try {
     for (let index = 0; index < 3; index++) await app.ensemble.dispatch('logox', '目标' + index).done;
     assert.equal(requests.length, 3, JSON.stringify(app.store.getSnapshot().activities));
@@ -266,7 +266,7 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
     assert.deepEqual(await app.journal.load('context-app', 'logox'), before);
     assert.equal(requests.length, 3, '常规 /compact 不另发摘要请求');
     await app.close();
-    app = await createApplication({cwd, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
+    app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
     assert.equal(requests.length, 3, '恢复不执行模型');
     await app.ensemble.dispatch('logox', '继续').done;
     assert.ok(requests[3]!.messages.some(message => message.text.includes('【轮次摘要】已完成核对')));

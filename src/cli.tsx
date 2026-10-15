@@ -1,10 +1,13 @@
+#!/usr/bin/env node
 import {parseArgs} from 'node:util';
 import {renderTerminal} from './tui/terminal.js';
 import {createDemo} from './demo.js';
 import {createApplication} from './application.js';
 import {loadConfig} from './config/config.js';
 import {App} from './tui/app.js';
+import {ApplicationStage} from './tui/application.js';
 import {ProviderRegistry} from './providers/registry.js';
+import {applyTheme} from './tui/cards.js';
 
 async function main(): Promise<void> {
   const {values} = parseArgs({options: {
@@ -25,31 +28,37 @@ async function main(): Promise<void> {
   }};
   if (values['check-config'] || values['check-provider'] || values['list-providers'] || values['list-models']) {
     const registry = new ProviderRegistry(await loadConfig(process.cwd(), overrides));
-    if (values['list-providers']) process.stdout.write(registry.names().join('\n') + '\n');
-    if (values['check-config']) {
-      const settings = await registry.settings(false);
-      process.stdout.write(JSON.stringify({...registry.selection(), credentialConfigured: !!settings.key}, null, 2) + '\n');
-    }
-    if (values['list-models']) process.stdout.write((await registry.models()).join('\n') + '\n');
-    if (values['check-provider']) process.stdout.write(JSON.stringify({...registry.selection(), ...await registry.check()}, null, 2) + '\n');
+    try {
+      if (values['list-providers']) process.stdout.write(registry.names().join('\n') + '\n');
+      if (values['check-config']) {
+        const settings = await registry.settings(false);
+        process.stdout.write(JSON.stringify({...registry.selection(), credentialConfigured: !!settings.key}, null, 2) + '\n');
+      }
+      if (values['list-models']) process.stdout.write((await registry.models()).join('\n') + '\n');
+      if (values['check-provider']) process.stdout.write(JSON.stringify({...registry.selection(), ...await registry.check()}, null, 2) + '\n');
+    } finally {await registry.close();}
     return;
   }
   if (!process.stdout.isTTY || !process.stdin.isTTY) throw new Error('全屏界面需要交互终端。请在 Windows Terminal 中运行 npm start 或 npm run demo。');
   if (values.session !== undefined && !values.session.trim()) throw new Error('--session 需要有效会话 ID');
   const demo = values.demo ? createDemo(values.session?.trim() ?? 'demo', process.cwd()) : undefined;
   if (demo) await demo.ready;
-  const application = demo ? undefined : await createApplication({cwd: process.cwd(), config: await loadConfig(process.cwd(), overrides),
+  const loadedConfig = await loadConfig(process.cwd(), overrides);
+  applyTheme(loadedConfig.theme);
+  const application = demo ? undefined : await createApplication({cwd: process.cwd(), config: loadedConfig,
     ...(values.session ? {sessionId: values.session} : {}), ...(values.resume ? {resume: true} : {})});
   const runtime = demo ?? application!;
-  const sessionId = demo ? values.session ?? 'demo' : application!.sessionId;
-  const instance = renderTerminal(<App store={runtime.store} sessionId={sessionId} {...(demo ? {demoScene: true, scenario: demo.scenario} : {stage: true, authentication: application!.authentication, surfaces: application!.surfaces, getCommandContext: application!.commandContext})}
-    onSubmit={runtime.submit} onDraft={runtime.noteDraft} onCancel={runtime.cancel} onClose={runtime.close}/>, {
+  const interrupts = new Set<() => void>();
+  const registerInterrupt = (handler: () => void) => {interrupts.add(handler); return () => {interrupts.delete(handler);};};
+  const instance = renderTerminal(demo ? <App store={demo.store} sessionId={values.session ?? 'demo'} demoScene scenario={demo.scenario}
+    onSubmit={demo.submit} onDraft={demo.noteDraft} onCancel={demo.cancel} onClose={demo.close} registerInterrupt={registerInterrupt}/> : <ApplicationStage application={application!} registerInterrupt={registerInterrupt}/>, {
     alternateScreen: true, incrementalRendering: true, maxFps: 30, exitOnCtrlC: false,
   });
   const stop = () => {void runtime.close().finally(() => instance.unmount());};
+  const interrupt = () => {for (const handler of interrupts) handler();};
   process.once('SIGTERM', stop);
-  process.once('SIGINT', stop);
+  process.on('SIGINT', interrupt);
   try {await instance.waitUntilExit();}
-  finally {process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); await runtime.close();}
+  finally {process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', interrupt); await runtime.close();}
 }
 await main().catch(error => {process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n'); process.exitCode = 1;});
