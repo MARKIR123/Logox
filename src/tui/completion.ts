@@ -14,10 +14,11 @@ export interface CommandSuggestion {
 export function commandSuggestions(draft: Draft, context: CommandContext): readonly CommandSuggestion[] {
   if (!draft.text.startsWith('/') || /[\r\n]/.test(draft.text)) return [];
   const before = graphemes(draft.text).slice(0, draft.cursor).join('');
-  const commandPrefix = /^\/([a-z-]*)$/i.exec(before);
+  const commandPrefix = /^\/([a-z0-9_-]*)$/i.exec(before);
   if (commandPrefix) {
     const end = /^\/[^\s]*/.exec(draft.text)?.[0].length ?? before.length;
-    return commandCatalog.filter(command => command.name.startsWith(commandPrefix[1]!.toLowerCase())).map(command => {
+    const catalog = [...commandCatalog, ...(context.customCommands ?? []).map(command => ({...command, argument: 'text'}))];
+    return catalog.filter(command => command.name.startsWith(commandPrefix[1]!.toLowerCase())).map(command => {
       const required = ['provider', 'model', 'text'].includes(command.argument);
       return {label: '/' + command.name, description: command.description, replacement: '/' + command.name + (required ? ' ' : ''),
         start: 0, end, kind: 'command', execute: command.argument !== 'text'};

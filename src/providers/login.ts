@@ -12,7 +12,7 @@ export class LoginFlow {
   private listeners = new Set<() => void>();
   private saving: Promise<void> | undefined;
   constructor(private readonly auth: AuthStorage, private readonly names: () => string[],
-    private readonly onSaved: (provider: string) => void) {}
+    private readonly onSaved: (provider: string) => unknown) {}
   getSnapshot = (): LoginState | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
   private publish(state: LoginState | null): void {this.state = state; for (const listener of this.listeners) listener();}
@@ -35,7 +35,7 @@ export class LoginFlow {
     this.saving = (async () => {
       try {
         await this.auth.save(state.provider, key, new AbortController().signal);
-        this.onSaved(state.provider);
+        await this.onSaved(state.provider);
         this.publish(null);
       } catch (error) {
         this.publish({...state, phase: 'key', error: error instanceof Error ? error.message : '保存 API key 失败'});

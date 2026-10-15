@@ -124,13 +124,15 @@ test('异步 stdout 的 Ink 与画布写出顺序一致，屏幕阅读器保留 
     try {
       await settle(); input.write('输入保留'); await settle();
       const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 39, {}, null);
-      const expectedTop = rows[rows.length - 7 - 3]!.text;
+      // One composer, two separators, and the new single-line statusbar.
+      const historyHeight = output.rows - 4;
+      const expectedTop = rows[rows.length - historyHeight - 3]!.text;
       input.write('\x1b[<64;5;2M'); await settle();
       store.appendMessage(id, '\n追加'); await settle();
       if (screenReader) assert.ok(output.text.includes('ASYNC-'), '阅读器没有丢失正文');
       else {
         assert.equal(output.lines[0], '▎ ' + expectedTop);
-        assert.ok(output.lines.slice(7).some(line => line.includes('输入保留')));
+        assert.ok(output.lines.slice(historyHeight).some(line => line.includes('输入保留')));
         assert.ok(!output.lines.some(line => line.includes('追加')), '异步写出期间不抢回底部');
         output.resize(4, 8); await settle();
         assert.ok(output.lines.every(line => line.length <= 4), '极窄屏不写出窗口边界');

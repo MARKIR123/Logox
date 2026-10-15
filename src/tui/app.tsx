@@ -9,6 +9,10 @@ import type {CommandSurfaces} from '../commands/surfaces.js';
 import {Picker} from './picker.js';
 import {TabbedPage} from './tabbed-page.js';
 import type {LoginFlow} from '../providers/login.js';
+import type {StageStatus} from '../runtime/stage-status.js';
+import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
+import {statusbarText, statusbarParts} from './statusbar.js';
+import {MouseContext, type MouseSubscriber} from './mouse.js';
 import {LoginDialog} from './login.js';
 import {useContentHeight} from './metrics.js';
 import {CommandMenu} from './command-menu.js';
@@ -18,11 +22,12 @@ import {projectPortfolioScene} from './scene-state.js';
 import {answerEnvelope} from '../runtime/interactions.js';
 import type {Answer, Interaction} from '../runtime/contracts.js';
 import {cast, type ActorId} from '../actors/ensemble.js';
-import {ActivityCard, InteractionCard, ownerColor, ownerHeader, palette, safeText, type QuestionDraft} from './cards.js';
+import {ActivityCard, InteractionCard, ownerColor, ownerHeader, palette, safeText, type QuestionDraft, type ActorStyle, type ActorStyles} from './cards.js';
 import {cursorAt, emptyDraft, erase, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './editor.js';
 import {
   buildDemoSceneRows,
   hoveredCardAt,
+  actionAt,
   demoRoles,
   defaultSceneFoldOpen,
   INITIAL_DEMO_DRAFT,
@@ -30,21 +35,22 @@ import {
   isFoldOpen,
   type DemoSceneUi,
   type SceneRow,
+  type SceneAction,
 } from './scene.js';
 import {
   clipLine,
   extractSelection,
   osc52Clipboard,
   parseSgrMouse,
-  rowSelectionBounds,
-  sliceRowText,
   timelineRows,
   viewport,
   type Anchor,
   type Row,
-  type SelectionRange,
   type SgrMouseEvent,
 } from './viewport.js';
+
+import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './selection.js';
+import {decorateRow, presentedSegments} from './row-presentation.js';
 
 interface ResponseDraft extends QuestionDraft {answers: Record<string, Answer>; editor: Draft}
 function initialResponse(request: Interaction): ResponseDraft {
@@ -55,11 +61,15 @@ export interface AppProps {
   authentication?: LoginFlow;
   surfaces?: CommandSurfaces;
   getCommandContext?: () => CommandContext;
+  getActors?: () => readonly (ActorStyle & {id: string})[];
+  getStatus?: (ownerId: string) => StageStatus;
+  statusbar?: StatusbarPreferences;
+  registerInterrupt?: (handler: () => void) => () => void;
   sessionId: string;
   demoScene?: boolean;
   stage?: boolean;
   scenario?: PortfolioActivities;
-  onSubmit(text: string, source?: ActorId): Promise<void>;
+  onSubmit(text: string, source?: string): Promise<void>;
   onCancel(activityId: string): void;
   onDraft?(): void;
   onClose(): Promise<void>;
@@ -69,10 +79,19 @@ const foldableDemoIds = ['main-thinking', 'main-tool', 'main-aletheia', 'main-al
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, authentication, surfaces, getCommandContext, sessionId, demoScene = false, stage = false, scenario, onSubmit, onCancel, onClose, onDraft}: AppProps) {
+export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onCancel, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const definitions = getActors?.();
+  const roles = useMemo<ActorStyles>(() => {
+    if (!definitions) return cast;
+    const roles: Record<string, ActorStyle> = Object.fromEntries(definitions.map(role => [role.id, role]));
+    for (const activity of snapshot.activities) if (activity.kind === 'actor' && !roles[activity.ownerId])
+      roles[activity.ownerId] = {symbol: '◇', name: activity.ownerId, title: '历史角色', color: palette.accent};
+    return roles;
+  }, [definitions, snapshot.activities]);
   const loginState = useSyncExternalStore(authentication?.subscribe ?? noLoginSubscription, authentication?.getSnapshot ?? noLoginSnapshot);
   const surface = useSyncExternalStore(surfaces?.subscribe ?? noLoginSubscription, surfaces?.getSnapshot ?? noLoginSnapshot);
+  const layout = useSyncExternalStore(statusbar?.subscribe ?? noLoginSubscription, statusbar?.getSnapshot ?? noLoginSnapshot);
   const {columns, rows} = useWindowSize();
   const width = Math.max(1, columns - 1);
   const screenRows = Math.max(1, rows);
@@ -87,8 +106,8 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const [editingCustom, setEditingCustom] = useState(false);
   const [cardCursor, setCardCursor] = useState(4); // defaults to main-techne
 
-  const [activeWindow, setActiveWindow] = useState<ActorId>('logox');
-  const [drafts, setDrafts] = useState<Record<ActorId, Draft>>(() => ({
+  const [activeWindow, setActiveWindow] = useState('logox');
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => ({
     logox: demoScene ? insert(emptyDraft, INITIAL_DEMO_DRAFT) : emptyDraft,
     aletheia: emptyDraft,
     techne: emptyDraft,
@@ -97,15 +116,25 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const topAnchor: Anchor | null = demoScene ? {messageId: '__top__', line: 0} : null;
   const plane = useContext(TerminalPlaneContext);
   const [, refreshReading] = useState(0);
-  const anchors = useRef<Record<ActorId, Anchor | null>>({
+  const anchors = useRef<Record<string, Anchor | null>>({
     logox: topAnchor,
     aletheia: topAnchor,
     techne: topAnchor,
     kalon: topAnchor,
   });
   const [hoveredFoldId, setHoveredFoldId] = useState<string | null>(null);
-  const [selection, setSelection] = useState<SelectionRange | null>(null);
-  const [focus, setFocus] = useState<'input' | 'question'>('input');
+  const contentSelection = useRef<ContentSelection | null>(null);
+  const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow} | null>(null);
+  const edgeTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const edgePointer = useRef<{x: number; y: number} | null>(null);
+  const stopEdgeScroll = () => {if (edgeTimer.current) clearInterval(edgeTimer.current); edgeTimer.current = undefined; edgePointer.current = null;};
+  const clearSelection = () => {contentSelection.current = null; gesture.current = null; stopEdgeScroll(); presentReading();};
+  useEffect(() => () => stopEdgeScroll(), []);
+  const [focus, setFocus] = useState<'input' | 'question' | 'stop'>('input');
+  const [focusedStop, setFocusedStop] = useState('');
+  const [hoveredStop, setHoveredStop] = useState('');
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
+  const stoppingIds = useRef(new Set<string>());
   const [selectedRequestId, setSelectedRequestId] = useState('');
   const [responses, setResponses] = useState<Record<string, ResponseDraft>>({});
   const [expanded, setExpanded] = useState(false);
@@ -113,24 +142,33 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const [detailOffset, setDetailOffset] = useState(0);
   const [notice, setNotice] = useState('');
   const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
   const [completion, setCompletion] = useState({query: '', selected: 0, dismissed: false});
+  const exitDeadline = useRef(0);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const flash = (text: string, duration = 1800) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(text); noticeTimer.current = setTimeout(() => setNotice(''), duration);
+  };
+  useEffect(() => () => {if (noticeTimer.current) clearTimeout(noticeTimer.current);}, []);
 
-  const currentView: ActorId = demoScene ? scene.view : activeWindow;
-  const draft = drafts[currentView];
-  const anchor = anchors.current[currentView];
+  const currentView = demoScene ? scene.view : activeWindow;
+  const draft = drafts[currentView] ?? emptyDraft;
+  const anchor = anchors.current[currentView] ?? null;
   const setDraft = (fn: (current: Draft) => Draft) => {
-    setDrafts(prev => ({...prev, [currentView]: fn(prev[currentView])}));
+    setDrafts(prev => ({...prev, [currentView]: fn(prev[currentView] ?? emptyDraft)}));
   };
   const setAnchor = (next: Anchor | null) => {
     anchors.current[currentView] = next;
     presentReading();
   };
-  const switchView = (target: ActorId) => {
-    if (demoScene) setScene(prev => ({...prev, view: target}));
+  const switchView = (target: string) => {
+    if (demoScene) setScene(prev => ({...prev, view: target as ActorId}));
     else setActiveWindow(target);
     setEditingCustom(false);
-    setSelection(null);
+    clearSelection();
     setHoveredFoldId(null);
+    setHoveredStop(''); setFocus('input');
   };
 
   const pending = snapshot.interactions.filter(request =>
@@ -157,13 +195,15 @@ export function App({store, authentication, surfaces, getCommandContext, session
 
   const messageRows: readonly Row[] = useMemo(() => {
     if (demoScene) return buildDemoSceneRows(scene, width, hoveredFoldId);
-    if (stage) return buildStageRows(snapshot, sessionId, currentView, width, sceneUi.folds, hoveredFoldId, responses);
+    if (stage) return buildStageRows(snapshot, sessionId, currentView, width, sceneUi.folds, hoveredFoldId, responses, roles,
+      {stopping, focusedStop: focus === 'stop' ? focusedStop : '', hoveredStop});
     return timelineRows(visibleMessages, width);
-  }, [demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId]);
+  }, [demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop]);
 
   const own = currentView !== 'logox';
   const statusLeft = notice
     ? notice
+    : getStatus ? statusbarText(getStatus(currentView), width, layout?.modules)
     : demoScene
       ? own
         ? `${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].symbol} ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].name} · ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].role} · 独立对话`
@@ -174,11 +214,11 @@ export function App({store, authentication, surfaces, getCommandContext, session
             : pending.length ? '◈ Logox · ' + pending.length + ' 个待回答'
               : activities.some(item => item.kind !== 'anamnesis' && ['queued', 'running'].includes(item.status)) ? '◈ Logox · 任务处理中'
                 : scene.style && scene.runtime?.kalon === 'completed' ? '◈ Logox · 本轮完成 · Anamnesis 整理候选' : '◈ Logox · 舞台就绪'
-      : `${own ? `${ownerHeader(currentView)} · 独立对话` : '◈ Logox'} · ${pending.length ? pending.length + ' 个待回答' : '舞台就绪'}`;
+      : `${own ? `${ownerHeader(currentView, roles)} · 独立对话` : '◈ Logox'} · ${pending.length ? pending.length + ' 个待回答' : '舞台就绪'}`;
   const statusLeftColor = notice
     ? palette.accent
     : own
-      ? ownerColor(currentView)
+      ? ownerColor(currentView, roles)
       : palette.muted;
   const backLabel = own ? 'Esc 返回 Logox  ' : '';
   const keysLabel = closing
@@ -191,8 +231,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
     : width < 60
       ? own ? 'Esc 返回 Logox · Enter 发送' : 'Enter发送 · Shift+Enter换行'
       : backLabel + keysLabel;
-  const splitFooter = width < 80 && screenRows >= 8;
-  const footerHeight = screenRows < 2 ? 0 : splitFooter ? 2 : 1;
+  const footerHeight = screenRows < 2 ? 0 : 1;
   const hairlineHeight = screenRows >= 4 ? 2 : 0;
   const freeAnswer = (!inlineRequest || stage) && focus === 'question' && request?.kind === 'question' && response &&
     response.selected === (request.questions[response.questionIndex]?.options?.length ?? 0);
@@ -208,7 +247,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const inputKey = currentView + ':' + (editingCustom ? 'custom' : freeAnswer ? request?.requestId : 'main');
   const inputView = inputViewport(inputLayout, inputHeight, inputStarts.current.get(inputKey) ?? 0);
   inputStarts.current.set(inputKey, inputView.start);
-  const placeholder = currentView === 'logox' ? stage ? '输入任务，或用 @角色 派发…' : '@kalon 看一下首页配色…' : '给 ' + cast[currentView].name + ' 的补充…';
+  const placeholder = currentView === 'logox' ? stage ? '输入任务，或用 @角色 派发…' : '@kalon 看一下首页配色…' : '给 ' + (roles[currentView]?.name ?? currentView) + ' 的补充…';
   const choiceSummary = demoScene && inlineRequest
     ? request?.kind === 'permission' ? '许可：' + (scene.permissionChoice === 'allow' ? '仅本次允许' : '拒绝（默认）') + ' · Enter 确认'
       : '选择：' + (scene.choice === 'minimal' ? '克制的文字作品集' : scene.choice === 'editorial' ? '温暖的编辑部' : '自由回答') + ' · Enter 确认'
@@ -239,6 +278,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const questionHeight = !loginState && !surface && !stage && (!demoScene || !inlineRequest) && request ? Math.max(0, Math.floor((screenRows - fixedHeight - activityHeight) * 0.6)) : 0;
   const timelineHeight = Math.max(0, screenRows - fixedHeight - activityHeight - questionHeight);
   const view = viewport(messageRows, timelineHeight, anchor);
+  const selection = selectionInViewport(selectionRange(messageRows, contentSelection.current), view.start);
   const inputY = timelineHeight + activityHeight + questionHeight + menuHeight + (hairlineHeight ? 1 : 0);
   const detailMax = Math.max(0, detailContentHeight - questionHeight);
   const detailStart = Math.min(detailOffset, detailMax);
@@ -247,6 +287,19 @@ export function App({store, authentication, surfaces, getCommandContext, session
     y: inputY + inputLayout.cursorRow - inputView.start,
   } : undefined);
   useEffect(() => { if (!request) {setFocus('input'); setEditingCustom(false);} }, [request]);
+  const openedRequests = useRef({sessionId, ids: new Set<string>()});
+  useEffect(() => {
+    if (!stage) return;
+    if (openedRequests.current.sessionId !== sessionId) openedRequests.current = {sessionId, ids: new Set()};
+    const fresh = snapshot.interactions.filter(item => item.sessionId === sessionId && item.status === 'pending' && !openedRequests.current.ids.has(item.requestId));
+    if (!fresh.length) return;
+    for (const item of fresh) openedRequests.current.ids.add(item.requestId);
+    setScene(previous => {
+      const folds = {...previous.folds};
+      for (const item of fresh) {folds[item.activityId] = true; folds[item.requestId] = true;}
+      return {...previous, folds};
+    });
+  }, [stage, sessionId, snapshot.interactions]);
   useEffect(() => {
     if (scene.runtime?.styleRequest?.status === 'pending') setScene(prev => ({...prev, folds: {...prev.folds, 'main-techne': false, 'main-kalon': true}}));
   }, [scene.runtime?.styleRequest?.requestId]);
@@ -255,20 +308,43 @@ export function App({store, authentication, surfaces, getCommandContext, session
     if (request) setResponses(previous => ({...previous, [request.requestId]: update(previous[request.requestId] ?? initialResponse(request))}));
   };
   const close = () => {
-    if (closing) return;
+    if (closingRef.current) return;
+    closingRef.current = true;
     setClosing(true);
     void onClose().then(() => exit(), error => exit(error));
   };
+  const interrupt = () => {
+    if (closing) return;
+    const copied = !surface && !loginState ? copySelection() : '';
+    if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('已复制选区'); return;}
+    const now = Date.now();
+    if (exitDeadline.current > now) {close(); return;}
+    exitDeadline.current = now + 1500; flash('再次按 Ctrl+C 退出', 1500);
+  };
+  const interruptRef = useRef(interrupt); interruptRef.current = interrupt;
+  useEffect(() => registerInterrupt?.(() => interruptRef.current()), [registerInterrupt]);
+  const stopActor = (activityId: string) => {
+    if (stoppingIds.current.has(activityId)) return;
+    const target = snapshot.activities.find(item => item.activityId === activityId && item.kind === 'actor' && ['queued', 'running', 'waiting_input', 'paused'].includes(item.status));
+    if (!target) return;
+    stoppingIds.current.add(activityId); setStopping(new Set(stoppingIds.current)); onCancel(activityId);
+  };
+  useEffect(() => {
+    const next = new Set([...stopping].filter(id => snapshot.activities.some(item => item.activityId === id && ['queued', 'running', 'waiting_input', 'paused'].includes(item.status))));
+    if (next.size !== stopping.size) {stoppingIds.current = next; setStopping(next);}
+  }, [snapshot.activities, stopping]);
   const presentReading = () => {
-    if (plane) plane.present({...viewport(messageRows, timelineHeight, anchors.current[currentView]), width, height: timelineHeight, selection});
+    const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
+    if (plane) plane.present({...current, width, height: timelineHeight, selection: selectionInViewport(selectionRange(messageRows, contentSelection.current), current.start), motion: layout?.motion ?? true});
     else refreshReading(value => value + 1);
   };
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
     if (surface?.kind === 'page') plane.hide();
-    else plane.present({...view, width, height: timelineHeight, selection});
+    else plane.present({...view, width, height: timelineHeight, selection, motion: layout?.motion ?? true});
   });
+  const copySelection = () => extractSelection(messageRows.map(row => decorateRow(row, plane?.time ?? Date.now(), layout?.motion ?? true)), selectionRange(messageRows, contentSelection.current));
   const readingRows = () => {
     if (!plane) return view.rows;
     plane.flush();
@@ -276,7 +352,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
   };
   const scroll = (amount: number) => {
     const maxStart = Math.max(0, messageRows.length - timelineHeight);
-    const current = viewport(messageRows, timelineHeight, anchors.current[currentView]);
+    const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
     const start = Math.max(0, Math.min(maxStart, current.start + amount));
     if (start === current.start && !(amount > 0 && start === maxStart && anchors.current[currentView] !== null)) return;
     let readableIndex = start;
@@ -316,9 +392,9 @@ export function App({store, authentication, surfaces, getCommandContext, session
     submitting.current = true;
     setNotice('');
     void onSubmit(text, currentView).then(() => {
-      setDrafts(prev => ({...prev, [currentView]: prev[currentView].text === text ? emptyDraft : prev[currentView]}));
+      setDrafts(prev => ({...prev, [currentView]: prev[currentView]?.text === text ? emptyDraft : prev[currentView] ?? emptyDraft}));
       if (!text.trim().startsWith('/')) setAnchor(null);
-    }, error => setNotice(error instanceof Error ? error.message : String(error))).finally(() => {submitting.current = false;});
+    }, error => {if (!stage) flash(error instanceof Error ? error.message : String(error));}).finally(() => {submitting.current = false;});
   };
 
   const complete = (suggestion: CommandSuggestion, execute: boolean) => {
@@ -335,11 +411,129 @@ export function App({store, authentication, surfaces, getCommandContext, session
   const lastClickRef = useRef<{time: number; key: string}>({time: 0, key: ''});
   const foldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mouseHandlerRef = useRef<(event: SgrMouseEvent) => void>(() => {});
+  const mouseListeners = useRef(new Set<(event: SgrMouseEvent) => void>());
+  const subscribeMouse = useMemo<MouseSubscriber>(() => handler => {mouseListeners.current.add(handler); return () => {mouseListeners.current.delete(handler);};}, []);
+  const clickTimeline = (act: SceneAction, clickedRow: SceneRow, event: SgrMouseEvent) => {
+    if (act.kind === 'stop_actor' && act.foldId) {stopActor(act.foldId); return;}
+    const now = Date.now();
+    if (stage && act.kind === 'select_answer' && act.requestId) {
+      const clicked = pending.find(item => item.requestId === act.requestId);
+      if (clicked) {setSelectedRequestId(clicked.requestId); setResponses(prev => ({...prev, [clicked.requestId]: {...prev[clicked.requestId] ?? initialResponse(clicked), selected: Number(act.value), error: ''}})); setFocus('question');}
+      return;
+    }
+    if (stage && act.kind === 'confirm_answer' && act.requestId) {
+      if (request?.requestId === act.requestId) commitAnswer(); else {setSelectedRequestId(act.requestId); setFocus('question');}
+      return;
+    }
+    if (act.kind === 'toggle_fold' && act.foldId) {
+      const id = act.foldId;
+      setScene(prev => ({...prev, folds: {...prev.folds, [id]: !(stage ? stageFoldOpen(snapshot, id, prev.folds) : isFoldOpen(prev, id, false))}}));
+      return;
+    }
+    if ((act.kind === 'actor_summary' || act.kind === 'actor_body') && act.foldId && act.owner) {
+      const id = act.foldId;
+      const owner = act.owner;
+      if (now - lastClickRef.current.time < 320 && lastClickRef.current.key === `actor:${owner}`) {
+        if (foldTimerRef.current) { clearTimeout(foldTimerRef.current); foldTimerRef.current = null; }
+        lastClickRef.current = {time: 0, key: ''};
+        switchView(owner);
+      } else {
+        lastClickRef.current = {time: now, key: `actor:${owner}`};
+        if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
+        foldTimerRef.current = setTimeout(() => {
+          setScene(prev => {
+            const defaultOpen = demoScene ? defaultSceneFoldOpen(scene, id) : stageFoldOpen(snapshot, id, {});
+            return {...prev, folds: {...prev.folds, [id]: !isFoldOpen(prev, id, defaultOpen)}};
+          });
+        }, 180);
+      }
+      return;
+    }
+    if (act.kind === 'actor_body' && act.owner) {
+      const owner = act.owner;
+      if (now - lastClickRef.current.time < 320 && lastClickRef.current.key === `actor:${owner}`) {
+        lastClickRef.current = {time: 0, key: ''};
+        switchView(owner);
+        return;
+      }
+      lastClickRef.current = {time: now, key: `actor:${owner}`};
+    }
+    if (act.kind === 'select_permission' && (act.value === 'allow' || act.value === 'deny')) {
+      const val = act.value;
+      setScene(prev => ({...prev, permissionChoice: val}));
+      setFocus('question');
+      return;
+    }
+    if (act.kind === 'later' && act.foldId) {
+      const id = act.foldId;
+      setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
+      setEditingCustom(false); setFocus('input');
+      return;
+    }
+    if (act.kind === 'confirm_permission') {
+      if (event.x >= clickedRow.gutterCols + 12 && act.foldId) {
+        const id = act.foldId;
+        setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
+        setFocus('input');
+      } else {
+        confirmScenePermission();
+      }
+      return;
+    }
+    if (act.kind === 'select_style' && (act.value === 'minimal' || act.value === 'editorial' || act.value === 'custom')) {
+      const val = act.value;
+      setScene(prev => ({...prev, choice: val, customError: false}));
+      setEditingCustom(val === 'custom');
+      setFocus('question');
+      return;
+    }
+    if (act.kind === 'focus_custom') {
+      setScene(prev => ({...prev, choice: 'custom', customError: false}));
+      setEditingCustom(true);
+      setFocus('question');
+      return;
+    }
+    if (act.kind === 'confirm_style') {
+      if (event.x >= clickedRow.gutterCols + 12 && act.foldId) {
+        const id = act.foldId;
+        setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
+        setEditingCustom(false);
+        setFocus('input');
+      } else {
+        confirmSceneStyle();
+      }
+      return;
+    }
+  };
+  const updateDrag = (x: number, y: number) => {
+    const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
+    const selected = contentSelection.current;
+    if (!selected || !gesture.current) return;
+    contentSelection.current = {...selected, focus: contentPoint(messageRows, current.start + Math.max(0, Math.min(timelineHeight - 1, y)), x)};
+    presentReading();
+  };
+  const dragAt = (x: number, y: number) => {
+    if (!gesture.current) return;
+    if (x !== gesture.current.x || y !== gesture.current.y) gesture.current.dragged = true;
+    updateDrag(x, y);
+    edgePointer.current = {x, y};
+    if (gesture.current.dragged && (y <= 0 || y >= timelineHeight - 1) && !edgeTimer.current) {
+      edgeTimer.current = setInterval(() => {
+        const point = edgePointer.current;
+        if (!point || !gesture.current?.dragged) {stopEdgeScroll(); return;}
+        scroll(point.y <= 0 ? -1 : 1);
+        updateDrag(point.x, point.y);
+      }, 40);
+    } else if (y > 0 && y < timelineHeight - 1) stopEdgeScroll();
+  };
   mouseHandlerRef.current = (event: SgrMouseEvent) => {
+    for (const listener of mouseListeners.current) listener(event);
     if (loginState || surface) return;
     if (event.action === 'wheel_up') { if (event.y < timelineHeight) scroll(-3); return; }
     if (event.action === 'wheel_down') { if (event.y < timelineHeight) scroll(3); return; }
     if (event.action === 'move') {
+      const control = event.y < timelineHeight ? (readingRows()[event.y] as SceneRow | undefined)?.controls?.find(item => event.x >= item.startCol && event.x < item.endCol && !item.disabled) : undefined;
+      setHoveredStop(control?.action.foldId ?? '');
       const target = (demoScene || stage) && event.y < timelineHeight
         ? hoveredCardAt(readingRows()[event.y] as SceneRow | undefined, event.x)
         : !demoScene && activity && !expanded && event.y >= timelineHeight && event.y < timelineHeight + activityHeight && event.x < width
@@ -366,111 +560,24 @@ export function App({store, authentication, surfaces, getCommandContext, session
           const cursor = cursorAt(inputLayout, inputView.start + event.y - inputY, Math.max(0, event.x - promptWidth));
           edit(current => ({text: current.text, cursor}));
         } else { setEditingCustom(false); setFocus('input'); }
-        setSelection(null);
+        clearSelection();
         return;
       }
       if (event.y < timelineHeight) {
+        stopEdgeScroll();
         const clickedRow = readingRows()[event.y] as SceneRow | undefined;
-        if ((demoScene || stage) && clickedRow?.action) {
-          setSelection(null);
-          const act = clickedRow.action;
-          const now = Date.now();
-          if (stage && act.kind === 'select_answer' && act.requestId) {
-            const clicked = pending.find(item => item.requestId === act.requestId);
-            if (clicked) {setSelectedRequestId(clicked.requestId); setResponses(prev => ({...prev, [clicked.requestId]: {...prev[clicked.requestId] ?? initialResponse(clicked), selected: Number(act.value), error: ''}})); setFocus('question');}
-            return;
-          }
-          if (stage && act.kind === 'confirm_answer' && act.requestId) {
-            if (request?.requestId === act.requestId) commitAnswer(); else {setSelectedRequestId(act.requestId); setFocus('question');}
-            return;
-          }
-          if (act.kind === 'toggle_fold' && act.foldId) {
-            const id = act.foldId;
-            setScene(prev => ({...prev, folds: {...prev.folds, [id]: !(stage ? stageFoldOpen(snapshot, id, prev.folds) : isFoldOpen(prev, id, false))}}));
-            return;
-          }
-          if (act.kind === 'actor_summary' && act.foldId && act.owner) {
-            const id = act.foldId;
-            const owner = act.owner;
-            if (now - lastClickRef.current.time < 320 && lastClickRef.current.key === `actor:${owner}`) {
-              if (foldTimerRef.current) { clearTimeout(foldTimerRef.current); foldTimerRef.current = null; }
-              lastClickRef.current = {time: 0, key: ''};
-              switchView(owner);
-            } else {
-              lastClickRef.current = {time: now, key: `actor:${owner}`};
-              if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
-              foldTimerRef.current = setTimeout(() => {
-                setScene(prev => {
-                  const defaultOpen = demoScene ? defaultSceneFoldOpen(scene, id) : stageFoldOpen(snapshot, id, {});
-                  return {...prev, folds: {...prev.folds, [id]: !isFoldOpen(prev, id, defaultOpen)}};
-                });
-              }, 180);
-            }
-            return;
-          }
-          if (act.kind === 'actor_body' && act.owner) {
-            const owner = act.owner;
-            if (now - lastClickRef.current.time < 320 && lastClickRef.current.key === `actor:${owner}`) {
-              lastClickRef.current = {time: 0, key: ''};
-              switchView(owner);
-              return;
-            }
-            lastClickRef.current = {time: now, key: `actor:${owner}`};
-          }
-          if (act.kind === 'select_permission' && (act.value === 'allow' || act.value === 'deny')) {
-            const val = act.value;
-            setScene(prev => ({...prev, permissionChoice: val}));
-            setFocus('question');
-            return;
-          }
-          if (act.kind === 'later' && act.foldId) {
-            const id = act.foldId;
-            setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
-            setEditingCustom(false); setFocus('input');
-            return;
-          }
-          if (act.kind === 'confirm_permission') {
-            if (event.x >= clickedRow.gutterCols + 12 && act.foldId) {
-              const id = act.foldId;
-              setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
-              setFocus('input');
-            } else {
-              confirmScenePermission();
-            }
-            return;
-          }
-          if (act.kind === 'select_style' && (act.value === 'minimal' || act.value === 'editorial' || act.value === 'custom')) {
-            const val = act.value;
-            setScene(prev => ({...prev, choice: val, customError: false}));
-            setEditingCustom(val === 'custom');
-            setFocus('question');
-            return;
-          }
-          if (act.kind === 'focus_custom') {
-            setScene(prev => ({...prev, choice: 'custom', customError: false}));
-            setEditingCustom(true);
-            setFocus('question');
-            return;
-          }
-          if (act.kind === 'confirm_style') {
-            if (event.x >= clickedRow.gutterCols + 12 && act.foldId) {
-              const id = act.foldId;
-              setScene(prev => ({...prev, folds: {...prev.folds, [id]: false}}));
-              setEditingCustom(false);
-              setFocus('input');
-            } else {
-              confirmSceneStyle();
-            }
-            return;
-          }
-        }
-        setSelection({anchor: {x: event.x, y: event.y}, focus: {x: event.x, y: event.y}});
+        const act = actionAt(clickedRow, event.x);
+        const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
+        const point = contentPoint(messageRows, current.start + event.y, event.x);
+        contentSelection.current = {anchor: point, focus: point};
+        gesture.current = {x: event.x, y: event.y, dragged: false, ...(act ? {action: act} : {}), ...(clickedRow ? {row: clickedRow} : {})};
+        presentReading();
         return;
       }
-      setSelection(null);
+      clearSelection();
       if (!demoScene && activity && event.y >= timelineHeight && event.y < timelineHeight + activityHeight) {
         const now = Date.now();
-        if (now - lastClickRef.current.time < 350 && Object.hasOwn(cast, activity.ownerId) && activity.ownerId !== 'logox') {
+        if (now - lastClickRef.current.time < 350 && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox') {
           switchView(activity.ownerId as ActorId);
           lastClickRef.current = {time: 0, key: ''};
         } else {
@@ -480,28 +587,19 @@ export function App({store, authentication, surfaces, getCommandContext, session
       }
       return;
     }
-    if (event.action === 'drag') {
-      setSelection(prev => prev ? {
-        anchor: prev.anchor,
-        focus: {x: event.x, y: Math.max(0, Math.min(Math.max(0, timelineHeight - 1), event.y))},
-      } : null);
-      return;
-    }
+    if (event.action === 'drag') {dragAt(event.x, event.y); return;}
     if (event.action === 'release') {
-      setSelection(prev => {
-        if (!prev) return null;
-        const next: SelectionRange = {
-          anchor: prev.anchor,
-          focus: {x: event.x, y: Math.max(0, Math.min(Math.max(0, timelineHeight - 1), event.y))},
-        };
-        const copied = extractSelection(readingRows(), next);
-        if (copied) {
-          stdout?.write(osc52Clipboard(copied));
-          setNotice('已复制选区（不含左侧轨道）');
-          return next;
-        }
-        return null;
-      });
+      const pressed = gesture.current;
+      if (!pressed) return;
+      dragAt(event.x, event.y); stopEdgeScroll();
+      gesture.current = null;
+      if (!pressed.dragged) {
+        contentSelection.current = null; presentReading();
+        if (pressed.action && pressed.row) clickTimeline(pressed.action, pressed.row, event);
+        return;
+      }
+      const copied = copySelection();
+      if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('已复制选区（不含左侧轨道）');}
     }
   };
 
@@ -575,16 +673,14 @@ export function App({store, authentication, surfaces, getCommandContext, session
       onDraft?.();
     }
   };
-  usePaste(text => {if (!loginState && !surface) edit(current => insert(current, text));});
+  usePaste(text => {exitDeadline.current = 0; setNotice(''); if (!loginState && !surface) edit(current => insert(current, text));});
   useInput((input, key) => {
-    if (loginState || closing || key.eventType === 'release') return;
+    if (closing || key.eventType === 'release') return;
+    if (key.ctrl && input === 'c') {interrupt(); return;}
+    exitDeadline.current = 0; if (notice) setNotice('');
     if (key.ctrl && input === 'd') { close(); return; }
+    if (loginState) return;
     if (surface) return;
-    if (key.ctrl && input === 'c') {
-      const running = activities.find(item => ['running', 'waiting_input', 'queued'].includes(item.status) && item.kind !== 'anamnesis');
-      if (running) onCancel(running.activityId); else close();
-      return;
-    }
     if (menuHeight && !key.ctrl && !key.meta && !key.shift) {
       if (key.upArrow || key.downArrow) {
         setCompletion({query, selected: (suggestionIndex + (key.upArrow ? suggestions.length - 1 : 1)) % suggestions.length, dismissed: false});
@@ -598,6 +694,27 @@ export function App({store, authentication, surfaces, getCommandContext, session
       }
     }
     if (key.tab) {
+      if (stage) {
+        const stops = [...new Set(messageRows.flatMap(row => (row as SceneRow).controls?.filter(item => !item.disabled).flatMap(item => item.action.foldId ? [item.action.foldId] : []) ?? []))];
+        const targets = ['input', ...pending.map(item => 'question:' + item.requestId), ...stops.map(id => 'stop:' + id)];
+        const current = focus === 'stop' ? 'stop:' + focusedStop : focus === 'question' ? 'question:' + request?.requestId : 'input';
+        const selected = targets[(Math.max(0, targets.indexOf(current)) + targets.length + (key.shift ? -1 : 1)) % targets.length]!;
+        if (selected === 'input') {setFocus('input'); return;}
+        const kind = selected.startsWith('stop:') ? 'stop' : 'question', id = selected.slice(kind.length + 1);
+        setFocus(kind);
+        if (kind === 'stop') {
+          setFocusedStop(id);
+          const index = messageRows.findIndex(row => (row as SceneRow).controls?.some(item => item.action.foldId === id));
+          if (index >= 0) setAnchor({messageId: '__top__', line: Math.max(0, index - 1)});
+        } else {
+          const target = pending.find(item => item.requestId === id);
+          setSelectedRequestId(id);
+          if (target) setScene(prev => ({...prev, folds: {...prev.folds, [target.activityId]: true, [id]: true}}));
+          const index = messageRows.findIndex(row => row.messageId === id);
+          if (index >= 0) setAnchor({messageId: '__top__', line: Math.max(0, index - 1)});
+        }
+        return;
+      }
       if (stage && request) {
         if (focus === 'question') {setFocus('input'); return;}
         setFocus('question');
@@ -655,14 +772,14 @@ export function App({store, authentication, surfaces, getCommandContext, session
       return;
     }
     if (key.ctrl && input === 'g') {
-      if (stage) {const order: ActorId[] = ['logox', 'aletheia', 'techne', 'kalon']; switchView(order[(order.indexOf(currentView) + 1) % order.length]!); return;}
+      if (stage) {const order = Object.keys(roles); switchView(order[(order.indexOf(currentView) + 1) % order.length] ?? 'logox'); return;}
       if (demoScene) {
         const order: ActorId[] = ['logox', 'aletheia', 'techne', 'kalon'];
         const next = order[(order.indexOf(scene.view) + 1) % order.length]!;
         switchView(next);
         return;
       }
-      const target = activity && Object.hasOwn(cast, activity.ownerId) && activity.ownerId !== 'logox'
+      const target = activity && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox'
         ? activity.ownerId as ActorId
         : currentView === 'logox' ? 'kalon' : 'logox';
       switchView(target);
@@ -686,8 +803,11 @@ export function App({store, authentication, surfaces, getCommandContext, session
         return;
       }
       if (focus === 'question') { setFocus('input'); return; }
-      if (selection) { setSelection(null); return; }
       if (currentView !== 'logox') { switchView('logox'); return; }
+      if (focus === 'stop') {setFocus('input'); return;}
+      if (selection) { clearSelection(); return; }
+      const running = activities.find(item => item.ownerId === 'logox' && ['running', 'waiting_input', 'queued'].includes(item.status));
+      if (running) onCancel(running.activityId);
       return;
     }
     if (key.ctrl && (key.upArrow || key.downArrow) && request) {
@@ -721,6 +841,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
     }
     if (key.ctrl && input === 'j') { edit(current => insert(current, '\n')); return; }
     if (key.return) {
+      if (focus === 'stop') {stopActor(focusedStop); setFocus('input'); return;}
       if (key.shift || key.meta) { edit(current => insert(current, '\n')); return; }
       if (demoScene && key.ctrl) {
         const match = /^main-(aletheia|techne|kalon)$/.exec(foldableDemoIds[cardCursor]!);
@@ -745,10 +866,10 @@ export function App({store, authentication, surfaces, getCommandContext, session
       if (stage && key.ctrl) {
         const ids = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
         const selected = activities.find(item => item.activityId === ids[cardCursor % Math.max(1, ids.length)]);
-        if (selected && Object.hasOwn(cast, selected.ownerId) && selected.ownerId !== 'logox') switchView(selected.ownerId as ActorId);
+        if (selected && Object.hasOwn(roles, selected.ownerId) && selected.ownerId !== 'logox') switchView(selected.ownerId as ActorId);
         return;
       }
-      if (key.ctrl && activity && Object.hasOwn(cast, activity.ownerId) && activity.ownerId !== 'logox') {
+      if (key.ctrl && activity && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox') {
         switchView(activity.ownerId as ActorId);
         return;
       }
@@ -760,7 +881,7 @@ export function App({store, authentication, surfaces, getCommandContext, session
           ? `@${currentView} ${raw}`
           : raw;
         setDraft(() => emptyDraft); setNotice('');
-        void onSubmit(payload).catch(error => setNotice(error instanceof Error ? error.message : String(error)));
+        void onSubmit(payload).catch(error => {if (!stage) flash(error instanceof Error ? error.message : String(error));});
       }
       return;
     }
@@ -771,77 +892,27 @@ export function App({store, authentication, surfaces, getCommandContext, session
     if (!key.ctrl && !key.meta && input) edit(current => insert(current, input));
   });
 
-  if (surface?.kind === 'page' && surfaces) return <TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
-    initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}/>;
+  if (surface?.kind === 'page' && surfaces) return <MouseContext.Provider value={subscribeMouse}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
+    initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
+    saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items) => {void surfaces.saveToggles(surface.id, tabId, items);}}/></MouseContext.Provider>;
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {!plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;
-        const textColor = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
-        const bounds = rowSelectionBounds(row, index, selection);
         const rail = row.gutterCols > 0 ? <Text color={row.railColor}>▎ </Text> : null;
-        const prefix = row.prefixSegments?.map((seg, i) => (
-          <Text key={`p-${i}`} color={seg.color ?? palette.fg} {...(seg.bg ? {backgroundColor: seg.bg} : {})} bold={Boolean(seg.bold)} italic={Boolean(seg.italic)}>{seg.text}</Text>
-        ));
-        const suffix = row.suffixSegments?.map((seg, i) => (
-          <Text key={`s-${i}`} color={seg.color ?? palette.fg} {...(seg.bg ? {backgroundColor: seg.bg} : {})} bold={Boolean(seg.bold)} italic={Boolean(seg.italic)}>{seg.text}</Text>
-        ));
-
-        if (bounds) {
-          const {before, selected, after} = sliceRowText(row.text, bounds[0], bounds[1]);
-          return <Box key={index} height={1} flexShrink={0} overflow="hidden">
-            {rail}
-            <Text wrap="truncate">
-              {prefix}
-              <Text color={textColor} {...(row.bg ? {backgroundColor: row.bg} : {})} bold={row.tone === 'header'} italic={row.tone === 'direction'}>
-                {before}
-                <Text backgroundColor={palette.selectionBg} color={palette.fg}>{selected}</Text>
-                {after}
-              </Text>
-              {suffix}
-            </Text>
-          </Box>;
-        }
-
-        if (row.segments && row.segments.length > 0) {
-          return <Box key={index} height={1} flexShrink={0} overflow="hidden">
-            {rail}
-            <Text wrap="truncate">
-              {row.segments.map((seg, segIdx) => {
-                const segBg = seg.bg ?? row.bg;
-                return (
-                  <Text
-                    key={segIdx}
-                    color={seg.color ?? palette.fg}
-                    {...(segBg ? {backgroundColor: segBg} : {})}
-                    bold={Boolean(seg.bold)}
-                    italic={Boolean(seg.italic)}
-                  >
-                    {seg.text}
-                  </Text>
-                );
-              })}
-            </Text>
-          </Box>;
-        }
-
         return <Box key={index} height={1} flexShrink={0} overflow="hidden">
           {rail}
-          <Text wrap="truncate">
-            {prefix}
-            <Text color={textColor} {...(row.bg ? {backgroundColor: row.bg} : {})} bold={row.tone === 'header'} italic={row.tone === 'direction'}>
-              {row.text || ' '}
-            </Text>
-            {suffix}
-          </Text>
+          <Text wrap="truncate">{presentedSegments(row, index, selection).map((seg, i) =>
+            <Text key={i} color={seg.color ?? palette.fg} {...(seg.bg ?? row.bg ? {backgroundColor: seg.bg ?? row.bg} : {})} bold={Boolean(seg.bold)} italic={Boolean(seg.italic)}>{seg.text}</Text>)}</Text>
         </Box>;
       })}
     </Box>
     {surface?.kind === 'picker' && surfaces ? <Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
-      onSelect={id => {void surfaces.choose(surface.id, id);}} onCancel={() => surfaces.cancel()}/>
-      : loginState && authentication ? <LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close}/> : <>
+      {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
+      notice={notice} onSelect={id => {void surfaces.choose(surface.id, id);}} onCancel={() => surfaces.cancel()}/>
+      : loginState && authentication ? <LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/> : <>
     {!demoScene && !stage && activity && activityHeight > 0 && <Box height={activityHeight} flexShrink={0} overflow="hidden" flexDirection="column">
       <Box ref={activityRef} flexDirection="column" flexShrink={0}><ActivityCard activity={activity} expanded={expanded} hovered={hoveredFoldId === activity.activityId}/></Box>
     </Box>}
@@ -861,17 +932,14 @@ export function App({store, authentication, surfaces, getCommandContext, session
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
-    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="column">
-      {splitFooter ? <>
-        <Text color={statusLeftColor} wrap="truncate">{clipLine(statusLeft, width)}</Text>
-        <Text color={palette.muted} wrap="truncate">{clipLine(renderedFooterKeys, width)}</Text>
-      </> : <Text wrap="truncate">
-        <Text color={statusLeftColor}>{clipLine(statusLeft, screenRows < 8 ? width : Math.max(1, width - stringWidth(renderedFooterKeys) - 1))}</Text>
-        {screenRows >= 8 && <>
-          <Text>{' '.repeat(Math.max(1, width - stringWidth(clipLine(statusLeft, Math.max(1, width - stringWidth(renderedFooterKeys) - 1))) - stringWidth(renderedFooterKeys)))}</Text>
-          <Text color={palette.muted}>{renderedFooterKeys}</Text>
-        </>}
-      </Text>}
+    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0}>
+      <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
+        ? statusbarParts(getStatus(currentView), width, layout?.modules).map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
+        : clipLine(statusLeft, width)}</Text>
+      {!getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width && <>
+        <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
+        <Text color={palette.muted}>{renderedFooterKeys}</Text>
+      </>}
     </Box>}
     </>}
   </Box>;

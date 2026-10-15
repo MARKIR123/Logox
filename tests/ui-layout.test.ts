@@ -59,7 +59,7 @@ test('输入视口仅在光标越界时滚动；草稿缩短和终端缩放后�
   assert.equal(inputViewport(layoutInput(emptyDraft, 10), 5, 20).start, 0);
 });
 
-test('窄屏保留完整任务与状态；嵌套正文复制过滤轨道、封边和内边距', () => {
+test('窄屏保留完整任务与状态；嵌套正文复制只过滤左侧轨道', () => {
   const task = '检查首页的中文标题、emoji 🙂 与 src/components/ProjectCard.tsx 的完整展示，保留全部任务描述。';
   const state: DemoSceneState = {
     ...initialDemoSceneState,
@@ -78,25 +78,25 @@ test('窄屏保留完整任务与状态；嵌套正文复制过滤轨道、封�
     const descriptionRows = rows.filter(row => row.messageId === 'main-aletheia-reads-body-0');
     assert.ok(descriptionRows.every(row => row.gutterCols >= 4));
     const copied = extractSelection(descriptionRows, {anchor: {x: 0, y: 0}, focus: {x: width, y: descriptionRows.length - 1}});
-    assert.equal(copied, 'src/pages/index.tsx:18             首屏标题、标签组与按钮字重同级，焦点分散');
+    assert.equal(copied, ' '.repeat(descriptionRows[0]!.gutterCols - 2) + 'src/pages/index.tsx:18             首屏标题、标签组与按钮字重同级，焦点分散');
     const status = rows.filter(row => row.messageId.startsWith('dispatch-1')).map(row => row.text).join('');
     assert.ok(status.includes('任务已接收'));
   }
 });
 
 
-test('卡片使用透亮烟熏色与白日梦雾白灰；内联工具无灰底；选中项只改变标识和文字', () => {
+test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透出父色，展开独立灰底；选中项只改变标识和文字', () => {
   const denyRows = buildDemoSceneRows(initialDemoSceneState, 99);
   const allowRows = buildDemoSceneRows({...initialDemoSceneState, permissionChoice: 'allow'}, 99);
-  assert.equal(actorCardPalette.aletheia.closed, '#3d5a4f');
-  assert.equal(actorCardPalette.aletheia.highlight, '#a8f0d4');
-  assert.equal(actorCardPalette.techne.closed, '#3d5266');
-  assert.equal(actorCardPalette.techne.highlight, '#a8d8ff');
+  assert.equal(actorCardPalette.aletheia.closed, '#2c473d');
+  assert.equal(actorCardPalette.aletheia.highlight, '#7ee7c4');
+  assert.equal(actorCardPalette.techne.closed, '#483c27');
+  assert.equal(actorCardPalette.techne.highlight, '#e5b567');
   assert.equal(actorCardPalette.kalon.closed, '#544359');
-  assert.equal(actorCardPalette.kalon.highlight, '#f4b8e8');
+  assert.equal(actorCardPalette.kalon.highlight, '#e8a8dc');
   for (const hex of Object.values(actorCardPalette).flatMap(p => [p.closed, p.open])) {
     const channels = hex.slice(1).match(/../g)!.map(c => Number.parseInt(c, 16));
-    assert.ok(channels.every(c => c >= 55 && c <= 130), hex);
+    assert.ok(channels.every(c => c >= 35 && c <= 130), hex);
   }
   for (const id of ['main-techne-perm-allow', 'main-techne-perm-deny']) {
     const before = denyRows.find(r => r.messageId === id)!;
@@ -122,7 +122,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；内联工具无灰底�
   assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, actorCardPalette.aletheia.open, 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
 });
 
-test('悬停统一高亮逻辑：有底色卡切换展开底色与高亮标题，无底色工具/思考卡保持无底色并高亮标题', () => {
+test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Actor 底色与内层灰底独立', () => {
   const base = buildDemoSceneRows(initialDemoSceneState, 40);
   for (const id of ['main-aletheia', 'main-kalon']) {
     const hovered = buildDemoSceneRows(initialDemoSceneState, 40, id);
@@ -150,16 +150,19 @@ test('悬停统一高亮逻辑：有底色卡切换展开底色与高亮标题�
   }
   for (const id of ['main-thinking', 'main-tool']) {
     const idleRow = base.find(r => r.messageId === id)!;
-    assert.equal(hoveredCardAt(idleRow, 2), id, '无底色折叠卡同样支持鼠标悬停命中');
-    assert.equal(idleRow.segments!.find(s => s.text === '思考' || s.text === '工具调用')!.color, palette.muted);
+    assert.equal(hoveredCardAt(idleRow, idleRow.gutterCols), id, '无底色折叠卡同样支持鼠标悬停命中');
+    assert.equal(idleRow.segments!.find(s => s.selectionKey?.endsWith(':title'))!.color, palette.muted);
     for (const open of [false, true]) {
       const rows = buildDemoSceneRows({...initialDemoSceneState, folds: {[id]: open}}, 40, id).filter(r => r.messageId.startsWith(id));
       assert.ok(rows.length >= 1);
-      assert.ok(rows.every(r => !r.bg && !r.segments?.some(s => s.bg) && !r.prefixSegments?.some(s => s.bg) && !r.suffixSegments?.some(s => s.bg)));
+      if (open) assert.ok(rows.every(r => r.bg === palette.toolExpanded));
+      else assert.ok(rows.every(r => !r.bg));
       const headerRow = rows.find(r => r.messageId === id)!;
       assert.equal(headerRow.action?.kind, 'toggle_fold');
-      const labelSeg = headerRow.segments!.find(s => s.text === '思考' || s.text === '工具调用')!;
-      assert.equal(labelSeg.color, palette.accent, '悬停或展开时标题切换为高亮色');
+      const labelSeg = headerRow.segments!.find(s => s.selectionKey?.endsWith(':title'))!;
+      assert.equal(labelSeg.color, palette.accent, '悬停标题使用所属角色主题色');
+      const unhovered = buildDemoSceneRows({...initialDemoSceneState, folds: {[id]: open}}, 40, null).find(r => r.messageId === id)!;
+      assert.equal(unhovered.segments!.find(s => s.selectionKey?.endsWith(':title'))!.color, palette.muted, '移出后恢复次要色，展开不永久高亮');
       assert.equal(Boolean(labelSeg.bold), false, '无底色卡高亮同样不加粗');
     }
   }

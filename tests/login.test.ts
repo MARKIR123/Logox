@@ -34,6 +34,24 @@ test('持久认证保留其他提供商，跨实例并发不丢失，拒绝坏�
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
+test('默认使用 .logox-ts 并在缺失时只读后备读取旧 .logox，保存写入新路径', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-fallback-'));
+  const legacyPath = join(cwd, 'legacy-auth.json');
+  const tsPath = join(cwd, 'ts-auth.json');
+  await writeFile(legacyPath, JSON.stringify({deepseek: {type: 'api_key', key: 'legacy-key'}}));
+  const storage = new AuthStorage(tsPath, legacyPath);
+  try {
+    assert.equal(await storage.key('deepseek'), 'legacy-key');
+    assert.deepEqual(await storage.providers(), ['deepseek']);
+    await storage.save('anthropic', 'new-key', signal());
+    assert.equal(await storage.key('deepseek'), 'legacy-key');
+    assert.equal(await storage.key('anthropic'), 'new-key');
+    const saved = JSON.parse(await readFile(tsPath, 'utf8'));
+    assert.equal(saved.deepseek.key, 'legacy-key');
+    assert.equal(saved.anthropic.key, 'new-key');
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
 test('登录阶段不保存密钥，取消不落盘，保存失败可以重试', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-login-flow-'));
   const auth = new AuthStorage(join(cwd, 'auth.json'));
@@ -66,7 +84,7 @@ test('/login 保存后重建应用直接认证，密钥不进入舞台或会话'
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();assert.ok(address && typeof address === 'object');
   const config = await loadConfig(cwd, {provider: {name: 'test-cloud', model: 'test'}, providers: {'test-cloud': {base_url: 'http://127.0.0.1:' + address.port, api_key_env: 'LOGIN_TEST_KEY'}}}, {}, cwd, cwd);
-  let app = await createApplication({cwd, authPath, config, sessionId: 'first'});
+  let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, authPath, config, sessionId: 'first'});
   try {
     await app.submit('/login test-cloud');
     assert.equal(app.authentication.getSnapshot()?.phase, 'key');
@@ -75,7 +93,7 @@ test('/login 保存后重建应用直接认证，密钥不进入舞台或会话'
     assert.ok(!JSON.stringify(app.store.getSnapshot()).includes('synthetic-persistent-key'));
     assert.deepEqual(await app.journal.load('first', 'logox'), []);
     await app.close();
-    app = await createApplication({cwd, authPath, config, sessionId: 'second'});
+    app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, authPath, config, sessionId: 'second'});
     assert.equal(app.authentication.getSnapshot(), null);
     await app.submit('/check-provider');
     assert.deepEqual(authorization, ['Bearer synthetic-persistent-key', 'Bearer synthetic-persistent-key']);

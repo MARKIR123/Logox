@@ -10,11 +10,31 @@ type Credentials = z.infer<typeof schema>;
 
 /** 用户凭据独立保存，既不属于项目配置，也不属于会话账本。 */
 export class AuthStorage {
-  constructor(readonly path = join(homedir(), '.logox', 'auth.json')) {}
+  readonly fallbackPath: string | undefined;
+  constructor(
+    readonly path = join(homedir(), '.logox-ts', 'auth.json'),
+    fallbackPath?: string,
+  ) {
+    this.fallbackPath = fallbackPath ?? (path === join(homedir(), '.logox-ts', 'auth.json') ? join(homedir(), '.logox', 'auth.json') : undefined);
+  }
   private async read(): Promise<Credentials> {
-    let content: string;
+    let content: string | undefined;
     try {content = await readFile(this.path, 'utf8');}
-    catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw new Error('无法读取 LOGOX 认证文件');}
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (this.fallbackPath) {
+          try {content = await readFile(this.fallbackPath, 'utf8');}
+          catch (fallbackErr) {
+            if ((fallbackErr as NodeJS.ErrnoException).code === 'ENOENT') return {};
+            throw new Error('无法读取 LOGOX 认证文件');
+          }
+        } else {
+          return {};
+        }
+      } else {
+        throw new Error('无法读取 LOGOX 认证文件');
+      }
+    }
     try {return schema.parse(JSON.parse(content));}
     catch {throw new Error('LOGOX 认证文件格式无效；保留原文件，请检查后重试');}
   }

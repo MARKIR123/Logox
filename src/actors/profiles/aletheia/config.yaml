@@ -1,0 +1,17 @@
+id: aletheia
+name: Aletheia
+title: 澄明 · 侦察者
+description: 调查代码、日志与资料，追踪调用链、核实来源，交付可查证的事实地图。
+color: "#7ee7c4"
+card_closed: "#2c473d"
+card_open: "#395c4f"
+symbol: ◇
+context:
+  keep_recent_rounds: 0
+  keep_recent_tools: 2
+  reserve_tokens: 32768
+  low_watermark_ratio: 0.5
+skills:
+  - investigate-first
+  - diagnosing-bugs
+  - research

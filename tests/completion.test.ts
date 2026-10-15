@@ -46,7 +46,7 @@ test('应用提供公开候选：模型查询缓存按提供商隔离，切换�
     alpha: {kind: 'openai_compat', base_url, default_model: 'alpha-default'},
     beta: {kind: 'openai_compat', base_url, default_model: 'beta-default'},
   }}, {}, cwd, cwd);
-  const app = await createApplication({cwd, config, authPath: join(cwd, 'auth.json')});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, authPath: join(cwd, 'auth.json')});
   try {
     assert.ok(app.commandContext().providers.includes('alpha'));
     assert.ok(!app.commandContext().loginProviders.includes('alpha'), '无认证本地接口不加入登录菜单');

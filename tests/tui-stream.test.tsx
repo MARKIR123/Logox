@@ -75,8 +75,8 @@ test('正式 Ink 阅读：同批滚轮累加，阅读期间流式追加保留位
   try {
     await delay(80); await instance.waitUntilRenderFlush();
     const total = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {}, null).length;
-    // 18 rows minus one composer, two separators and two footer rows = 13 history rows.
-    const start = total - 13 - 6;
+    // Status always uses one row, leaving 14 history rows in this terminal.
+    const start = total - 14 - 6;
     const expected = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {}, null)[start]!.text;
     const wheel = await frame(() => input.write('\x1b[<64;5;5M\x1b[<64;5;5M'));
     assert.ok(wheel.includes(expected), '同一输入批次的两次滚轮各移动三行');

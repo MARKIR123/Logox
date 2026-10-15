@@ -14,17 +14,36 @@ export class RuntimeStore {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
-  message(sessionId: string, ownerId: string, role: Message['role'], text: string, origin: Pick<Message, 'activityId' | 'source' | 'kind'> = {}): string {
+  message(sessionId: string, ownerId: string, role: Message['role'], text: string, origin: Pick<Message, 'activityId' | 'source' | 'kind' | 'time' | 'inputKind' | 'step'> = {}): string {
     const id = randomUUID();
-    this.messages.push(immutable({id, sessionId, ownerId, role, text, ...origin}));
+    this.messages.push(immutable({id, sessionId, ownerId, role, text, time: Date.now(), ...origin}));
     this.publish();
     return id;
+  }
+  system(event: {id: string; sessionId: string; ownerId: string; text: string; time: number; activityId?: string | undefined}): void {
+    if (this.messages.some(message => message.id === event.id)) return;
+    const {id, sessionId, ownerId, text, time, activityId} = event;
+    this.messages.push(immutable({id, sessionId, ownerId, text, time, role: 'system' as const,
+      ...(activityId ? {activityId} : {})}));
+    this.messages.sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
+    this.publish();
   }
   appendMessage(id: string, text: string): void {
     const index = this.messages.findIndex(message => message.id === id);
     const message = this.messages[index];
     if (!message) throw new Error('消息不存在');
     this.messages[index] = immutable({...message, text: message.text + text});
+    this.publish();
+  }
+  updateMessage(id: string, patch: Partial<Pick<Message, 'text' | 'step'>>): void {
+    const index = this.messages.findIndex(message => message.id === id);
+    const message = this.messages[index];
+    if (!message) throw new Error('消息不存在');
+    this.messages[index] = immutable({...message, ...patch}); this.publish();
+  }
+  clearTimeline(sessionId: string): void {
+    this.activities.clearSession(sessionId);
+    for (let index = this.messages.length - 1; index >= 0; index--) if (this.messages[index]?.sessionId === sessionId) this.messages.splice(index, 1);
     this.publish();
   }
   private publish(): void {

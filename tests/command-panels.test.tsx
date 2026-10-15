@@ -55,7 +55,8 @@ test('实际 Ink picker：搜索、跳过禁用、翻页、取消；页签保留
     await act(async () => {output.emit('resize');}); await instance.waitUntilRenderFlush();
     assert.match(frame(output), /❯ 配置/);
     await key('\t'); assert.match(frame(output), /第一页面/);
-    await key('\x03'); assert.equal(surfaces.getSnapshot(), null); assert.equal(store.interactions.list()[0]!.status, 'pending');
+    await key('\x03'); assert.ok(surfaces.getSnapshot(), 'Ctrl+C 不关闭命令界面');
+    await key('\x1b'); assert.equal(surfaces.getSnapshot(), null); assert.equal(store.interactions.list()[0]!.status, 'pending');
     await key('\r'); assert.equal((await ticket.result).status, 'answered', '页签退出仍聚焦原审批');
     await key('\r'); assert.deepEqual(submissions, ['保留我的草稿']);
     let signal!: AbortSignal;
@@ -77,7 +78,7 @@ test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 
     alpha: {base_url: 'http://127.0.0.1:' + address.port + '/alpha'}, beta: {base_url: 'http://127.0.0.1:' + address.port + '/beta'},
   }}, {}, cwd, cwd);
   let calls = 0;
-  const app = await createApplication({cwd, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不应调用模型');}}});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不应调用模型');}}});
   let instance!: ReturnType<typeof render>;
   await act(async () => {instance = render(<App stage sessionId={app.sessionId} store={app.store} surfaces={app.surfaces} authentication={app.authentication}
     getCommandContext={app.commandContext} onSubmit={app.submit} onCancel={app.cancel} onClose={app.close}/>,

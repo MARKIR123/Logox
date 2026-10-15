@@ -5,6 +5,11 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {buildStageRows} from '../src/tui/stage.js';
 import {extractSelection, viewport} from '../src/tui/viewport.js';
 import {layoutMarkdown} from '../src/tui/markdown.js';
+import {palette} from '../src/tui/cards.js';
+
+function displayedCopy(rows: readonly {text: string; softWrap: boolean}[]): string {
+  return rows.map((row, index) => row.text + (index < rows.length - 1 && !row.softWrap ? '\n' : '')).join('');
+}
 
 test('运行中不追加模型过程块，行动消息和 Actor 状态保留，失败及取消仍可见', () => {
   for (const ownerId of ['logox', 'techne'] as const) {
@@ -12,13 +17,13 @@ test('运行中不追加模型过程块，行动消息和 Actor 状态保留，�
     store.activities.create({sessionId: 's', activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
       title: '读取项目', status: 'queued', stage: '等待登场', detail: '读取 README'});
     store.message('s', ownerId, 'user', '读取项目', {activityId});
-    store.message('s', ownerId, 'assistant', '先了解项目结构', {activityId, kind: 'thinking'});
+    const thinking = store.message('s', ownerId, 'assistant', '先了解项目结构', {activityId, kind: 'thinking'});
     store.message('s', ownerId, 'assistant', 'read README.md', {activityId, kind: 'tool'});
     for (const stage of ['模型处理中', '工具执行', '等待重试']) {
       store.activities.update('s', activityId, {status: 'running', stage, detail: '第 2 次往返'});
       for (const view of ['logox', ownerId] as const) {
-        const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true}, null);
-        assert.ok(!rows.some(row => row.text.includes('第 2 次往返') || row.text.includes('处理中 · ')), '过程诊断不进入对话');
+        const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true, [thinking]: true}, null);
+        assert.ok(!rows.some(row => row.text.includes('第 2 次往返') || row.text.includes('处理中 · ') && !row.controls?.length), '过程诊断不进入对话，Actor状态与停止按钮保留');
         assert.ok(rows.some(row => row.text.includes('先了解项目结构')), '思考消息保留');
         assert.ok(rows.some(row => row.text.includes('read README.md')), '工具消息保留');
         if (view === 'logox' && ownerId === 'techne') assert.ok(rows.some(row => row.text.includes('处理中')), 'Actor 任务卡仍显示真实运行状态');
@@ -28,13 +33,13 @@ test('运行中不追加模型过程块，行动消息和 Actor 状态保留，�
     const status = ownerId === 'logox' ? 'failed' : 'cancelled';
     store.activities.update('s', activityId, {status, stage: status === 'failed' ? '执行失败' : '已中断', detail: '任务停止的实际原因'});
     for (const view of ['logox', ownerId] as const) {
-      const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true}, null);
+      const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true, [thinking]: true}, null);
       assert.ok(rows.some(row => row.text.includes('任务停止的实际原因')), '失败和取消仍可见');
     }
   }
 });
 
-test('正式舞台渲染 Markdown，软折行复制恢复原文，用户和工具保持原样', () => {
+test('正式舞台渲染 Markdown，软折行复制屏幕文字，用户和工具保持原样', () => {
   const store = new RuntimeStore();
   const source = '# 中文标题🙂\n- **第一项** 和 `代码`\n1. 第二项\n> 引用\n[链接](https://example.com)\n```ts\n\tconst value = "中文👩‍💻";\n```';
   const id = store.message('s', 'logox', 'assistant', source);
@@ -47,12 +52,12 @@ test('正式舞台渲染 Markdown，软折行复制恢复原文，用户和工�
   assert.ok(body.some(row => row.segments?.some(segment => segment.bold && segment.text.includes('第一'))));
   assert.ok(body.every(row => !row.text.includes('```')));
   assert.ok(body.every(row => stringWidth(row.text) <= 16));
-  assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 100, y: body.length - 1}}), source);
+  assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 100, y: body.length - 1}}), '中文标题🙂\n• 第一项 和 代码\n1. 第二项\n│ 引用\n链接 (https://example.com)\n── ts ──────────\n    const value = "中文👩‍💻";\n────────────────');
   assert.equal(store.getSnapshot().messages[0]?.text, source);
   assert.ok(rows.some(row => row.messageId === user && row.text === '# 用户原文'));
   assert.ok(rows.some(row => row.text === '# 工具原文'));
   const emphasis = body.findIndex(row => row.text.includes('第一项'));
-  assert.equal(extractSelection(body, {anchor: {x: 4, y: emphasis}, focus: {x: 9, y: emphasis}}), '**第一项**');
+  assert.equal(extractSelection(body, {anchor: {x: 4, y: emphasis}, focus: {x: 9, y: emphasis}}), '第一项');
 });
 
 test('未闭合围栏和行内强调在流式追加后收尾，字形与代码缩进保持完整', () => {
@@ -65,7 +70,7 @@ test('未闭合围栏和行内强调在流式追加后收尾，字形与代码�
   store.appendMessage(id, '\n```\n**完成**');
   const after = buildStageRows(store.getSnapshot(), 's', 'logox', 12, {}, null).filter(row => row.messageId === id);
   assert.equal(after.at(-1)?.text, '完成');
-  assert.equal(extractSelection(after, {anchor: {x: 0, y: 0}, focus: {x: 100, y: after.length - 1}}), store.getSnapshot().messages[0]?.text);
+  assert.equal(extractSelection(after, {anchor: {x: 0, y: 0}, focus: {x: 100, y: after.length - 1}}), '说明 **尚未结束\n── ts ────\n  const emoji = "👩‍💻";\n──────────\n完成');
 });
 
 test('流式新增与悬停复用已有消息布局，宽度和工具折叠变化刷新布局', () => {
@@ -84,12 +89,12 @@ test('流式新增与悬停复用已有消息布局，宽度和工具折叠变�
   assert.notEqual(before.find(row => row.messageId === old), narrow.find(row => row.messageId === old));
 });
 
-test('窄屏保留嵌套强调、深层列表、CRLF 和未完成标题的复制原文', () => {
+test('窄屏保留嵌套强调、深层列表、CRLF 和未完成标题的可见文字复制', () => {
   for (const source of ['# ', '**第一项 *斜体* 结尾**', '    - 嵌套项目🙂', '# 标题\r\n```ts\r\n\tvalue\r\n```']) {
     const store = new RuntimeStore();
     const id = store.message('s', 'logox', 'assistant', source);
     const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 8, {}, null).filter(row => row.messageId === id);
-    assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 100, y: rows.length - 1}}), source);
+    assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 100, y: rows.length - 1}}), displayedCopy(rows));
   }
 });
 
@@ -110,14 +115,14 @@ test('消息原文位置作为阅读锚点：缩放与新增消息保持位置�
   assert.equal(bottom.following, true);
 });
 
-test('表格按中文字形分配列宽、对齐和换行，整表复制保留 CRLF、竖线及原始语法', () => {
+test('表格按中文字形分配列宽、对齐和换行，整表复制可见边框、换行和单元格文字', () => {
   const source = '表格前\r\n| 项目 | 数量 | 说明 |\r\n| :--- | ---: | :---: |\r\n| **中文🙂** | 42 | `a|b` 和转义\\|文本以及更多内容👩‍💻 |\r\n| 后续 | 7 | 完成 |\r\n表格后';
   for (const width of [80, 36, 16, 8]) {
     const store = new RuntimeStore();
     const id = store.message('s', 'logox', 'assistant', source);
     const body = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
     assert.ok(body.every(row => stringWidth(row.text) <= width - 2), '每行都在窗口内');
-    assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: body.length - 1}}), source);
+    assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: body.length - 1}}), displayedCopy(body));
     assert.ok(body.some(row => row.text.includes('│') || row.text.includes('：')));
     assert.ok(!body.some(row => row.text.includes('\\|')));
     assert.equal(body.map(row => row.text).join('').match(/👩‍💻/g)?.length, 1);
@@ -126,7 +131,7 @@ test('表格按中文字形分配列宽、对齐和换行，整表复制保留 C
   assert.equal(lines[3]?.text, '│ xx  │   1 │  a  │');
   const rows = buildStageRows((() => {const store = new RuntimeStore(); store.message('s', 'logox', 'assistant', '| 项目 | 值 |\n| --- | --- |\n| **中文** | 42 |'); return store.getSnapshot();})(), 's', 'logox', 40, {}, null);
   const y = rows.findIndex(row => row.text.includes('中文'));
-  assert.equal(extractSelection(rows, {anchor: {x: 4, y}, focus: {x: 7, y}}), '**中文**', '单元格选择不含边框或填充');
+  assert.equal(extractSelection(rows, {anchor: {x: 4, y}, focus: {x: 7, y}}), '中文', '单元格选择复制可见字形');
 });
 
 test('流式表格从未完成分隔行转成布局，代码围栏内的表格保持代码', () => {
@@ -137,12 +142,12 @@ test('流式表格从未完成分隔行转成布局，代码围栏内的表格�
   store.appendMessage(id, '- |\n| 中文 |');
   rows = buildStageRows(store.getSnapshot(), 's', 'logox', 40, {}, null).filter(row => row.messageId === id);
   assert.ok(rows.some(row => row.text.includes('├')));
-  assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), store.getSnapshot().messages[0]!.text);
+  assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), '┌──────┬─────┐\n│ A    │ B   │\n├──────┼─────┤\n│ 中文 │     │\n└──────┴─────┘');
   assert.ok(layoutMarkdown('```\n| A | B |\n| --- | --- |\n```', 40).some(row => row.text === '| --- | --- |'));
   assert.ok(!layoutMarkdown('| A | B |\n| --- | --- |\n| \x1b[2J | ok |', 40).some(row => row.text.includes('\x1b')));
 });
 
-test('短表格只占内容需要的宽度，完整上下框线、缩放与原文复制保留', () => {
+test('短表格只占内容需要的宽度，完整上下框线、缩放与可见文字复制保留', () => {
   const source = '| A | B |\r\n| :--- | ---: |\r\n| x | 42 |';
   const store = new RuntimeStore();
   const id = store.message('s', 'logox', 'assistant', source);
@@ -156,14 +161,14 @@ test('短表格只占内容需要的宽度，完整上下框线、缩放与原�
       assert.match(rows[0]!.text, /^┌─+┬─+┐$/);
       assert.match(rows.at(-1)!.text, /^└─+┴─+┘$/);
       assert.ok(rows.every(row => stringWidth(row.text) === tableWidth), '列边界与上下框线等宽');
-      assert.equal(extractSelection(rows, {anchor: {x: 2, y: 0}, focus: {x: width - 1, y: 0}}), '', '新增装饰框线不进入复制');
+      assert.equal(extractSelection(rows, {anchor: {x: 2, y: 0}, focus: {x: width - 1, y: 0}}), rows[0]!.text, '可见框线进入复制');
       assert.equal(extractSelection(rows, {anchor: {x: 20, y: 2}, focus: {x: 30, y: 2}}), '', '表格外的空白不会复制表头分隔行');
     }
-    assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), source);
+    assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), displayedCopy(rows));
   }
 });
 
-test('代码块上下横线铺满正文宽度，语言标签不换行，整块复制恢复围栏', () => {
+test('代码块上下横线铺满正文宽度，语言标签不换行，整块复制可见横线和正文', () => {
   for (const label of ['powershell', '中文👩‍💻'.repeat(20), '']) {
     const source = '```' + label + '\r\nnpm start\r\n```';
     const store = new RuntimeStore();
@@ -173,7 +178,7 @@ test('代码块上下横线铺满正文宽度，语言标签不换行，整块�
       assert.equal(stringWidth(rows[0]!.text), width - 2, '顶部横线铺满正文');
       assert.equal(rows.at(-1)!.text, '─'.repeat(width - 2), '底部横线铺满正文');
       assert.equal(rows.slice(1, -1).map(row => row.text).join(''), 'npm start', '语言标签不溢出到代码正文');
-      assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), source);
+      assert.equal(extractSelection(rows, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: rows.length - 1}}), displayedCopy(rows));
     }
   }
 });
@@ -188,4 +193,45 @@ test('长表格的单元格折行逐行可滚动，缩放锚点定位到同一�
   const wider = buildStageRows(store.getSnapshot(), 's', 'logox', 40, {}, null);
   const restored = viewport(wider, 3, anchor).rows[0]!;
   assert.ok(restored.sourceCells?.some(cell => cell.start <= anchor.sourceOffset && cell.end > anchor.sourceOffset));
+});
+
+test('执行者拥有导轨与悬停主题色，工具正常方块为灰色，角色标题仍使用主题色', () => {
+  const store = new RuntimeStore();
+  const techneColor = '#e5b567';
+  const logoxColor = '#d97757';
+  const customRoles = {
+    techne: {symbol: '⊞', name: 'Techne', title: '精工', color: techneColor},
+    logox: {symbol: '◈', name: 'Logox', title: '执导者', color: logoxColor},
+  };
+
+  const activityId = 'techne-task-1';
+  store.activities.create({
+    sessionId: 's', activityId, ownerId: 'techne', kind: 'actor',
+    title: '重构首屏', status: 'running', stage: '处理中', detail: '执行工具',
+  });
+  const techneTool = store.message('s', 'techne', 'notice', 'shell\nls', {activityId, kind: 'tool',
+    step: {title: 'shell', state: 'running', elapsedMs: 0, runningSince: 100}});
+  const techneThink = store.message('s', 'techne', 'assistant', '摸清现场', {activityId, kind: 'thinking'});
+
+  // 1. 在独立窗口 (view === 'techne') 下验证
+  const techneRows = buildStageRows(store.getSnapshot(), 's', 'techne', 80, {[techneTool]: true, [techneThink]: true}, techneTool, {}, customRoles);
+  const toolRows = techneRows.filter(r => r.messageId === techneTool);
+  assert.ok(toolRows.length > 0, '工具卡存在');
+  assert.equal(toolRows[0]!.railColor, techneColor, 'Techne 工具卡的导轨颜色必须是 Techne 专属主题色');
+  const highlightSegment = toolRows[0]!.segments?.find(s => s.text.includes('shell'));
+  assert.equal(highlightSegment?.color, techneColor, '悬停工具卡标题使用 Techne 主题色');
+  const unhovered = buildStageRows(store.getSnapshot(), 's', 'techne', 80, {[techneTool]: true}, null, {}, customRoles).find(row => row.messageId === techneTool)!;
+  assert.equal(unhovered.segments!.find(s => s.selectionKey === techneTool + ':title')!.color, palette.muted, '移出工具卡后恢复次要色');
+  assert.equal(toolRows[0]!.segments?.find(s => s.selectionKey === techneTool + ':icon')?.color, palette.muted, '工具运行方块静默灰色');
+
+  const thinkRows = techneRows.filter(r => r.messageId === techneThink);
+  assert.equal(thinkRows[0]!.railColor, techneColor, 'Techne 思考卡的导轨颜色是 Techne 主题色');
+
+  // 2. 在主窗口 (view === 'logox') 下验证 Techne 卡片
+  const logoxRows = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {[activityId]: true}, null, {}, customRoles);
+  const actorCardHeader = logoxRows.find(r => r.messageId === activityId);
+  assert.ok(actorCardHeader, '主窗口中 Techne 卡片存在');
+  assert.equal(actorCardHeader.railColor, techneColor, '主窗口中 Techne 角色卡的导轨颜色是 Techne 自身主题色');
+  const actorTitleSegment = actorCardHeader.segments?.find(s => s.text.includes('Techne'));
+  assert.equal(actorTitleSegment?.color, techneColor, 'Techne 角色卡标题字色使用 Techne 自身主题色');
 });
