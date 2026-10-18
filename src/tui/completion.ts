@@ -11,9 +11,43 @@ export interface CommandSuggestion {
   readonly execute: boolean;
 }
 
+const actorDescriptions: Record<string, string> = {
+  logox: 'Director · 执导者',
+  techne: 'Technician · 精工构建',
+  kalon: 'Aesthetician · 雅正审美',
+  aletheia: 'Investigator · 澄明侦察',
+};
+
 export function commandSuggestions(draft: Draft, context: CommandContext): readonly CommandSuggestion[] {
-  if (!draft.text.startsWith('/') || /[\r\n]/.test(draft.text)) return [];
+  if (/[\r\n]/.test(draft.text)) return [];
   const before = graphemes(draft.text).slice(0, draft.cursor).join('');
+
+  const mentionMatch = /(?:^|\s)@([a-z0-9_-]*)$/i.exec(before);
+  if (mentionMatch) {
+    const atIndex = before.lastIndexOf('@');
+    const prefix = mentionMatch[1]!.toLowerCase();
+    const suffix = /^[^\s]*/.exec(draft.text.slice(before.length))?.[0] ?? '';
+    const end = before.length + suffix.length;
+    const actorList = context.actors && context.actors.length > 0
+      ? context.actors
+      : ['logox', 'techne', 'kalon', 'aletheia'];
+    return actorList
+      .filter(id => id.toLowerCase().startsWith(prefix))
+      .map(id => {
+        const desc = actorDescriptions[id.toLowerCase()] ?? 'Actor role';
+        return {
+          label: '@' + id,
+          description: desc,
+          replacement: '@' + id + ' ',
+          start: atIndex,
+          end,
+          kind: 'argument' as const,
+          execute: false,
+        };
+      });
+  }
+
+  if (!draft.text.startsWith('/')) return [];
   const commandPrefix = /^\/([a-z0-9_-]*)$/i.exec(before);
   if (commandPrefix) {
     const end = /^\/[^\s]*/.exec(draft.text)?.[0].length ?? before.length;

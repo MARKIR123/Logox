@@ -30,6 +30,27 @@ test('命令目录补全现有命令、参数及中文模型，保留光标后�
   }
 });
 
+test('@ 触发剧团角色联想补全，支持前缀筛选与制表符补全', () => {
+  const atAll = commandSuggestions(draft('@'), context);
+  assert.deepEqual(atAll.map(item => item.label), ['@logox', '@techne', '@kalon', '@aletheia']);
+  assert.equal(atAll[0]!.execute, false);
+
+  const atTechne = commandSuggestions(draft('@t'), context);
+  assert.equal(atTechne.length, 1);
+  assert.equal(atTechne[0]!.label, '@techne');
+  assert.deepEqual(applyCommandSuggestion(draft('@t'), atTechne[0]!), draft('@techne '));
+
+  const atAletheia = commandSuggestions(draft('@al'), context);
+  assert.equal(atAletheia.length, 1);
+  assert.equal(atAletheia[0]!.label, '@aletheia');
+  assert.deepEqual(applyCommandSuggestion(draft('@al'), atAletheia[0]!), draft('@aletheia '));
+
+  const atKalon = commandSuggestions(draft('@k'), context);
+  assert.equal(atKalon.length, 1);
+  assert.equal(atKalon[0]!.label, '@kalon');
+  assert.deepEqual(applyCommandSuggestion(draft('@k'), atKalon[0]!), draft('@kalon '));
+});
+
 import {createServer} from 'node:http';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';

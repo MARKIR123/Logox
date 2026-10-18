@@ -777,6 +777,32 @@ export async function createSessionApplication(options: SessionApplicationOption
         await saveEffort(effort.data); notice('Thinking effort: ' + effort.data + ' (saved)'); return;
       }
       if (text === '/model') {openModels(); return;}
+      if (text === '/models') {
+        const provider = settings.provider;
+        const models = await registry.models(AbortSignal.any([commands.signal, AbortSignal.timeout(15000)]));
+        modelCandidates.set(provider, models);
+        notice(models.join('\n') || 'Provider returned empty model list'); return;
+      }
+      if (text.startsWith('/provider ') || text.startsWith('/providers ')) {
+        const parts = text.replace(/^\/providers?\s+/, '').trim().split(/\s+/);
+        if (parts[0] === 'check') {
+          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
+          const selection = registry.selection();
+          const result = await registry.check(commands.signal);
+          notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+        }
+        if (parts[0] === 'unregister' || parts[0] === 'logout') {
+          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before unregistering provider.');
+          const target = parts[1];
+          if (!target) throw new Error('Usage: /providers unregister <name>');
+          await registry.unregister(target);
+          notice("Provider '" + target + "' unregistered successfully."); return;
+        }
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
+        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model]');
+        await saveSelection(registry.candidate(parts[0], parts[1]));
+        notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
+      }
       if (text === '/compact') {
         requireIdle();
         const activityId = randomUUID(), controller = new AbortController();
