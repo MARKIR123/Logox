@@ -271,7 +271,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const activityContentHeight = useContentHeight(activityRef);
   const detailRef = useRef<DOMElement>(null);
   const detailContentHeight = useContentHeight(detailRef);
-  const loginHeight = loginState ? Math.min(screenRows, loginState.phase === 'provider' ? Math.min(6, loginState.providers.length) + 5 : 5) : 0;
+  const loginHeight = loginState
+    ? Math.min(
+        screenRows,
+        loginState.phase === 'provider'
+          ? Math.min(8, loginState.providers.length) + 6
+          : loginState.phase === 'method'
+            ? Math.min(6, loginState.methods?.length ?? 2) + 6
+            : 5,
+      )
+    : 0;
   const pickerHeight = surface?.kind === 'picker' ? Math.min(screenRows, 11) : 0;
   const fixedHeight = pickerHeight || (loginState ? loginHeight : inputHeight + hairlineHeight + footerHeight + menuHeight);
   const activityHeight = !loginState && !surface && !demoScene && !stage && activity ? Math.max(0, Math.min(activityContentHeight || (expanded ? 6 : 4), screenRows - fixedHeight)) : 0;
