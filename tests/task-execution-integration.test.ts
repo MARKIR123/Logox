@@ -84,7 +84,7 @@ test('阶段工具通过正式Agent执行，真实阶段成果重置无交付，
     assert.equal(activity.status, 'completed');
     assert.equal(activity.progress?.stages[0]?.status, 'completed');
     assert.equal(f.requests.length, 6);
-    assert.match(f.requests[4]!.system, /已完成成果.*confirmed/);
+    assert.match(f.requests[4]!.system, /(?:已完成成果|Completed milestones).*confirmed/);
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.equal(history.find(entry => entry.message?.role === 'tool' && entry.message.name === 'read')?.step?.stage?.id, stage.id);
     assert.equal(history.find(entry => entry.message?.role === 'assistant')?.step?.stage?.id, 'planning', '旧探查不事后重归类');
