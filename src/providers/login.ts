@@ -1,17 +1,39 @@
 import {AuthStorage} from './auth.js';
+import {CustomProviderStorage} from './custom-storage.js';
 import {startOpenAiOAuth, type OAuthSession} from './oauth.js';
 
+export function expandPortOrUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error('Invalid URL or port: input is empty');
+  if (/^\d{1,5}$/.test(trimmed)) {
+    const port = Number(trimmed);
+    if (port <= 0 || port > 65535) throw new Error('Invalid port number: must be between 1 and 65535');
+    return 'http://127.0.0.1:' + port + '/v1';
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('Invalid URL or port: must be a numeric port or valid http(s) URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('Invalid URL protocol: must be http or https');
+  }
+  return trimmed;
+}
+
 export interface LoginState {
-  phase: 'provider' | 'method' | 'key' | 'oauth' | 'saving';
+  phase: 'provider' | 'method' | 'key' | 'oauth' | 'custom_name' | 'custom_url' | 'custom_key' | 'saving';
   providers: readonly {name: string; saved: boolean}[];
   provider: string;
+  customUrl?: string | undefined;
   methods?: readonly {id: 'key' | 'oauth'; label: string}[] | undefined;
   oauthUrl?: string | undefined;
   userCode?: string | undefined;
   error: string;
 }
 
-/** 登录快照不持有密钥；密钥只在编辑器和一次保存调用之间传递。 */
+/** Login state snapshot holds no credentials; credentials transfer only between editor and storage save. */
 export class LoginFlow {
   private state: LoginState | null = null;
   private listeners = new Set<() => void>();
@@ -22,6 +44,7 @@ export class LoginFlow {
     private readonly auth: AuthStorage,
     private readonly names: () => string[],
     private readonly onSaved: (provider: string) => unknown,
+    private readonly customStorage = new CustomProviderStorage(),
   ) {}
 
   getSnapshot = (): LoginState | null => this.state;
@@ -29,15 +52,19 @@ export class LoginFlow {
   private publish(state: LoginState | null): void {this.state = state; for (const listener of this.listeners) listener();}
 
   async begin(provider?: string): Promise<void> {
-    if (this.state) throw new Error('登录正在进行，请先完成或取消');
+    if (this.state) throw new Error('Login already in progress. Complete or cancel first.');
     const names = this.names();
-    if (provider && !names.includes(provider)) throw new Error('该提供商不支持当前 API key 登录');
+    if (provider && !names.includes(provider) && provider !== '+ Custom') throw new Error('Provider does not support API key login.');
     const saved = await this.auth.providers();
+    const providerList: {name: string; saved: boolean}[] = [
+      ...names.map(name => ({name, saved: saved.includes(name)})),
+      {name: '+ Custom', saved: false},
+    ];
 
     if (provider === 'openai') {
       this.publish({
         phase: 'method',
-        providers: names.map(name => ({name, saved: saved.includes(name)})),
+        providers: providerList,
         provider: 'openai',
         methods: [
           {id: 'key', label: 'API Key'},
@@ -48,9 +75,19 @@ export class LoginFlow {
       return;
     }
 
+    if (provider === '+ Custom') {
+      this.publish({
+        phase: 'custom_name',
+        providers: providerList,
+        provider: '',
+        error: '',
+      });
+      return;
+    }
+
     this.publish({
       phase: provider ? 'key' : 'provider',
-      providers: names.map(name => ({name, saved: saved.includes(name)})),
+      providers: providerList,
       provider: provider ?? '',
       error: '',
     });
@@ -58,6 +95,15 @@ export class LoginFlow {
 
   choose(provider: string): void {
     if (this.state?.phase !== 'provider' || !this.state.providers.some(item => item.name === provider)) return;
+    if (provider === '+ Custom') {
+      this.publish({
+        ...this.state,
+        phase: 'custom_name',
+        provider: '',
+        error: '',
+      });
+      return;
+    }
     if (provider === 'openai') {
       this.publish({
         ...this.state,
@@ -80,8 +126,49 @@ export class LoginFlow {
       this.publish({...this.state, phase: 'key', error: ''});
       return;
     }
-    // method === 'oauth'
     this.startOAuth();
+  }
+
+  submitCustomName(name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed || !/^[a-z0-9_-]+$/i.test(trimmed)) {
+      this.publish({...this.state!, error: 'Provider name must contain only letters, numbers, dashes, or underscores.'});
+      return;
+    }
+    this.publish({...this.state!, phase: 'custom_url', provider: trimmed, error: ''});
+  }
+
+  submitCustomUrl(urlOrPort: string): void {
+    try {
+      const expanded = expandPortOrUrl(urlOrPort);
+      this.publish({...this.state!, phase: 'custom_key', customUrl: expanded, error: ''});
+    } catch (error) {
+      this.publish({...this.state!, error: error instanceof Error ? error.message : 'Invalid URL or port number.'});
+    }
+  }
+
+  async submitCustomKey(key: string): Promise<void> {
+    const state = this.state;
+    if (!state || state.phase !== 'custom_key') return;
+    this.publish({...state, phase: 'saving', error: ''});
+    this.saving = (async () => {
+      try {
+        await this.customStorage.save({
+          name: state.provider,
+          base_url: state.customUrl!,
+          kind: 'openai_compat',
+        });
+        const trimmedKey = key.trim();
+        if (trimmedKey) {
+          await this.auth.save(state.provider, trimmedKey, new AbortController().signal);
+        }
+        await this.onSaved(state.provider);
+        this.publish(null);
+      } catch (error) {
+        this.publish({...state, phase: 'custom_key', error: error instanceof Error ? error.message : 'Failed to save custom provider.'});
+      }
+    })();
+    try {await this.saving;} finally {this.saving = undefined;}
   }
 
   private startOAuth(): void {
@@ -107,7 +194,7 @@ export class LoginFlow {
         this.publish({
           ...state,
           phase: 'method',
-          error: error instanceof Error ? error.message : 'OAuth 登录失败',
+          error: error instanceof Error ? error.message : 'OAuth login failed.',
         });
       } finally {
         this.oauthSession = undefined;
@@ -125,7 +212,11 @@ export class LoginFlow {
 
   async submit(key: string): Promise<void> {
     const state = this.state;
-    if (state?.phase !== 'key') return;
+    if (!state) return;
+    if (state.phase === 'custom_name') {this.submitCustomName(key); return;}
+    if (state.phase === 'custom_url') {this.submitCustomUrl(key); return;}
+    if (state.phase === 'custom_key') {await this.submitCustomKey(key); return;}
+    if (state.phase !== 'key') return;
     this.publish({...state, phase: 'saving', error: ''});
     this.saving = (async () => {
       try {
@@ -133,7 +224,7 @@ export class LoginFlow {
         await this.onSaved(state.provider);
         this.publish(null);
       } catch (error) {
-        this.publish({...state, phase: 'key', error: error instanceof Error ? error.message : '保存 API key 失败'});
+        this.publish({...state, phase: 'key', error: error instanceof Error ? error.message : 'Failed to save API key.'});
       }
     })();
     try {await this.saving;} finally {this.saving = undefined;}

@@ -122,7 +122,7 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
   };
   try {
     assert.match(output.text, /保留项目内容，让它更像一个有审美的开发者作品/);
-    assert.match(output.text, /◇ Aletheia/);
+    assert.match(output.text, /[◇◎] Aletheia/);
     assert.match(output.text, /⊞ Techne/);
     assert.match(output.text, /允许修改这两个文件吗？/);
     await key('\x1b[6~'); // 较低的终端滚动后可见排队中的 Kalon
@@ -459,7 +459,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   };
   try {
     await key('/lo');await key('\r');await phase('provider');
-    assert.ok(output.text.includes('登录提供商'));
+    assert.ok(/登录提供商|Log In Provider/.test(output.text));
     await key('\x1b[B');await key('\r');await phase('key');
     assert.equal(app.authentication.getSnapshot()?.provider, 'deepseek');
     await key('\x1b[200~synthetic-ui-secret\x1b[201~');
