@@ -36,6 +36,10 @@ export class ModelPool {
     this.models = [...models];
   }
 
+  snapshot(): readonly DiscoveredModel[] {
+    return this.models;
+  }
+
   async loadCache(): Promise<DiscoveredModel[]> {
     try {
       const content = await readFile(this.cachePath, 'utf8');

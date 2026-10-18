@@ -61,7 +61,7 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
       : command.argument === 'loginProvider' ? context.loginProviders
         : [];
     return [...new Set(candidates)].filter(name => name.toLowerCase().startsWith(currentPrefix.toLowerCase())).map(name => ({
-      label: name, description: command.argument === 'provider' ? '提供商' : '登录接口', replacement: name,
+      label: name, description: command.argument === 'provider' ? 'Provider' : 'Login provider', replacement: name,
       start, end, kind: 'argument', execute: false,
     }));
   }

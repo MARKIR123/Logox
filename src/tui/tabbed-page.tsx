@@ -50,6 +50,20 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       return;
     }
     if (!tab) return;
+    if (tab.id === 'providers') {
+      if (focusArea === 'tabs') {
+        if (key.downArrow) {setFocusArea('content'); return;}
+      } else {
+        if (key.upArrow && (offsets[tab.id] ?? 0) === 0) {setFocusArea('tabs'); return;}
+        if (key.leftArrow || key.rightArrow || input === '[' || input === ']') {
+          onAction?.('providers', (key.leftArrow || input === '[') ? 'prev_provider' : 'next_provider');
+          return;
+        }
+      }
+      if (input === 't' || input === 'T') {onAction?.('providers', 'test'); return;}
+      if (input === 'r' || input === 'R') {onAction?.('providers', 'refresh'); return;}
+      if (input === 'x' || input === 'X') {onAction?.('providers', 'logout'); return;}
+    }
     if (items) {
       if (focusArea === 'tabs') {
         if (key.downArrow) {setFocusArea('content'); return;}
@@ -107,7 +121,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       else toggle(at);
     }
   });
-  const footer = saving ? 'Saving...' : items ? '←→ / Tab Switch · ↑↓ Select · Space Toggle · [ / ] Reorder · Enter Save · Esc Discard' : '←→ / Tab Switch · ↑↓ / PgUp PgDn Scroll · Esc Back';
+  const footer = saving ? 'Saving...' : tab?.id === 'providers' ? '[t] Test   [r] Refresh   [x] Logout   [←→] Provider   [↑↓] Scroll   [Esc] Back' : items ? '←→ / Tab Switch · ↑↓ Select · Space Toggle · [ / ] Reorder · Enter Save · Esc Discard' : '←→ / Tab Switch · ↑↓ / PgUp PgDn Scroll · Esc Back';
   return <CommandPane title={title} width={width} height={height} footer={notice || footer}>
     <Box height={1} flexShrink={0} overflow="hidden">
       {stringWidth(tabs.map(item => '  ' + item.title + '  ').join('')) > columns ? <Text color={tab?.color ?? palette.accent} bold wrap="truncate">{clipLine('❯ ' + (tab?.title ?? '') + ' · ' + (index + 1) + '/' + tabs.length, columns)}</Text> : tabs.map(item => <Text key={item.id} bold={item.id === tab?.id} color={item.id === tab?.id ? item.color ?? palette.accent : palette.muted}>

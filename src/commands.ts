@@ -1,7 +1,15 @@
-export const commandCatalog = [
+export type CommandArgumentKind = 'none' | 'loginProvider' | 'provider' | 'model' | 'text';
+export interface CommandDefinition {
+  name: string;
+  usage: string;
+  description: string;
+  argument: CommandArgumentKind;
+}
+
+export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'help', usage: '/help', description: 'View available commands and keybindings', argument: 'none'},
   {name: 'login', usage: '/login [provider]', description: 'Log in and save provider API key', argument: 'loginProvider'},
-  {name: 'provider', usage: '/provider [name|check|unregister] [model]', description: 'Switch, test, or unregister provider (/provider to choose, /provider check, /provider unregister <name>)', argument: 'provider'},
+  {name: 'providers', usage: '/providers', description: 'Inspect connected providers, models, test latency, and refresh', argument: 'none'},
   {name: 'model', usage: '/model [actor]', description: 'Open model picker (defaults to active window, or specify an actor)', argument: 'model'},
   {name: 'status', usage: '/status', description: 'View model, usage, permissions, and session status', argument: 'none'},
   {name: 'config', usage: '/config', description: 'View current active configuration', argument: 'none'},

@@ -278,6 +278,61 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   const status = (ownerId: string) => stageStatus({sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config}, ownerId);
   const sessionUsageRecords = () => [...meteredOwners].flatMap(ownerId => contexts.meter({sessionId: session, ownerId}).usageRecords());
+  let viewingProviderIndex = 0;
+  const providerStatuses = new Map<string, string>();
+  const providersTabLines = (): string[] => {
+    const names = registry.names();
+    if (names.length === 0) {
+      return [
+        'Connected Providers',
+        '─────────────────────────────────────────────────────────────',
+        'No providers currently configured.',
+        '',
+        'Run /login to add an official provider or custom reverse proxy.',
+      ];
+    }
+    if (viewingProviderIndex >= names.length) {
+      viewingProviderIndex = Math.max(0, names.length - 1);
+    }
+    const current = names[viewingProviderIndex]!;
+    const poolModels = modelPool.snapshot();
+    const currentModels = poolModels.filter(m => m.provider === current);
+
+    // Horizontal Provider Navigation
+    const navItems = names.map((name, i) => {
+      const count = poolModels.filter(m => m.provider === name).length;
+      return i === viewingProviderIndex ? '❯ [ ' + name + ' (' + count + ') ]' : '  ' + name + ' (' + count + ')';
+    }).join('    ');
+
+    const candSettings = registry.candidate(current).selection();
+    const statusText = providerStatuses.get(current) ?? '● Ready (press [t] to test)';
+
+    const lines: string[] = [
+      navItems,
+      '─────────────────────────────────────────────────────────────',
+      'Provider: ' + current,
+      'Base URL: ' + candSettings.baseUrl,
+      'Status: ' + statusText,
+      'Models count: ' + currentModels.length,
+      '',
+      '── Models (' + currentModels.length + ') ───────────────────────────────────────────────',
+    ];
+
+    if (currentModels.length === 0) {
+      lines.push('  No models cached. Press [r] to fetch models from provider.');
+    } else {
+      for (const m of currentModels) {
+        const win = m.window ? (Math.round(m.window / 1000) + 'k') : '128k';
+        const eff = m.thinkingLevels && m.thinkingLevels.length > 0
+          ? '✦ ' + m.thinkingLevels.filter((l: string) => l !== 'auto').join(' / ')
+          : '-';
+        const offlineTag = m.isOffline ? ' [offline]' : '';
+        lines.push('  • ' + m.id + offlineTag + ' · ' + win + ' · Thinking: ' + eff);
+      }
+    }
+    return lines;
+  };
+
   const pageTabs = (): readonly CommandTab[] => [
     {id: 'status', title: 'Status', lines: [
       'Session: ' + session + ' · Role: ' + pageOwner,
@@ -299,6 +354,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
       ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
     ]},
+    {id: 'providers', title: 'Providers', lines: providersTabLines()},
     {id: 'config', title: 'Config', lines: [
       'Effective Configuration',
       '─────────────────────────────────────────────────────────────',
@@ -420,14 +476,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         }
         await saveSelection(candidate);
         return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : '')};
-      });
-  };
-  const openProviders = () => {
-    requireIdle();
-    void surfaces.openPicker({title: 'Select Provider', description: 'Switch default provider; run /model to inspect available models', current: settings.provider},
-      async () => ({items: registry.names().map(name => ({id: name, label: name}))}), async name => {
-        await saveSelection(registry.candidate(name));
-        return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
       });
   };
   // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
@@ -622,8 +670,9 @@ export async function createSessionApplication(options: SessionApplicationOption
         notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble'].includes(text)) {
-        pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : text.slice(1), {
+      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble', '/providers', '/provider'].includes(text)) {
+        const initialTab = text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : ['/providers', '/provider'].includes(text) ? 'providers' : text.slice(1);
+        pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), initialTab, {
           onSaveToggles: async (tabId, items) => {
             if (tabId === 'animations') {
               await statusbar.saveMotion(items[0]?.enabled ?? true);
@@ -639,6 +688,61 @@ export async function createSessionApplication(options: SessionApplicationOption
               const nextMode = modes[(modes.indexOf(permissions.mode) + 1) % modes.length]!;
               await permissions.setMode(nextMode);
               return {message: 'Permission mode switched to: ' + nextMode};
+            }
+            if (tabId === 'providers') {
+              const names = registry.names();
+              if (action === 'next_provider' && names.length > 0) {
+                viewingProviderIndex = (viewingProviderIndex + 1) % names.length;
+                surfaces.updatePage(pageTabs());
+                return {};
+              }
+              if (action === 'prev_provider' && names.length > 0) {
+                viewingProviderIndex = (viewingProviderIndex - 1 + names.length) % names.length;
+                surfaces.updatePage(pageTabs());
+                return {};
+              }
+              const current = names[viewingProviderIndex];
+              if (!current) return {};
+              if (action === 'test') {
+                providerStatuses.set(current, 'Testing connection...');
+                surfaces.updatePage(pageTabs());
+                const start = Date.now();
+                try {
+                  const candidate = registry.candidate(current);
+                  await candidate.check(commands.signal);
+                  const elapsed = Date.now() - start;
+                  providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
+                  surfaces.updatePage(pageTabs());
+                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)"};
+                } catch (error) {
+                  providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
+                  surfaces.updatePage(pageTabs());
+                  return {message: "Provider '" + current + "' connection failed"};
+                }
+              }
+              if (action === 'refresh') {
+                providerStatuses.set(current, 'Refreshing models...');
+                surfaces.updatePage(pageTabs());
+                try {
+                  const pool = await modelPool.syncProvider(current, commands.signal);
+                  const count = pool.filter(m => m.provider === current).length;
+                  providerStatuses.set(current, '● Connected (' + count + ' models synced)');
+                  surfaces.updatePage(pageTabs());
+                  return {message: "Refreshed " + count + " models from '" + current + "'"};
+                } catch (error) {
+                  providerStatuses.set(current, '○ Sync failed');
+                  surfaces.updatePage(pageTabs());
+                  return {message: "Failed to refresh models from '" + current + "'"};
+                }
+              }
+              if (action === 'logout') {
+                await registry.unregister(current);
+                if (viewingProviderIndex >= registry.names().length) {
+                  viewingProviderIndex = Math.max(0, registry.names().length - 1);
+                }
+                surfaces.updatePage(pageTabs());
+                return {message: "Logged out provider '" + current + "'"};
+              }
             }
             return {};
           },
@@ -667,41 +771,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
         await saveEffort(effort.data); notice('Thinking effort: ' + effort.data + ' (saved)'); return;
       }
-      if (text === '/providers' || text === '/provider') {openProviders(); return;}
       if (text === '/model') {openModels(); return;}
-      if (text === '/models') {
-        const provider = settings.provider;
-        const poolModels = await modelPool.refresh(commands.signal);
-        const models = poolModels.filter(m => m.provider === provider).map(m => m.id);
-        modelCandidates.set(provider, models);
-        notice(models.join('\n') || 'Provider returned empty model list'); return;
-      }
-      if (text === '/check-provider') {
-        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
-        const selection = registry.selection();
-        const result = await registry.check(commands.signal);
-        notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
-      }
-      if (text.startsWith('/provider ')) {
-        const parts = text.slice(10).trim().split(/\s+/);
-        if (parts[0] === 'check') {
-          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
-          const selection = registry.selection();
-          const result = await registry.check(commands.signal);
-          notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
-        }
-        if (parts[0] === 'unregister' || parts[0] === 'logout') {
-          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before unregistering provider.');
-          const target = parts[1];
-          if (!target) throw new Error('Usage: /provider unregister <name>');
-          await registry.unregister(target);
-          notice("Provider '" + target + "' unregistered successfully."); return;
-        }
-        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
-        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model], /provider check, or /provider unregister <name>');
-        await saveSelection(registry.candidate(parts[0], parts[1]));
-        notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
-      }
       if (text === '/compact') {
         requireIdle();
         const activityId = randomUUID(), controller = new AbortController();
