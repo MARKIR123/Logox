@@ -91,6 +91,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
   const modelPool = new ModelPool(registry);
+  void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
   const taskModels = new TaskModels({registry, ledger: taskModelLedger,
     defaultModel: owner => actors.find(owner)?.defaultModel,
@@ -248,6 +249,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     selectionDone = (async () => {
       try {
         const selection = next.selection();
+        const globalPref = new StateFile(join(homedir(), '.logox-ts', 'model-preferences.json'), preferenceSchema);
+        await globalPref.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort}).catch(() => {});
         await preferences.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort});
         registry.adopt(next); settings = registry.selection();
       } finally {selecting = false;}
@@ -278,7 +281,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   const status = (ownerId: string) => stageStatus({sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config}, ownerId);
   const sessionUsageRecords = () => [...meteredOwners].flatMap(ownerId => contexts.meter({sessionId: session, ownerId}).usageRecords());
-  let viewingProviderIndex = 0;
+  let viewingProviderIndex = -1;
   const providerStatuses = new Map<string, string>();
   const providersTabLines = (): string[] => {
     const names = registry.names();
@@ -291,8 +294,9 @@ export async function createSessionApplication(options: SessionApplicationOption
         'Run /login to add an official provider or custom reverse proxy.',
       ];
     }
-    if (viewingProviderIndex >= names.length) {
-      viewingProviderIndex = Math.max(0, names.length - 1);
+    if (viewingProviderIndex < 0 || viewingProviderIndex >= names.length) {
+      const activeIdx = names.indexOf(settings.provider);
+      viewingProviderIndex = activeIdx >= 0 ? activeIdx : 0;
     }
     const current = names[viewingProviderIndex]!;
     const poolModels = modelPool.snapshot();

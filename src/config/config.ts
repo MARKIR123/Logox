@@ -138,7 +138,15 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
     catch {throw new Error('配置无效：' + file + '（检查 TOML 格式及 api_key_env）');}
   }
   try {
-    const previous = await new StateFile(join(cwd, '.logox', 'state', 'model-preferences.json'), preferenceSchema).read();
+    const prefPaths = [
+      join(cwd, '.logox', 'state', 'model-preferences.json'),
+      join(homedir(), '.logox-ts', 'model-preferences.json'),
+    ];
+    let previous: z.infer<typeof preferenceSchema> | undefined;
+    for (const p of prefPaths) {
+      previous = await new StateFile(p, preferenceSchema).read().catch(() => undefined);
+      if (previous) break;
+    }
     if (previous) {
       const candidate = merge(raw, {provider: {name: previous.provider, model: previous.model, thinking_effort: previous.effort}});
       modelSettings(schema.parse(candidate), env);

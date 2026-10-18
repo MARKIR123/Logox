@@ -1,4 +1,5 @@
 import {mkdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -28,29 +29,42 @@ export class ModelPool {
 
   constructor(
     private readonly registry?: ProviderRegistry,
-    readonly cachePath = join(homedir(), '.logox-ts', 'models-cache.json'),
+    readonly cachePath = join(homedir(), '.logox-ts', 'models-store.json'),
     readonly fallbackStorePath = join(homedir(), '.pi', 'agent', 'models-store.json'),
-  ) {}
+  ) {
+    this.loadCacheSync();
+  }
 
   setMockModels(models: DiscoveredModel[]): void {
     this.models = [...models];
   }
 
   snapshot(): readonly DiscoveredModel[] {
+    if (!this.models.length) this.loadCacheSync();
     return this.models;
   }
 
-  async loadCache(): Promise<DiscoveredModel[]> {
+  loadCacheSync(): DiscoveredModel[] {
+    // 1. Try primary models-store.json
     try {
-      const content = await readFile(this.cachePath, 'utf8');
+      const content = readFileSync(this.cachePath, 'utf8');
       const parsed = cacheSchema.parse(JSON.parse(content));
       this.models = parsed.models;
       return this.models;
     } catch {}
 
-    // Fallback: import from Pi models-store.json if available
+    // 2. Try legacy models-cache.json
     try {
-      const piContent = JSON.parse(await readFile(this.fallbackStorePath, 'utf8'));
+      const legacyPath = join(dirname(this.cachePath), 'models-cache.json');
+      const content = readFileSync(legacyPath, 'utf8');
+      const parsed = cacheSchema.parse(JSON.parse(content));
+      this.models = parsed.models;
+      return this.models;
+    } catch {}
+
+    // 3. Fallback: import from Pi models-store.json
+    try {
+      const piContent = JSON.parse(readFileSync(this.fallbackStorePath, 'utf8'));
       const imported: DiscoveredModel[] = [];
       for (const [provider, obj] of Object.entries(piContent)) {
         if (obj && typeof obj === 'object' && Array.isArray((obj as Record<string, unknown>).models)) {
@@ -72,12 +86,15 @@ export class ModelPool {
       }
       if (imported.length) {
         this.models = imported;
-        await this.saveCache().catch(() => {});
         return this.models;
       }
     } catch {}
 
     return this.models;
+  }
+
+  async loadCache(): Promise<DiscoveredModel[]> {
+    return this.loadCacheSync();
   }
 
   async saveCache(): Promise<void> {

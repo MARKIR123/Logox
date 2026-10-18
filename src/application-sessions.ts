@@ -24,6 +24,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   if (!sessionId) throw new Error('没有可恢复的会话');
   const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env);
   const registry = new ProviderRegistry(config, options.env ?? process.env, undefined, new AuthStorage(options.authPath));
+  await registry.syncCustom();
   const journal = new Journal(join(manager.directory, 'sessions'));
   const actors = new ActorCatalog(cwd, options.resourceOptions?.home ? {home: options.resourceOptions.home} : {});
   await actors.load();
