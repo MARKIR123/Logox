@@ -46,6 +46,7 @@ export class TaskModelLedger {
 export interface TaskModelsOptions {
   registry: ProviderRegistry;
   defaultModel(ownerId: string): TaskModelSelection | undefined;
+  defaultFallbackModel?: TaskModelSelection | (() => TaskModelSelection | undefined);
   ledger?: TaskModelLedger;
   checkpoint?(state: Readonly<TaskModelCheckpoint>): Promise<void>;
   /** 包装现有 provider（例如观察 hooks），不另行计费。 */
@@ -57,7 +58,11 @@ export class TaskModels {
   constructor(private readonly options: TaskModelsOptions) {}
   private key(identity: Identity): string {return JSON.stringify([identity.sessionId, identity.ownerId]);}
   async begin(context: ActorContext): Promise<TaskModelScope> {
-    const configured = context.ownerId === 'logox' ? undefined : this.options.defaultModel(context.ownerId);
+    let configured = context.ownerId === 'logox' ? undefined : this.options.defaultModel(context.ownerId);
+    if (configured && !this.options.registry.names().includes(configured.provider)) {
+      const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
+      if (fallback) configured = fallback;
+    }
     const initial = selectionSchema.parse(configured ?? this.options.registry.selection());
     const state: TaskModelCheckpoint = {version: 1, sessionId: context.sessionId, ownerId: context.ownerId, activityId: context.activityId,
       initial, actual: initial, inherited: !configured, switched: false, phase: 'started'};
@@ -69,7 +74,12 @@ export class TaskModels {
   selection(identity: Identity): TaskModelSelection {
     const scope = this.current.get(this.key(identity));
     if (scope && (identity.ownerId !== 'logox' || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) return scope.selection();
-    return selectionSchema.parse((identity.ownerId === 'logox' ? undefined : this.options.defaultModel(identity.ownerId)) ?? this.options.registry.selection());
+    let configured = identity.ownerId === 'logox' ? undefined : this.options.defaultModel(identity.ownerId);
+    if (configured && !this.options.registry.names().includes(configured.provider)) {
+      const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
+      if (fallback) configured = fallback;
+    }
+    return selectionSchema.parse(configured ?? this.options.registry.selection());
   }
   model(identity: Identity): ModelCapacity {
     const selection = this.selection(identity);

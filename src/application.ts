@@ -22,6 +22,7 @@ import {createAgent, agentRequestBase} from './kernel/agent.js';
 import {getScratchpadDir, ensureScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
+import {ModelPool} from './providers/model-pool.js';
 import {RuntimeStore} from './runtime/store.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
@@ -89,9 +90,15 @@ export async function createSessionApplication(options: SessionApplicationOption
   let compactTask: {activityId: string; controller: AbortController; done: Promise<void>} | undefined;
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
+  const modelPool = new ModelPool(registry);
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
   const taskModels = new TaskModels({registry, ledger: taskModelLedger,
     defaultModel: owner => actors.find(owner)?.defaultModel,
+    defaultFallbackModel: () => {
+      const active = registry.selection();
+      if (active && registry.names().includes(active.provider)) return {provider: active.provider, model: active.model};
+      return undefined;
+    },
     provider: (_selection, provider) => options.provider ?? provider,
     checkpoint: async state => {
       const activity = store.activities.get(session, state.activityId);
@@ -588,6 +595,13 @@ export async function createSessionApplication(options: SessionApplicationOption
 
         if (targetActor) {
           requireIdle();
+          const specificModel = rawArg.slice(firstToken!.length).trim();
+          if (specificModel) {
+            const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
+            await actorServices.management.saveDefaultModel(targetActor.id, {provider: resolved.provider, model: resolved.model}, commands.signal);
+            notice('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model);
+            return;
+          }
           if (targetActor.id === 'logox') {
             openModels();
             return;
@@ -599,9 +613,9 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching model.');
         const model = rawArg;
         if (!model) throw new Error('Please specify a model name');
-        const provider = registry.names().filter(name => model.startsWith(name + '/')).sort((a, b) => b.length - a.length)[0];
-        await saveSelection(registry.candidate(provider ?? settings.provider, provider ? model.slice(provider.length + 1) : model));
-        notice('Current model: ' + model);
+        const resolved = modelPool.resolveShorthand(model, settings.provider);
+        await saveSelection(registry.candidate(resolved.provider, resolved.model));
+        notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
       if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble'].includes(text)) {
