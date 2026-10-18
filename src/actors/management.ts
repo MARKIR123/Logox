@@ -11,15 +11,34 @@ import {detectEffortLevels} from '../config/model-grouping.js';
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
 export interface CraftResult {readonly status: 'saved' | 'denied'; readonly path: string; readonly revision: number}
 export class ActorManagement {
-  constructor(readonly catalog: ActorCatalog, private readonly registry: Pick<ProviderRegistry, 'modelCatalog'>,
-    private readonly requireIdle: () => void = () => {}, private readonly policy?: (ownerId: string) => ContextPolicy) {}
+  constructor(
+    readonly catalog: ActorCatalog,
+    private readonly registry: Pick<ProviderRegistry, 'modelCatalog'>,
+    private readonly requireIdle: () => void = () => {},
+    private readonly policy?: (ownerId: string) => ContextPolicy,
+    private readonly modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined,
+  ) {}
   tab(): CommandTab {
     return immutable({id: 'actors', title: 'Ensemble', lines: this.catalog.list().flatMap(actor => {
       const policy = this.policy?.(actor.id) ?? actor.context;
+      const resolved = this.modelResolver?.(actor.id);
+      const modelLine = actor.defaultModel
+        ? actor.defaultModel.provider + '/' + actor.defaultModel.model
+        : resolved
+          ? 'Inherits session model (' + resolved.provider + '/' + resolved.model + ') (switch via /model ' + actor.id + ')'
+          : 'Inherits session model (switch via /model ' + actor.id + ')';
+
+      const effort = resolved?.effort ?? 'auto';
+      const levels = resolved?.levels ?? [];
+      const effortLine = levels.length > 0
+        ? '✦ ' + levels.filter(l => l !== 'auto').join(' / ') + ' (current: ' + effort + ')'
+        : (effort !== 'auto' ? effort : '-');
+
       return [
         '── ' + actor.symbol + ' ' + actor.name + ' (' + actor.title + ') ' + '─'.repeat(30),
         'Description: ' + actor.description,
-        'Designated model: ' + (actor.defaultModel ? actor.defaultModel.provider + '/' + actor.defaultModel.model : 'Inherits session model (switch via /model ' + actor.id + ')'),
+        'Designated model: ' + modelLine,
+        'Thinking effort: ' + effortLine,
         'Context retention: ' + policy.keep_recent_rounds + ' rounds / ' + policy.keep_recent_tools + ' tools',
         'Context policy: ' + JSON.stringify(policy),
         'Skills: ' + (actor.skills.join(', ') || 'Declared on-demand'),

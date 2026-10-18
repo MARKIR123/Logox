@@ -32,6 +32,7 @@ const historySchema = z.strictObject({ownerId: z.string(), activityId: z.string(
 const borrowSchema = z.strictObject({name: z.string().min(1)});
 const tool = (name: string, description: string, schema: z.ZodType): ToolDefinition => ({name, description, parameters: z.toJSONSchema(schema)});
 const directorTools = [
+  tool('Actor', DISPATCH_ROLE_PROMPT.description, tasksSchema),
   tool('dispatch_role', DISPATCH_ROLE_PROMPT.description, tasksSchema),
   tool('craft_actor', CRAFT_ACTOR_PROMPT.description, craftSchema),
   tool('read_actor', READ_ACTOR_PROMPT.description, historySchema),
@@ -47,6 +48,7 @@ export interface ActorServicesOptions {
   approve(context: ActorContext, review: {path: string; content: string; previous: string | undefined}): Promise<boolean>;
   requireIdle(): void;
   authorize?(call: ToolCall, context: ActorContext): Promise<boolean>;
+  modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
 }
 /** 角色配置、单次技能借阅与摘要交接；执行队列仍由 Ensemble 拥有。 */
 export class ActorServices {
@@ -64,7 +66,7 @@ export class ActorServices {
   private readonly dispatchSignatures = new Map<string, number>();
   private readonly groups = new Map<string, {remaining: Set<string>; reports: string[]; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
-    this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner));
+    this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner), options.modelResolver);
     this.collaboration = new Collaboration({...options, member: owner => !!options.catalog.find(owner)});
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
   }
@@ -92,14 +94,22 @@ export class ActorServices {
   definitionsForValidation(): readonly ToolDefinition[] {return [...directorTools, borrowTool, ...this.collaboration.tools('logox'), ...this.collaboration.tools('actor')];}
   async execute(call: ToolCall, context: ActorContext): Promise<ToolResult> {
     try {
-      if (!this.tools(context.ownerId).some(tool => tool.name === call.name)) throw new Error('角色无权执行此工具');
+      const matchedTool = this.tools(context.ownerId).find(tool => tool.name.toLowerCase() === call.name.toLowerCase());
+      if (!matchedTool) throw new Error('角色无权执行此工具');
       const input: unknown = JSON.parse(call.arguments);
-      z.fromJSONSchema(this.tools(context.ownerId).find(tool => tool.name === call.name)!.parameters).parse(input);
+      z.fromJSONSchema(matchedTool.parameters).parse(input);
       if (call.name !== 'craft_actor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: '角色操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
       if (call.name !== 'craft_actor') context.startTool?.();
-      if (call.name === 'dispatch_role') {
+      if (call.name === 'dispatch_role' || call.name === 'Actor' || call.name === 'actor') {
         if (context.recovery?.exhausted) throw new Error('同一故障已补救两次，需要用户决定下一步，不能继续自动派工');
-        const {tasks, resumeBatch} = tasksSchema.parse(input);
+        let parsedInput: z.infer<typeof tasksSchema>;
+        if (input && typeof input === 'object' && 'actor' in input && typeof (input as {actor: unknown}).actor === 'string') {
+          const single = input as {actor: string; prompt: string; description?: string};
+          parsedInput = {tasks: [{ownerId: single.actor, prompt: single.prompt, goal: single.description}]};
+        } else {
+          parsedInput = tasksSchema.parse(input);
+        }
+        const {tasks, resumeBatch} = parsedInput;
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
         const resumed = new Set<string>(), roots = new Set<string>();
         for (const task of tasks) {

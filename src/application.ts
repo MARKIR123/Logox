@@ -122,6 +122,17 @@ export async function createSessionApplication(options: SessionApplicationOption
     approve: (context, review) => tools.permissionGuard(context).authorize({tool: 'craft_actor', paths: [review.path], risky: false, effect: 'write'},
       {path: review.path, content: review.content, previous: review.previous ?? null}, context),
     authorize: (call, context) => tools.authorizeExtension(call, context, 'read'),
+    modelResolver: (actorId: string) => {
+      const identity = {sessionId: session, ownerId: actorId};
+      const sel = taskModels.selection(identity);
+      const th = taskModels.thinking(identity);
+      return {
+        provider: sel.provider,
+        model: sel.model,
+        effort: th.effort,
+        levels: th.levels,
+      };
+    },
   });
   const contexts = new ContextManager({journal, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
