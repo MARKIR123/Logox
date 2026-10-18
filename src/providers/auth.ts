@@ -20,7 +20,8 @@ export const oauthCredentialSchema = z.object({
   expires: z.number().optional(),
   account_id: z.string().optional(),
   clientId: z.string().optional(),
-});
+  scopes: z.array(z.string()).optional(),
+}).passthrough();
 
 export const credentialSchema = z.discriminatedUnion('type', [
   apiKeyCredentialSchema,

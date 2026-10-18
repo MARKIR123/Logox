@@ -1,4 +1,7 @@
 import {EventEmitter} from 'node:events';
+import {readFileSync} from 'node:fs';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
 import {Client, Pool, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher} from 'undici';
 import {ProviderError} from './http.js';
 
@@ -10,16 +13,36 @@ function guarded<T extends Dispatcher>(dispatcher: T): T {
 }
 const client = (origin: string | URL, options: object) => guarded(new Client(origin, options));
 
+function loadConfiguredProxy(env: NodeJS.ProcessEnv): string {
+  const envProxy = env.https_proxy || env.HTTPS_PROXY || env.http_proxy || env.HTTP_PROXY || env.all_proxy || env.ALL_PROXY;
+  if (envProxy) return envProxy;
+  const settingsPaths = [
+    join(homedir(), '.logox-ts', 'settings.json'),
+    join(homedir(), '.logox', 'settings.json'),
+    join(homedir(), '.pi', 'agent', 'settings.json'),
+  ];
+  for (const p of settingsPaths) {
+    try {
+      const data = JSON.parse(readFileSync(p, 'utf8'));
+      if (typeof data?.httpProxy === 'string' && data.httpProxy.trim()) {
+        return data.httpProxy.trim();
+      }
+    } catch {}
+  }
+  return '';
+}
+
 /** 应用拥有连接，模型候选与会话共享；不修改全局 fetch、dispatcher 或环境。 */
 export function createHttpTransport(env: NodeJS.ProcessEnv = process.env) {
   let dispatcher: EnvHttpProxyAgent;
   try {
-    const httpProxy = env.http_proxy || env.HTTP_PROXY || '';
+    const configured = loadConfiguredProxy(env);
+    const httpProxy = env.http_proxy || env.HTTP_PROXY || configured || '';
     const httpsProxy = env.https_proxy || env.HTTPS_PROXY || httpProxy;
     for (const proxy of [httpProxy, httpsProxy]) if (proxy && !['http:', 'https:'].includes(new URL(proxy).protocol)) throw new Error('unsupported proxy');
     dispatcher = guarded(new EnvHttpProxyAgent({
       httpProxy, httpsProxy,
-      noProxy: env.no_proxy || env.NO_PROXY || '',
+      noProxy: env.no_proxy || env.NO_PROXY || 'localhost,127.0.0.1,::1',
       allowH2: false, proxyTunnel: true,
       // 禁用 Undici 内部固定的 300s 超时；流式长连接的有效性由应用层的无进展 deadline 监控。
       headersTimeout: 0, bodyTimeout: 0,

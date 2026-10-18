@@ -144,7 +144,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     try {await saveSelection(registry.candidate(provider));}
     catch {notice('API key 已保存；模型偏好保存失败，当前模型保留。'); return;}
     notice('已保存 ' + provider + ' 的 API key，重启后自动读取。' + (settings.model ? '\n当前模型：' + settings.model : '\n使用 /models 查询，再用 /model 名称选择模型。'));
-  });
+  }, registry.customStorage, (input, init) => registry.fetcher(input, init));
   let loginError = '';
   const stopLoginErrors = authentication.subscribe(() => {
     const current = authentication.getSnapshot();

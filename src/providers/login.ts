@@ -1,6 +1,7 @@
 import {AuthStorage} from './auth.js';
 import {CustomProviderStorage} from './custom-storage.js';
 import {startOpenAiOAuth, type OAuthSession} from './oauth.js';
+import {createHttpTransport} from './transport.js';
 
 export function expandPortOrUrl(input: string): string {
   const trimmed = input.trim();
@@ -45,6 +46,7 @@ export class LoginFlow {
     private readonly names: () => string[],
     private readonly onSaved: (provider: string) => unknown,
     private readonly customStorage = new CustomProviderStorage(),
+    private readonly fetcher: typeof fetch = createHttpTransport().fetch,
   ) {}
 
   getSnapshot = (): LoginState | null => this.state;
@@ -177,7 +179,7 @@ export class LoginFlow {
     this.publish({...state, phase: 'oauth', error: ''});
     this.saving = (async () => {
       try {
-        const session = await startOpenAiOAuth();
+        const session = await startOpenAiOAuth(new AbortController().signal, this.fetcher);
         this.oauthSession = session;
         this.publish({
           ...state,

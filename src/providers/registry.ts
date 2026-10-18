@@ -39,7 +39,7 @@ async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv)
 export class ProviderRegistry {
   private config: Config;
   private transport: ReturnType<typeof createHttpTransport> | undefined;
-  private readonly fetcher: typeof fetch;
+  readonly fetcher: typeof fetch;
   private closed = false;
   private readonly capabilities = new Map<string, {window?: number; maxOutput?: number}>();
   readonly customProviders = new Map<string, CustomProviderRecord>();

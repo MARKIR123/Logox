@@ -1,4 +1,7 @@
 import {createServer, type Server} from 'node:http';
+import {readFileSync} from 'node:fs';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
 import {randomBytes, createHash, randomUUID} from 'node:crypto';
 import {exec} from 'node:child_process';
 import type {OAuthToken} from './auth.js';
@@ -25,6 +28,23 @@ function base64url(buffer: Buffer): string {
   return buffer.toString('base64url');
 }
 
+function loadDeviceId(): string {
+  const settingsPaths = [
+    join(homedir(), '.logox-ts', 'settings.json'),
+    join(homedir(), '.logox', 'settings.json'),
+    join(homedir(), '.pi', 'agent', 'settings.json'),
+  ];
+  for (const p of settingsPaths) {
+    try {
+      const data = JSON.parse(readFileSync(p, 'utf8'));
+      if (typeof data?.deviceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.deviceId)) {
+        return data.deviceId.toLowerCase();
+      }
+    } catch {}
+  }
+  return randomUUID().toLowerCase();
+}
+
 /**
  * Initiates OpenAI OAuth browser PKCE flow (matching Pi coding agent),
  * starts local callback server on port 1455, and launches the system browser.
@@ -37,7 +57,7 @@ export async function startOpenAiOAuth(
   const challenge = base64url(createHash('sha256').update(verifier).digest());
   const state = base64url(randomBytes(32));
   const nonce = base64url(randomBytes(32));
-  const hostId = 'urn:uuid:' + randomUUID().toLowerCase();
+  const hostId = 'urn:uuid:' + loadDeviceId();
 
   const params = new URLSearchParams({
     client_id: DYNAMIC_CLIENT_ID,
