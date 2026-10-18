@@ -12,10 +12,14 @@ export const apiKeyCredentialSchema = z.object({
 
 export const oauthCredentialSchema = z.object({
   type: z.literal('oauth'),
-  access_token: z.string().min(1),
+  access_token: z.string().optional(),
+  access: z.string().optional(),
   refresh_token: z.string().optional(),
+  refresh: z.string().optional(),
   expires_at: z.number().optional(),
+  expires: z.number().optional(),
   account_id: z.string().optional(),
+  clientId: z.string().optional(),
 });
 
 export const credentialSchema = z.discriminatedUnion('type', [
@@ -30,33 +34,50 @@ type Credentials = z.infer<typeof schema>;
 
 /** 用户凭据独立保存，既不属于项目配置，也不属于会话账本。 */
 export class AuthStorage {
-  readonly fallbackPath: string | undefined;
+  readonly fallbackPaths: readonly string[];
   constructor(
     readonly path = join(homedir(), '.logox-ts', 'auth.json'),
-    fallbackPath?: string,
+    fallbackPaths?: string | readonly string[],
   ) {
-    this.fallbackPath = fallbackPath ?? (path === join(homedir(), '.logox-ts', 'auth.json') ? join(homedir(), '.logox', 'auth.json') : undefined);
+    if (typeof fallbackPaths === 'string') {
+      this.fallbackPaths = [fallbackPaths];
+    } else if (fallbackPaths !== undefined) {
+      this.fallbackPaths = fallbackPaths;
+    } else if (path === join(homedir(), '.logox-ts', 'auth.json')) {
+      this.fallbackPaths = [
+        join(homedir(), '.logox', 'auth.json'),
+        join(homedir(), '.pi', 'agent', 'auth.json'),
+      ];
+    } else {
+      this.fallbackPaths = [];
+    }
   }
   private async read(): Promise<Credentials> {
-    let content: string | undefined;
-    try {content = await readFile(this.path, 'utf8');}
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        if (this.fallbackPath) {
-          try {content = await readFile(this.fallbackPath, 'utf8');}
-          catch (fallbackErr) {
-            if ((fallbackErr as NodeJS.ErrnoException).code === 'ENOENT') return {};
-            throw new Error('无法读取 LOGOX 认证文件');
+    const merged: Credentials = {};
+    for (const fb of this.fallbackPaths) {
+      try {
+        const raw = JSON.parse(await readFile(fb, 'utf8'));
+        if (raw && typeof raw === 'object') {
+          for (const [provider, val] of Object.entries(raw)) {
+            const parsed = credentialSchema.safeParse(val);
+            if (parsed.success) {
+              merged[provider] = parsed.data;
+            }
           }
-        } else {
-          return {};
         }
-      } else {
-        throw new Error('无法读取 LOGOX 认证文件');
-      }
+      } catch {}
     }
-    try {return schema.parse(JSON.parse(content));}
-    catch {throw new Error('LOGOX 认证文件格式无效；保留原文件，请检查后重试');}
+    try {
+      const content = await readFile(this.path, 'utf8');
+      const parsed = schema.parse(JSON.parse(content));
+      Object.assign(merged, parsed);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return merged;
+      }
+      throw new Error('LOGOX 认证文件格式无效；保留原文件，请检查后重试');
+    }
+    return merged;
   }
 
   async credential(provider: string): Promise<Credential | undefined> {
@@ -66,7 +87,7 @@ export class AuthStorage {
   async key(provider: string): Promise<string> {
     const cred = (await this.read())[provider];
     if (!cred) return '';
-    return cred.type === 'api_key' ? cred.key : cred.access_token;
+    return cred.type === 'api_key' ? cred.key : (cred.access_token ?? cred.access ?? '');
   }
 
   async providers(): Promise<string[]> {return Object.keys(await this.read());}
