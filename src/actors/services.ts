@@ -17,28 +17,25 @@ import type {ToolResult} from '../tools/tools.js';
 import {contextPolicySchema, type Config} from '../config/config.js';
 import type {RoundStatus} from '../context/contracts.js';
 import {ExecutionRecoveryError} from '../kernel/execution-recovery.js';
-import {DISPATCH_ROLE_PROMPT, CRAFT_ACTOR_PROMPT, READ_ACTOR_PROMPT, BORROW_SKILL_PROMPT} from '../prompts/index.js';
+import {
+  actorSchema,
+  ACTOR_DESCRIPTION,
+  craftActorSchema,
+  CRAFT_ACTOR_DESCRIPTION,
+  readActorSchema,
+  READ_ACTOR_DESCRIPTION,
+  borrowSkillSchema,
+  BORROW_SKILL_DESCRIPTION,
+  canonicalToolName,
+} from '../tools/index.js';
 
-const tasksSchema = z.strictObject({
-  tasks: z.array(z.strictObject({
-    ownerId: z.string(), prompt: z.string().trim().min(1),
-    skills: z.array(z.string()).max(16).optional(), resumeTask: z.string().optional(),
-    goal: z.string().optional(), constraints: z.array(z.string()).optional(),
-    minDeliverable: z.string().optional(), stopCondition: z.string().optional(),
-  })).max(16).default([]),
-  resumeBatch: z.string().optional(),
-}).refine(input => input.tasks.length > 0 || !!input.resumeBatch, '至少指定任务或待恢复批次');
-const craftSchema = z.strictObject({content: z.string().min(1).max(65536)});
-const historySchema = z.strictObject({ownerId: z.string(), activityId: z.string().optional()});
-const borrowSchema = z.strictObject({name: z.string().min(1)});
 const tool = (name: string, description: string, schema: z.ZodType): ToolDefinition => ({name, description, parameters: z.toJSONSchema(schema)});
 const directorTools = [
-  tool('Actor', DISPATCH_ROLE_PROMPT.description, tasksSchema),
-  tool('dispatch_role', DISPATCH_ROLE_PROMPT.description, tasksSchema),
-  tool('craft_actor', CRAFT_ACTOR_PROMPT.description, craftSchema),
-  tool('read_actor', READ_ACTOR_PROMPT.description, historySchema),
+  tool('Actor', ACTOR_DESCRIPTION, actorSchema),
+  tool('CraftActor', CRAFT_ACTOR_DESCRIPTION, craftActorSchema),
+  tool('ReadActor', READ_ACTOR_DESCRIPTION, readActorSchema),
 ];
-const borrowTool = tool('borrow_skill', BORROW_SKILL_PROMPT.description, borrowSchema);
+const borrowTool = tool('BorrowSkill', BORROW_SKILL_DESCRIPTION, borrowSkillSchema);
 
 export interface ActorServicesOptions {
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
@@ -96,20 +93,24 @@ export class ActorServices {
   definitionsForValidation(): readonly ToolDefinition[] {return [...directorTools, borrowTool, ...this.collaboration.tools('logox'), ...this.collaboration.tools('actor')];}
   async execute(call: ToolCall, context: ActorContext): Promise<ToolResult> {
     try {
-      const matchedTool = this.tools(context.ownerId).find(tool => tool.name.toLowerCase() === call.name.toLowerCase());
+      const canonical = canonicalToolName(call.name) ?? call.name;
+      const matchedTool = this.tools(context.ownerId).find(tool =>
+        tool.name.toLowerCase() === call.name.toLowerCase() ||
+        canonicalToolName(tool.name) === canonical
+      );
       if (!matchedTool) throw new Error('角色无权执行此工具');
       const input: unknown = JSON.parse(call.arguments);
       z.fromJSONSchema(matchedTool.parameters).parse(input);
-      if (call.name !== 'craft_actor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: '角色操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
-      if (call.name !== 'craft_actor') context.startTool?.();
-      if (call.name === 'dispatch_role' || call.name === 'Actor' || call.name === 'actor') {
+      if (canonical !== 'CraftActor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: '角色操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
+      if (canonical !== 'CraftActor') context.startTool?.();
+      if (canonical === 'Actor') {
         if (context.recovery?.exhausted) throw new Error('同一故障已补救两次，需要用户决定下一步，不能继续自动派工');
-        let parsedInput: z.infer<typeof tasksSchema>;
+        let parsedInput: z.infer<typeof actorSchema>;
         if (input && typeof input === 'object' && 'actor' in input && typeof (input as {actor: unknown}).actor === 'string') {
           const single = input as {actor: string; prompt: string; description?: string};
           parsedInput = {tasks: [{ownerId: single.actor, prompt: single.prompt, goal: single.description}]};
         } else {
-          parsedInput = tasksSchema.parse(input);
+          parsedInput = actorSchema.parse(input);
         }
         const {tasks, resumeBatch} = parsedInput;
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
@@ -186,15 +187,15 @@ export class ActorServices {
         for (const activityId of resumed) this.continuedTasks.add(activityId);
         return {text: '角色任务已排队（批次 ' + group.batchId + '）：' + handles.map(handle => handle.activityId).join('、'), isError: false};
       }
-      if (call.name === 'craft_actor') {
-        const {content} = craftSchema.parse(input);
+      if (canonical === 'CraftActor') {
+        const {content} = craftActorSchema.parse(input);
         const result = await this.management.craftActor(content, async review => {
           const allowed = await this.options.approve(context, review); if (allowed) context.startTool?.(); return allowed;
         }, context.signal);
         return {text: (result.status === 'saved' ? '已保存并重载：' : '用户拒绝，未写入：') + result.path, isError: result.status === 'denied', ...(result.status === 'denied' ? {disposition: 'denied' as const} : {})};
       }
-      if (call.name === 'read_actor') {
-        const {ownerId, activityId} = historySchema.parse(input);
+      if (canonical === 'ReadActor') {
+        const {ownerId, activityId} = readActorSchema.parse(input);
         const entries = await this.options.journal.load(context.sessionId, ownerId);
         const rounds = await this.options.journal.rounds(context.sessionId, ownerId, entries);
         const relevantRounds = rounds.filter(round => !activityId || round.activityId === activityId).slice(-4);
@@ -211,8 +212,8 @@ export class ActorServices {
 
         return {text: report.slice(0, 4000), isError: false};
       }
-      if (call.name === 'borrow_skill') {
-        const {name} = borrowSchema.parse(input);
+      if (canonical === 'BorrowSkill') {
+        const {name} = borrowSkillSchema.parse(input);
         if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('技能不存在');
         const borrowed = this.borrowed.get(context.activityId) ?? new Set<string>(); borrowed.add(name); this.borrowed.set(context.activityId, borrowed);
         return {text: '本任务已借阅 ' + name + '；请读取技能正文后使用。', isError: false};

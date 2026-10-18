@@ -56,7 +56,7 @@ export class AuthStorage {
     const merged: Credentials = {};
     for (const fb of this.fallbackPaths) {
       try {
-        const raw = JSON.parse(await readFile(fb, 'utf8'));
+        const raw = JSON.parse((await readFile(fb, 'utf8')).replace(/^﻿/, ''));
         if (raw && typeof raw === 'object') {
           for (const [provider, val] of Object.entries(raw)) {
             const parsed = credentialSchema.safeParse(val);
@@ -69,7 +69,7 @@ export class AuthStorage {
     }
     try {
       const content = await readFile(this.path, 'utf8');
-      const parsed = schema.parse(JSON.parse(content));
+      const parsed = schema.parse(JSON.parse(content.replace(/^﻿/, '')));
       Object.assign(merged, parsed);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {

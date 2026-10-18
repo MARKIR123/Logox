@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {immutable} from '../runtime/contracts.js';
 import type {CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
+  readonly items?: readonly PickerItem[];
   readonly effort?: string;
   readonly effortLevels?: readonly string[];
 };
@@ -59,7 +60,8 @@ export class CommandSurfaces {
     this.assertIdle();
     const id = randomUUID(), controller = new AbortController();
     this.controller = controller; this.select = select; this.pickerActions = actions;
-    this.publish({id, kind: 'picker', ...spec, items: [], status: 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
+    const initialItems = spec.items ?? [];
+    this.publish({id, kind: 'picker', ...spec, items: initialItems, status: initialItems.length ? 'ready' : 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
     try {
       const result = await load(controller.signal);
       if (this.state?.id === id && this.state.kind === 'picker' && !controller.signal.aborted)

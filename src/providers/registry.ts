@@ -8,7 +8,7 @@ import type {Provider} from '../runtime/messages.js';
 import {modelSettings, presets, type Config, type ModelSettings} from '../config/config.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
-import type {ThinkingEffort} from '../config/model-preferences.js';
+import {type ThinkingEffort, isOpenAiReasoningModel} from '../config/model-preferences.js';
 import {AuthStorage} from './auth.js';
 import {CustomProviderStorage, type CustomProviderRecord} from './custom-storage.js';
 import {createHttpTransport} from './transport.js';
@@ -171,12 +171,24 @@ export class ProviderRegistry {
     if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 选择模型');
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
     const override = config.models[name + '/' + settings.model];
-    const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
+    const builtin = modelCapacities[name + '/' + settings.model]
+      ?? modelCapacities['openai/' + settings.model]
+      ?? modelCapacities['openai-compatible/' + settings.model];
     const isAntigravity = name === 'antigravity' || settings.baseUrl.includes('8045');
-    const antigravityWindow = isAntigravity ? (settings.model.toLowerCase().includes('gemini') || settings.model.toLowerCase().includes('claude') ? 1_000_000 : 128_000) : undefined;
-    const antigravityOutput = isAntigravity ? (settings.model.toLowerCase().includes('claude') ? 128_000 : 64_000) : undefined;
-    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window ?? antigravityWindow;
-    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? antigravityOutput;
+    const cleanModel = settings.model.toLowerCase();
+    const isReasoning = isOpenAiReasoningModel(cleanModel);
+    const isClaudeOrGemini = cleanModel.includes('gemini') || cleanModel.includes('claude');
+    const defaultWindow = isAntigravity && isClaudeOrGemini ? 1_000_000
+      : isClaudeOrGemini ? (cleanModel.includes('opus-4-6') || cleanModel.includes('sonnet-4-6') || cleanModel.includes('gemini') ? 1_000_000 : 200_000)
+      : isReasoning ? 272_000
+      : cleanModel.includes('gpt-4') ? 128_000
+      : undefined;
+    const defaultOutput = isClaudeOrGemini ? 64_000
+      : isReasoning ? 128_000
+      : cleanModel.includes('gpt-4') ? 16_384
+      : undefined;
+    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window ?? defaultWindow;
+    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? defaultOutput;
     if (!window) throw new ProviderError('模型 ' + name + '/' + settings.model + ' 的上下文窗口未知；在 [models."' + name + '/' + settings.model + '"] 配置 context_window 后重启（本地填实际 num_ctx）。', false, 'capacity');
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};

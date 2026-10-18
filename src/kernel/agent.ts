@@ -7,7 +7,7 @@ import {builtinActors} from '../actors/builtins.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
-import {Tools, toolDefinitions, validToolCall, validateToolCall, type ToolResult} from '../tools/tools.js';
+import {Tools, toolDefinitions, validToolCall, validateToolCall, canonicalToolName, type ToolResult} from '../tools/tools.js';
 
 import type {ContextManager} from '../context/manager.js';
 import {inputKind, inputMessage} from '../runtime/provenance.js';
@@ -232,11 +232,21 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           let schemaError: {callId: string; name: string; error: string} | undefined;
           if (!truncated) {
             for (const call of calls) {
-              if (!base.tools.some(tool => tool.name === call.name)) {
+              const canonical = canonicalToolName(call.name);
+              const toolMatch = base.tools.find(tool =>
+                tool.name.toLowerCase() === call.name.toLowerCase() ||
+                (canonical && canonicalToolName(tool.name) === canonical)
+              );
+              if (!toolMatch) {
                 schemaError = {callId: call.id, name: call.name, error: '未知工具：' + call.name + '。可用工具：' + base.tools.map(t => t.name).join('、')};
                 break;
               }
-              const extra = call.name === taskProgressTool.name ? taskProgressTool : options.extraTools?.find(tool => tool.name === call.name);
+              const extra = call.name.toLowerCase() === taskProgressTool.name.toLowerCase()
+                ? taskProgressTool
+                : options.extraTools?.find(tool =>
+                    tool.name.toLowerCase() === call.name.toLowerCase() ||
+                    (canonical && canonicalToolName(tool.name) === canonical)
+                  );
               try {
                 const args = JSON.parse(call.arguments);
                 if (extra) {
@@ -275,6 +285,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               }
               context.signal.throwIfAborted();
               context.report('工具执行', call.name);
+              const canonical = canonicalToolName(call.name);
               const id = toolIds.get(call.id)!;
               const waiting = async <T>(reason: string, operation: () => Promise<T>): Promise<T> => {
                 const resume = steps.wait(id, reason); try {return await operation();} finally {resume();}
@@ -291,8 +302,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 }
                 return result;
               }
-              if (options.extraTools?.some(tool => tool.name === call.name) && options.executeExtra) {
-                if (!approvalHandled.has(call.name)) {
+              const matchedExtra = options.extraTools?.find(tool =>
+                tool.name.toLowerCase() === call.name.toLowerCase() ||
+                (canonical && canonicalToolName(tool.name) === canonical)
+              );
+              if (matchedExtra && options.executeExtra) {
+                if (!approvalHandled.has(call.name) && !approvalHandled.has(matchedExtra.name)) {
                   if (!await options.tools.authorizeExtension(call, toolContext)) return {text: '扩展工具操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
                   toolContext.startTool();
                 }
@@ -301,7 +316,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               return options.tools.execute(call, toolContext);
             };
             for (let start = 0; start < calls.length;) {
-              const readonly = (call: ToolCall) => ['read', 'glob', 'grep'].includes(call.name) && !options.extraTools?.some(tool => tool.name === call.name);
+              const readonly = (call: ToolCall) => {
+                const c = (canonicalToolName(call.name) ?? call.name).toLowerCase();
+                return ['read', 'glob', 'grep'].includes(c) && !options.extraTools?.some(tool => tool.name.toLowerCase() === call.name.toLowerCase());
+              };
               let end = start + 1;
               if (!truncated && !schemaError && readonly(calls[start]!)) while (end < calls.length && readonly(calls[end]!)) end++;
               for (let offset = start; offset < end; offset += concurrency) {

@@ -47,7 +47,7 @@ export class ModelPool {
     // 1. Try primary models-store.json
     try {
       const content = readFileSync(this.cachePath, 'utf8');
-      const parsed = cacheSchema.parse(JSON.parse(content));
+      const parsed = cacheSchema.parse(JSON.parse(content.replace(/^﻿/, '')));
       this.models = parsed.models;
       return this.models;
     } catch {}
@@ -56,7 +56,7 @@ export class ModelPool {
     try {
       const legacyPath = join(dirname(this.cachePath), 'models-cache.json');
       const content = readFileSync(legacyPath, 'utf8');
-      const parsed = cacheSchema.parse(JSON.parse(content));
+      const parsed = cacheSchema.parse(JSON.parse(content.replace(/^﻿/, '')));
       this.models = parsed.models;
       return this.models;
     } catch {}

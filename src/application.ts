@@ -690,6 +690,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble', '/providers', '/provider'].includes(text)) {
+        if (['/providers', '/provider'].includes(text)) requireIdle();
         const initialTab = text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : ['/providers', '/provider'].includes(text) ? 'providers' : text.slice(1);
         pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), initialTab, {
           onSaveToggles: async (tabId, items) => {

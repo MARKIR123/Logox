@@ -22,7 +22,7 @@ export class CustomProviderStorage {
   private async read(): Promise<CustomStorageMap> {
     try {
       const content = await readFile(this.path, 'utf8');
-      return customStorageSchema.parse(JSON.parse(content));
+      return customStorageSchema.parse(JSON.parse(content.replace(/^﻿/, '')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
       throw new Error('Failed to read custom providers file: ' + (error instanceof Error ? error.message : String(error)));

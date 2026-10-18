@@ -397,8 +397,7 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
   try {
     await f.app.submit('/providers');
     const providers = f.app.surfaces.getSnapshot();
-    assert.ok(providers?.kind === 'picker');
-    await Promise.resolve();
+    assert.ok(providers?.kind === 'page');
     f.app.surfaces.cancel();
     await f.app.submit('/provider deepseek cloud-fixture');
     await f.app.submit('/status');
@@ -406,12 +405,8 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     assert.ok(status?.kind === 'page');
     assert.match(status.tabs[0]!.lines.join('\n'), /deepseek[\s\S]*cloud-fixture/);
     f.app.surfaces.cancel();
-    await f.app.submit('/provider'); await Promise.resolve();
     const task = f.app.ensemble.dispatch('aletheia', 'wait');
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === '模型处理中'));
-    await f.app.surfaces.choose(f.app.surfaces.getSnapshot()!.id, 'antigravity');
-    const blocked = f.app.surfaces.getSnapshot(); assert.ok(blocked?.kind === 'picker');
-    assert.match(blocked.error, /(?:任务处理中|Tasks are running)/); f.app.surfaces.cancel();
     await assert.rejects(f.app.submit('/model'), /(?:任务处理中|Tasks are running)/);
     await assert.rejects(f.app.submit('/provider'), /(?:任务处理中|Tasks are running)/);
     await assert.rejects(f.app.submit('/model different'), /(?:任务处理中|Tasks are running)/);
