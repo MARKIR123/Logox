@@ -432,12 +432,17 @@ export async function createSessionApplication(options: SessionApplicationOption
             const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
               ? currentThinkingEffort
               : grouped.currentEffort;
-            const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel);
+            const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel)
+              ?? poolModels.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
             const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
+            const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
+            const eff = effortLevels && effortLevels.length > 0
+              ? '✦ ' + effortLevels.filter((l: string) => l !== 'auto').join('/')
+              : '-';
             items.push({
               id: grouped.id,
-              label: grouped.baseModel,
-              description: grouped.provider + (recorded?.isOffline ? ' [offline]' : ''),
+              label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
+              description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
               effort: currentEffort,
               effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
             });

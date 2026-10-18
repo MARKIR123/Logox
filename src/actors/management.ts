@@ -45,34 +45,36 @@ export class ActorManagement {
     this.requireIdle();
     const {defaultModel: _old, ...rest} = previous === undefined ? actor : parseActor(previous);
     const path = await this.catalog.writeProject(id, serializeActor({...rest, ...(model ? {defaultModel: model} : {})}), previous);
-    const state = await this.catalog.reload(); if (state.issues.length) throw new Error('文件已保存，热载失败：' + state.issues.map(item => item.reason).join('；'));
+    const state = await this.catalog.reload(); if (state.issues.length) throw new Error('File saved, reload failed: ' + state.issues.map(item => item.reason).join('; '));
     return path;
   }
   async openDefaultModel(id: string, surfaces: CommandSurfaces): Promise<void> {
-    const actor = this.catalog.find(id); if (!actor) throw new Error('角色不存在');
+    const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
     const choices = new Map<string, ActorModel | undefined>([['inherit', undefined]]);
-    await surfaces.openPicker({title: actor.name + ' 默认模型', description: '确认只改变此角色，取消不保存',
+    await surfaces.openPicker({title: actor.name + ' Default Model', description: 'Confirm to apply to this actor only; Esc to cancel',
       current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit'}, async signal => {
       const result = await this.registry.modelCatalog(signal);
       for (const item of result.models) choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
       const items = [
-        {id: 'inherit', label: '继承当前会话模型'},
+        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
         ...result.models.map(item => {
           const choiceId = JSON.stringify({provider: item.provider, model: item.id});
           const levels = detectEffortLevels(item.id, item.provider);
+          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
           return {
             id: choiceId,
             label: item.provider + ' / ' + item.id,
+            description: eff,
             effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-            effortLevels: levels.length > 1 ? levels : undefined,
+            effortLevels: levels.length > 0 ? levels : undefined,
           };
         }),
       ];
-      return {items, warning: result.issues.join('；')};
+      return {items, warning: result.issues.join('; ')};
     }, async choice => {
-      if (!choices.has(choice)) throw new Error('模型选项无效');
+      if (!choices.has(choice)) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);
-      return {message: actor.name + ' 默认模型已保存'};
+      return {message: actor.name + ' default model saved'};
     });
   }
   async craftActor(content: string, approve: (review: ActorWriteReview) => Promise<boolean>, signal: AbortSignal): Promise<CraftResult> {
