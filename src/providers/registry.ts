@@ -169,7 +169,7 @@ export class ProviderRegistry {
   async models(signal: AbortSignal = AbortSignal.timeout(15000)): Promise<string[]> {
     return this.modelsFor(this.config.provider.name, signal);
   }
-  private async modelsFor(name: string, signal: AbortSignal): Promise<string[]> {
+  async modelsFor(name: string, signal: AbortSignal): Promise<string[]> {
     const settings = await this.settingsFor(name, true);
     signal.throwIfAborted();
     const headers: Record<string, string> = {};
