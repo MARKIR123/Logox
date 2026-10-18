@@ -142,7 +142,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const authentication = new LoginFlow(registry.auth, () => registry.loginNames(), async provider => {
     try {await saveSelection(registry.candidate(provider));}
-    catch {notice('API key 已保存；模型偏好保存失败，当前模型保留。'); return;}
+    catch {notice('API key 已保存；模型偏好保存失败，当前模型保留。');}
+    await modelPool.syncProvider(provider).catch(() => {});
     notice('已保存 ' + provider + ' 的 API key，重启后自动读取。' + (settings.model ? '\n当前模型：' + settings.model : '\n使用 /models 查询，再用 /model 名称选择模型。'));
   }, registry.customStorage, (input, init) => registry.fetcher(input, init));
   let loginError = '';
@@ -359,14 +360,14 @@ export async function createSessionApplication(options: SessionApplicationOption
       current: JSON.stringify([settings.provider, currentBase]),
     },
       async signal => {
-        const catalog = await registry.modelCatalog(AbortSignal.any([signal, commands.signal]));
-        for (const provider of new Set(catalog.models.map(item => item.provider))) {
-          modelCandidates.set(provider, catalog.models.filter(item => item.provider === provider).map(item => item.id));
+        const poolModels = await modelPool.list(AbortSignal.any([signal, commands.signal]));
+        for (const provider of new Set(poolModels.map(item => item.provider))) {
+          modelCandidates.set(provider, poolModels.filter(item => item.provider === provider).map(item => item.id));
         }
         const items: PickerItem[] = [];
-        const providers = [...new Set(catalog.models.map(m => m.provider))];
+        const providers = [...new Set(poolModels.map(m => m.provider))];
         for (const provider of providers) {
-          const providerModels = catalog.models.filter(m => m.provider === provider).map(m => m.id);
+          const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
           const currentForThisProvider = settings.provider === provider ? settings.model : '';
           const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
           for (const grouped of groupedList) {
@@ -375,18 +376,20 @@ export async function createSessionApplication(options: SessionApplicationOption
             const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
               ? currentThinkingEffort
               : grouped.currentEffort;
+            const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel);
+            const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
             items.push({
               id: grouped.id,
               label: grouped.baseModel,
-              description: grouped.provider,
+              description: grouped.provider + (recorded?.isOffline ? ' [offline]' : ''),
               effort: currentEffort,
-              effortLevels: grouped.effortLevels.length > 1 ? grouped.effortLevels : undefined,
+              effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
             });
           }
         }
         return {
           items,
-          warning: catalog.issues.join(' · ') || (!items.length ? 'No models available. Run /login or configure a local provider.' : ''),
+          warning: !items.length ? 'No models available. Run /login or configure a local provider.' : '',
         };
       },
       async (id, chosenEffort) => {
@@ -668,7 +671,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (text === '/model') {openModels(); return;}
       if (text === '/models') {
         const provider = settings.provider;
-        const models = await registry.models(AbortSignal.any([commands.signal, AbortSignal.timeout(15000)]));
+        const poolModels = await modelPool.refresh(commands.signal);
+        const models = poolModels.filter(m => m.provider === provider).map(m => m.id);
         modelCandidates.set(provider, models);
         notice(models.join('\n') || 'Provider returned empty model list'); return;
       }
