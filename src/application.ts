@@ -671,8 +671,15 @@ export async function createSessionApplication(options: SessionApplicationOption
           const result = await registry.check(commands.signal);
           notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
         }
+        if (parts[0] === 'unregister' || parts[0] === 'logout') {
+          if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before unregistering provider.');
+          const target = parts[1];
+          if (!target) throw new Error('Usage: /provider unregister <name>');
+          await registry.unregister(target);
+          notice("Provider '" + target + "' unregistered successfully."); return;
+        }
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
-        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model], or /provider check');
+        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model], /provider check, or /provider unregister <name>');
         await saveSelection(registry.candidate(parts[0], parts[1]));
         notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
       }
