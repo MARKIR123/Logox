@@ -1,5 +1,6 @@
 import {readFile} from 'node:fs/promises';
 import type {ProviderRegistry} from '../providers/registry.js';
+import type {ModelPool} from '../providers/model-pool.js';
 import type {CommandSurfaces} from '../commands/surfaces.js';
 import type {CommandTab} from '../runtime/command-surface.js';
 import {immutable} from '../runtime/contracts.js';
@@ -17,6 +18,7 @@ export class ActorManagement {
     private readonly requireIdle: () => void = () => {},
     private readonly policy?: (ownerId: string) => ContextPolicy,
     private readonly modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined,
+    private readonly modelPool?: ModelPool,
   ) {}
   tab(): CommandTab {
     return immutable({id: 'actors', title: 'Ensemble', lines: this.catalog.list().flatMap(actor => {
@@ -56,8 +58,14 @@ export class ActorManagement {
     const actor = this.catalog.find(id); if (!actor) throw new Error('角色不存在');
     if (model) {
       const selected = actorModelSchema.parse(model); model = selected;
-      const result = await this.registry.modelCatalog(signal); signal.throwIfAborted();
-      if (!result.models.some(item => item.provider === selected.provider && item.id === selected.model)) throw new Error('模型不在当前可用目录中');
+      const poolModels = this.modelPool?.snapshot() ?? [];
+      const foundInPool = poolModels.some(item => item.provider === selected.provider && item.id === selected.model);
+      if (!foundInPool && poolModels.length > 0) {
+        const result = await this.registry.modelCatalog(signal).catch(() => ({models: []}));
+        if (!result.models.some(item => item.provider === selected.provider && item.id === selected.model)) {
+          throw new Error('Model not in available catalog: ' + selected.provider + '/' + selected.model);
+        }
+      }
     }
     const previous = await this.previous(id); signal.throwIfAborted();
     this.requireIdle();
@@ -68,28 +76,33 @@ export class ActorManagement {
   }
   async openDefaultModel(id: string, surfaces: CommandSurfaces): Promise<void> {
     const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
+    const poolModels = this.modelPool?.snapshot() ?? [];
     const choices = new Map<string, ActorModel | undefined>([['inherit', undefined]]);
-    await surfaces.openPicker({title: actor.name + ' Default Model', description: 'Confirm to apply to this actor only; Esc to cancel',
-      current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit'}, async signal => {
-      const result = await this.registry.modelCatalog(signal);
-      for (const item of result.models) choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-      const items = [
-        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-        ...result.models.map(item => {
-          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
-          const levels = detectEffortLevels(item.id, item.provider);
-          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
-          return {
-            id: choiceId,
-            label: item.provider + ' / ' + item.id,
-            description: eff,
-            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-            effortLevels: levels.length > 0 ? levels : undefined,
-          };
-        }),
-      ];
-      return {items, warning: result.issues.join('; ')};
-    }, async choice => {
+    for (const item of poolModels) {
+      choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
+    }
+    const items = [
+      {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
+      ...poolModels.map(item => {
+        const choiceId = JSON.stringify({provider: item.provider, model: item.id});
+        const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
+        const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
+        const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
+        return {
+          id: choiceId,
+          label: item.provider + ' / ' + item.id,
+          description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
+          effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
+          effortLevels: levels.length > 0 ? levels : undefined,
+        };
+      }),
+    ];
+    void surfaces.openPicker({
+      title: actor.name + ' Default Model',
+      description: 'Confirm to apply to this actor only; Esc to cancel',
+      current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit',
+      items,
+    }, async () => ({items}), async choice => {
       if (!choices.has(choice)) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);
       return {message: actor.name + ' default model saved'};

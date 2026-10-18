@@ -11,6 +11,7 @@ import {Collaboration} from './collaboration.js';
 import type {Resources} from '../resources/manager.js';
 import type {Journal} from '../store/journal.js';
 import type {ProviderRegistry} from '../providers/registry.js';
+import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import type {ToolResult} from '../tools/tools.js';
 import {contextPolicySchema, type Config} from '../config/config.js';
@@ -49,6 +50,7 @@ export interface ActorServicesOptions {
   requireIdle(): void;
   authorize?(call: ToolCall, context: ActorContext): Promise<boolean>;
   modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
+  modelPool?: ModelPool;
 }
 /** 角色配置、单次技能借阅与摘要交接；执行队列仍由 Ensemble 拥有。 */
 export class ActorServices {
@@ -66,7 +68,7 @@ export class ActorServices {
   private readonly dispatchSignatures = new Map<string, number>();
   private readonly groups = new Map<string, {remaining: Set<string>; reports: string[]; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
-    this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner), options.modelResolver);
+    this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner), options.modelResolver, options.modelPool);
     this.collaboration = new Collaboration({...options, member: owner => !!options.catalog.find(owner)});
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
   }

@@ -133,6 +133,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         levels: th.levels,
       };
     },
+    modelPool,
   });
   const contexts = new ContextManager({journal, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
@@ -425,49 +426,47 @@ export async function createSessionApplication(options: SessionApplicationOption
       const match = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/.exec(settings.model);
       return match ? match[1]! : settings.model;
     })();
+    // 1. Immediately read from local model store (0ms, zero network)
+    const poolModels = modelPool.snapshot();
+    for (const provider of new Set(poolModels.map(item => item.provider))) {
+      modelCandidates.set(provider, poolModels.filter(item => item.provider === provider).map(item => item.id));
+    }
+    const items: PickerItem[] = [];
+    const providers = [...new Set(poolModels.map(m => m.provider))];
+    for (const provider of providers) {
+      const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
+      const currentForThisProvider = settings.provider === provider ? settings.model : '';
+      const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
+      for (const grouped of groupedList) {
+        groupedMap.set(grouped.id, grouped);
+        const currentThinkingEffort = registry.thinking().effort;
+        const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
+          ? currentThinkingEffort
+          : grouped.currentEffort;
+        const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel)
+          ?? poolModels.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
+        const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
+        const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
+        const eff = effortLevels && effortLevels.length > 0
+          ? '✦ ' + effortLevels.filter((l: string) => l !== 'auto').join('/')
+          : '-';
+        items.push({
+          id: grouped.id,
+          label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
+          description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
+          effort: currentEffort,
+          effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
+        });
+      }
+    }
+
     void surfaces.openPicker({
       title: 'Select Model',
       description: 'Model families grouped · Search models, use ← → to adjust thinking effort',
       current: JSON.stringify([settings.provider, currentBase]),
+      items,
     },
-      async signal => {
-        const poolModels = await modelPool.list(AbortSignal.any([signal, commands.signal]));
-        for (const provider of new Set(poolModels.map(item => item.provider))) {
-          modelCandidates.set(provider, poolModels.filter(item => item.provider === provider).map(item => item.id));
-        }
-        const items: PickerItem[] = [];
-        const providers = [...new Set(poolModels.map(m => m.provider))];
-        for (const provider of providers) {
-          const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
-          const currentForThisProvider = settings.provider === provider ? settings.model : '';
-          const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
-          for (const grouped of groupedList) {
-            groupedMap.set(grouped.id, grouped);
-            const currentThinkingEffort = registry.thinking().effort;
-            const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
-              ? currentThinkingEffort
-              : grouped.currentEffort;
-            const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel)
-              ?? poolModels.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
-            const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
-            const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
-            const eff = effortLevels && effortLevels.length > 0
-              ? '✦ ' + effortLevels.filter((l: string) => l !== 'auto').join('/')
-              : '-';
-            items.push({
-              id: grouped.id,
-              label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
-              description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
-              effort: currentEffort,
-              effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
-            });
-          }
-        }
-        return {
-          items,
-          warning: !items.length ? 'No models available. Run /login or configure a local provider.' : '',
-        };
-      },
+      async () => ({items, warning: !items.length ? 'No models available. Run /login or configure a provider.' : ''}),
       async (id, chosenEffort) => {
         requireIdle();
         const grouped = groupedMap.get(id);
