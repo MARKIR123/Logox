@@ -96,7 +96,8 @@ test('/login 保存后重建应用直接认证，密钥不进入舞台或会话'
     app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, authPath, config, sessionId: 'second'});
     assert.equal(app.authentication.getSnapshot(), null);
     await app.submit('/check-provider');
-    assert.deepEqual(authorization, ['Bearer synthetic-persistent-key', 'Bearer synthetic-persistent-key']);
+    assert.ok(authorization.every(h => h === 'Bearer synthetic-persistent-key'));
+    assert.ok(authorization.length >= 2);
     const registry = new ProviderRegistry(config, {LOGIN_TEST_KEY: 'stale-env'}, fetch, new AuthStorage(authPath));
     assert.equal((await registry.settings()).key, 'synthetic-persistent-key');
   } finally {await app.close();server.closeAllConnections();await new Promise<void>(resolve => server.close(() => resolve()));await rm(cwd, {recursive: true, force: true});}

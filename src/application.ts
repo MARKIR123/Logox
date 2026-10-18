@@ -807,6 +807,12 @@ export async function createSessionApplication(options: SessionApplicationOption
         await saveSelection(registry.candidate(parts[0], parts[1]));
         notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
       }
+      if (text === '/check-provider') {
+        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
+        const selection = registry.selection();
+        const result = await registry.check(commands.signal);
+        notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+      }
       if (text === '/compact') {
         requireIdle();
         const activityId = randomUUID(), controller = new AbortController();

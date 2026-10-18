@@ -47,7 +47,6 @@ export class AuthStorage {
     } else if (path === join(homedir(), '.logox-ts', 'auth.json')) {
       this.fallbackPaths = [
         join(homedir(), '.logox', 'auth.json'),
-        join(homedir(), '.pi', 'agent', 'auth.json'),
       ];
     } else {
       this.fallbackPaths = [];

@@ -32,7 +32,6 @@ function loadDeviceId(): string {
   const settingsPaths = [
     join(homedir(), '.logox-ts', 'settings.json'),
     join(homedir(), '.logox', 'settings.json'),
-    join(homedir(), '.pi', 'agent', 'settings.json'),
   ];
   for (const p of settingsPaths) {
     try {

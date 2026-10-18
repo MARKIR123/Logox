@@ -40,7 +40,6 @@ function readStoredModelsForProvider(name: string): string[] {
   const storePaths = [
     join(homedir(), '.logox-ts', 'models-store.json'),
     join(homedir(), '.logox-ts', 'models-cache.json'),
-    join(homedir(), '.pi', 'agent', 'models-store.json'),
   ];
   for (const p of storePaths) {
     try {

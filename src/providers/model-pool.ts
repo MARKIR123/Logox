@@ -30,7 +30,6 @@ export class ModelPool {
   constructor(
     private readonly registry?: ProviderRegistry,
     readonly cachePath = join(homedir(), '.logox-ts', 'models-store.json'),
-    readonly fallbackStorePath = join(homedir(), '.pi', 'agent', 'models-store.json'),
   ) {
     this.loadCacheSync();
   }
@@ -60,34 +59,6 @@ export class ModelPool {
       const parsed = cacheSchema.parse(JSON.parse(content));
       this.models = parsed.models;
       return this.models;
-    } catch {}
-
-    // 3. Fallback: import from Pi models-store.json
-    try {
-      const piContent = JSON.parse(readFileSync(this.fallbackStorePath, 'utf8'));
-      const imported: DiscoveredModel[] = [];
-      for (const [provider, obj] of Object.entries(piContent)) {
-        if (obj && typeof obj === 'object' && Array.isArray((obj as Record<string, unknown>).models)) {
-          for (const m of (obj as Record<string, unknown>).models as Array<Record<string, unknown>>) {
-            if (typeof m.id === 'string' && m.id) {
-              const effortLevels = detectEffortLevels(m.id, provider);
-              imported.push({
-                provider,
-                id: m.id,
-                window: typeof m.contextWindow === 'number' ? m.contextWindow : 128_000,
-                maxOutput: typeof m.maxTokens === 'number' ? m.maxTokens : 16_384,
-                thinkingLevels: effortLevels.length ? [...effortLevels] : undefined,
-                isOffline: false,
-                lastSeen: Date.now(),
-              });
-            }
-          }
-        }
-      }
-      if (imported.length) {
-        this.models = imported;
-        return this.models;
-      }
     } catch {}
 
     return this.models;
