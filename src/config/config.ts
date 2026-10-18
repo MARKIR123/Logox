@@ -76,9 +76,9 @@ export interface ModelSettings {
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
-  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
+  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1'},
   anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY'},
 };

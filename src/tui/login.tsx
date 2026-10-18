@@ -19,7 +19,7 @@ export function LoginDialog({flow, state, width, height, y, onCursor, onClose, n
   useInput((input, key) => {
     if (key.eventType === 'release') return;
     if (key.ctrl && input === 'd') {onClose(); return;}
-    if (state.phase === 'saving' || state.phase === 'provider') return;
+    if (state.phase === 'saving' || state.phase === 'provider' || state.phase === 'method') return;
     if (key.escape) {setDraft(emptyDraft); flow.cancel(); return;}
     if (key.return) {const value = draft.text; setDraft(emptyDraft); void flow.submit(value); return;}
     if (key.backspace || key.delete) {edit(erase(draft, Boolean(key.backspace))); return;}
@@ -28,9 +28,23 @@ export function LoginDialog({flow, state, width, height, y, onCursor, onClose, n
     if (key.ctrl && input === 'u') {setDraft(emptyDraft); return;}
     if (!key.ctrl && !key.meta && input) edit(insert(draft, input));
   });
+
   if (state.phase === 'provider') return <Picker title="登录提供商 · API key" description="保存后重启自动读取" width={width} height={height} y={y}
     items={state.providers.map(provider => ({id: provider.name, label: provider.name, description: provider.saved ? '已保存' : ''}))}
     error={state.error} notice={notice} onSelect={name => flow.choose(name)} onCancel={() => flow.cancel()}/>;
+
+  if (state.phase === 'method' && state.methods) return <Picker title={state.provider + ' · 登录方式'} description="选择 API Key 或浏览器账号授权" width={width} height={height} y={y}
+    items={state.methods.map(method => ({id: method.id, label: method.label}))}
+    error={state.error} notice={notice} onSelect={id => flow.chooseMethod(id as 'key' | 'oauth')} onCancel={() => flow.cancel()}/>;
+
+  if (state.phase === 'oauth') return <Box width={width} height={height} overflow="hidden" flexDirection="column" paddingX={2}>
+    <Text color={palette.line}>{'─'.repeat(Math.max(1, width - 4))}</Text>
+    <Text bold color={palette.accent}>{'OpenAI 账号授权'}</Text>
+    <Text color={palette.fg}>❯ 请在浏览器中打开以下链接完成登录授权：</Text>
+    <Text color={palette.accent} wrap="truncate-end">{state.oauthUrl || '正在生成授权链接…'}</Text>
+    <Text color={state.error ? palette.error : palette.muted}>{state.error || 'Esc 取消'}</Text>
+  </Box>;
+
   return <Box width={width} height={height} overflow="hidden" flexDirection="column" paddingX={2}>
     <Text color={palette.line}>{'─'.repeat(Math.max(1, width - 4))}</Text>
     <Text bold color={palette.accent}>{'登录 ' + state.provider + ' · API key'}</Text>
