@@ -22,23 +22,22 @@ export class ActorManagement {
     return immutable({id: 'actors', title: 'Ensemble', lines: this.catalog.list().flatMap(actor => {
       const policy = this.policy?.(actor.id) ?? actor.context;
       const resolved = this.modelResolver?.(actor.id);
-      const modelLine = actor.defaultModel
+      const effort = resolved?.effort;
+      const effortSuffix = effort && effort !== 'none' ? ' · ' + effort : '';
+      const baseName = actor.defaultModel
         ? actor.defaultModel.provider + '/' + actor.defaultModel.model
         : resolved
-          ? 'Inherits session model (' + resolved.provider + '/' + resolved.model + ') (switch via /model ' + actor.id + ')'
-          : 'Inherits session model (switch via /model ' + actor.id + ')';
-
-      const effort = resolved?.effort ?? 'auto';
-      const levels = resolved?.levels ?? [];
-      const effortLine = levels.length > 0
-        ? '✦ ' + levels.filter(l => l !== 'auto').join(' / ') + ' (current: ' + effort + ')'
-        : (effort !== 'auto' ? effort : '-');
+          ? resolved.provider + '/' + resolved.model
+          : 'None';
+      const modelWithEffort = baseName + effortSuffix;
+      const modelLine = actor.defaultModel
+        ? modelWithEffort
+        : 'Inherits session model (' + modelWithEffort + ') (switch via /model ' + actor.id + ')';
 
       return [
         '── ' + actor.symbol + ' ' + actor.name + ' (' + actor.title + ') ' + '─'.repeat(30),
         'Description: ' + actor.description,
         'Designated model: ' + modelLine,
-        'Thinking effort: ' + effortLine,
         'Context retention: ' + policy.keep_recent_rounds + ' rounds / ' + policy.keep_recent_tools + ' tools',
         'Context policy: ' + JSON.stringify(policy),
         'Skills: ' + (actor.skills.join(', ') || 'Declared on-demand'),
