@@ -76,6 +76,7 @@ export interface ModelSettings {
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
+  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
   antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1'},
@@ -172,6 +173,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6)$/.test(model) ? 'anthropic-adaptive'
     : official && provider.name === 'anthropic' && /^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?)(?:-\d{8})?$/.test(model) ? 'anthropic-budget'
     : (provider.name === 'antigravity' || url.port === '8045') && (model.toLowerCase().includes('gemini') || model.toLowerCase().includes('claude')) ? 'reasoning-effort'
+    : (provider.name === 'openai' || provider.name === 'openai-compatible') && /^(?:o1|o3)(?:-|$)/i.test(model) ? 'reasoning-effort'
     : undefined);
   const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');

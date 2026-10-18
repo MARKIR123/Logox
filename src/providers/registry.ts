@@ -9,6 +9,7 @@ import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
 import type {ThinkingEffort} from '../config/model-preferences.js';
 import {AuthStorage} from './auth.js';
+import {CustomProviderStorage, type CustomProviderRecord} from './custom-storage.js';
 import {createHttpTransport} from './transport.js';
 
 const credentialSchema = z.object({type: z.literal('api_key'), key: z.string(), env: z.record(z.string(), z.string()).optional()});
@@ -41,9 +42,11 @@ export class ProviderRegistry {
   private readonly fetcher: typeof fetch;
   private closed = false;
   private readonly capabilities = new Map<string, {window?: number; maxOutput?: number}>();
+  readonly customProviders = new Map<string, CustomProviderRecord>();
   constructor(config: Config, private readonly env: NodeJS.ProcessEnv = process.env,
     fetcher?: typeof fetch,
-    readonly auth = new AuthStorage()) {
+    readonly auth = new AuthStorage(),
+    readonly customStorage = new CustomProviderStorage()) {
     this.config = config;
     this.fetcher = fetcher ?? ((input, init) => {
       if (this.closed) return Promise.reject(new ProviderError('模型网络服务已关闭'));
@@ -53,7 +56,28 @@ export class ProviderRegistry {
   }
   async close(): Promise<void> {this.closed = true; await this.transport?.close();}
 
-  names(): string[] {return [...new Set([...Object.keys(presets), ...Object.keys(this.config.providers), this.config.provider.name])];}
+  async syncCustom(): Promise<void> {
+    const list = await this.customStorage.list();
+    for (const record of list) {
+      this.customProviders.set(record.name, record);
+      this.config.providers[record.name] = {
+        kind: record.kind,
+        base_url: record.base_url,
+        default_model: record.default_model,
+      };
+    }
+  }
+
+  async unregister(name: string): Promise<void> {
+    await this.auth.remove(name);
+    if (this.customProviders.has(name)) {
+      await this.customStorage.remove(name);
+      this.customProviders.delete(name);
+      delete this.config.providers[name];
+    }
+  }
+
+  names(): string[] {return [...new Set([...Object.keys(presets), ...Object.keys(this.config.providers), ...this.customProviders.keys(), this.config.provider.name])];}
   loginNames(): string[] {
     return this.names().filter(name => {
       const config = this.configFor(name), definition = config.providers[name] ?? presets[name];
@@ -67,7 +91,16 @@ export class ProviderRegistry {
   }
   private configFor(name: string, model?: string): Config {
     const current = this.config.provider;
-    return {...this.config, provider: name === current.name
+    const custom = this.customProviders.get(name);
+    const providers = {...this.config.providers};
+    if (custom) {
+      providers[name] = {
+        kind: custom.kind,
+        base_url: custom.base_url,
+        default_model: custom.default_model,
+      };
+    }
+    return {...this.config, providers, provider: name === current.name
       ? {...current, ...(model !== undefined ? {model, ...(model !== current.model ? {context_window: undefined, max_output_tokens: undefined} : {})} : {})}
       : {name, model: model ?? '', temperature: current.temperature, max_tokens: current.max_tokens, timeout: current.timeout, thinking_effort: current.thinking_effort}};
   }
@@ -80,7 +113,8 @@ export class ProviderRegistry {
     this.config = {...this.config, provider: {...this.config.provider, thinking_effort: effort}};
   }
   candidate(name: string, model?: string): ProviderRegistry {
-    const next = new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth);
+    const next = new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth, this.customStorage);
+    for (const [k, v] of this.customProviders) next.customProviders.set(k, v);
     for (const [key, value] of this.capabilities) next.capabilities.set(key, {...value});
     const settings = modelSettings(next.config, this.env);
     if (!settings.thinkingLevels?.includes(next.config.provider.thinking_effort)) next.config.provider.thinking_effort = 'auto';
