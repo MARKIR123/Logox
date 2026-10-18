@@ -1,4 +1,5 @@
 import {readFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -33,6 +34,32 @@ async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv)
   if (reference) return env[reference[1] ?? reference[2]!] ?? credential.data.env?.[reference[1] ?? reference[2]!] ?? '';
   if (key.includes('$')) throw new ProviderError('认证文件只支持完整的 $ENV 或 ${ENV} 引用');
   return key;
+}
+
+function readStoredModelsForProvider(name: string): string[] {
+  const storePaths = [
+    join(homedir(), '.logox-ts', 'models-store.json'),
+    join(homedir(), '.logox-ts', 'models-cache.json'),
+    join(homedir(), '.pi', 'agent', 'models-store.json'),
+  ];
+  for (const p of storePaths) {
+    try {
+      const raw = JSON.parse(readFileSync(p, 'utf8'));
+      if (raw && typeof raw === 'object') {
+        if (raw[name] && typeof raw[name] === 'object' && Array.isArray((raw[name] as Record<string, unknown>).models)) {
+          const list = ((raw[name] as Record<string, unknown>).models as Array<Record<string, unknown>>)
+            .map(m => m.id).filter(id => typeof id === 'string') as string[];
+          if (list.length > 0) return list;
+        }
+        if (Array.isArray(raw.models)) {
+          const list = (raw.models as Array<Record<string, unknown>>)
+            .filter(m => m.provider === name).map(m => m.id).filter(id => typeof id === 'string') as string[];
+          if (list.length > 0) return list;
+        }
+      }
+    } catch {}
+  }
+  return [];
 }
 
 /** 统一提供商选择与请求时认证；不拥有 Agent 历史或任务状态。 */
@@ -182,12 +209,16 @@ export class ProviderRegistry {
     catch {signal.throwIfAborted(); throw new ProviderError('模型列表连接失败', true);}
     if (!response.ok) {
       await response.body?.cancel();
+      const stored = readStoredModelsForProvider(name);
+      if (stored.length > 0) return [...new Set(stored)].sort();
       const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
       if (known.length > 0) return [...new Set(known)].sort();
       throw new ProviderError('模型列表查询失败（HTTP ' + response.status + '）');
     }
     const payload = modelsSchema.safeParse(await response.json().catch(() => undefined));
     if (!payload.success) {
+      const stored = readStoredModelsForProvider(name);
+      if (stored.length > 0) return [...new Set(stored)].sort();
       const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
       if (known.length > 0) return [...new Set(known)].sort();
       throw new ProviderError('模型列表格式无效');
