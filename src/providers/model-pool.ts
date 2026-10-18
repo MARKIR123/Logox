@@ -107,7 +107,8 @@ export class ModelPool {
         const isAntigravity = name === 'antigravity' || name.toLowerCase().includes('proxy');
         const isClaudeOrGemini = modelId.toLowerCase().includes('claude') || modelId.toLowerCase().includes('gemini');
         const window = isAntigravity && isClaudeOrGemini ? 1_000_000 : 128_000;
-        const maxOutput = isAntigravity && isClaudeOrGemini ? 64_000 : 16_384;
+        const isClaude = modelId.toLowerCase().includes('claude');
+        const maxOutput = isAntigravity && isClaudeOrGemini ? (isClaude ? 128_000 : 64_000) : 16_384;
         const levels = detectEffortLevels(modelId, name);
         this.models.push({
           provider: name,
@@ -146,7 +147,8 @@ export class ModelPool {
           const isAntigravity = name === 'antigravity' || name.toLowerCase().includes('proxy');
           const isClaudeOrGemini = modelId.toLowerCase().includes('claude') || modelId.toLowerCase().includes('gemini');
           const window = isAntigravity && isClaudeOrGemini ? 1_000_000 : 128_000;
-          const maxOutput = isAntigravity && isClaudeOrGemini ? 64_000 : 16_384;
+          const isClaude = modelId.toLowerCase().includes('claude');
+        const maxOutput = isAntigravity && isClaudeOrGemini ? (isClaude ? 128_000 : 64_000) : 16_384;
           const levels = detectEffortLevels(modelId, name);
           discovered.push({
             provider: name,

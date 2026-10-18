@@ -22,7 +22,7 @@ function loadConfiguredProxy(env: NodeJS.ProcessEnv): string {
   ];
   for (const p of settingsPaths) {
     try {
-      const data = JSON.parse(readFileSync(p, 'utf8'));
+      const data = JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, ''));
       if (typeof data?.httpProxy === 'string' && data.httpProxy.trim()) {
         return data.httpProxy.trim();
       }
@@ -41,7 +41,7 @@ export function createHttpTransport(env: NodeJS.ProcessEnv = process.env) {
     for (const proxy of [httpProxy, httpsProxy]) if (proxy && !['http:', 'https:'].includes(new URL(proxy).protocol)) throw new Error('unsupported proxy');
     dispatcher = guarded(new EnvHttpProxyAgent({
       httpProxy, httpsProxy,
-      noProxy: env.no_proxy || env.NO_PROXY || 'localhost,127.0.0.1,::1',
+      noProxy: env.no_proxy ?? env.NO_PROXY ?? 'localhost,127.0.0.1,::1',
       allowH2: false, proxyTunnel: true,
       // 禁用 Undici 内部固定的 300s 超时；流式长连接的有效性由应用层的无进展 deadline 监控。
       headersTimeout: 0, bodyTimeout: 0,

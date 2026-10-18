@@ -6,6 +6,7 @@ import {immutable} from '../runtime/contracts.js';
 import {withFileLock} from '../store/file-lock.js';
 import {builtinActors} from './builtins.js';
 import {actorIdSchema, parseActor, parseActorProfile, serializeActor, type ActorDefinition} from './definitions.js';
+import {ActorModelStorage} from './actor-models-storage.js';
 
 export interface ActorIssue {readonly path: string; readonly reason: string}
 export interface ActorSnapshot {readonly definitions: readonly ActorDefinition[]; readonly issues: readonly ActorIssue[]; readonly revision: number}
@@ -21,7 +22,14 @@ export async function assertActorPath(path: string): Promise<void> {
 }
 export class ActorCatalog {
   private value: ActorSnapshot = immutable({definitions: builtinActors, issues: [], revision: 0});
-  constructor(readonly cwd: string, readonly options: ActorCatalogOptions = {}) {}
+  readonly modelStorage: ActorModelStorage;
+  constructor(readonly cwd: string, readonly options: ActorCatalogOptions = {}) {
+    const home = options.home ?? homedir();
+    this.modelStorage = new ActorModelStorage(
+      join(home, '.logox-ts', 'actor-models.json'),
+      join(home, '.logox', 'actor-models.json'),
+    );
+  }
   snapshot(): ActorSnapshot {return this.value;}
   list(): readonly ActorDefinition[] {return this.value.definitions;}
   find(id: string): ActorDefinition | undefined {return this.list().find(actor => actor.id === id);}
@@ -105,6 +113,13 @@ export class ActorCatalog {
           }
         }
       } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issues.push({path: directory, reason: error instanceof Error ? error.message : '扫描失败'});}
+    }
+    const userModels = this.modelStorage.loadSync();
+    for (const [id, model] of Object.entries(userModels)) {
+      const def = definitions.get(id);
+      if (def) {
+        definitions.set(id, {...def, defaultModel: model});
+      }
     }
     this.value = immutable({definitions: issues.length ? this.value.definitions : [...definitions.values()], issues,
       revision: this.value.revision + (issues.length ? 0 : 1)});

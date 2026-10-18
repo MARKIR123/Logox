@@ -129,7 +129,19 @@ const deltaSchema = z.object({
 const eventSchema = z.object({
   type: z.string().optional(), index: z.number().int().nonnegative().optional(),
   error: z.unknown().optional(), usage: usageSchema.nullable().optional(),
-  message: z.object({usage: usageSchema.optional()}).optional(), delta: deltaSchema.optional(),
+  message: z.object({usage: usageSchema.optional()}).optional(), delta: z.union([deltaSchema, z.string()]).optional(),
+  output_index: z.number().int().nonnegative().optional(),
+  arguments: z.string().optional(),
+  item: z.object({
+    type: z.string().optional(), id: z.string().optional(), call_id: z.string().optional(),
+    name: z.string().optional(), arguments: z.string().optional(),
+  }).passthrough().optional(),
+  response: z.object({
+    id: z.string().optional(), status: z.string().optional(),
+    usage: z.object({
+      input_tokens: z.number().optional(), output_tokens: z.number().optional(), total_tokens: z.number().optional(),
+    }).nullable().optional(),
+  }).passthrough().optional(),
   content_block: z.object({
     type: z.string(), id: z.string().optional(), name: z.string().optional(),
     text: z.string().optional(), thinking: z.string().optional(), signature: z.string().optional(),
@@ -146,16 +158,66 @@ const eventSchema = z.object({
       })).optional(),
     }).optional(),
   })).optional(),
-});
+}).passthrough();
 type StreamEvent = z.infer<typeof eventSchema>;
 /** 心跳和空帧不是模型进展；正文、思考、工具参数及协议收尾都能刷新期限。 */
 function hasProgress(event: StreamEvent): boolean {
   if (['message_start', 'content_block_start', 'content_block_stop', 'message_stop'].includes(event.type ?? '')) return true;
-  if (event.delta?.text || event.delta?.thinking || event.delta?.signature || event.delta?.partial_json || event.delta?.stop_reason) return true;
+  if (event.type?.startsWith('response.')) return true;
+  if (typeof event.delta === 'string' && event.delta) return true;
+  if (typeof event.delta === 'object' && event.delta && (event.delta.text || event.delta.thinking || event.delta.signature || event.delta.partial_json || event.delta.stop_reason)) return true;
   if (event.usage && Object.values(event.usage).some(value => typeof value === 'number')) return true;
   return event.choices?.some(choice => !!choice.finish_reason || !!choice.delta &&
     (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning ||
       !!choice.delta.tool_calls?.some(call => !!call.id || !!call.function?.name || !!call.function?.arguments))) ?? false;
+}
+export function responsesInput(messages: readonly ModelMessage[], supportsVision = false, maxImages = 2): ObjectValue[] {
+  const imageIndices = messages
+    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
+    .filter(i => i >= 0);
+  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+  const result: ObjectValue[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    const keepImage = activeImageIndices.has(i);
+
+    if (message.role === 'user') {
+      if (supportsVision && message.images?.length && keepImage) {
+        result.push({
+          role: 'user',
+          content: [
+            {type: 'input_text', text: message.text},
+            ...message.images.map(img => ({
+              type: 'input_image',
+              image_url: `data:${img.mimeType};base64,${img.data}`,
+            })),
+          ],
+        });
+      } else {
+        result.push({role: 'user', content: message.text});
+      }
+    } else if (message.role === 'assistant') {
+      if (message.text) {
+        result.push({role: 'assistant', content: message.text});
+      }
+      for (const call of message.toolCalls ?? []) {
+        result.push({
+          type: 'function_call',
+          call_id: call.id,
+          name: call.name,
+          arguments: call.arguments,
+        });
+      }
+    } else if (message.role === 'tool') {
+      result.push({
+        type: 'function_call_output',
+        call_id: message.callId,
+        output: message.text,
+      });
+    }
+  }
+  return result;
 }
 export function openaiMessages(messages: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
   const imageIndices = messages
@@ -277,15 +339,21 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
   return {async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 名称或 --model 名称');
     const native = settings.kind === 'anthropic';
-    const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : '/chat/completions');
+    const isResponsesApi = (settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && typeof settings.key === 'string' && !settings.key.startsWith('sk-'));
+    const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : isResponsesApi ? '/responses' : '/chat/completions');
     const headers: Record<string, string> = {'content-type': 'application/json'};
     if (native) {
       headers['anthropic-version'] = '2023-06-01';
       if (settings.key) headers['x-api-key'] = settings.key;
-    } else if (settings.key) headers.authorization = 'Bearer ' + settings.key;
+    } else if (settings.key) {
+      headers.authorization = 'Bearer ' + settings.key;
+      if (isResponsesApi) headers.accept = 'text/event-stream';
+    }
     const tools = request.tools.map(tool => native
       ? {name: tool.name, description: tool.description, input_schema: tool.parameters}
-      : {type: 'function', function: tool});
+      : isResponsesApi
+        ? {type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters}
+        : {type: 'function', function: tool});
     const maxTokens = Math.min(settings.maxTokens, request.maxTokens ?? Infinity);
     const effort = request.thinking === false ? 'off' : settings.thinkingEffort ?? 'auto';
     const protocol = settings.thinkingProtocol;
@@ -312,14 +380,28 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
     const supportsVision = request.supportsVision ?? true;
     const isStream = request.stream !== false;
+    let chosenModel = settings.model;
+    if (isResponsesApi && (!chosenModel || chosenModel.includes('gpt-4') || chosenModel.includes('o3-mini'))) {
+      chosenModel = 'gpt-6.1-sol';
+    }
     const body = native
-      ? {model: settings.model, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
+      ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),
         system: request.system, messages: anthropicMessages(request.messages), tools, ...thinking}
-      : {model: settings.model, max_tokens: maxTokens, temperature: settings.temperature,
-        ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
-        messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision)], tools,
-        ...thinking};
+      : isResponsesApi
+        ? {
+            model: chosenModel,
+            store: false,
+            stream: true,
+            instructions: request.system,
+            input: responsesInput(request.messages, supportsVision),
+            ...(tools.length ? {tools} : {}),
+            ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort}} : {}),
+          }
+        : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature,
+          ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
+          messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision)], tools,
+          ...thinking};
     signal.throwIfAborted();
     const deadline = idleDeadline(signal, settings.timeoutMs), timed = deadline.signal;
     try {
@@ -405,7 +487,44 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           timed.throwIfAborted();
           if (hasProgress(event)) deadline.progress();
           if (calls.size > 128) throw new ProviderError('单次工具调用数量超过限制');
-          if (native) {
+          if (isResponsesApi) {
+            if (event.type === 'error' || event.error) throw providerFailure(200, {error: event.error ?? event});
+            if (event.type === 'response.output_text.delta') {
+              if (typeof event.delta === 'string') append('text', event.delta);
+            } else if (event.type === 'response.reasoning.delta' || event.type === 'response.reasoning_text.delta') {
+              if (typeof event.delta === 'string') append('reasoning', event.delta);
+            } else if (event.type === 'response.function_call_arguments.delta') {
+              const idx = event.output_index ?? 0;
+              const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
+              if (typeof event.delta === 'string') call.arguments += event.delta;
+              calls.set(idx, call);
+            } else if (event.type === 'response.output_item.added') {
+              if (event.item?.type === 'function_call') {
+                const idx = event.output_index ?? calls.size;
+                const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
+                if (event.item.call_id) call.id = event.item.call_id;
+                if (event.item.name) call.name = event.item.name;
+                calls.set(idx, call);
+              }
+            } else if (event.type === 'response.output_item.done') {
+              if (event.item?.type === 'function_call') {
+                const idx = event.output_index ?? 0;
+                const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
+                if (event.item.call_id) call.id = event.item.call_id;
+                if (event.item.name) call.name = event.item.name;
+                if (event.item.arguments) call.arguments = event.item.arguments;
+                calls.set(idx, call);
+              }
+            } else if (event.type === 'response.completed') {
+              stop = calls.size > 0 ? 'tools' : 'complete';
+              if (event.response?.usage) {
+                usage = {
+                  input: event.response.usage.input_tokens ?? 0,
+                  output: event.response.usage.output_tokens ?? 0,
+                };
+              }
+            }
+          } else if (native) {
             if (event.type === 'error') throw providerFailure(200, {error: event.error});
             if (event.type === 'message_start') {
               const value = event.message?.usage;
@@ -420,7 +539,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               else if (block?.type === 'thinking') {append('reasoning', block.thinking); signature = block.signature ?? '';}
             }
             if (event.type === 'content_block_delta') {
-              const delta = event.delta;
+              const delta = typeof event.delta === 'object' && event.delta ? event.delta : undefined;
               if (delta?.type === 'text_delta') append('text', delta.text);
               if (delta?.type === 'thinking_delta') append('reasoning', delta.thinking);
               if (delta?.type === 'signature_delta') signature += delta.signature ?? '';
@@ -430,7 +549,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               }
             }
             if (event.type === 'message_delta') {
-              const reason = event.delta?.stop_reason;
+              const delta = typeof event.delta === 'object' && event.delta ? event.delta : undefined;
+              const reason = delta?.stop_reason;
               stop = reason === 'tool_use' ? 'tools' : reason === 'max_tokens' ? 'length'
                 : ['end_turn', 'stop_sequence'].includes(reason ?? '') ? 'complete' : 'other';
               if (usage && typeof event.usage?.output_tokens === 'number') usage.output = event.usage.output_tokens;

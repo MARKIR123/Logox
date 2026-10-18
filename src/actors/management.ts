@@ -60,8 +60,8 @@ export class ActorManagement {
       const selected = actorModelSchema.parse(model); model = selected;
       const poolModels = this.modelPool?.snapshot() ?? [];
       const foundInPool = poolModels.some(item => item.provider === selected.provider && item.id === selected.model);
-      if (!foundInPool && poolModels.length > 0) {
-        const result = await this.registry.modelCatalog(signal).catch(() => ({models: []}));
+      if (!foundInPool) {
+        const result = await this.registry.modelCatalog(signal);
         if (!result.models.some(item => item.provider === selected.provider && item.id === selected.model)) {
           throw new Error('Model not in available catalog: ' + selected.provider + '/' + selected.model);
         }
@@ -69,6 +69,7 @@ export class ActorManagement {
     }
     const previous = await this.previous(id); signal.throwIfAborted();
     this.requireIdle();
+    await this.catalog.modelStorage.save(id, model, signal);
     const {defaultModel: _old, ...rest} = previous === undefined ? actor : parseActor(previous);
     const path = await this.catalog.writeProject(id, serializeActor({...rest, ...(model ? {defaultModel: model} : {})}), previous);
     const state = await this.catalog.reload(); if (state.issues.length) throw new Error('File saved, reload failed: ' + state.issues.map(item => item.reason).join('; '));
@@ -81,7 +82,7 @@ export class ActorManagement {
     for (const item of poolModels) {
       choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
     }
-    const items = [
+    const initialItems = [
       {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
       ...poolModels.map(item => {
         const choiceId = JSON.stringify({provider: item.provider, model: item.id});
@@ -97,12 +98,44 @@ export class ActorManagement {
         };
       }),
     ];
-    void surfaces.openPicker({
+    await surfaces.openPicker({
       title: actor.name + ' Default Model',
       description: 'Confirm to apply to this actor only; Esc to cancel',
       current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit',
-      items,
-    }, async () => ({items}), async choice => {
+      ...(poolModels.length > 0 ? {items: initialItems} : {}),
+    }, async signal => {
+      let models = poolModels;
+      let warning: string | undefined;
+      if (models.length === 0) {
+        const result = await this.registry.modelCatalog(signal);
+        warning = result.issues.join('; ');
+        models = result.models.map(m => ({
+          provider: m.provider,
+          id: m.id,
+          thinkingLevels: [...detectEffortLevels(m.id, m.provider)],
+        }));
+      }
+      for (const item of models) {
+        choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
+      }
+      const loadedItems = [
+        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
+        ...models.map(item => {
+          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
+          const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
+          const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
+          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
+          return {
+            id: choiceId,
+            label: item.provider + ' / ' + item.id,
+            description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
+            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
+            effortLevels: levels.length > 0 ? levels : undefined,
+          };
+        }),
+      ];
+      return {items: loadedItems, ...(warning ? {warning} : {})};
+    }, async choice => {
       if (!choices.has(choice)) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);
       return {message: actor.name + ' default model saved'};

@@ -12,6 +12,7 @@ import {type ThinkingEffort, isOpenAiReasoningModel} from '../config/model-prefe
 import {AuthStorage} from './auth.js';
 import {CustomProviderStorage, type CustomProviderRecord} from './custom-storage.js';
 import {createHttpTransport} from './transport.js';
+import {refreshOpenAIToken} from './oauth.js';
 
 const credentialSchema = z.object({type: z.literal('api_key'), key: z.string(), env: z.record(z.string(), z.string()).optional()});
 const modelsSchema = z.object({data: z.array(z.object({id: z.string().min(1),
@@ -158,7 +159,23 @@ export class ProviderRegistry {
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
     const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
     settings.maxTokens = Math.min(settings.maxTokens, config.provider.max_output_tokens ?? config.models[name + '/' + settings.model]?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? Infinity);
-    settings.key = await this.auth.key(name) || settings.key;
+    const cred = await this.auth.credential(name);
+    if (cred?.type === 'oauth' && (name === 'openai' || name.toLowerCase().includes('openai'))) {
+      const expires = cred.expires_at ?? cred.expires ?? 0;
+      if (expires && Date.now() >= expires - 180_000) {
+        try {
+          const refreshed = await refreshOpenAIToken(cred, this.fetcher);
+          await this.auth.saveOAuth(name, refreshed, new AbortController().signal);
+          settings.key = typeof refreshed.access_token === 'string' ? refreshed.access_token : '';
+        } catch {
+          settings.key = cred.access_token ?? cred.access ?? settings.key;
+        }
+      } else {
+        settings.key = cred.access_token ?? cred.access ?? settings.key;
+      }
+    } else {
+      settings.key = await this.auth.key(name) || settings.key;
+    }
     const selected = config.providers[name] ?? presets[name];
     const file = provider.auth_file ?? config.providers[name]?.auth_file;
     if (!settings.key && file) settings.key = await storedKey(file, provider.auth_provider ?? config.providers[name]?.auth_provider ?? name, this.env);
@@ -183,7 +200,8 @@ export class ProviderRegistry {
       : isReasoning ? 272_000
       : cleanModel.includes('gpt-4') ? 128_000
       : undefined;
-    const defaultOutput = isClaudeOrGemini ? 64_000
+    const defaultOutput = isAntigravity && cleanModel.includes('claude') ? 128_000
+      : isClaudeOrGemini ? 64_000
       : isReasoning ? 128_000
       : cleanModel.includes('gpt-4') ? 16_384
       : undefined;
@@ -265,7 +283,14 @@ export class ProviderRegistry {
   async check(signal: AbortSignal = new AbortController().signal): Promise<{text: string; elapsedMs: number}> {
     const started = Date.now();
     const settings = await this.settings();
-    const turn = await createProvider({...settings, maxTokens: Math.min(settings.maxTokens, 512)}, this.fetcher).respond({
+    const isOAuth = (await this.auth.credential(this.config.provider.name))?.type === 'oauth';
+    let checkModel = settings.model;
+    if (this.config.provider.name === 'openai' && isOAuth) {
+      if (!checkModel || checkModel.includes('gpt-4') || checkModel.includes('o3-mini')) {
+        checkModel = 'gpt-6.1-sol';
+      }
+    }
+    const turn = await createProvider({...settings, model: checkModel, maxTokens: Math.min(settings.maxTokens, 512)}, this.fetcher).respond({
       system: 'This is a connection check. Answer briefly.',
       messages: [{role: 'user', text: 'Reply with exactly LOGOX_PROVIDER_READY.'}], tools: [],
       thinking: false,

@@ -194,11 +194,57 @@ export async function startOpenAiOAuth(
           ...(refreshToken ? {refresh_token: refreshToken} : {}),
           expires_at: Date.now() + expiresIn * 1000,
           account_id: clientId,
+          clientId,
         };
       } finally {
         closeServer();
       }
     },
     cancel,
+  };
+}
+
+export async function refreshOpenAIToken(
+  cred: OAuthToken,
+  fetcher: typeof fetch = fetch,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<OAuthToken> {
+  const refreshToken = String(cred.refresh_token || cred.refresh || '');
+  if (!refreshToken) throw new Error('Missing refresh token for OpenAI OAuth credential');
+  const clientId = String(cred.clientId || cred.account_id || DYNAMIC_CLIENT_ID);
+
+  const res = await fetcher(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: clientId,
+      refresh_token: refreshToken,
+      resource: RESOURCE,
+    }).toString(),
+    signal,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error('OpenAI token refresh failed (' + res.status + '): ' + body);
+  }
+
+  const data = await res.json() as Record<string, unknown>;
+  const accessToken = typeof data.access_token === 'string' ? data.access_token : '';
+  const newRefreshToken = typeof data.refresh_token === 'string' ? data.refresh_token : refreshToken;
+  const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 3600;
+
+  if (!accessToken) throw new Error('Token refresh did not contain access_token');
+
+  return {
+    access_token: accessToken,
+    refresh_token: newRefreshToken,
+    expires_at: Date.now() + expiresIn * 1000,
+    account_id: clientId,
+    clientId,
   };
 }

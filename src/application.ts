@@ -94,7 +94,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
   const taskModels = new TaskModels({registry, ledger: taskModelLedger,
-    defaultModel: owner => actors.find(owner)?.defaultModel,
+    defaultModel: owner => actors.modelStorage.get(owner) ?? actors.find(owner)?.defaultModel,
     defaultFallbackModel: () => {
       const active = registry.selection();
       if (active && registry.names().includes(active.provider)) return {provider: active.provider, model: active.model};
