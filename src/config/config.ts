@@ -169,17 +169,21 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   const model = provider.model || (selected && 'default_model' in selected ? selected.default_model ?? '' : '');
   const declared = config.models[provider.name + '/' + model];
   const official = baseUrl.replace(/\/$/, '') === presets[provider.name]?.base_url.replace(/\/$/, '');
-  const protocol = declared?.thinking_protocol ?? (official && provider.name === 'deepseek' && ['deepseek-flash', 'deepseek-v4-pro'].includes(model) ? 'deepseek'
-    : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6)$/.test(model) ? 'anthropic-adaptive'
-    : official && provider.name === 'anthropic' && /^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?)(?:-\d{8})?$/.test(model) ? 'anthropic-budget'
-    : (provider.name === 'antigravity' || url.port === '8045') && (model.toLowerCase().includes('gemini') || model.toLowerCase().includes('claude')) ? 'reasoning-effort'
-    : (provider.name === 'openai' || provider.name === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
-    : undefined);
+  const cleanModel = model.toLowerCase();
+  const cleanProvider = provider.name.toLowerCase();
   const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
+  const protocol = declared?.thinking_protocol ?? (
+    official && provider.name === 'deepseek' && ['deepseek-flash', 'deepseek-v4-pro'].includes(model) ? 'deepseek'
+    : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
+    : (provider.name === 'anthropic' || cleanModel.includes('claude')) && kind === 'anthropic' ? 'anthropic-budget'
+    : (cleanProvider === 'deepseek' || cleanModel.includes('deepseek') || cleanModel.includes('reasoner') || cleanModel.includes('r1')) && kind === 'openai_compat' ? 'deepseek'
+    : (cleanProvider === 'openai' || cleanProvider === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
+    : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
+    : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
   return {kind, baseUrl,
     model, thinkingEffort: provider.thinking_effort,
-    ...(protocol ? {thinkingProtocol: protocol, thinkingLevels: declared?.thinking_levels ?? (protocol === 'deepseek' ? ['auto', 'off', 'low', 'high', 'max'] : protocol === 'anthropic-adaptive' && model.startsWith('claude-opus-') ? ['auto', 'off', 'low', 'medium', 'high', 'max'] : ['auto', 'off', 'low', 'medium', 'high', 'max'])} : {}),
+    ...(protocol ? {thinkingProtocol: protocol, thinkingLevels: declared?.thinking_levels ?? ['auto', 'off', 'low', 'medium', 'high', 'max']} : {}),
     key: keyEnv ? env[keyEnv] ?? '' : '',
     temperature: provider.temperature, maxTokens: provider.max_tokens, timeoutMs: provider.timeout * 1000,
     ...(provider.name === 'deepseek' && url.hostname === 'api.deepseek.com' ? {thinkingControl: true} : {})};

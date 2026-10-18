@@ -304,8 +304,11 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         if (effort !== 'off' && effort !== 'auto') thinking.output_config = {effort};
       } else if (protocol === 'deepseek') {
         thinking.thinking = {type: effort === 'off' ? 'disabled' : 'enabled'};
-        if (effort !== 'off') thinking.reasoning_effort = effort === 'auto' ? 'low' : effort;
-      } else thinking.reasoning_effort = effort === 'off' ? 'none' : effort;
+        if (effort !== 'off' && effort !== 'auto') thinking.reasoning_effort = effort === 'max' ? 'high' : effort;
+      } else {
+        if (effort === 'off') thinking.reasoning_effort = 'none';
+        else if (effort !== 'auto') thinking.reasoning_effort = effort === 'max' ? 'high' : effort;
+      }
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
     const supportsVision = request.supportsVision ?? true;
     const isStream = request.stream !== false;

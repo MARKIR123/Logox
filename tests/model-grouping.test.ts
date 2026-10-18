@@ -48,18 +48,20 @@ test('模型折叠：claude-sonnet-4-6 与 claude-sonnet-4-6-thinking 合并', (
   assert.equal(resolveActualModel(claude, 'auto').modelId, 'claude-sonnet-4-6');
 });
 
-test('思考档位探测：DeepSeek 仅保留合法档位 (无 max)，Claude 支持 max，非思考模型为空', () => {
+test('思考档位探测：DeepSeek 与 Claude 及 OpenAI 推理模型统一支持 6 档位，非思考模型为空', () => {
   const deepseek = groupModelsForProvider(['deepseek-chat', 'deepseek-reasoner'], 'deepseek', 'deepseek-reasoner');
   assert.equal(deepseek.length, 2);
   const reasoner = deepseek.find(m => m.baseModel === 'deepseek-reasoner')!;
   assert.ok(reasoner);
-  // DeepSeek 官方支持 low, medium, high；绝无 max
-  assert.deepEqual(reasoner.effortLevels, ['auto', 'off', 'low', 'medium', 'high']);
-  assert.ok(!reasoner.effortLevels.includes('max'));
+  assert.deepEqual(reasoner.effortLevels, ['auto', 'off', 'low', 'medium', 'high', 'max']);
 
   const anthropic = groupModelsForProvider(['claude-3-7-sonnet'], 'anthropic', 'claude-3-7-sonnet');
   assert.equal(anthropic.length, 1);
   assert.deepEqual(anthropic[0]!.effortLevels, ['auto', 'off', 'low', 'medium', 'high', 'max']);
+
+  const openaiSol = groupModelsForProvider(['gpt-6.1-sol'], 'openai', 'gpt-6.1-sol');
+  assert.equal(openaiSol.length, 1);
+  assert.deepEqual(openaiSol[0]!.effortLevels, ['auto', 'off', 'low', 'medium', 'high', 'max']);
 
   const plain = groupModelsForProvider(['text-embedding-3-small'], 'openai', 'text-embedding-3-small');
   assert.equal(plain.length, 1);

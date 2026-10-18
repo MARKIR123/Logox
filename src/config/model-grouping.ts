@@ -33,35 +33,64 @@ function normalizeTier(suffix: string): string {
   return suffix;
 }
 
+export const STANDARD_THINKING_LEVELS: readonly string[] = ['auto', 'off', 'low', 'medium', 'high', 'max'];
+
 /**
- * 探测模型和提供商支持的思考档位
+ * 探测模型和提供商支持的统一思考档位
  */
 export function detectEffortLevels(modelId: string, provider: string): readonly string[] {
   const cleanModel = modelId.toLowerCase();
   const cleanProvider = provider.toLowerCase();
 
-  // 1. DeepSeek: 官方接口只支持 low, medium, high (以及 auto, off)
+  // Known non-reasoning / embedding / audio / image models
+  if (
+    cleanModel.startsWith('text-embedding') ||
+    cleanModel.startsWith('dall-e') ||
+    cleanModel.startsWith('tts') ||
+    cleanModel.startsWith('whisper') ||
+    cleanModel === 'gpt-4' ||
+    cleanModel === 'gpt-4-turbo' ||
+    cleanModel === 'gpt-3.5-turbo' ||
+    cleanModel === 'gpt-4o' ||
+    cleanModel === 'gpt-4o-mini' ||
+    cleanModel.includes('embedding')
+  ) {
+    return [];
+  }
+
+  // 1. Anthropic / Claude: all modern Claude models support thinking
+  if (cleanProvider === 'anthropic' || cleanModel.includes('claude') || cleanModel.includes('fable')) {
+    return STANDARD_THINKING_LEVELS;
+  }
+
+  // 2. DeepSeek: deepseek provider or models
   if (cleanProvider === 'deepseek' || cleanModel.includes('deepseek') || cleanModel.includes('reasoner') || cleanModel.includes('r1')) {
-    return ['auto', 'off', 'low', 'medium', 'high'];
+    return STANDARD_THINKING_LEVELS;
   }
-  // 2. Anthropic / Claude: 支持 low, medium, high, max (以及 auto, off)
-  if (cleanProvider === 'anthropic' || cleanModel.includes('claude')) {
-    return ['auto', 'off', 'low', 'medium', 'high', 'max'];
-  }
-  // 3. OpenAI Reasoning models (o1, o3, o4, gpt-5*, gpt-6* sol/luna/astra/terra/etc.)
+
+  // 3. OpenAI Reasoning models (o1~o4, gpt-5*, gpt-6*, sol, luna, astra, terra, codex, daybreak, etc.)
   if (cleanProvider === 'openai' || cleanProvider === 'openai-compatible' || isOpenAiReasoningModel(cleanModel)) {
     if (isOpenAiReasoningModel(cleanModel)) {
-      return ['auto', 'off', 'low', 'medium', 'high', 'max'];
+      return STANDARD_THINKING_LEVELS;
     }
   }
-  // 4. Gemini thinking / QwQ 等通识思考模型
-  if (cleanModel.includes('thinking') || cleanModel.includes('qwq')) {
-    return ['auto', 'off', 'low', 'medium', 'high', 'max'];
+
+  // 4. Gemini thinking models
+  if (cleanModel.includes('gemini') || cleanModel.includes('gemma')) {
+    if (cleanModel.includes('2.5') && !cleanModel.includes('thinking')) return [];
+    return STANDARD_THINKING_LEVELS;
   }
-  // 5. Antigravity 本地/代理提供商（若模型名自身含思考词）
-  if (cleanProvider === 'antigravity' && (cleanModel.includes('thinking') || cleanModel.includes('gemini') || cleanModel.includes('claude'))) {
-    return ['auto', 'off', 'low', 'medium', 'high', 'max'];
+
+  // 5. Antigravity local/reverse proxy: models with thinking keywords or known reasoning models (claude, gemini, o1, etc.)
+  if (cleanProvider === 'antigravity' && (cleanModel.includes('thinking') || cleanModel.includes('gemini') || cleanModel.includes('claude') || isOpenAiReasoningModel(cleanModel))) {
+    return STANDARD_THINKING_LEVELS;
   }
+
+  // 6. Generic models containing thinking keywords (qwq, cot, reason, etc.)
+  if (cleanModel.includes('think') || cleanModel.includes('reason') || cleanModel.includes('cot') || cleanModel.includes('qwq')) {
+    return STANDARD_THINKING_LEVELS;
+  }
+
   return [];
 }
 
