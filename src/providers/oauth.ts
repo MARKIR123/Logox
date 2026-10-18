@@ -1,5 +1,5 @@
 import {createServer, type Server} from 'node:http';
-import {randomBytes, createHash} from 'node:crypto';
+import {randomBytes, createHash, randomUUID} from 'node:crypto';
 import {exec} from 'node:child_process';
 import type {OAuthToken} from './auth.js';
 
@@ -10,21 +10,24 @@ export interface OAuthSession {
   cancel(): void;
 }
 
-const CLIENT_ID = 'oaiapp_beG5rTYszdsC4BC6r8AvjYVNR';
+const DYNAMIC_CLIENT_ID = 'dynamic_agent_client';
+const AGENT_NAME_HINT = 'LOGOX';
 const AUTHORIZE_URL = 'https://auth.openai.com/api/accounts/authorize';
 const TOKEN_URL = 'https://auth.openai.com/api/accounts/oauth/token';
+const RESOURCE = 'https://api.openai.com/v1';
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = '/auth/callback';
 const REDIRECT_URI = 'http://127.0.0.1:' + CALLBACK_PORT + CALLBACK_PATH;
-const SCOPE = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
+const DIRECT_TOKEN_SCOPE = 'chatgpt.tokens.use.direct';
+const SCOPE = 'openid profile email offline_access resource.invoke ' + DIRECT_TOKEN_SCOPE;
 
 function base64url(buffer: Buffer): string {
   return buffer.toString('base64url');
 }
 
 /**
- * Initiates OpenAI OAuth browser PKCE flow, starts local callback server on port 1455,
- * and launches the system browser.
+ * Initiates OpenAI OAuth browser PKCE flow (matching Pi coding agent),
+ * starts local callback server on port 1455, and launches the system browser.
  */
 export async function startOpenAiOAuth(
   signal: AbortSignal = new AbortController().signal,
@@ -33,15 +36,21 @@ export async function startOpenAiOAuth(
   const verifier = base64url(randomBytes(32));
   const challenge = base64url(createHash('sha256').update(verifier).digest());
   const state = base64url(randomBytes(32));
+  const nonce = base64url(randomBytes(32));
+  const hostId = 'urn:uuid:' + randomUUID().toLowerCase();
 
   const params = new URLSearchParams({
+    client_id: DYNAMIC_CLIENT_ID,
+    agent_name_hint: AGENT_NAME_HINT,
+    ext_agent_host_id: hostId,
     response_type: 'code',
-    client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
+    resource: RESOURCE,
     scope: SCOPE,
+    state,
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    state,
+    nonce,
   });
 
   const authUrl = AUTHORIZE_URL + '?' + params.toString();
@@ -86,7 +95,7 @@ export async function startOpenAiOAuth(
         closeServer();
         return;
       }
-      const clientId = parsedUrl.searchParams.get('client_id') || CLIENT_ID;
+      const clientId = parsedUrl.searchParams.get('client_id')?.trim() || DYNAMIC_CLIENT_ID;
       res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
       res.end(`<!DOCTYPE html><html><body style="font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:50px;background:#18181b;color:#f4f4f5;">
         <h2 style="color:#7ee7c4;">Authorization Successful</h2>
@@ -140,10 +149,11 @@ export async function startOpenAiOAuth(
           },
           body: new URLSearchParams({
             grant_type: 'authorization_code',
-            code,
-            redirect_uri: REDIRECT_URI,
             client_id: clientId,
+            code,
             code_verifier: verifier,
+            redirect_uri: REDIRECT_URI,
+            resource: RESOURCE,
           }).toString(),
           signal,
         });

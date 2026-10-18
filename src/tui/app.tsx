@@ -278,7 +278,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           ? Math.min(8, loginState.providers.length) + 6
           : loginState.phase === 'method'
             ? Math.min(6, loginState.methods?.length ?? 2) + 6
-            : 5,
+            : loginState.phase === 'oauth'
+              ? 8
+              : 5,
       )
     : 0;
   const pickerHeight = surface?.kind === 'picker' ? Math.min(screenRows, 11) : 0;
