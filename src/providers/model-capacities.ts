@@ -1,5 +1,5 @@
 // Public capacity data from PI 0.87.1, checked 2026-10-12. Config and live metadata override this snapshot.
-export const modelCapacities: Readonly<Record<string, {window: number; maxOutput: number}>> = {
+const baseCapacities: Record<string, {window: number; maxOutput: number}> = {
   "deepseek/deepseek-flash": {window: 1000000, maxOutput: 384000},
   "deepseek/deepseek-v4-pro": {window: 1000000, maxOutput: 384000},
   "anthropic/claude-fable-5": {window: 1000000, maxOutput: 128000},
@@ -59,3 +59,13 @@ export const modelCapacities: Readonly<Record<string, {window: number; maxOutput
   "openai-compatible/o3-pro": {window: 200000, maxOutput: 100000},
   "openai-compatible/o4-mini": {window: 200000, maxOutput: 100000},
 };
+
+export const modelCapacities: Readonly<Record<string, {window: number; maxOutput: number}>> = (() => {
+  const map: Record<string, {window: number; maxOutput: number}> = {...baseCapacities};
+  for (const [key, val] of Object.entries(baseCapacities)) {
+    if (key.startsWith('openai-compatible/')) {
+      map['openai/' + key.slice('openai-compatible/'.length)] = val;
+    }
+  }
+  return Object.freeze(map);
+})();

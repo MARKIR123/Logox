@@ -519,6 +519,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     activate() {extensions.hooks.emit('session_start', {session_id: session, model: settings.model});},
     commandContext(): CommandContext {
       const knownPresets: Record<string, string[]> = {
+        openai: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini', 'gpt-4-turbo'],
         antigravity: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'gemini-3.7-flash', 'claude-opus-4-6', 'gemini-3.1-pro-high', 'gpt-oss-120b-medium'],
         deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
         anthropic: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'],

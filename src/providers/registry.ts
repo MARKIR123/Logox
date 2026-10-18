@@ -180,9 +180,18 @@ export class ProviderRegistry {
     let response: Response;
     try {response = await this.fetcher(settings.baseUrl.replace(/\/$/, '') + '/models', {headers, signal, redirect: 'error'});}
     catch {signal.throwIfAborted(); throw new ProviderError('模型列表连接失败', true);}
-    if (!response.ok) {await response.body?.cancel(); throw new ProviderError('模型列表查询失败（HTTP ' + response.status + '）');}
+    if (!response.ok) {
+      await response.body?.cancel();
+      const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
+      if (known.length > 0) return [...new Set(known)].sort();
+      throw new ProviderError('模型列表查询失败（HTTP ' + response.status + '）');
+    }
     const payload = modelsSchema.safeParse(await response.json().catch(() => undefined));
-    if (!payload.success) throw new ProviderError('模型列表格式无效');
+    if (!payload.success) {
+      const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
+      if (known.length > 0) return [...new Set(known)].sort();
+      throw new ProviderError('模型列表格式无效');
+    }
     for (const model of payload.data.data) {
       const window = model.context_window ?? model.context_length;
       this.capabilities.set(JSON.stringify([name, model.id]), {...(window ? {window} : {}), ...(model.max_output_tokens ? {maxOutput: model.max_output_tokens} : {})});
