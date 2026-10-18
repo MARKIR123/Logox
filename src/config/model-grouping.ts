@@ -4,6 +4,8 @@
  * 折叠合并为单一基准模型，支持通过 ← → 方向键直接切换底层思考档位与对应真实模型。
  */
 
+import {isOpenAiReasoningModel} from './model-preferences.js';
+
 const SUFFIX_REGEX = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/;
 
 export interface GroupedModelVariant {
@@ -46,9 +48,11 @@ export function detectEffortLevels(modelId: string, provider: string): readonly 
   if (cleanProvider === 'anthropic' || cleanModel.includes('claude')) {
     return ['auto', 'off', 'low', 'medium', 'high', 'max'];
   }
-  // 3. OpenAI Reasoning models (o1, o3, o4): 官方 reasoning_effort 仅支持 low, medium, high
-  if (/^o[134](-|$)/.test(cleanModel) || cleanModel.includes('o1-') || cleanModel.includes('o3-')) {
-    return ['low', 'medium', 'high'];
+  // 3. OpenAI Reasoning models (o1, o3, o4, gpt-5*, gpt-6* sol/luna/astra/terra/etc.)
+  if (cleanProvider === 'openai' || cleanProvider === 'openai-compatible' || isOpenAiReasoningModel(cleanModel)) {
+    if (isOpenAiReasoningModel(cleanModel)) {
+      return ['auto', 'off', 'low', 'medium', 'high', 'max'];
+    }
   }
   // 4. Gemini thinking / QwQ 等通识思考模型
   if (cleanModel.includes('thinking') || cleanModel.includes('qwq')) {

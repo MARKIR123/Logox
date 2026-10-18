@@ -3,7 +3,7 @@ import {homedir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {parse} from 'smol-toml';
 import {z} from 'zod';
-import {effortSchema, preferenceSchema, StateFile} from './model-preferences.js';
+import {effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
 import {hooksSchema, mcpServerSchema} from '../extensions/config.js';
 
 export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
@@ -173,13 +173,13 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6)$/.test(model) ? 'anthropic-adaptive'
     : official && provider.name === 'anthropic' && /^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?)(?:-\d{8})?$/.test(model) ? 'anthropic-budget'
     : (provider.name === 'antigravity' || url.port === '8045') && (model.toLowerCase().includes('gemini') || model.toLowerCase().includes('claude')) ? 'reasoning-effort'
-    : (provider.name === 'openai' || provider.name === 'openai-compatible') && /^(?:o1|o3)(?:-|$)/i.test(model) ? 'reasoning-effort'
+    : (provider.name === 'openai' || provider.name === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
     : undefined);
   const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
   return {kind, baseUrl,
     model, thinkingEffort: provider.thinking_effort,
-    ...(protocol ? {thinkingProtocol: protocol, thinkingLevels: declared?.thinking_levels ?? (protocol === 'deepseek' ? ['auto', 'off', 'low', 'high', 'max'] : protocol === 'anthropic-adaptive' && model.startsWith('claude-opus-') ? ['auto', 'off', 'low', 'medium', 'high', 'max'] : ['auto', 'off', 'low', 'medium', 'high'])} : {}),
+    ...(protocol ? {thinkingProtocol: protocol, thinkingLevels: declared?.thinking_levels ?? (protocol === 'deepseek' ? ['auto', 'off', 'low', 'high', 'max'] : protocol === 'anthropic-adaptive' && model.startsWith('claude-opus-') ? ['auto', 'off', 'low', 'medium', 'high', 'max'] : ['auto', 'off', 'low', 'medium', 'high', 'max'])} : {}),
     key: keyEnv ? env[keyEnv] ?? '' : '',
     temperature: provider.temperature, maxTokens: provider.max_tokens, timeoutMs: provider.timeout * 1000,
     ...(provider.name === 'deepseek' && url.hostname === 'api.deepseek.com' ? {thinkingControl: true} : {})};

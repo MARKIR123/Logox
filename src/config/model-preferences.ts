@@ -6,6 +6,16 @@ import {withFileLock} from '../store/file-lock.js';
 
 export const effortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']);
 export type ThinkingEffort = z.infer<typeof effortSchema>;
+
+export function isOpenAiReasoningModel(id: string): boolean {
+  const clean = id.toLowerCase();
+  if (clean.includes('chat-latest') && !clean.includes('gpt-5.2')) return false;
+  if (/^o[1-9](?:-|$)/.test(clean)) return true;
+  if (/^gpt-[5-9]/.test(clean)) return true;
+  if (/(?:sol|luna|astra|terra|codex|daybreak|realtime)/.test(clean)) return true;
+  return false;
+}
+
 export const preferenceSchema = z.strictObject({version: z.literal(1),
   provider: z.string().min(1).max(256), model: z.string().max(1024), effort: effortSchema});
 export type ModelPreference = z.infer<typeof preferenceSchema>;
