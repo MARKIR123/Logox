@@ -5,7 +5,7 @@ const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
   resumeTaskId: id.optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
-  stopReason: z.enum(['user', 'shutdown', 'interrupted']).optional(),
+  stopReason: z.enum(['user', 'shutdown', 'interrupted', 'director_cancel']).optional(),
   recovery: z.strictObject({key: id, attempt: z.number().int().nonnegative(), exhausted: z.boolean().optional()}).optional()});
 export const roundSummarySchema = z.strictObject({
   title: z.string().trim().min(1).max(120),

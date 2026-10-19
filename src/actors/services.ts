@@ -26,12 +26,23 @@ import {
   READ_ACTOR_DESCRIPTION,
   borrowSkillSchema,
   BORROW_SKILL_DESCRIPTION,
+  listActorsSchema,
+  LIST_ACTORS_DESCRIPTION,
+  executeListActors,
+  cancelActorSchema,
+  CANCEL_ACTOR_DESCRIPTION,
+  executeCancelActor,
   canonicalToolName,
 } from '../tools/index.js';
+import type {RuntimeSnapshot} from '../runtime/contracts.js';
 
 const tool = (name: string, description: string, schema: z.ZodType): ToolDefinition => ({name, description, parameters: z.toJSONSchema(schema)});
+const listActorsTool = tool('ListActors', LIST_ACTORS_DESCRIPTION, listActorsSchema);
+const cancelActorTool = tool('CancelActor', CANCEL_ACTOR_DESCRIPTION, cancelActorSchema);
 const directorTools = [
   tool('Actor', ACTOR_DESCRIPTION, actorSchema),
+  cancelActorTool,
+  listActorsTool,
   tool('CraftActor', CRAFT_ACTOR_DESCRIPTION, craftActorSchema),
   tool('ReadActor', READ_ACTOR_DESCRIPTION, readActorSchema),
 ];
@@ -40,8 +51,14 @@ const borrowTool = tool('BorrowSkill', BORROW_SKILL_DESCRIPTION, borrowSkillSche
 export interface ActorServicesOptions {
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
   enqueue(owner: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
+  interrupt?(targetOwnerId: string, message: string, source: string, summary?: string): boolean;
   pauseBatch?(batchId: string): void;
   resumeBatch?(batchId: string): void;
+  cancelActivity?(activityId: string, reason?: string): boolean;
+  cancelTool?(actorId: string, toolId?: string, reason?: string): {success: boolean; message: string};
+  cancelActor?(actorId: string, scope: 'tool' | 'activity', toolId?: string, reason?: string): {success: boolean; message: string};
+  getSnapshot?(): RuntimeSnapshot;
+  projectDir?: string;
   coordinationPath?: string;
   approve(context: ActorContext, review: {path: string; content: string; previous: string | undefined}): Promise<boolean>;
   requireIdle(): void;
@@ -66,7 +83,15 @@ export class ActorServices {
   private readonly groups = new Map<string, {remaining: Set<string>; reports: string[]; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
     this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner), options.modelResolver, options.modelPool);
-    this.collaboration = new Collaboration({...options, member: owner => !!options.catalog.find(owner)});
+    this.collaboration = new Collaboration({
+      ...options,
+      member: owner => !!options.catalog.find(owner),
+      members: () => options.catalog.list().map(a => a.id),
+      interrupt: (target, message, source, summary) => {
+        return options.interrupt ? options.interrupt(target, message, source, summary) : false;
+      },
+      projectDir: options.projectDir,
+    });
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
   }
   definition(context: ActorContext): ActorDefinition {
@@ -88,9 +113,14 @@ export class ActorServices {
   skills(context: ActorContext) {return {actorId: context.ownerId, skills: this.definition(context).skills,
     borrowed: [...this.borrowed.get(context.activityId) ?? []]};}
   tools(ownerId: string): readonly ToolDefinition[] {
-    return [...(ownerId === 'logox' ? directorTools : [borrowTool]), ...this.collaboration.tools(ownerId)];
+    return [
+      ...(ownerId === 'logox' ? directorTools : [borrowTool, listActorsTool]),
+      ...this.collaboration.tools(ownerId),
+    ];
   }
-  definitionsForValidation(): readonly ToolDefinition[] {return [...directorTools, borrowTool, ...this.collaboration.tools('logox'), ...this.collaboration.tools('actor')];}
+  definitionsForValidation(): readonly ToolDefinition[] {
+    return [...directorTools, borrowTool, listActorsTool, ...this.collaboration.tools('logox'), ...this.collaboration.tools('actor')];
+  }
   async execute(call: ToolCall, context: ActorContext): Promise<ToolResult> {
     try {
       const canonical = canonicalToolName(call.name) ?? call.name;
@@ -211,6 +241,30 @@ export class ActorServices {
         ].filter(Boolean).join('\n\n');
 
         return {text: report.slice(0, 4000), isError: false};
+      }
+      if (canonical === 'ListActors') {
+        const roles = this.options.catalog.snapshot().definitions.reduce((acc, a) => ({...acc, [a.id]: {name: a.name, title: a.title}}), {});
+        return executeListActors({}, {
+          caller: context.ownerId,
+          getSnapshot: this.options.getSnapshot ?? (() => ({revision: 0, activities: [], interactions: [], messages: []})),
+          roles,
+        });
+      }
+      if (canonical === 'CancelActor') {
+        const cancelArgs = cancelActorSchema.parse(input);
+        return executeCancelActor(cancelArgs, {
+          caller: context.ownerId,
+          cancelTool: (actorId, toolId, reason) => {
+            return this.options.cancelTool ? this.options.cancelTool(actorId, toolId, reason) : {success: false, message: 'Tool cancellation not available.'};
+          },
+          cancelActivity: (actorId, reason) => {
+            if (this.options.cancelActor) {
+              return this.options.cancelActor(actorId, 'activity', undefined, reason);
+            }
+            const success = this.options.cancelActivity ? this.options.cancelActivity(actorId, reason) : false;
+            return {success, message: success ? `Activity for ${actorId} cancelled.` : `Failed to cancel activity for ${actorId}.`};
+          },
+        });
       }
       if (canonical === 'BorrowSkill') {
         const {name} = borrowSkillSchema.parse(input);

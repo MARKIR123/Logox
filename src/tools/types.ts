@@ -45,6 +45,18 @@ export const toolAliases = {
   borrow_skill: 'BorrowSkill',
   borrowskill: 'BorrowSkill',
   BorrowSkill: 'BorrowSkill',
+  list_actors: 'ListActors',
+  listactors: 'ListActors',
+  ListActors: 'ListActors',
+  list_agents: 'ListActors',
+  listagents: 'ListActors',
+  ListAgents: 'ListActors',
+  cancel_actor: 'CancelActor',
+  cancelactor: 'CancelActor',
+  CancelActor: 'CancelActor',
+  task_stop: 'CancelActor',
+  taskstop: 'CancelActor',
+  TaskStop: 'CancelActor',
 } as const;
 
 export type CanonicalToolName = (typeof toolAliases)[keyof typeof toolAliases];

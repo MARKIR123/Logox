@@ -206,8 +206,15 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
               (model.switched ? ' · 本任务已转用（原模型：' + model.initial.provider + '/' + model.initial.model + '）' : ''), actorColor, 'body', frame);
           }
           if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
-          for (const item of grouped.get(activity.activityId) ?? []) if (item.role !== 'user' &&
-            !(item.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) body(item, frame);
+          for (const item of grouped.get(activity.activityId) ?? []) {
+            if (item.inputKind === 'collaboration_interrupt') {
+              builder.pushBlank(actorColor, frame);
+              builder.pushProse(item.id + '-interrupt', item.text, '#d97757', 'body', frame, undefined, '#d97757');
+              builder.pushBlank(actorColor, frame);
+            } else if (item.role !== 'user' && !(item.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) {
+              body(item, frame);
+            }
+          }
           for (const request of requests.get(activity.activityId) ?? []) interaction(request, frame);
           if (activity.status === 'failed' || activity.status === 'cancelled') builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);
         },
@@ -224,8 +231,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
           active: animated(activity),
           status: activityStatus(activity), open: open(activity.activityId), railColor: actorColor,
           ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: activeStop(activity.activityId)} : {}),
-          renderBody(frame) {actorDetails(activity, frame); if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
-            if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);},
+          renderBody(frame) {
+            actorDetails(activity, frame);
+            if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
+            for (const item of grouped.get(activity.activityId) ?? []) {
+              if (item.inputKind === 'collaboration_interrupt') {
+                builder.pushBlank(actorColor, frame);
+                builder.pushProse(item.id + '-interrupt', item.text, '#d97757', 'body', frame, undefined, '#d97757');
+                builder.pushBlank(actorColor, frame);
+              }
+            }
+            if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);
+          },
         });
       }
     }

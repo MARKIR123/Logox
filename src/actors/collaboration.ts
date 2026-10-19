@@ -3,6 +3,7 @@ import {z} from 'zod';
 import type {ActorContext, TaskHandle, TaskOrigin} from './ensemble.js';
 import type {ToolCall, ToolDefinition, ModelMessage} from '../runtime/messages.js';
 import type {CollaborationRecord, Journal} from '../store/journal.js';
+import {appendProjectBulletin} from './bulletin.js';
 
 const id = z.string().uuid();
 const requestSchema = z.strictObject({target: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/), reason: z.string().trim().min(1).max(2000)});
@@ -14,6 +15,9 @@ export interface CollaborationOptions {
   member(ownerId: string): boolean;
   /** 仅登记到 Ensemble；禁止等待返回句柄的 done。 */
   enqueue(ownerId: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
+  interrupt?: ((targetOwnerId: string, message: string, source: string, summary?: string) => boolean) | undefined;
+  projectDir?: string | undefined;
+  members?: (() => string[]) | undefined;
 }
 /** 每次执行从当前有效分支读取；持久记录不会自动重放副作用。 */
 export class Collaboration {
@@ -23,9 +27,21 @@ export class Collaboration {
   tools(ownerId: string): readonly ToolDefinition[] {
     const definition = (name: string, description: string, properties: Record<string, unknown>, required: string[]): ToolDefinition =>
       ({name, description, parameters: {type: 'object', properties, required, additionalProperties: false}});
+    const sendMessageDef = definition(
+      'SendMessage',
+      'Send a message to another actor, to Director (logox), or broadcast to "all". Mode "queue" (default) enqueues for next turn. Mode "interrupt" immediately aborts recipient\'s active stuck tool and injects the message into the active round without creating a new card.',
+      {
+        to: {type: 'string', description: 'Recipient actor name: "logox", companion actor ("techne", "kalon", "aletheia"), or "all" to broadcast'},
+        message: {type: 'string', maxLength: 4000, description: 'The direct message, blocker report, consultation query, or intervention instruction'},
+        mode: {type: 'string', enum: ['queue', 'interrupt'], description: 'Delivery mode: "queue" (default) or "interrupt" (immediately abort running tool and inject into active activity)'},
+        summary: {type: 'string', maxLength: 200, description: 'Short 5-10 word label summarizing this communication'},
+      },
+      ['to', 'message']
+    );
     return ownerId === 'logox'
-      ? [definition('approve_assist', '批准或拒绝 Actor 协作申请；仅登记后续任务，不等待结果。', {channel: {type: 'string'}, approve: {type: 'boolean'}}, ['channel', 'approve'])]
+      ? [definition('approve_assist', '批准或拒绝 Actor 协作申请；仅登记后续任务，不等待结果。', {channel: {type: 'string'}, approve: {type: 'boolean'}}, ['channel', 'approve']), sendMessageDef]
       : [definition('request_assist', '向 Director 申请协作，返回申请回执。', {target: {type: 'string'}, reason: {type: 'string', maxLength: 2000}}, ['target', 'reason']),
+        sendMessageDef,
         definition('send_message', '在 Director 已批准渠道交替交流，最多三轮往返。', {channel: {type: 'string'}, text: {type: 'string', maxLength: 2000}}, ['channel', 'text'])];
   }
   execute(call: ToolCall, context: ActorContext<string>): Promise<Extract<ModelMessage, {role: 'tool'}>> {
@@ -39,7 +55,56 @@ export class Collaboration {
         let receipt: string;
         let channelId: string;
         let delivery: {owner: string; prompt: string; source: string} | undefined;
-        if (call.name === 'request_assist') {
+        if (call.name === 'SendMessage' || call.name === 'sendMessage') {
+          const sendInput = z.strictObject({
+            to: z.string().min(1),
+            message: z.string().trim().min(1).max(4000),
+            summary: z.string().optional(),
+            mode: z.enum(['queue', 'interrupt']).optional().default('queue'),
+          }).parse(args);
+
+          const isBroadcast = sendInput.to.toLowerCase() === 'all';
+          if (!isBroadcast && sendInput.to !== 'logox' && !this.options.member(sendInput.to)) {
+            throw new Error('协作目标角色不存在或不可用: ' + sendInput.to);
+          }
+
+          if (isBroadcast) {
+            const targets = (this.options.members?.() ?? ['techne', 'kalon', 'aletheia']).filter(id => id !== context.ownerId);
+            for (const target of targets) {
+              this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {inputKind: 'collaboration'});
+            }
+            if (this.options.projectDir) {
+              void appendProjectBulletin(this.options.projectDir, context.ownerId, sendInput.summary || '广播交流', sendInput.message);
+            }
+            return {role: 'tool' as const, callId: call.id, name: call.name, text: `Broadcast message sent to: ${targets.join(', ')} and recorded in bulletin.md`, isError: false};
+          }
+
+          if (sendInput.mode === 'interrupt' && this.options.interrupt) {
+            const interrupted = this.options.interrupt(sendInput.to, sendInput.message, context.ownerId, sendInput.summary);
+            if (interrupted) {
+              return {role: 'tool' as const, callId: call.id, name: call.name, text: `Successfully interrupted ${sendInput.to} and injected message into its active activity without queueing.`, isError: false};
+            }
+          }
+
+          channelId = randomUUID();
+          receipt = `Delivered message to ${sendInput.to}.`;
+          delivery = {
+            owner: sendInput.to,
+            source: context.ownerId,
+            prompt: `[Message from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`,
+          };
+          records.push({
+            id: channelId,
+            sessionId: context.sessionId,
+            activityId: context.activityId,
+            requester: context.ownerId,
+            target: sendInput.to,
+            reason: sendInput.summary ? sendInput.summary.slice(0, 2000) : sendInput.message.slice(0, 100),
+            status: 'closed',
+            messages: [{from: context.ownerId, text: sendInput.message.slice(0, 2000), activityId: context.activityId}],
+            relatedActivities: [],
+          });
+        } else if (call.name === 'request_assist') {
           const input = requestSchema.parse(args);
           if (!this.options.member(input.target) || input.target === 'logox' || input.target === context.ownerId) throw new Error('协作目标无效');
           if (records.filter(record => record.requester === context.ownerId && ['pending', 'approved'].includes(record.status)).length >= 3) throw new Error('开放协作申请已达到上限');

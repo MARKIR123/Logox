@@ -6,15 +6,16 @@ import type {RoundSummary, RoundStatus} from '../context/contracts.js';
 import type {HistoryEntry, HistoryStore} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {UserCancelledError} from '../kernel/agent.js';
+import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
 
 export const cast = immutable({
   logox: {symbol: '◈', name: 'Logox', title: '执导者', color: '#d97757'},
-  aletheia: {symbol: '◇', name: 'Aletheia', title: '澄明 · 侦察者', color: '#7ee7c4'},
+  aletheia: {symbol: '◎', name: 'Aletheia', title: '澄明 · 侦察者', color: '#7ee7c4'},
   techne: {symbol: '⊞', name: 'Techne', title: '精工 · 构建匠人', color: '#e5b567'},
   kalon: {symbol: '✧', name: 'Kalon', title: '雅正 · 审美官', color: '#e8a8dc'},
 });
 export type ActorId = keyof typeof cast;
-export type StopReason = 'user' | 'shutdown' | 'interrupted';
+export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel';
 export interface TaskOrigin {
   inputKind?: InputKind;
   authorization?: readonly string[];
@@ -117,6 +118,55 @@ export class EnsembleRuntime<Id extends string> {
     return {activityId, done, cancel: () => {this.cancel(activityId);}};
   }
   isBusy(): boolean {return [...this.controllers.keys()].some(id => this.store.activities.get(this.sessionId, id)?.status !== 'paused') || this.pendingWrites.size > 0;}
+
+  getActiveTask(ownerId: string): QueuedTask<Id> | undefined {
+    return [...this.tasks.values()].find(task =>
+      task.ownerId === ownerId && this.store.activities.get(this.sessionId, task.activityId)?.status === 'running'
+    );
+  }
+
+  interruptTask(targetOwnerId: string, message: string, source = 'logox', summary?: string): boolean {
+    const active = this.getActiveTask(targetOwnerId);
+    if (!active) return false;
+    // Abort running tool process tree for this active activity if any
+    killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
+    // Inject message directly into the existing activity context without creating a new card
+    const label = summary ? `[Intervention from ${source} · ${summary}]` : `[Intervention from ${source}]`;
+    this.store.message(this.sessionId, targetOwnerId, 'user', `${label}\n${message}`, {
+      activityId: active.activityId,
+      source,
+      inputKind: 'collaboration_interrupt',
+    });
+    return true;
+  }
+
+  cancelTool(actorId: string, toolId?: string, reason = 'Cancelled by Director'): {success: boolean; message: string} {
+    const active = this.getActiveTask(actorId);
+    if (!active) return {success: false, message: `No active running task found for actor '${actorId}'.`};
+    const targetId = toolId || active.activityId;
+    const killed = toolId ? killActiveProcess(toolId, reason) : killActivityProcesses(active.activityId, reason) > 0;
+    if (killed) {
+      return {success: true, message: `Successfully cancelled tool process for ${actorId} (target: ${targetId}): ${reason}`};
+    }
+    return {success: true, message: `Tool cancellation signal delivered to ${actorId}. Tool may have already completed.`};
+  }
+
+  cancelActor(actorId: string, scope: 'tool' | 'activity', toolId?: string, reason = 'Cancelled by Director'): {success: boolean; message: string} {
+    if (scope === 'tool') {
+      return this.cancelTool(actorId, toolId, reason);
+    }
+    const active = this.getActiveTask(actorId);
+    if (!active) {
+      return {success: false, message: `No active running activity found for actor '${actorId}'.`};
+    }
+    const cancelled = this.cancel(active.activityId, 'director_cancel');
+    return {
+      success: cancelled,
+      message: cancelled
+        ? `Successfully cancelled activity ${active.activityId} for actor '${actorId}': ${reason}`
+        : `Activity ${active.activityId} was already finalized.`,
+    };
+  }
   cancel(activityId: string, reason: StopReason = 'user'): boolean {
     const task = this.tasks.get(activityId);
     if (!task) return false;
@@ -296,6 +346,15 @@ export class EnsembleRuntime<Id extends string> {
       await settle('completed');
       this.controllers.delete(activityId);
       this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: '已完成', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
+      if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
+        const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
+        const roleName = member?.name ?? ownerId;
+        this.store.message(this.sessionId, 'logox', 'notice', `[Notice] ${roleName} (${ownerId}) completed activity ${activityId}.`, {
+          activityId,
+          source: ownerId,
+          inputKind: 'human',
+        });
+      }
     } catch (error) {
       const isUserCancel = (error instanceof UserCancelledError) ||
         (error instanceof Error && (error.name === 'UserCancelledError' || error.message.includes('用户选择停止'))) ||
@@ -319,6 +378,18 @@ export class EnsembleRuntime<Id extends string> {
       await settle(status);
       this.controllers.delete(activityId);
       this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? '已中断' : '执行失败', detail, ...(summary ? {summary, title: summary.title} : {})});
+      if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
+        const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
+        const roleName = member?.name ?? ownerId;
+        const noticeText = status === 'cancelled'
+          ? `[Notice] ${roleName} (${ownerId}) activity ${activityId} was cancelled (${task.stopReason ?? 'user'}).`
+          : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed: ${detail.slice(0, 300)}.`;
+        this.store.message(this.sessionId, 'logox', 'notice', noticeText, {
+          activityId,
+          source: ownerId,
+          inputKind: 'human',
+        });
+      }
     } finally {
       this.store.interactions.cancelActivity(this.sessionId, activityId);
       this.controllers.delete(activityId);

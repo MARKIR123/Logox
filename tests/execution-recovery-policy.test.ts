@@ -165,7 +165,7 @@ test('正式应用无交付收束、用户继续沿用Actor阶段与原根，不
         name: 'update_task_progress', arguments: JSON.stringify({stages: [{id: 'skeleton', title: '理顺可运行骨架',
           purpose: '先形成可运行的最小页面', activeForm: '正在搭建可运行骨架'}], update: {id: 'skeleton', status: 'in_progress'}})}]}};
       if (allowedContinue) {
-        assert.match(request.system, /当前阶段：理顺可运行骨架/);
+        assert.match(request.system, /(?:当前阶段：|Active phase:\s*)理顺可运行骨架/);
         assert.ok(request.messages.every(message => message.role !== 'assistant' || !!message.text || !!message.toolCalls?.length));
         return {stop: 'complete', message: {role: 'assistant', text: '已有阶段和工具结果已核对，当前步骤可以继续。'}};
       }

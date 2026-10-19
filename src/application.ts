@@ -23,6 +23,7 @@ import {getScratchpadDir, ensureScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
 import {ModelPool} from './providers/model-pool.js';
+import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
@@ -113,9 +114,16 @@ export async function createSessionApplication(options: SessionApplicationOption
         model: policy.summary_model ?? taskModels.selection(identity).model};
     },
   });
+  void ensureProjectBulletin(cwd);
   const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config,
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
+    interrupt: (target, message, source, summary) => ensemble.interruptTask(target, message, source, summary),
+    cancelTool: (actorId, toolId, reason) => ensemble.cancelTool(actorId, toolId, reason),
+    cancelActor: (actorId, scope, toolId, reason) => ensemble.cancelActor(actorId, scope, toolId, reason),
+    cancelActivity: (activityId, reason) => ensemble.cancel(activityId, 'director_cancel'),
+    getSnapshot: () => store.getSnapshot(),
+    projectDir: cwd,
     pauseBatch: batch => ensemble.pauseBatch(batch),
     resumeBatch: batch => ensemble.resumeBatch(batch),
     coordinationPath: join(state, 'actor-coordination', createHash('sha256').update(session).digest('hex') + '.json'),

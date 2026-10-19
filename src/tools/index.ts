@@ -34,6 +34,10 @@ import {readActorSchema, type ReadActorArgs} from './ReadActorTool/ReadActorTool
 import {READ_ACTOR_DESCRIPTION, READ_ACTOR_TOOL_NAME} from './ReadActorTool/prompt.js';
 import {borrowSkillSchema, type BorrowSkillArgs} from './BorrowSkillTool/BorrowSkillTool.js';
 import {BORROW_SKILL_DESCRIPTION, BORROW_SKILL_TOOL_NAME} from './BorrowSkillTool/prompt.js';
+import {listActorsSchema, executeListActors, type ListActorsArgs} from './ListActorsTool/ListActorsTool.js';
+import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './ListActorsTool/prompt.js';
+import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './CancelActorTool/CancelActorTool.js';
+import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './CancelActorTool/prompt.js';
 
 export {
   pathArg,
@@ -58,6 +62,16 @@ export {
   type BorrowSkillArgs,
   BORROW_SKILL_DESCRIPTION,
   BORROW_SKILL_TOOL_NAME,
+  listActorsSchema,
+  executeListActors,
+  type ListActorsArgs,
+  LIST_ACTORS_DESCRIPTION,
+  LIST_ACTORS_TOOL_NAME,
+  cancelActorSchema,
+  executeCancelActor,
+  type CancelActorArgs,
+  CANCEL_ACTOR_DESCRIPTION,
+  CANCEL_ACTOR_TOOL_NAME,
 };
 
 export const schemas = {
@@ -73,6 +87,8 @@ export const schemas = {
   CraftActor: craftActorSchema,
   ReadActor: readActorSchema,
   BorrowSkill: borrowSkillSchema,
+  ListActors: listActorsSchema,
+  CancelActor: cancelActorSchema,
 } as const;
 
 export type ToolName = keyof typeof schemas;
@@ -90,6 +106,8 @@ export const descriptions: Record<ToolName, string> = {
   CraftActor: CRAFT_ACTOR_DESCRIPTION,
   ReadActor: READ_ACTOR_DESCRIPTION,
   BorrowSkill: BORROW_SKILL_DESCRIPTION,
+  ListActors: LIST_ACTORS_DESCRIPTION,
+  CancelActor: CANCEL_ACTOR_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
@@ -368,7 +386,7 @@ export class Tools {
         return await executeGrep(schemas.Grep.parse(parsed), path, originalPath, this.cwd, context.signal);
       }
       if (name === 'Shell') {
-        return await executeShell(schemas.Shell.parse(parsed), this.cwd, context.signal);
+        return await executeShell(schemas.Shell.parse(parsed), this.cwd, context.signal, {activityId: context.activityId, toolId: call.id});
       }
       throw new Error('Unhandled tool: ' + name);
     } catch (error) {
