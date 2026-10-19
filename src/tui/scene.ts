@@ -2,7 +2,7 @@ import type {ActivityStatus, Interaction, Step} from '../runtime/contracts.js';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type {ActorId} from '../actors/ensemble.js';
-import {actorCardPalette, choiceStyle, mixHex, palette, safeText, ownerColor, ownerHeader, ownerSurface, type ActorStyles} from './cards.js';
+import {actorCardPalette, choiceStyle, mixHex, palette, safeText, ownerColor, ownerHeader, ownerSurface, type ActorStyle, type ActorStyles} from './cards.js';
 import {cast} from '../actors/ensemble.js';
 import type {Row} from './viewport.js';
 import type {ContentCell} from './selection.js';
@@ -48,7 +48,7 @@ export interface SceneRow extends Row {
   readonly segments?: readonly SceneSegment[];
   readonly action?: SceneAction;
   readonly hits?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction}[];
-  readonly animation?: {readonly step?: Step; readonly thinking?: boolean; readonly highlighted?: boolean; readonly actorBg?: string; readonly actorColor?: string; readonly active?: boolean};
+  readonly animation?: {readonly step?: Step; readonly thinking?: boolean; readonly highlighted?: boolean; readonly actorBg?: string; readonly actorColor?: string; readonly active?: boolean; readonly open?: boolean; readonly frames?: readonly string[] | undefined};
   readonly controls?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction; readonly disabled?: boolean}[];
 }
 
@@ -368,7 +368,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
   };
 
   const pushCardHeader: RowBuilder['pushCardHeader'] = (id, label, title, status, frame, railColor, action, statusTint = palette.muted, textTint = palette.fg, textBold = false) => {
-    label = label.map((segment, index) => ({...segment, selectionKey: id + ':label:' + index, selectionOffset: 0}));
+    label = label.map((segment, index) => ({...segment, selectionKey: segment.selectionKey ?? (id + ':label:' + index), selectionOffset: 0}));
     const titleSegment = {text: title, color: textTint, bold: textBold, selectionKey: id + ':title', selectionOffset: 0};
     const statusSegment = {text: status, color: statusTint, selectionKey: id + ':status', selectionOffset: 0};
     const labelW = label.reduce((sum, s) => sum + stringWidth(s.text), 0);
@@ -434,7 +434,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       ], frame, action);
       if (opts.step) for (let index = firstRow; index < rows.length; index++) {
         const row = rows[index]!;
-        rows[index] = {...row, animation: {step: opts.step, thinking, highlighted: hoveredFoldId === opts.id, actorColor: highlightColor}};
+        const frames = opts.ownerId && roles[opts.ownerId]?.thinkingAnimation ? roles[opts.ownerId]?.thinkingAnimation : undefined;
+        rows[index] = {...row, animation: {step: opts.step, thinking, highlighted: hoveredFoldId === opts.id, actorColor: highlightColor, frames}};
       }
     } else pushCardHeader(opts.id, [{text: opts.kind, color: labelColor, bold: isDream}],
       opts.title, opts.status ?? '', frame, opts.railColor, action,
@@ -559,7 +560,7 @@ export function appendActorCard(
   },
 ) {
   const roles: ActorStyles = opts.roles ?? cast;
-  const role = roles[opts.owner] ?? {symbol: '◇', name: opts.owner, color: palette.accent};
+  const role: ActorStyle = roles[opts.owner] ?? {symbol: '◇', name: opts.owner, title: opts.owner, color: palette.accent};
   const shortStatus = opts.status.split(' · ')[0]!.replace('等待你授权', '待授权').replace('等待你回答', '待回答');
   const firstRow = builder.rows.length;
   const bright = opts.open || builder.hoveredFoldId === opts.id;
@@ -571,7 +572,10 @@ export function appendActorCard(
   builder.pushCardCap(opts.id + '-top', 'top', cardBg, opts.railColor, outerFrame, action);
   builder.pushCardHeader(
     opts.id,
-    [{text: role.symbol + ' ' + role.name, color: role.color, bold: true}],
+    [
+      {text: role.symbol, color: role.color, bold: true, selectionKey: opts.id + ':icon'},
+      {text: ' ' + role.name, color: role.color, bold: true, selectionKey: opts.id + ':name'},
+    ],
     opts.task,
     shortStatus + (opts.stop ? opts.stop.disabled ? ' · 停止中…' : ' · ■ 停止' : ''),
     frame,
@@ -605,8 +609,19 @@ export function appendActorCard(
   builder.pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, outerFrame, action);
   for (let index = firstRow; index < builder.rows.length; index++) {
     const row = builder.rows[index]!;
-    builder.rows[index] = {...row, hits: [...row.hits ?? [], {startCol: builder.baseGutterCols, endCol: builder.width, action}],
-      animation: {...row.animation, ...(cardBg ? {actorBg: cardBg} : {}), actorColor: role.color, active: opts.active ?? false}};
+    const isCardOuter = row.messageId === opts.id || row.messageId === opts.id + '-top' || row.messageId === opts.id + '-bottom';
+    builder.rows[index] = {
+      ...row,
+      hits: [...row.hits ?? [], {startCol: builder.baseGutterCols, endCol: builder.width, action}],
+      animation: {
+        ...row.animation,
+        ...(isCardOuter && cardBg ? {actorBg: cardBg} : {}),
+        actorColor: role.color,
+        active: isCardOuter ? (opts.active ?? false) : (row.animation?.active ?? false),
+        open: opts.open,
+        frames: role.thinkingAnimation,
+      },
+    };
   }
   if (!opts.open) markHover(builder.rows, firstRow, opts.id, builder.baseGutterCols, builder.width);
 }

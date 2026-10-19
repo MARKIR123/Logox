@@ -7,14 +7,16 @@ import {rowSelectionBounds, sliceRowText, type Row, type SelectionRange} from '.
 
 const dots = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const glyphs = new Intl.Segmenter('zh', {granularity: 'grapheme'});
-const breathingRows = new WeakMap<Row, {color: string | undefined; row: SceneRow}>();
+
 export function thinkingDuration(step: Step, now: number): string {
   const seconds = stepElapsed(step, now) / 1000;
   const terminal = ['completed', 'failed', 'cancelled'].includes(step.state);
   return terminal ? Math.round(seconds) + 's' : (seconds.toFixed(1) + 's').padEnd(7).slice(0, 7);
 }
-export function stepIcon(step: Step, now: number, motion: boolean): string {
-  return step.state === 'running' && motion ? dots[Math.floor(now / 80) % dots.length]! : step.state === 'running' ? '·' : step.state === 'waiting' ? '○' : step.state === 'queued' ? '◦' : '▮';
+export function stepIcon(step: Step, now: number, motion: boolean, frames?: readonly string[]): string {
+  const activeFrames = frames && frames.length ? frames : dots;
+  const frameInterval = activeFrames.length <= 8 ? 200 : 130;
+  return step.state === 'running' && motion ? activeFrames[Math.floor(now / frameInterval) % activeFrames.length]! : step.state === 'running' ? '·' : step.state === 'waiting' ? '○' : step.state === 'queued' ? '◦' : '▮';
 }
 export function stepStatus(step: Step, now: number): string {
   const seconds = stepElapsed(step, now) / 1000;
@@ -43,40 +45,36 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const row = raw as SceneRow, animation = row.animation;
   if (!animation) return row;
   const running = animation.step?.state === 'running';
-  if (!running && !(motion && animation.active)) return row;
+  const activeActor = Boolean(animation.active);
+  if (!running && !activeActor) return row;
+  if (!motion && !running) return row;
   const status = animation.step && running ? animation.thinking ? thinkingDuration(animation.step, now) : stepStatus(animation.step, now).slice(0, 7) : '';
-  const breath = motion && animation.active && animation.actorBg
-    ? mixHex(animation.actorColor ?? animation.actorBg, animation.actorBg, 0.02 + (Math.sin(now * 2 * Math.PI / 2500) + 1) * 0.08) : undefined;
-  if (!running) {
-    const known = breathingRows.get(row);
-    if (known && known.color === breath) return known.row;
-  }
-  // Background colors apply to style runs, not individual graphemes.
-  const original = rowSegments(row);
-  const base = original.map(segment => breath && (segment.bg === animation.actorBg || segment.color === animation.actorBg) ? {...segment,
-    ...(segment.bg === animation.actorBg ? {bg: breath} : {}),
-    ...(segment.color === animation.actorBg ? {color: breath} : {})} : segment);
-  if (!running) {
-    const bg = breath && row.bg === animation.actorBg ? breath : row.bg;
-    const decorated = bg === row.bg && base.every((segment, index) => segment === original[index]) ? row : {...row, ...(bg ? {bg} : {}), segments: base,
-      displayText: row.displayText ?? base.map(segment => segment.text).join('')};
-    breathingRows.set(row, {color: breath, row: decorated});
-    return decorated;
-  }
+  const base = rowSegments(row);
   const mappedCells = new Map(row.selectionCells?.map(cell => [cell.column, cell]));
+  const actorColor = animation.actorColor ?? palette.accent;
+  const isWorking = (running && animation.thinking) || activeActor;
+
+  // Gentle, organic breathing rhythm:
+  // Slow respiratory envelope cycle (~4.1s) modulated by gentle spatial traveling phase
+  const breath = (Math.sin(now / 650) + 1) / 2;
+
   const segments = transform(base, (segment, column) => {
     const cell = mappedCells.get(column);
     if (running && cell?.key.endsWith(':status') && cell.offset < status.length)
       segment = {...segment, text: status[cell.offset] ?? segment.text};
-    if (running && animation.thinking && cell?.key.endsWith(':icon') && cell.offset === 0)
-      segment = {...segment, text: stepIcon(animation.step!, now, motion), color: animation.actorColor ?? palette.accent};
-    if (running && motion && animation.thinking && !animation.highlighted && cell?.key.endsWith(':title')) {
-      const wave = (Math.sin(column * 0.7 - now / 150) + 1) / 2;
-      segment = {...segment, color: mixHex(animation.actorColor ?? palette.accent, palette.muted, 0.35 + wave * 0.65)};
+    if (isWorking && cell?.key.endsWith(':icon') && cell.offset === 0) {
+      if (!activeActor || !animation.open) {
+        segment = {...segment, text: stepIcon(animation.step ?? ({state: 'running'} as Step), now, motion, animation.frames), color: actorColor};
+      }
+    }
+    if (isWorking && motion && !animation.highlighted && cell?.key.endsWith(':title')) {
+      const wave = (Math.sin(column * 0.35 - now / 450) + 1) / 2;
+      const luster = 0.28 + 0.62 * (0.65 * breath + 0.35 * wave);
+      segment = {...segment, color: mixHex(actorColor, palette.muted, luster)};
     }
     return segment;
   });
-  return {...row, ...(breath && row.bg === animation.actorBg ? {bg: breath} : {}), segments, displayText: segments.map(segment => segment.text).join('')};
+  return {...row, segments, displayText: segments.map(segment => segment.text).join('')};
 }
 export function presentedSegments(row: SceneRow, index: number, selection: SelectionRange | null): readonly SceneSegment[] {
   const bounds = rowSelectionBounds(row, index, selection);

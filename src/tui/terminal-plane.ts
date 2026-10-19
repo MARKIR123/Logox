@@ -103,8 +103,13 @@ export class TerminalPlane {
   private cancelAnimation(): void {if (this.animationTimer) clearTimeout(this.animationTimer); this.animationTimer = undefined;}
   private armAnimation(): void {
     this.cancelAnimation();
-    if (!this.active || this.closed || !this.frame?.rows.some(raw => {const a = (raw as SceneRow).animation; return a?.step?.state === 'running' || this.frame?.motion !== false && a?.active;})) return;
-    this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame.motion === false ? 100 : 80);
+    if (!this.active || this.closed) return;
+    const hasRunning = this.frame?.rows.some(raw => {
+      const a = (raw as SceneRow).animation;
+      return a?.step?.state === 'running' || a?.active;
+    });
+    if (!hasRunning) return;
+    this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame?.motion === false ? 100 : 80);
     this.animationTimer.unref?.();
   }
   private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
