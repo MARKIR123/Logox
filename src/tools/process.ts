@@ -149,8 +149,8 @@ export function runProcess(
       stderr = bounded(stderr, data);
     });
 
-    const abort = () => stop(new Error('操作已取消 (Operation cancelled)'));
-    const timer = setTimeout(() => stop(new Error(`命令执行超时 (Command timed out after ${timeoutMs}ms)`)), timeoutMs);
+    const abort = () => stop(new Error('Operation cancelled'));
+    const timer = setTimeout(() => stop(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs);
     signal.addEventListener('abort', abort, {once: true});
 
     const cleanup = () => {

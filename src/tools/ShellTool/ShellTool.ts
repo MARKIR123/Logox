@@ -54,7 +54,7 @@ export async function executeShell(
   );
 
   return {
-    text: '退出码：' + result.code + ' (Exit code: ' + result.code + ')\n' + result.stdout + (result.stderr ? '\nStderr:\n' + result.stderr : ''),
+    text: 'Exit code: ' + result.code + '\n' + result.stdout + (result.stderr ? '\nStderr:\n' + result.stderr : ''),
     isError: result.code !== 0,
   };
 }

@@ -75,7 +75,7 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     assert.equal(await readFile(join(f.cwd, 'hello.ts'), 'utf8'), 'export const 你好 = 1;\n');
     const second = requests[1] as {messages: Array<{role: string; content: string}>};
     assert.equal(second.messages.at(-1)?.role, 'tool');
-    assert.match(second.messages.at(-1)!.content, /已修改/);
+    assert.match(second.messages.at(-1)!.content, /(?:Updated|已修改)/);
     const entries = await f.app.journal.load('test', 'techne');
     assert.deepEqual(entries.map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant']);
     assert.equal(entries[1]?.message?.role, 'assistant');
@@ -214,7 +214,7 @@ test('未识别的暂时故障只在可见增量之前重试，已显示的中�
 test('Windows 进程树终止失败时仍及时回收直属子进程', {timeout: 5000}, async () => {
   const start = Date.now();
   await assert.rejects(runProcess(process.execPath, ['-e', 'setTimeout(()=>process.exit(),2500)'],
-    process.cwd(), new AbortController().signal, 100), /超时/);
+    process.cwd(), new AbortController().signal, 100), /(?:timed out|超时)/i);
   assert.ok(Date.now() - start < 1500, '超时后必须回收子进程，不能等待它自行结束');
 });
 
@@ -227,8 +227,8 @@ test('真实 Shell 成功、非零退出、取消和超时均回收进程', {tim
   const controller = new AbortController();
   const pending = runProcess(node, ['-e', 'setInterval(()=>{},1000)'], process.cwd(), controller.signal);
   await delay(80); controller.abort();
-  await assert.rejects(pending, /取消/);
-  await assert.rejects(runProcess(node, ['-e', 'setInterval(()=>{},1000)'], process.cwd(), signal, 100), /超时/);
+  await assert.rejects(pending, /(?:cancelled|取消)/i);
+  await assert.rejects(runProcess(node, ['-e', 'setInterval(()=>{},1000)'], process.cwd(), signal, 100), /(?:timed out|超时)/i);
 });
 
 test('Director 派发后角色串行执行，结果自动返回且上下文隔离', {timeout: 5000}, async () => {
@@ -375,7 +375,7 @@ test('Shell 工具经过真实许可再执行平台命令，并将退出码和�
     ? 'Write-Output LOGOX_SHELL_READY' : 'printf LOGOX_SHELL_READY', timeout: 10}), request => {
     const result = request.messages.at(-1)!;
     assert.equal(result.role, 'tool');
-    assert.match(result.text, /退出码：0/);
+    assert.match(result.text, /(?:Exit code: 0|退出码：0)/);
     assert.match(result.text, /LOGOX_SHELL_READY/);
     seen = true; return assistant('命令执行完成');
   }]));

@@ -160,7 +160,7 @@ export function validateToolCall(call: ToolCall): {valid: true; data: unknown} |
 
   return {
     valid: false,
-    error: `Parameter validation failed for tool \`${call.name}\`: ${parts.join('. ')}. (参数校验失败)`,
+    error: `Parameter validation failed for tool \`${call.name}\`: ${parts.join('. ')}.`,
   };
 }
 
@@ -301,7 +301,7 @@ export class Tools {
       if (name === 'WebFetch') {
         const args = schemas.WebFetch.parse(parsed);
         if (!await this.permissionGuard(context).authorize({tool: 'web_fetch', paths: [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
-          return {text: 'Operation denied (操作被拒绝). Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
+          return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }
         context.startTool?.();
         return executeWebFetch(args, context.signal, {cwd: this.cwd, sessionId: context.sessionId, callId: call.id});
@@ -355,7 +355,7 @@ export class Tools {
       let policy: string;
       do {
         if (!await guard.authorize(target, permissionArgs, context)) {
-          return {text: 'Operation denied (操作被拒绝). Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
+          return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }
         policy = guard.policy();
         context.signal.throwIfAborted();
