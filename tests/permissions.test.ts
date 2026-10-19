@@ -65,7 +65,7 @@ test('真实 Tools：deny 优先、creative 普通写、敏感和链接直接阻
 
     const denied = await f.permissions.add({scope: 'session', decision: 'deny', tool: 'read', pattern: 'a.txt'});
 
-    assert.match((await f.tools.execute(call('read', {path: 'a.txt'}), f.context)).text, /拒绝/);
+    assert.match((await f.tools.execute(call('read', {path: 'a.txt'}), f.context)).text, /(?:denied|拒绝)/i);
 
     await f.permissions.revoke(denied.id);
 

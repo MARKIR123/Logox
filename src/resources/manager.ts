@@ -1,6 +1,8 @@
 import {lstat, open, readdir, realpath} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {dirname, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve, relative} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {commandCatalog} from '../commands.js';
 import {parseDocument} from 'yaml';
 import {actorIdSchema} from '../actors/definitions.js';
@@ -21,6 +23,23 @@ export interface SkillVisibility {readonly actorId: string; readonly skills?: re
 const maxBytes = 64 * 1024;
 const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
 const forbidden = (path: string) => path.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy');
+
+async function collectSkillFiles(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  try {
+    const entries = await readdir(dir, {withFileTypes: true});
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || forbidden(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await collectSkillFiles(full));
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        files.push(full);
+      }
+    }
+  } catch {}
+  return files;
+}
 function metadata(text: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   const fields: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -145,48 +164,103 @@ export class Resources {
     }
     const skills = new Map<string, SkillResource>(), commands = new Map<string, CommandResource>();
     const builtins = new Set<string>(commandCatalog.map(item => item.name));
-    for (const root of [...new Set([...userDirs, join(this.cwd, '.logox'), join(this.cwd, '.logox-ts')])]) {
-      for (const kind of ['skills', 'commands'] as const) {
-        const directory = join(root, kind);
-        let entries;
-        try {entries = await readdir(directory, {withFileTypes: true});} catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issue(kind, directory, '目录扫描失败');
+
+    const distBuiltinSkills = resolve(dirname(fileURLToPath(import.meta.url)), 'builtin-skills');
+    const srcBuiltinSkills = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'resources', 'builtin-skills');
+    const builtinSkillsDir = existsSync(distBuiltinSkills) ? distBuiltinSkills : srcBuiltinSkills;
+
+    // Scan order: Builtin -> User global -> Project private (so project overrides user, user overrides builtin)
+    const allowBuiltin = !this.options.boundary || builtinSkillsDir.toLowerCase().startsWith(this.options.boundary.toLowerCase());
+    const skillRoots = [...new Set([
+      ...(allowBuiltin ? [builtinSkillsDir] : []),
+      ...userDirs.map(d => join(d, 'skills')),
+      join(this.cwd, '.logox', 'skills'),
+      join(this.cwd, '.logox-ts', 'skills'),
+    ])];
+    const commandRoots = [...new Set([...userDirs.map(d => join(d, 'commands')), join(this.cwd, '.logox', 'commands'), join(this.cwd, '.logox-ts', 'commands')])];
+
+    // 1. Scan hierarchical skill tree (Path as Prompt / Semantic Signposts)
+    for (const directory of skillRoots) {
+      const files = await collectSkillFiles(directory);
+      for (const filePath of files) {
+        if (basename(filePath).toLowerCase() === 'agent.md') {
+          // agent.md is the root navigation signpost file, read on-demand via Read
           continue;
         }
-        for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 256)) {
-          let path = join(directory, entry.name);
-          if (kind === 'skills') {
-            if (!entry.isDirectory() || forbidden(entry.name)) continue;
-            path = join(path, 'SKILL.md');
-            try {await lstat(path);} catch {path = join(directory, entry.name, 'skill.md');}
-          } else if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-          const resource = await read(path, kind);
-          if (!resource) continue;
-          const meta = metadata(resource.text);
-          const name = (kind === 'skills' ? meta.fields.name || entry.name : entry.name.slice(0, -3)).toLowerCase();
-          if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {issue(kind, path, '名称无效'); continue;}
-          if (kind === 'commands' && builtins.has(name)) {issue(kind, path, '与内置命令重名，未加载'); continue;}
-          const item = {name, description: meta.description || name, path: resource.path};
-          if (kind === 'skills') {
-            try {
-              const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
-              let actors: readonly string[] | undefined;
-              if (header) {
-                const document = parseDocument(header[1]!, {uniqueKeys: true});
-                if (document.errors.length) throw new Error('技能 Frontmatter 无效');
-                const fields: unknown = document.toJS({maxAliasCount: 0});
-                if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'actors')) {
-                  const raw: unknown = (fields as Record<string, unknown>).actors;
-                  if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors 必须是角色 ID 列表');
-                  actors = Object.freeze([...new Set(raw.map(value => actorIdSchema.parse(value)))]);
-                }
-              }
-              skills.set(name, Object.freeze({...item, ...(actors ? {actors} : {})}));
-            } catch (error) {issue(kind, path, error instanceof Error ? error.message : '技能角色声明无效');}
-          }
-          else commands.set(name, Object.freeze({...item, template: meta.body}));
+        const resource = await read(filePath, 'skills');
+        if (!resource) continue;
+        const meta = metadata(resource.text);
+
+        const rawName = meta.fields.name || (basename(filePath).toLowerCase() === 'skill.md'
+          ? basename(dirname(filePath))
+          : basename(filePath, '.md'));
+        const name = rawName.toLowerCase();
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+          issue('skills', filePath, '名称无效');
+          continue;
         }
-        if (entries.length > 256) issue(kind, directory, '目录超过 256 项，其余跳过');
+
+        // Infer default actors from directory path: e.g. skills/kalon/... -> ['kalon']
+        let defaultActors: readonly string[] | undefined;
+        const rel = relative(directory, filePath).replaceAll('\\', '/');
+        const firstSegment = rel.split('/')[0]?.toLowerCase();
+        if (firstSegment && ['kalon', 'techne', 'aletheia', 'logox'].includes(firstSegment)) {
+          defaultActors = Object.freeze([firstSegment]);
+        } else if (firstSegment === 'public') {
+          defaultActors = Object.freeze(['logox', 'techne', 'kalon', 'aletheia']);
+        }
+
+        let actors = defaultActors;
+        try {
+          const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
+          if (header) {
+            const document = parseDocument(header[1]!, {uniqueKeys: true});
+            if (document.errors.length) throw new Error('技能 Frontmatter 无效');
+            const fields: unknown = document.toJS({maxAliasCount: 0});
+            if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'actors')) {
+              const raw: unknown = (fields as Record<string, unknown>).actors;
+              if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors 必须是角色 ID 列表');
+              actors = Object.freeze([...new Set(raw.map(value => actorIdSchema.parse(String(value))))]);
+            }
+          }
+
+          const item = {
+            name,
+            description: meta.description || name,
+            path: resource.path,
+            ...(actors ? {actors} : {}),
+          };
+          skills.set(name, Object.freeze(item));
+        } catch (error) {
+          issue('skills', filePath, error instanceof Error ? error.message : '技能角色声明无效');
+        }
+      }
+    }
+
+    // 2. Scan custom commands
+    for (const directory of commandRoots) {
+      let entries;
+      try {
+        entries = await readdir(directory, {withFileTypes: true});
+      } catch (error) {
+        continue;
+      }
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 256)) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        const path = join(directory, entry.name);
+        const resource = await read(path, 'commands');
+        if (!resource) continue;
+        const meta = metadata(resource.text);
+        const name = (meta.fields.name || entry.name.slice(0, -3)).toLowerCase();
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+          issue('commands', path, '名称无效');
+          continue;
+        }
+        if (builtins.has(name)) {
+          issue('commands', path, '与内置命令重名，未加载');
+          continue;
+        }
+        commands.set(name, Object.freeze({name, description: meta.description || name, path: resource.path, template: meta.body}));
       }
     }
     this.value = Object.freeze({guidelines: Object.freeze(guidelines),

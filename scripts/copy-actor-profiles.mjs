@@ -15,6 +15,17 @@ const binOutput = new URL('../dist/src/tools/bin/', import.meta.url);
 await rm(binOutput, {recursive: true, force: true});
 await cp(new URL('../src/tools/bin/', import.meta.url), binOutput, {recursive: true});
 
+// 复制内置标准技能库 (builtin-skills)
+const skillsOutput = new URL('../dist/src/resources/builtin-skills/', import.meta.url);
+await rm(skillsOutput, {recursive: true, force: true});
+await cp(new URL('../src/resources/builtin-skills/', import.meta.url), skillsOutput, {recursive: true});
+
+// 同步到用户配置目录 ~/.logox-ts/skills，保证随身可用
+try {
+  const userSkillsDir = join(homedir(), '.logox-ts', 'skills');
+  await cp(new URL('../src/resources/builtin-skills/', import.meta.url), userSkillsDir, {recursive: true});
+} catch {}
+
 // 同步到用户配置目录 ~/.logox-ts/actors，保证始终一致
 try {
   const userActorsDir = join(homedir(), '.logox-ts', 'actors');
