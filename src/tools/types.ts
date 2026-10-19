@@ -57,6 +57,9 @@ export const toolAliases = {
   task_stop: 'CancelActor',
   taskstop: 'CancelActor',
   TaskStop: 'CancelActor',
+  update_task_progress: 'UpdateTaskProgress',
+  updatetaskprogress: 'UpdateTaskProgress',
+  UpdateTaskProgress: 'UpdateTaskProgress',
 } as const;
 
 export type CanonicalToolName = (typeof toolAliases)[keyof typeof toolAliases];

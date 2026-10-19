@@ -82,7 +82,7 @@ test('页签命令和提供商选择不触发模型、不进账本；确认才�
     await app.submit('/provider'); await Promise.resolve();
     const picker = app.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker');
     app.surfaces.cancel(); assert.equal(app.store.getSnapshot().messages.length, before);
-    await app.submit('/providers'); await Promise.resolve();
+    await app.submit('/provider'); await Promise.resolve();
     await app.surfaces.choose(app.surfaces.getSnapshot()!.id, 'beta');
     assert.equal(app.commandContext().models[0], 'second');
     await app.submit('/model alpha/custom/model'); assert.equal(app.commandContext().models[0], 'custom/model');

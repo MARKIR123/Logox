@@ -6,7 +6,7 @@
 - `activities.ts`: Activity status updates and lifecycle transitions.
 - `messages.ts`: Model message contracts (`user`, `assistant`, `tool`), tool calls, and message normalization.
 - `provenance.ts`: Input provenance attribution (`human`, `director`, `actor`, `collaboration`, `collaboration_interrupt`).
-- `task-progress.ts`: Macro progress milestone tracking (`update_task_progress` tool implementation).
+- `task-progress.ts`: Macro progress milestone tracking (`UpdateTaskProgress` tool implementation).
 - `steps.ts`: Step timing and elapsed duration calculations.
 
 ## 2. Invariants (刚性边界与底线)

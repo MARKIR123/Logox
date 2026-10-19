@@ -41,6 +41,7 @@ export interface HistoryStore {
   finish?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary>;
   checkpoint?(sessionId: string, task: TaskCheckpoint): Promise<void>;
   progress?(sessionId: string, ownerId: string, activityId: string): Promise<TaskProgressSnapshot | undefined>;
+  activeTasks?(sessionId: string): Promise<TaskCheckpoint[]>;
 }
 export class Journal implements HistoryStore {
   private readonly lineMaps = new Map<string, number[]>();

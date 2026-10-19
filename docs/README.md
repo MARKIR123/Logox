@@ -44,6 +44,7 @@
 | [任务推进与思考耗尽恢复](development/designs/2026-10-14-task-progress-and-reasoning-recovery.md) | 如何分阶段交付、处理无交付思考，并结合剧团接管和卡片体验？ |
 | [剧团协作效能与视觉能力](development/designs/2026-10-15-subagent-efficiency-and-vision.md) | 参数错误精准原位自愈、预算重置、收尾契约、角色隔离并发与多模态视觉能力怎样接入？ |
 | [提示词工程架构与缓存边界](development/designs/2026-10-15-prompt-engineering-architecture.md) | 静态切片、Prompt Caching 缓存分水岭、通用行为宪章与定量数值控制怎样设计？ |
+| [确定性截图与 `browser-shot` 定位](development/designs/2026-10-19-browser-shot-determinism.md) | 虚拟时钟为什么要在导航前冻结？截图为何不做成一等公民工具？ |
 
 [Gemini UI 交接](development/handoffs/2026-10-11-ui-gemini/HANDOFF.md)和[离线 HTML](development/handoffs/2026-10-11-ui-gemini/logox-ui-demo.html)保留交接时的场景，当前 UI 查 UI-SPEC。[角色人设交接](development/handoffs/2026-10-13-actor-personas/HANDOFF.md)保留人设重写前的诊断与蓝本，现行正文查角色模块。
 

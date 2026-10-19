@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {withFileLock} from '../store/file-lock.js';
 
 import {shellWords, shellImpact, shellCommands} from './shell.js';
+import {RUNTIME_WRITE_DANGER} from './paths.js';
 import {isScratchpadPath} from '../kernel/scratchpad.js';
 export {shellWords} from './shell.js';
 export const permissionModeSchema = z.enum(['default', 'auto', 'creative']);
@@ -93,7 +94,8 @@ export class PermissionEngine {
     const shell = target.command === undefined ? undefined : shellWords(target.command);
     const impact = target.command === undefined ? undefined : shellImpact(target.command, 0, this.root);
     if (impact?.kind === 'forbidden') return {decision: 'deny', reason: impact.reason};
-    const matches = (rule: PermissionRule) => (rule.tool === target.tool || target.tool.startsWith(rule.tool + ':')) && (rule.pattern === '*' || (shell
+    const toolLower = target.tool.toLowerCase();
+    const matches = (rule: PermissionRule) => (rule.tool.toLowerCase() === toolLower || toolLower.startsWith(rule.tool.toLowerCase() + ':')) && (rule.pattern === '*' || (shell
       ? (() => {
         if (rule.decision === 'allow' && (shell.compound || shell.dynamic)) return false;
         const prefix = shellWords(rule.pattern).words;
@@ -106,13 +108,18 @@ export class PermissionEngine {
       return {decision: 'allow', reason: 'Scratchpad directory is allowed for temporary operations'};
     }
     const danger = target.danger ?? (impact?.kind === 'danger' ? impact.reason : undefined);
+    // Development mode (creative) may write its own runtime tree — skills, prompts,
+    // journals. Credential and VCS-internal protection are separate dangers and stay.
+    if (danger === RUNTIME_WRITE_DANGER && this.mode === 'creative') {
+      return {decision: 'allow', reason: 'creative：开发模式允许写入运行目录（凭据与版本库仍受保护）'};
+    }
     if (danger) return {decision: this.mode === 'creative' ? 'deny' : 'ask', reason: danger};
     if (this.rules.some(rule => rule.decision === 'allow' && matches(rule))) return {decision: 'allow', reason: '命中允许规则'};
     if (this.mode === 'creative') return {decision: 'allow', reason: 'creative：危险过滤后默认允许'};
-    const read = target.effect === 'read' || ['read', 'glob', 'grep', 'ask_user'].includes(target.tool) || impact?.kind === 'safe';
+    const read = target.effect === 'read' || ['read', 'glob', 'grep', 'ask_user', 'askuserquestion', 'webfetch', 'web_fetch'].includes(toolLower) || impact?.kind === 'safe';
     if (!target.risky && read) return {decision: 'allow', reason: '普通只读操作'};
     if (this.mode === 'auto') {
-      if (!target.risky && ['write', 'edit'].includes(target.tool)) return {decision: 'allow', reason: 'auto：项目内常规文件编辑'};
+      if (!target.risky && ['write', 'edit'].includes(toolLower)) return {decision: 'allow', reason: 'auto：项目内常规文件编辑'};
       return {decision: 'review', reason: 'auto：需要独立模型判断实际影响'};
     }
     return {decision: 'ask', reason: target.risky ? '敏感或越界目标需要授权' : 'default：操作尚未授权'};

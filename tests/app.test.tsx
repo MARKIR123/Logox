@@ -122,11 +122,11 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
   };
   try {
     assert.match(output.text, /保留项目内容，让它更像一个有审美的开发者作品/);
-    assert.match(output.text, /[◇◎] Aletheia/);
-    assert.match(output.text, /⊞ Techne/);
+    assert.match(output.text, /(?:◇|◎).*?Aletheia/);
+    assert.match(output.text, /⊞.*?Techne/);
     assert.match(output.text, /允许修改这两个文件吗？/);
     await key('\x1b[6~'); // 较低的终端滚动后可见排队中的 Kalon
-    assert.match(output.text, /✧ Kalon/);
+    assert.match(output.text, /✧.*?Kalon/);
     await key('\x1b[5~');
     assert.match(output.text, /@kalon 看一下首页配色。只给建议，先别改文件。/);
     assert.match(output.text, /◈ Logox · Techne 等待授权/);
@@ -170,7 +170,7 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
 
     // 4. Ctrl+G 切换角色独立历史窗口，Esc 返回 Logox
     await key('\x07');
-    assert.match(output.text, /◇ Aletheia · 澄明 · 侦察者 · 独立对话/);
+    assert.match(output.text, /(?:◇|◎) Aletheia · 澄明 · 侦察者 · 独立对话/);
     await key('\x1b');
     assert.match(output.text, /◈ Logox · 本轮完成 · Anamnesis 整理候选/);
   } finally {

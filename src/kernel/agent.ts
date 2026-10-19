@@ -114,6 +114,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
         if (options.requestBase) instruction = await options.requestBase(context);
+        const incoming = context.drainInbox?.() ?? [];
+        for (const msg of incoming) {
+          messages.push(msg);
+        }
         if (options.iterations > 0 && iteration >= options.iterations) {
           const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
             id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
@@ -126,7 +130,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           iteration = 0;
         }
         const definitions = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? instruction.tools :
-          [...instruction.tools.filter(tool => tool.name !== taskProgressTool.name), taskProgressTool];
+          [...instruction.tools.filter(tool => tool.name !== taskProgressTool.name && canonicalToolName(tool.name) !== 'UpdateTaskProgress'), taskProgressTool];
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const baseSystem = composeRuntimeSystemPrompt({
           baseSystem: instruction.system,
@@ -241,7 +245,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 schemaError = {callId: call.id, name: call.name, error: '未知工具：' + call.name + '。可用工具：' + base.tools.map(t => t.name).join('、')};
                 break;
               }
-              const extra = call.name.toLowerCase() === taskProgressTool.name.toLowerCase()
+              const extra = (call.name.toLowerCase() === taskProgressTool.name.toLowerCase() || canonical === 'UpdateTaskProgress')
                 ? taskProgressTool
                 : options.extraTools?.find(tool =>
                     tool.name.toLowerCase() === call.name.toLowerCase() ||
@@ -293,7 +297,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
                 permission: (input: Parameters<typeof context.permission>[0]) => waiting('等待许可', () => context.permission(input)),
                 ask: (input: Parameters<typeof context.ask>[0]) => waiting('等待回答', () => context.ask(input))};
-              if (call.name === taskProgressTool.name) {
+              if (call.name === taskProgressTool.name || canonical === 'UpdateTaskProgress') {
                 toolContext.startTool();
                 const before = new Set(progress.snapshot().stages.filter(stage => stage.status === 'completed').map(stage => stage.id));
                 const result = await progress.update(JSON.parse(call.arguments));
@@ -372,7 +376,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           try {await recoverOutput(kind, thinkingId);}
           finally {await persist(turn.message, steps.get(thinkingId));}
         } else await persist(turn.message, thinkingStep);
-        if (turn.stop === 'complete' && turn.message.text.trim()) {outcome = 'completed'; return;}
+        if (turn.stop === 'complete' && turn.message.text.trim()) {
+          const incoming = context.drainInbox?.() ?? [];
+          if (incoming.length > 0) {
+            for (const msg of incoming) messages.push(msg);
+            continue requestLoop;
+          }
+          outcome = 'completed';
+          return;
+        }
         if (turn.stop === 'other' || turn.stop === 'tools') throw new Error('模型未正常完成这一轮（缺少有效结束原因或工具调用）');
       }
     } finally {steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}

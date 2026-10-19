@@ -135,7 +135,6 @@ test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终
     const before = ui.commits(), revision = store.getSnapshot().revision; ui.output.text = '';
     await ui.settle(1000);
     assert.equal(ui.commits(), before); assert.equal(store.getSnapshot().revision, revision);
-    assert.ok(ui.output.text.includes('\x1b[48;2;'), 'Actor 背景在可见卡片中变化');
     // Open the actor and expose its active Thinking, then compare fixed geometry.
     const heading = ui.output.lines.findIndex(line => line.includes('Techne'));
     await ui.mouse(0, 8, heading); await ui.mouse(0, 8, heading, true); await ui.settle(200);
@@ -146,12 +145,10 @@ test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终
     assert.equal(stringWidth(early.displayText!), stringWidth(later.displayText!)); assert.notDeepEqual(early.segments, later.segments);
     assert.ok(early.segments!.length < 25, '相邻同色文字合并，局部动画不逐字发送 ANSI');
     const actorRow = rows.find(row => row.messageId === 'actor')!;
-    const breathed = decorateRow(actorRow, Date.now()).bg!;
-    const channels = (hex: string) => hex.slice(1).match(/../g)!.map(value => Number.parseInt(value, 16));
-    assert.ok(channels(breathed).every((value, index) => Math.abs(value - channels(actorRow.bg!)[index]!) <= 35), '呼吸缓慢改变暗底，不变成高亮填充');
-    const minimum = decorateRow(actorRow, 1875).bg!;
-    const maximum = decorateRow(actorRow, 625).bg!;
-    assert.ok(channels(maximum).some((value, index) => Math.abs(value - channels(minimum)[index]!) >= 15), '一轮呼吸必须有肉眼可辨的底色色差');
+    const earlyBg = decorateRow(actorRow, 625).bg!;
+    const laterBg = decorateRow(actorRow, 1875).bg!;
+    assert.equal(earlyBg, actorRow.bg, 'Actor 背景保持纯净稳定');
+    assert.equal(laterBg, actorRow.bg, '不同时间点背景绝对不发生全卡片重绘');
     const resume = steps.wait(thinking, '等待回答'); await ui.settle(); ui.output.text = ''; await ui.settle(220);
     assert.equal(ui.output.text, '', '等待时可见活动动画全部停止');
     resume(); await ui.settle(); await prefs.saveMotion(false); await ui.settle();

@@ -140,11 +140,11 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   try {
     const prefPaths = [
       join(cwd, '.logox', 'state', 'model-preferences.json'),
-      join(homedir(), '.logox-ts', 'model-preferences.json'),
+      join(home, '.logox-ts', 'model-preferences.json'),
     ];
     let previous: z.infer<typeof preferenceSchema> | undefined;
     for (const p of prefPaths) {
-      previous = await new StateFile(p, preferenceSchema).read().catch(() => undefined);
+      previous = await new StateFile(p, preferenceSchema).read();
       if (previous) break;
     }
     if (previous) {
@@ -191,7 +191,16 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
   return {kind, baseUrl,
     model, thinkingEffort: provider.thinking_effort,
-    ...(protocol ? {thinkingProtocol: protocol, thinkingLevels: declared?.thinking_levels ?? ['auto', 'off', 'low', 'medium', 'high', 'max']} : {}),
+    ...(protocol ? {
+      thinkingProtocol: protocol,
+      thinkingLevels: declared?.thinking_levels ?? (
+        protocol === 'deepseek'
+          ? ['auto', 'off', 'low', 'high', 'max']
+          : protocol === 'anthropic-adaptive' && model.startsWith('claude-opus-')
+            ? ['auto', 'off', 'low', 'medium', 'high', 'max']
+            : ['auto', 'off', 'low', 'medium', 'high']
+      ),
+    } : {}),
     key: keyEnv ? env[keyEnv] ?? '' : '',
     temperature: provider.temperature, maxTokens: provider.max_tokens, timeoutMs: provider.timeout * 1000,
     ...(provider.name === 'deepseek' && url.hostname === 'api.deepseek.com' ? {thinkingControl: true} : {})};

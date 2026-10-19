@@ -23,9 +23,9 @@ function fixture(saveProgress?: (value: TaskProgressSnapshot) => Promise<void>) 
 
 test('阶段严格校验、一次一个当前阶段、成果与取消原因保留且不可改写', async () => {
   const {store, progress} = fixture();
-  assert.equal(taskProgressTool.name, 'update_task_progress');
+  assert.equal(taskProgressTool.name, 'UpdateTaskProgress');
   assert.equal(progress.snapshot().planned, false);
-  assert.match(taskProgressTool.description, /简单任务无需清单/);
+  assert.match(taskProgressTool.description, /(?:Simple tasks do not require phases|简单任务无需清单)/);
   for (const input of [{}, {stages: [foundation, foundation]}, {stages: [{...foundation, bogus: true}]}]) {
     assert.equal((await progress.update(input)).isError, true);
     assert.equal(progress.snapshot().revision, 0);

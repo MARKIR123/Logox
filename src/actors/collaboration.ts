@@ -15,6 +15,8 @@ export interface CollaborationOptions {
   member(ownerId: string): boolean;
   /** 仅登记到 Ensemble；禁止等待返回句柄的 done。 */
   enqueue(ownerId: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
+  getActiveTask?: ((ownerId: string) => { activityId: string } | undefined) | undefined;
+  injectMessage?: ((targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue') => Promise<boolean> | boolean) | undefined;
   interrupt?: ((targetOwnerId: string, message: string, source: string, summary?: string) => boolean) | undefined;
   projectDir?: string | undefined;
   members?: (() => string[]) | undefined;
@@ -71,12 +73,34 @@ export class Collaboration {
           if (isBroadcast) {
             const targets = (this.options.members?.() ?? ['techne', 'kalon', 'aletheia']).filter(id => id !== context.ownerId);
             for (const target of targets) {
-              this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {inputKind: 'collaboration'});
+              const active = this.options.getActiveTask?.(target);
+              if (active && this.options.injectMessage) {
+                await this.options.injectMessage(target, sendInput.message, context.ownerId, sendInput.summary, sendInput.mode);
+              } else {
+                this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {inputKind: 'collaboration'});
+              }
             }
             if (this.options.projectDir) {
               void appendProjectBulletin(this.options.projectDir, context.ownerId, sendInput.summary || '广播交流', sendInput.message);
             }
             return {role: 'tool' as const, callId: call.id, name: call.name, text: `Broadcast message sent to: ${targets.join(', ')} and recorded in bulletin.md`, isError: false};
+          }
+
+          // Check if recipient actor is currently active!
+          const active = this.options.getActiveTask?.(sendInput.to);
+          if (active && this.options.injectMessage) {
+            const mode = sendInput.mode ?? 'queue';
+            const injected = await this.options.injectMessage(sendInput.to, sendInput.message, context.ownerId, sendInput.summary, mode);
+            if (injected) {
+              const actionDesc = mode === 'interrupt' ? 'interrupted and injected' : 'delivered';
+              return {
+                role: 'tool' as const,
+                callId: call.id,
+                name: call.name,
+                text: `Successfully ${actionDesc} message into active task of ${sendInput.to} without creating a new card.`,
+                isError: false,
+              };
+            }
           }
 
           if (sendInput.mode === 'interrupt' && this.options.interrupt) {

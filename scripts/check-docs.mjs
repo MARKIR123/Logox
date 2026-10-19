@@ -11,7 +11,7 @@ const report = (file, message) => errors.push(relative(file) + ': ' + message);
 function collect(directory, recursive) {
   if (!fs.existsSync(directory)) return;
   for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
-    if (/^legacy$/i.test(entry.name)) continue;
+    if (/^(?:legacy|superpowers)$/i.test(entry.name)) continue;
     const file = path.join(directory, entry.name);
     if (entry.isDirectory() && recursive) collect(file, true);
     if (entry.isFile() && /\.md$/i.test(entry.name)) documents.set(file, null);

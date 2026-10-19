@@ -51,6 +51,8 @@ const borrowTool = tool('BorrowSkill', BORROW_SKILL_DESCRIPTION, borrowSkillSche
 export interface ActorServicesOptions {
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
   enqueue(owner: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
+  getActiveTask?(ownerId: string): { activityId: string } | undefined;
+  injectMessage?(targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue'): Promise<boolean> | boolean;
   interrupt?(targetOwnerId: string, message: string, source: string, summary?: string): boolean;
   pauseBatch?(batchId: string): void;
   resumeBatch?(batchId: string): void;
@@ -87,6 +89,8 @@ export class ActorServices {
       ...options,
       member: owner => !!options.catalog.find(owner),
       members: () => options.catalog.list().map(a => a.id),
+      getActiveTask: options.getActiveTask ? (owner) => options.getActiveTask!(owner) : undefined,
+      injectMessage: options.injectMessage ? (target, msg, src, sum, mode) => options.injectMessage!(target, msg, src, sum, mode) : undefined,
       interrupt: (target, message, source, summary) => {
         return options.interrupt ? options.interrupt(target, message, source, summary) : false;
       },

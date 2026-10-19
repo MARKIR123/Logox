@@ -38,6 +38,8 @@ import {listActorsSchema, executeListActors, type ListActorsArgs} from './ListAc
 import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './ListActorsTool/prompt.js';
 import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './CancelActorTool/CancelActorTool.js';
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './CancelActorTool/prompt.js';
+import {updateTaskProgressSchema, type UpdateTaskProgressArgs} from './UpdateTaskProgressTool/UpdateTaskProgressTool.js';
+import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from './UpdateTaskProgressTool/prompt.js';
 
 export {
   pathArg,
@@ -72,6 +74,10 @@ export {
   type CancelActorArgs,
   CANCEL_ACTOR_DESCRIPTION,
   CANCEL_ACTOR_TOOL_NAME,
+  updateTaskProgressSchema,
+  type UpdateTaskProgressArgs,
+  UPDATE_TASK_PROGRESS_DESCRIPTION,
+  UPDATE_TASK_PROGRESS_TOOL_NAME,
 };
 
 export const schemas = {
@@ -89,6 +95,7 @@ export const schemas = {
   BorrowSkill: borrowSkillSchema,
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
+  UpdateTaskProgress: updateTaskProgressSchema,
 } as const;
 
 export type ToolName = keyof typeof schemas;
@@ -108,6 +115,7 @@ export const descriptions: Record<ToolName, string> = {
   BorrowSkill: BORROW_SKILL_DESCRIPTION,
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
+  UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (

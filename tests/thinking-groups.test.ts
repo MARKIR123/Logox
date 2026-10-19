@@ -30,15 +30,14 @@ test('请求投影按快照缓存，界面操作复用时钟，流式只更新�
   assert.ok(!buildStageRows(f.store.getSnapshot(), 'other', 'logox', 99, {}, null).some(row => row.messageId === id));
 });
 
-test('呼吸 RGB 未变化复用行，正文与内层灰底保持不变', () => {
+test('卡片背景保持纯净静态，正文与内层灰底不产生重绘', () => {
   const f = fixture('techne'), id = f.steps.thinking(); f.store.appendMessage(id, '中文🙂 正文');
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [id]: true}, null);
   const raw = rows.find(row => row.messageId === 'a')!;
-  const early = decorateRow(raw, 100000), sameColor = decorateRow(raw, 100001);
-  assert.equal(early, sameColor, '颜色取整相同的呼吸帧不重新分字、分配和编码');
+  const early = decorateRow(raw, 100000), later = decorateRow(raw, 102000);
+  assert.equal(early.bg, raw.bg, '卡片背景保持稳定静态');
+  assert.equal(later.bg, raw.bg, '不同时间点背景绝对不发生抖动重绘');
   assert.equal(early.displayText, raw.displayText); assert.deepEqual(early.selectionCells, raw.selectionCells);
-  const changed = decorateRow(raw, 102000);
-  assert.notEqual(changed.bg, early.bg); assert.equal(changed.displayText, early.displayText);
   assert.equal(decorateRow(raw, 100000, false), raw, '关闭动效直接返回原行');
   const thinkingBody = rows.find(row => row.text === '中文🙂 正文')!;
   const decorated = decorateRow(thinkingBody, 100000);

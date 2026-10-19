@@ -13,7 +13,7 @@ function role(id: string, name: string, title: string, symbol: string, color: st
 }
 export const builtinActors: readonly ActorDefinition[] = immutable([
   role('logox', 'Logox', '执导者', '◈', '#d97757', '承接用户对话，拆解目标、调度剧团、汇总结果，也直接完成简单任务。', 2, [], '#4d3227', '#613e31'),
-  role('aletheia', 'Aletheia', '澄明 · 侦察者', '◇', '#7ee7c4', '调查代码、日志与资料，追踪调用链、核实来源，交付可查证的事实地图。', 2,
+  role('aletheia', 'Aletheia', '澄明 · 侦察者', '◎', '#7ee7c4', '调查代码、日志与资料，追踪调用链、核实来源，交付可查证的事实地图。', 2,
     ['investigate-first', 'diagnosing-bugs', 'research'], '#2c473d', '#395c4f'),
   role('techne', 'Techne', '精工 · 构建匠人', '⊞', '#e5b567', '推理、构建模块、修复根因，用实际验证闭合实现。', 2,
     ['tdd', 'safe-refactor', 'surgical-patch', 'codebase-design', 'lean-build'], '#483c27', '#5c4d32'),

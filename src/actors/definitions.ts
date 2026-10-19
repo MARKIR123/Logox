@@ -19,6 +19,7 @@ export const actorDefinitionSchema = z.strictObject({
   cardOpen: z.string().regex(/^#[\da-fA-F]{6}$/).optional(),
   prompt: text(48000), compression: text(4000), context: actorContextSchema,
   defaultModel: actorModelSchema.optional(), skills: z.array(actorIdSchema).max(256).default([]),
+  thinkingAnimation: z.array(z.string().min(1)).min(1).max(32).optional(),
 });
 export type ActorDefinition = Readonly<z.infer<typeof actorDefinitionSchema>>;
 export type ActorModel = z.infer<typeof actorModelSchema>;
@@ -52,6 +53,10 @@ export function parseActor(text: string): ActorDefinition {
   if (Object.hasOwn(raw, 'card_open')) {
     if (!Object.hasOwn(raw, 'cardOpen')) raw.cardOpen = raw.card_open;
     delete raw.card_open;
+  }
+  if (Object.hasOwn(raw, 'thinking_animation')) {
+    if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
+    delete raw.thinking_animation;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt 必须放在 Markdown 正文');
   if (raw.context && typeof raw.context === 'object') {
@@ -89,6 +94,10 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
   if (Object.hasOwn(raw, 'card_open')) {
     if (!Object.hasOwn(raw, 'cardOpen')) raw.cardOpen = raw.card_open;
     delete raw.card_open;
+  }
+  if (Object.hasOwn(raw, 'thinking_animation')) {
+    if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
+    delete raw.thinking_animation;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt 必须放在 persona.md');
   if (raw.context && typeof raw.context === 'object') {

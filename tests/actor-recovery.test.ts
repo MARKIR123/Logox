@@ -446,7 +446,7 @@ test('正式应用超时续做保留真实文件写入与中断输出，补救�
     const events = await app.journal.systemEvents('s');
     assert.ok(events.every(event => event.kind !== 'environment_change' || !event.text.includes('当前可用工具：无')));
     await app.submit('继续新目标'); await idle(app.ensemble);
-    assert.ok(seen.at(-1)!.tools.some(tool => tool.name === 'write'), '新输入仍拥有正常工具能力');
+    assert.ok(seen.at(-1)!.tools.some(tool => tool.name.toLowerCase() === 'write'), '新输入仍拥有正常工具能力');
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 

@@ -1,2 +1,2 @@
 @echo off
-node "%~dp0browser-shot.mjs" %*
+node "%~dp0..\BrowserShot\cli.js" %*

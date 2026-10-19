@@ -10,9 +10,21 @@ export function toolTitle(call: ToolCall): string {
   try {
     const args: unknown = JSON.parse(call.arguments);
     if (args && typeof args === 'object') {
-      for (const key of ['path', 'command', 'tool', 'ownerId', 'name']) {
+      const desc = Reflect.get(args, 'description') ?? Reflect.get(args, 'summary');
+      const descText = typeof desc === 'string' && desc.trim() ? desc.trim() : '';
+
+      for (const key of ['path', 'command', 'tool', 'to', 'actor', 'ownerId', 'name', 'url']) {
         const value: unknown = Reflect.get(args, key);
-        if (typeof value === 'string') return call.name + ' ' + value.replace(/\s+/g, ' ').slice(0, 90);
+        if (typeof value === 'string') {
+          const detail = value.replace(/\s+/g, ' ').slice(0, 90);
+          if (descText) {
+            return `${call.name} · ${descText} (${detail})`;
+          }
+          return `${call.name} ${detail}`;
+        }
+      }
+      if (descText) {
+        return `${call.name} · ${descText}`;
       }
     }
   } catch {}

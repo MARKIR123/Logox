@@ -10,6 +10,8 @@ import {join} from 'node:path';
 
 import {PermissionEngine, shellWords} from '../src/permissions/engine.js';
 
+import {pathDanger} from '../src/permissions/paths.js';
+
 import {createApplication} from '../src/application.js';
 
 import {loadConfig} from '../src/config/config.js';
@@ -96,6 +98,34 @@ test('真实 Tools：deny 优先、creative 普通写、敏感和链接直接阻
 });
 
 
+
+test('creative 允许写入运行目录，凭据与版本库仍阻止', async () => {
+
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-runtime-write-'));
+
+  try {
+
+    const decide = (mode: 'default' | 'auto' | 'creative', path: string) => {
+
+      const danger = pathDanger(path, 'write');
+
+      return new PermissionEngine(cwd, mode).evaluate({tool: 'write', paths: [path], effect: 'write', risky: true, ...(danger ? {danger} : {})}).decision;
+
+    };
+
+    assert.equal(decide('creative', join(cwd, '.logox-ts', 'skills', 'public', 'note.md')), 'allow');
+
+    assert.equal(decide('creative', join(cwd, '.logox', 'bulletin.md')), 'allow');
+
+    assert.equal(decide('creative', join(cwd, '.ssh', 'id_rsa')), 'deny');
+
+    assert.equal(decide('creative', join(cwd, '.git', 'config')), 'deny');
+
+    assert.equal(decide('default', join(cwd, '.logox', 'bulletin.md')), 'ask');
+
+  } finally {await rm(cwd, {recursive: true, force: true});}
+
+});
 
 test('项目规则持久、撤销、项目身份隔离与保存失败不生效', async () => {
 

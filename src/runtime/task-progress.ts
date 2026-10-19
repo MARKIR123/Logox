@@ -5,15 +5,14 @@ import {immutable, stepStageSchema, taskProgressSchema, type StepStage, type Tas
 import type {ToolDefinition} from './messages.js';
 import type {RuntimeStore} from './store.js';
 
-const updateSchema = z.strictObject({
-  stages: z.array(stepStageSchema).min(1).max(32).optional(),
-  update: z.strictObject({id: z.string().trim().min(1), status: z.enum(['in_progress', 'completed', 'skipped']),
-    result: z.string().trim().min(1).max(2000).optional(), reason: z.string().trim().min(1).max(1000).optional()}).optional(),
-}).refine(input => input.stages || input.update, '请登记阶段计划或更新阶段状态');
+import {updateTaskProgressSchema} from '../tools/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
+import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from '../tools/UpdateTaskProgressTool/prompt.js';
+
+const updateSchema = updateTaskProgressSchema;
 
 export const taskProgressTool: ToolDefinition = {
-  name: 'update_task_progress',
-  description: '登记或更新复杂任务的阶段；自然标题，无编号，一次推进一个阶段。完成写 result，取消写 reason。简单任务无需清单。',
+  name: UPDATE_TASK_PROGRESS_TOOL_NAME,
+  description: UPDATE_TASK_PROGRESS_DESCRIPTION,
   // 请求只携带字段结构，长度与修订边界由 updateSchema 在运行时严格校验。
   parameters: {type: 'object', additionalProperties: false, properties: {
     stages: {type: 'array', items: {type: 'object', additionalProperties: false,
@@ -37,14 +36,14 @@ export class TaskProgress {
     return stage ? {id: stage.id, title: stage.title, purpose: stage.purpose, activeForm: stage.activeForm} : this.value.planned ? undefined : planning;
   }
   instruction(): string {
-    if (!this.value.planned) return '当前目的：梳理目标与制定阶段；复杂任务先登记阶段，未登记不阻塞探查。';
+    if (!this.value.planned) return 'Current goal: clarify objectives and establish phase milestones. For complex tasks, register phases via UpdateTaskProgress first.';
     const stage = this.value.stages.find(stage => stage.id === this.value.activeStageId);
     const completed = this.value.stages.filter(stage => stage.status === 'completed').map(stage => stage.title + '：' + stage.result);
     const pending = this.value.stages.filter(stage => stage.status === 'pending').map(stage => stage.title);
-    return ['任务阶段由 update_task_progress 显式维护；工具继承当前阶段目的，不重复声明意图。',
-      stage ? '当前阶段：' + stage.title + '。目的：' + stage.purpose : '当前没有进行中的阶段；请补登记当前阶段，不因此停止或拒绝正常工具。',
-      completed.length ? '已完成成果：' + completed.join('；') : '', pending.length ? '剩余阶段：' + pending.join('；') : '',
-      '完成阶段请报告实际成果，收尾明确完成和剩余工作；阶段变更不代表取得成果。'].filter(Boolean).join('\n');
+    return ['Task phases are explicitly tracked via UpdateTaskProgress; tools inherit the active phase goal.',
+      stage ? 'Active phase: ' + stage.title + '. Purpose: ' + stage.purpose : 'No phase currently in progress.',
+      completed.length ? 'Completed milestones: ' + completed.join('; ') : '', pending.length ? 'Remaining phases: ' + pending.join('; ') : '',
+      'When completing a phase, report the concrete deliverable; changing phases does not count as achieving results.'].filter(Boolean).join('\n');
   }
   async update(arguments_: unknown): Promise<ToolResult> {
     this.context.signal.throwIfAborted();

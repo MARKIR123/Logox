@@ -91,7 +91,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   let compactTask: {activityId: string; controller: AbortController; done: Promise<void>} | undefined;
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
-  const modelPool = new ModelPool(registry);
+  const homeDir = options.resourceOptions?.home ?? homedir();
+  const modelPool = new ModelPool(registry, join(homeDir, '.logox-ts', 'models-store.json'));
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
   const taskModels = new TaskModels({registry, ledger: taskModelLedger,
@@ -118,6 +119,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config,
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
+    getActiveTask: (owner) => ensemble.getActiveTask(owner),
+    injectMessage: (target, msg, src, sum, mode) => ensemble.injectTaskMessage(target, msg, src, sum, mode),
     interrupt: (target, message, source, summary) => ensemble.interruptTask(target, message, source, summary),
     cancelTool: (actorId, toolId, reason) => ensemble.cancelTool(actorId, toolId, reason),
     cancelActor: (actorId, scope, toolId, reason) => ensemble.cancelActor(actorId, scope, toolId, reason),
@@ -378,7 +381,6 @@ export async function createSessionApplication(options: SessionApplicationOption
       ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
       ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
     ]},
-    {id: 'providers', title: 'Providers', lines: providersTabLines()},
     {id: 'config', title: 'Config', lines: [
       'Effective Configuration',
       '─────────────────────────────────────────────────────────────',
@@ -397,6 +399,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       '── Instructions ─────────────────────────────────────────────',
       'Switch via /model or /provider; edit config.toml and restart to change other settings.',
     ]},
+    {id: 'providers', title: 'Providers', lines: providersTabLines()},
     {id: 'usage', title: 'Usage', lines: [
       'Session: ' + session + ' · Role: ' + pageOwner,
       '─────────────────────────────────────────────────────────────',
@@ -474,7 +477,47 @@ export async function createSessionApplication(options: SessionApplicationOption
       current: JSON.stringify([settings.provider, currentBase]),
       items,
     },
-      async () => ({items, warning: !items.length ? 'No models available. Run /login or configure a provider.' : ''}),
+      async signal => {
+        if (items.length) {
+          return {items, warning: ''};
+        }
+        const poolModels = await modelPool.list(AbortSignal.any([signal, commands.signal]));
+        for (const provider of new Set(poolModels.map(item => item.provider))) {
+          modelCandidates.set(provider, poolModels.filter(item => item.provider === provider).map(item => item.id));
+        }
+        const freshItems: PickerItem[] = [];
+        const providers = [...new Set(poolModels.map(m => m.provider))];
+        for (const provider of providers) {
+          const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
+          const currentForThisProvider = settings.provider === provider ? settings.model : '';
+          const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
+          for (const grouped of groupedList) {
+            groupedMap.set(grouped.id, grouped);
+            const currentThinkingEffort = registry.thinking().effort;
+            const currentEffort = (settings.provider === grouped.provider && settings.model === grouped.baseModel && currentThinkingEffort)
+              ? currentThinkingEffort
+              : grouped.currentEffort;
+            const recorded = poolModels.find(m => m.provider === provider && m.id === grouped.baseModel)
+              ?? poolModels.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
+            const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
+            const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
+            const eff = effortLevels && effortLevels.length > 0
+              ? '✦ ' + effortLevels.filter((l: string) => l !== 'auto').join('/')
+              : '-';
+            freshItems.push({
+              id: grouped.id,
+              label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
+              description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
+              effort: currentEffort,
+              effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
+            });
+          }
+        }
+        return {
+          items: freshItems,
+          warning: !freshItems.length ? 'No models available. Run /login or configure a provider.' : '',
+        };
+      },
       async (id, chosenEffort) => {
         requireIdle();
         const grouped = groupedMap.get(id);
@@ -503,6 +546,15 @@ export async function createSessionApplication(options: SessionApplicationOption
         }
         await saveSelection(candidate);
         return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : '')};
+      });
+  };
+  const openProviders = () => {
+    requireIdle();
+    void surfaces.openPicker({title: 'Select Provider', description: 'Switch default provider; run /model to inspect available models', current: settings.provider},
+      async () => ({items: registry.names().map(name => ({id: name, label: name}))}), async name => {
+        requireIdle();
+        await saveSelection(registry.candidate(name));
+        return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
       });
   };
   // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
@@ -697,9 +749,9 @@ export async function createSessionApplication(options: SessionApplicationOption
         notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble', '/providers', '/provider'].includes(text)) {
-        if (['/providers', '/provider'].includes(text)) requireIdle();
-        const initialTab = text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : ['/providers', '/provider'].includes(text) ? 'providers' : text.slice(1);
+      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble', '/providers'].includes(text)) {
+        if (text === '/providers') requireIdle();
+        const initialTab = text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : text === '/providers' ? 'providers' : text.slice(1);
         pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), initialTab, {
           onSaveToggles: async (tabId, items) => {
             if (tabId === 'animations') {
@@ -799,6 +851,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
         await saveEffort(effort.data); notice('Thinking effort: ' + effort.data + ' (saved)'); return;
       }
+      if (text === '/provider') {openProviders(); return;}
       if (text === '/model') {openModels(); return;}
       if (text === '/models') {
         const provider = settings.provider;

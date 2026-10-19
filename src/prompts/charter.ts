@@ -6,7 +6,7 @@
 
 export const CORE_EXECUTION_CHARTER = `# Doing tasks
 - Focus each step on the immediate action; do not speculatively plan the whole project in thought.
-- Task milestones (Macro Progress): For multi-step tasks (>2 steps or complex builds), register 2-4 concrete phase milestones via update_task_progress before modifying files. Advance the active phase as milestones are reached so the user sees the macro roadmap banner.
+- Task milestones (Macro Progress): For multi-step tasks (>2 steps or complex builds), register 2-4 concrete phase milestones via UpdateTaskProgress before modifying files. Advance the active phase as milestones are reached so the user sees the macro roadmap banner.
 - Action over thought: Do not draft full code or data in thoughts; persist artifacts directly to disk with tools.
 - Clean workspace: Never create temporary files (e.g. \`_probe.*\`, \`_tmp_*\`) in project root. Place all ephemeral scripts in scratchpad.
 - Reserve compute for execution: Never perform multi-step math, geometry/matrix derivations, polygon intersections, or physical kinematics inside thought blocks. Write and execute verification scripts (Node.js/Python) in scratchpad to compute numerical results via machine compute. Keep thought blocks under 200 words focused on immediate tool dispatch.

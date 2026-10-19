@@ -12,13 +12,13 @@
 
 ## 2. Invariants (刚性边界与底线)
 - **Single-Writer Rule**: Only one designated actor (typically Techne) writes to a production file during an implementation round. Reviewers (Aletheia, Kalon) produce reports, never competing write handles.
-- **Zero Card Fragmentation**: Interventions via `SendMessage({ mode: 'interrupt' })` MUST be injected directly into the active activity context without opening a redundant queued actor card.
+- **Zero Card Fragmentation**: Messages sent to an active actor via `SendMessage` (both `mode: 'interrupt'` and `mode: 'queue'`) MUST be injected directly into the active activity context and drained into the running agent loop without opening a redundant queued actor card.
 - **Persistence Boundary**: Actor model configurations are user-scoped and MUST be persisted to `~/.logox-ts/actor-models.json`, surviving across sessions, projects, and restarts.
 - **Strictly English Receipts**: All tool receipts, error messages, and coordination records must be 100% English.
 
 ## 3. Entry Points & Key Workflows
 - **Dispatch**: Director Logox calls `Actor({ tasks: [...] })` -> `EnsembleRuntime.dispatch()` -> queued in `queue` -> executed by `pump()`.
-- **Intervention**: Director Logox calls `SendMessage({ to, message, mode: 'interrupt' })` -> `EnsembleRuntime.interruptTask()` -> cancels blocked tool and injects message into running activity.
+- **Intervention**: When target actor is active, `SendMessage` injects directly into the running activity context. Mode `'interrupt'` immediately aborts blocked tool processes, while mode `'queue'` delivers at the next model turn without disrupting running commands.
 - **Cancel**: Director Logox calls `CancelActor({ actor, scope: 'tool' | 'activity', reason })` -> surgical tool kill or round termination.
 - **Notice**: On subagent activity completion/failure, Runtime automatically delivers a lightweight Idle Notice to Logox unless cancelled by Director.
 

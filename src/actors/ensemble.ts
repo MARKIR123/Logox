@@ -3,7 +3,7 @@ import {RuntimeStore} from '../runtime/store.js';
 import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot} from '../runtime/contracts.js';
 import {repairToolResults, type ModelMessage} from '../runtime/messages.js';
 import type {RoundSummary, RoundStatus} from '../context/contracts.js';
-import type {HistoryEntry, HistoryStore} from '../store/journal.js';
+import type {HistoryEntry, HistoryStore, TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
@@ -36,6 +36,7 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly source?: string;
   startTool?(): void;
   wait?(reason: string): () => void;
+  drainInbox?(): readonly ModelMessage[];
   readonly sessionId: string;
   readonly activityId: string;
   readonly ownerId: Id;
@@ -71,6 +72,7 @@ export class EnsembleRuntime<Id extends string> {
   private readonly pausedBatches = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly pendingWrites = new Set<Promise<void>>();
+  private readonly inboxes = new Map<string, ModelMessage[]>();
   private closed = false;
   constructor(readonly sessionId: string, readonly store: RuntimeStore, private readonly history: HistoryStore,
     private readonly execute: ActorExecutor<NoInfer<Id>>, private readonly options: EnsembleOptions<Id> = {}) {}
@@ -104,7 +106,10 @@ export class EnsembleRuntime<Id extends string> {
     const done = new Promise<void>(finish => {resolve = finish;});
     const task: QueuedTask<Id> = {ownerId, prompt, activityId, source, origin, controller, resolve, ready: Promise.resolve()};
     task.ready = this.trackWrite((async () => {
-      const progress = origin.resumeTaskId ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId) : undefined;
+      const progress = origin.resumeTaskId
+        ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId)
+        : (origin.parentActivityId ? await this.history.progress?.(this.sessionId, ownerId, origin.parentActivityId) : undefined)
+          ?? (ownerId === 'logox' && this.history.activeTasks ? (await this.history.activeTasks(this.sessionId)).findLast((t: TaskCheckpoint) => t.ownerId === 'logox' && t.progress)?.progress : undefined);
       if (progress) {
         task.progress = progress;
         this.store.activities.update(this.sessionId, activityId, {progress});
@@ -125,18 +130,51 @@ export class EnsembleRuntime<Id extends string> {
     );
   }
 
+  async injectTaskMessage(targetOwnerId: string, message: string, source = 'logox', summary?: string, mode: 'interrupt' | 'queue' = 'queue'): Promise<boolean> {
+    const active = this.getActiveTask(targetOwnerId);
+    if (!active) return false;
+    // 1. If interrupt mode, kill active process tree for this activity so blocked tools abort immediately
+    if (mode === 'interrupt') {
+      killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
+    }
+    // 2. Format message
+    const label = summary ? `[Message from ${source} · ${summary}]` : `[Message from ${source}]`;
+    const fullText = `${label}\n${message}`;
+    const modelMsg: ModelMessage = {
+      role: 'user',
+      text: fullText,
+    };
+    // 3. Inject into runtime store so TUI renders it live in the active card
+    this.store.message(this.sessionId, targetOwnerId as Id, 'user', fullText, {
+      activityId: active.activityId,
+      source,
+      inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
+    });
+    // 4. Append to journal on disk for permanent transcript
+    await this.history.append({
+      version: 1,
+      sessionId: this.sessionId,
+      activityId: active.activityId,
+      ownerId: targetOwnerId,
+      source,
+      inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
+      role: 'user',
+      text: fullText,
+      message: modelMsg,
+      time: Date.now(),
+    });
+    // 5. Enqueue into active task inbox for agent.ts loop to consume
+    const inbox = this.inboxes.get(active.activityId);
+    if (inbox) {
+      inbox.push(modelMsg);
+    }
+    return true;
+  }
+
   interruptTask(targetOwnerId: string, message: string, source = 'logox', summary?: string): boolean {
     const active = this.getActiveTask(targetOwnerId);
     if (!active) return false;
-    // Abort running tool process tree for this active activity if any
-    killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
-    // Inject message directly into the existing activity context without creating a new card
-    const label = summary ? `[Intervention from ${source} · ${summary}]` : `[Intervention from ${source}]`;
-    this.store.message(this.sessionId, targetOwnerId, 'user', `${label}\n${message}`, {
-      activityId: active.activityId,
-      source,
-      inputKind: 'collaboration_interrupt',
-    });
+    void this.injectTaskMessage(targetOwnerId, message, source, summary, 'interrupt');
     return true;
   }
 
@@ -245,7 +283,7 @@ export class EnsembleRuntime<Id extends string> {
           await this.options.settled?.(task.activityId, 'failed');
         }
       })().catch(() => {}).finally(() => {
-        this.tasks.delete(task.activityId); this.controllers.delete(task.activityId); this.activeSlots.delete(task.ownerId);
+        this.tasks.delete(task.activityId); this.controllers.delete(task.activityId); this.activeSlots.delete(task.ownerId); this.inboxes.delete(task.activityId);
         task.resolve(); this.pump();
       });
       this.activeSlots.set(task.ownerId, execution);
@@ -289,6 +327,7 @@ export class EnsembleRuntime<Id extends string> {
         if (!signal.aborted) update('running', '继续处理');
       }
     };
+    this.inboxes.set(activityId, []);
     try {
       signal.throwIfAborted();
       update('running', '已登场');
@@ -302,6 +341,11 @@ export class EnsembleRuntime<Id extends string> {
       signal.throwIfAborted();
       context = {
         ...identity, ...origin, source, history: entries, signal,
+        drainInbox: () => {
+          const queue = this.inboxes.get(activityId);
+          if (!queue || queue.length === 0) return [];
+          return queue.splice(0, queue.length);
+        },
         ...(task.progress ? {progress: task.progress} : {}),
         saveProgress: async progress => {
           signal.throwIfAborted();

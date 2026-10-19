@@ -11,6 +11,7 @@ export interface ActorStyle {
   readonly color: string;
   readonly cardClosed?: string | undefined;
   readonly cardOpen?: string | undefined;
+  readonly thinkingAnimation?: readonly string[] | undefined;
 }
 export type ActorStyles = Readonly<Record<string, ActorStyle>>;
 

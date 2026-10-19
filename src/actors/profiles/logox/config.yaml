@@ -6,6 +6,15 @@ color: "#d97757"
 card_closed: "#4d3227"
 card_open: "#613e31"
 symbol: ◈
+thinking_animation:
+  - "·"
+  - "⋄"
+  - "◇"
+  - "◈"
+  - "◆"
+  - "◈"
+  - "◇"
+  - "⋄"
 context:
   keep_recent_rounds: 2
   keep_recent_tools: 2
