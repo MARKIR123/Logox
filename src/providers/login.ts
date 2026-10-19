@@ -2,6 +2,7 @@ import {AuthStorage} from './auth.js';
 import {CustomProviderStorage} from './custom-storage.js';
 import {startOpenAiOAuth, type OAuthSession} from './oauth.js';
 import {createHttpTransport} from './transport.js';
+import {formatDetailedError} from './error-format.js';
 
 export function expandPortOrUrl(input: string): string {
   const trimmed = input.trim();
@@ -167,7 +168,7 @@ export class LoginFlow {
         await this.onSaved(state.provider);
         this.publish(null);
       } catch (error) {
-        this.publish({...state, phase: 'custom_key', error: error instanceof Error ? error.message : 'Failed to save custom provider.'});
+        this.publish({...state, phase: 'custom_key', error: formatDetailedError(error, 'Failed to save custom provider.')});
       }
     })();
     try {await this.saving;} finally {this.saving = undefined;}
@@ -196,7 +197,7 @@ export class LoginFlow {
         this.publish({
           ...state,
           phase: 'method',
-          error: error instanceof Error ? error.message : 'OAuth login failed.',
+          error: formatDetailedError(error, 'OAuth login failed.'),
         });
       } finally {
         this.oauthSession = undefined;

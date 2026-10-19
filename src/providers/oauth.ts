@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {randomBytes, createHash, randomUUID} from 'node:crypto';
 import {exec} from 'node:child_process';
 import type {OAuthToken} from './auth.js';
+import {formatNetworkError} from './error-format.js';
 
 export interface OAuthSession {
   authUrl: string;
@@ -160,26 +161,36 @@ export async function startOpenAiOAuth(
       try {
         const {code, clientId} = await codePromise;
         signal.throwIfAborted();
-        const tokenRes = await fetcher(TOKEN_URL, {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            client_id: clientId,
-            code,
-            code_verifier: verifier,
-            redirect_uri: REDIRECT_URI,
-            resource: RESOURCE,
-          }).toString(),
-          signal,
-        });
+        let tokenRes: Response;
+        try {
+          tokenRes = await fetcher(TOKEN_URL, {
+            method: 'POST',
+            headers: {
+              accept: 'application/json',
+              'content-type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              grant_type: 'authorization_code',
+              client_id: clientId,
+              code,
+              code_verifier: verifier,
+              redirect_uri: REDIRECT_URI,
+              resource: RESOURCE,
+            }).toString(),
+            signal,
+          });
+        } catch (fetchErr) {
+          throw new Error(`OpenAI token exchange request failed: ${formatNetworkError(fetchErr, {url: TOKEN_URL, method: 'POST'})}`);
+        }
 
         if (!tokenRes.ok) {
           const body = await tokenRes.text().catch(() => '');
-          throw new Error('OpenAI token exchange failed (' + tokenRes.status + '): ' + body);
+          let detail = body;
+          try {
+            const parsed = JSON.parse(body);
+            detail = parsed.error_description || parsed.error?.message || (typeof parsed.error === 'string' ? parsed.error : body);
+          } catch {}
+          throw new Error(`OpenAI token exchange failed (HTTP ${tokenRes.status}): ${detail}`);
         }
 
         const data = await tokenRes.json() as Record<string, unknown>;
@@ -213,24 +224,34 @@ export async function refreshOpenAIToken(
   if (!refreshToken) throw new Error('Missing refresh token for OpenAI OAuth credential');
   const clientId = String(cred.clientId || cred.account_id || DYNAMIC_CLIENT_ID);
 
-  const res = await fetcher(TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      refresh_token: refreshToken,
-      resource: RESOURCE,
-    }).toString(),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetcher(TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: refreshToken,
+        resource: RESOURCE,
+      }).toString(),
+      signal,
+    });
+  } catch (fetchErr) {
+    throw new Error(`OpenAI token refresh request failed: ${formatNetworkError(fetchErr, {url: TOKEN_URL, method: 'POST'})}`);
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error('OpenAI token refresh failed (' + res.status + '): ' + body);
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      detail = parsed.error_description || parsed.error?.message || (typeof parsed.error === 'string' ? parsed.error : body);
+    } catch {}
+    throw new Error(`OpenAI token refresh failed (HTTP ${res.status}): ${detail}`);
   }
 
   const data = await res.json() as Record<string, unknown>;
