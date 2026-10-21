@@ -139,12 +139,13 @@ export function normalizeSelection(selection: SelectionRange): {start: Selection
 }
 
 export function sliceRowText(text: string, startCol: number, endCol: number): {before: string; selected: string; after: string} {
+  if (endCol <= 0) return {before: '', selected: '', after: text};
   let col = 0;
   let before = '';
   let selected = '';
   let after = '';
   for (const {segment} of segmenter.segment(safeText(text))) {
-    const w = Math.max(1, stringWidth(segment));
+    const w = segment.length === 1 && segment.charCodeAt(0) < 128 ? 1 : Math.max(1, stringWidth(segment));
     if (col + w <= startCol) before += segment;
     else if (col >= endCol) after += segment;
     else selected += segment;

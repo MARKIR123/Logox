@@ -21,6 +21,7 @@ function styled(segment: SceneSegment, color?: string, bg?: string): string {
 const graphemes = new Intl.Segmenter('zh', {granularity: 'grapheme'});
 const widths = new Map<string, number>();
 function glyphWidth(text: string): number {
+  if (text.length === 1 && text.charCodeAt(0) < 128) return 1;
   const known = widths.get(text); if (known !== undefined) return known;
   const width = stringWidth(text);
   if (widths.size >= 2048) widths.clear();

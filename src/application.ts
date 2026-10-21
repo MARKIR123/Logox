@@ -75,7 +75,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const store = new RuntimeStore(), journal = new Journal(join(state, 'sessions'));
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
-  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox-ts', 'statusbar.json'));
+  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
   let commandOwner = 'logox';
   const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = commandOwner, activityId?: string) => {
     systems.emit(text, kind, owner, activityId); extensions.hooks.emit('notification', {session_id: session});
@@ -92,7 +92,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
   const homeDir = options.resourceOptions?.home ?? homedir();
-  const modelPool = new ModelPool(registry, join(homeDir, '.logox-ts', 'models-store.json'));
+  const modelPool = new ModelPool(registry, join(homeDir, '.logox', 'models-store.json'));
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
   const taskModels = new TaskModels({registry, ledger: taskModelLedger,
@@ -272,7 +272,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     selectionDone = (async () => {
       try {
         const selection = next.selection();
-        const globalPref = new StateFile(join(homedir(), '.logox-ts', 'model-preferences.json'), preferenceSchema);
+        const globalPref = new StateFile(join(homedir(), '.logox', 'model-preferences.json'), preferenceSchema);
         await globalPref.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort}).catch(() => {});
         await preferences.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort});
         registry.adopt(next); settings = registry.selection();

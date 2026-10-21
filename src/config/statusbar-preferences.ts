@@ -23,9 +23,9 @@ export class StatusbarPreferences {
   private readonly fallbackFile?: StateFile<z.infer<typeof schema>>;
   private state: StatusbarSnapshot = immutable({revision: 0, modules: defaultStatusbar, motion: true});
   private listeners = new Set<() => void>();
-  constructor(path = join(homedir(), '.logox-ts', 'statusbar.json'), fallbackPath?: string) {
+  constructor(path = join(homedir(), '.logox', 'statusbar.json'), fallbackPath?: string) {
     this.file = new StateFile(path, schema);
-    const effectiveFallback = fallbackPath ?? (path === join(homedir(), '.logox-ts', 'statusbar.json') ? join(homedir(), '.logox', 'statusbar.json') : undefined);
+    const effectiveFallback = fallbackPath ?? (path === join(homedir(), '.logox', 'statusbar.json') ? join(homedir(), '.logox-ts', 'statusbar.json') : undefined);
     if (effectiveFallback) this.fallbackFile = new StateFile(effectiveFallback, schema);
   }
   getSnapshot = (): StatusbarSnapshot => this.state;

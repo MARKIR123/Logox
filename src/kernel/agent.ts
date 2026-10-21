@@ -188,7 +188,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               // 失败尝试只留作历史阅读。重试复用原请求，不拼接半段回复或执行半截工具参数。
               if (emitted) await context.record({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), contextExcluded: true}, step);
               thinkingId = steps.thinking(); textId = undefined; emitted = false;
-              context.report('Network retry', 'Connection interrupted; retrying with non-streaming fallback...');
+              context.report('Network retry', 'Connection interrupted. Retrying (' + (attempt + 1) + '/' + options.retries + ')...');
               const resume = steps.wait(thinkingId, 'Waiting for retry');
               try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: context.signal});} finally {resume();}
               // 对齐 Claude Code：流式长连接被代理或中间网关重置后，重试自动降级为非流式请求，彻底规避长流超时

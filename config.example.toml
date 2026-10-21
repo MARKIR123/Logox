@@ -1,21 +1,13 @@
-# 在舞台用 /login 保存 API key；重启自动读取。
-# 模型名从 /models 或 --list-models 返回值填写。
+# Copy selected sections to ~/.logox/config.toml or .logox/config.toml.
+# Use /login for credentials and /model for an available model ID.
 [provider]
-name = "deepseek"
+name = "openai-compatible"
 model = ""
 temperature = 0.2
 thinking_effort = "auto"
 max_tokens = 16384
-timeout = 600 # 连续无有效模型进展的秒数（默认 600 秒 / 10 分钟，对齐 Claude Code 与深度推理长思考）
+timeout = 600 # Seconds without meaningful model progress.
 
-# 全局界面主题与角色强调色（均可选，默认采用 LOGOX TS 官方配色）
-# [theme]
-# user = "#5282b5"             # 用户自身主题色（沉稳深海蓝）
-# accent = "#d97757"           # Logox 执导者与界面主高亮色（Claude 暖陶橙）
-# dream_collapsed = "#c4cbd2" # 入梦折叠底色（白日梦柔雾灰白）
-# dream_expanded = "#dce2e8"  # 入梦展开底色（云母白灰）
-
-# 上下文整理参数，输出上限仍由 provider.max_tokens 控制。
 [context]
 keep_recent_rounds = 2
 keep_recent_tools = 2
@@ -23,73 +15,70 @@ reserve_tokens = 32768
 low_watermark_ratio = 0.5
 # max_budget_tokens = 6000
 # target_budget_tokens = 4000
-# summary_provider = "deepseek"
-# summary_model = "从模型目录选择的真实名称"
-
-# 未知模型必须填写真实窗口；不要把累计用量当窗口。
-# 本地 num_ctx=8192 的模型示例：
-# [models."ollama/logox-qwen3.8:27b"]
-# context_window = 8192
-# max_output_tokens = 2048
+# summary_provider = "work"
+# summary_model = "your-model-id"
 
 [kernel]
-# 0 = unlimited continuous loop (Claude Code mode; loops until task complete or user interrupts with Esc)
-# Set a positive number (e.g. 50) if you want an interactive prompt every N round trips.
-max_iterations = 0
+max_iterations = 0 # Unlimited round trips; cancellation still applies.
 max_retries = 3
 
-# 可选：只读 pi 已有的 API key 文件，不复制密钥。
-# [providers.deepseek]
-# kind = "openai_compat"
-# base_url = "https://api.deepseek.com"
-# api_key_env = "DEEPSEEK_API_KEY"
-# auth_file = "~/.pi/agent/auth.json"
-# default_model = "从 --list-models 查询并选择的名称"
+[permissions]
+mode = "default" # default, auto, or creative; not an OS sandbox.
+readonly_concurrency = 4
 
-# 本地反代服务（如 Antigravity Tools，内置 preset，无需 API Key，自动适配 100 万 Token 窗口）：
-# [provider]
-# name = "antigravity"
-# model = "gemini-3.8-flash"
+# Optional theme overrides.
+# [theme]
+# user = "#5282b5"
+# accent = "#d97757"
+# dream_collapsed = "#c4cbd2"
+# dream_expanded = "#dce2e8"
 
-# 自定义 OpenAI 兼容服务：
+# Custom OpenAI-compatible service. Select it with /provider work.
+# Do not save api_key in TOML; use api_key_env or /login.
 # [providers.work]
 # kind = "openai_compat"
 # base_url = "https://example.com/v1"
 # api_key_env = "WORK_MODEL_API_KEY"
-# default_model = "实际模型名称"
-# 然后设置 [provider] name = "work"。
-# TOML 不保存 api_key。
+# default_model = "your-model-id"
 
-# 思考能力只在服务支持时声明；费用是每百万 token 静态价格。
-# [models."work/实际模型"]
+# Local service example; start the server and install its model separately.
+# [providers.local]
+# kind = "openai_compat"
+# base_url = "http://127.0.0.1:11434/v1"
+# default_model = "your-model-id"
+
+# Declare the actual server allocation, not just the model's theoretical limit.
+# [models."local/your-model-id"]
+# context_window = 8192
+# max_output_tokens = 2048
+
+# Optional thinking capabilities and per-million-token prices.
+# Only declare values supported by the selected service.
+# [models."work/your-model-id"]
 # context_window = 32768
 # thinking_protocol = "reasoning-effort"
 # thinking_levels = ["auto", "off", "low", "medium", "high"]
-# [models."work/实际模型".prices]
+# [models."work/your-model-id".prices]
 # currency = "USD"
 # input = 2
 # output = 4
 # cache_read = 0.5
 # cache_write = 3
-# MCP stdio：首次 list/call 时才启动。远端 call 按当前权限模式裁决。
+
+# MCP currently supports stdio subprocesses, not HTTP transport.
 # [mcp.servers.local]
 # command = "node"
-# args = ["C:/tools/local-mcp.mjs"]
+# args = ["/absolute/path/to/server.mjs"]
 # timeout = 30
 # startup_timeout_s = 10
 # enabled = true
 
-# 观察 hooks：可执行文件 + 参数数组，JSON 事件从 stdin 读取。
+# Observation hooks execute real commands. Review scripts before enabling.
 # [hooks]
 # enabled = true
 # timeout_s = 5
 # [[hooks.entries]]
 # event = "post_tool_use"
-# tool = "read"
-# command = "powershell.exe"
-# args = ["-NoProfile", "-File", "C:/tools/observe.ps1"]
-
-[permissions]
-# default 灰色：人工审批；auto 蓝色：会话模型审批；creative 紫色：危险过滤后默认允许
-mode = "default"
-readonly_concurrency = 4
+# tool = "Read"
+# command = "node"
+# args = ["/absolute/path/to/observe.mjs"]

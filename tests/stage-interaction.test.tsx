@@ -74,6 +74,25 @@ test('内容端点在滚动、追加和缩放后保持正文与角色标题位�
   assert.equal(extractSelection(narrow, selectionRange(narrow, heading)), '整理布局');
 });
 
+test('长历史会话中选区高亮计算保持亚毫秒级性能且结果精确', () => {
+  const store = new RuntimeStore();
+  for (let i = 0; i < 200; i++) {
+    store.message('s', 'logox', 'assistant', `第 ${i} 条消息：` + '测试内容中文🙂 English words. '.repeat(8));
+  }
+  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {}, null);
+  assert.ok(rows.length > 1000, '超过1000行');
+  const targetIndex = Math.floor(rows.length / 2);
+  const anchor = contentPoint(rows, targetIndex, 10);
+  const start = performance.now();
+  for (let i = 0; i < 200; i++) {
+    const focus = contentPoint(rows, targetIndex + 2, 20);
+    const range = selectionRange(rows, {anchor, focus});
+    assert.ok(range && range.anchor.y === targetIndex && range.focus.y === targetIndex + 2);
+  }
+  const elapsed = performance.now() - start;
+  assert.ok(elapsed < 200, `200次拖拽选区计算耗时 ${elapsed}ms，应低于 200ms (平均 < 1ms)`);
+});
+
 test('真实 Ink 鼠标松开才折叠，拖选标题和停止文字不会操作，内层灰底与 Actor 背景各自收起', {timeout: 7000}, async () => {
   const store = new RuntimeStore(); actor(store);
   store.message('s', 'techne', 'notice', 'read\n可选择的工具结果', {activityId: 'actor', kind: 'tool'});

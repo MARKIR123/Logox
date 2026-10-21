@@ -339,7 +339,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
   return {async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 名称或 --model 名称');
     const native = settings.kind === 'anthropic';
-    const isResponsesApi = (settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && typeof settings.key === 'string' && !settings.key.startsWith('sk-'));
+    const isResponsesApi = (settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && typeof settings.key === 'string' && (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-')));
     const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : isResponsesApi ? '/responses' : '/chat/completions');
     const headers: Record<string, string> = {'content-type': 'application/json'};
     if (native) {
@@ -379,7 +379,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       }
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
     const supportsVision = request.supportsVision ?? true;
-    const isStream = request.stream !== false;
+    const isStream = isResponsesApi ? true : request.stream !== false;
     let chosenModel = settings.model;
     if (isResponsesApi && (!chosenModel || chosenModel.includes('gpt-4') || chosenModel.includes('o3-mini'))) {
       chosenModel = 'gpt-6.1-sol';
@@ -429,8 +429,16 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       const contentType = response.headers.get('content-type') || '';
       if (!isStream && !contentType.includes('text/event-stream')) {
         let payload: unknown;
-        try {payload = await response.json();} catch {throw new ProviderError('模型返回的非流式响应格式无效');}
-        const parsed = z.record(z.string(), z.unknown()).parse(payload);
+        try {
+          payload = await response.json();
+        } catch (error) {
+          throw transportFailure(error, 'stream', response.status);
+        }
+        const parsedRecord = z.record(z.string(), z.unknown()).safeParse(payload);
+        if (!parsedRecord.success) {
+          throw new ProviderError('模型返回的非流式响应格式无效', true, 'temporary', {status: response.status});
+        }
+        const parsed = parsedRecord.data;
         if (native) {
           const content = Array.isArray(parsed.content) ? parsed.content as Array<Record<string, unknown>> : [];
           for (const block of content) {

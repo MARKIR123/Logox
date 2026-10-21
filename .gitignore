@@ -7,4 +7,12 @@ coverage/
 .env.*
 !.env.example
 .logox/
+.logox-ts/
 *.log
+
+# Local development instructions and working documents.
+/[Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
+/[Gg][Ll][Oo][Ss][Ss][Aa][Rr][Yy].[Mm][Dd]
+/docs/development/
+/docs/superpowers/
+/docs/PROJECT-REPORT.md

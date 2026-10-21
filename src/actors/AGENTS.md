@@ -1,29 +1,38 @@
 # Module: Actors & Ensemble (`src/actors/`)
 
-## 1. Quick Route (核心文件导航)
-- `definitions.ts`: Actor identity schemas, YAML frontmatter parser, and color derivation.
-- `catalog.ts`: ActorCatalog loader scanning builtin, user, and project-level actor definitions.
-- `actor-models-storage.ts`: Thread-safe persistence of actor default models in `~/.logox-ts/actor-models.json`.
-- `ensemble.ts`: EnsembleRuntime execution engine, task queue, `StopReason`, `cancelActor()`, and `interruptTask()`.
-- `collaboration.ts`: Inter-agent messaging tool `SendMessage` (supporting `mode: "interrupt"` and `to: "all"` broadcast).
-- `services.ts`: ActorServices bridging ActorCatalog, Ensemble, permissions, and tools (`ListActors`, `CancelActor`).
-- `bulletin.ts`: Project bulletin board (`.logox/bulletin.md`) initialization and experience appending.
-- `profiles/*/`: Built-in actor definitions (`logox`, `techne`, `kalon`, `aletheia`).
+## 1. Scope
+- **Owns**: Actor definitions (`persona.md`, `config.yaml`, `compression.md`), `ActorCatalog`, `EnsembleRuntime` task queue, `SendMessage` messaging, `CancelActor`, `ListActors`, and `.logox/bulletin.md`.
+- **Does not own**: Single-agent LLM loop execution (owned by `src/kernel/agent.ts`), TUI card rendering (owned by `src/tui/`).
 
-## 2. Invariants (刚性边界与底线)
-- **Single-Writer Rule**: Only one designated actor (typically Techne) writes to a production file during an implementation round. Reviewers (Aletheia, Kalon) produce reports, never competing write handles.
-- **Zero Card Fragmentation**: Messages sent to an active actor via `SendMessage` (both `mode: 'interrupt'` and `mode: 'queue'`) MUST be injected directly into the active activity context and drained into the running agent loop without opening a redundant queued actor card.
-- **Persistence Boundary**: Actor model configurations are user-scoped and MUST be persisted to `~/.logox-ts/actor-models.json`, surviving across sessions, projects, and restarts.
-- **Strictly English Receipts**: All tool receipts, error messages, and coordination records must be 100% English.
+## 2. Start Here (Task Router)
+| If investigating... | Start at... | Then check... |
+|---|---|---|
+| Subagent task dispatching or queuing | `ensemble.ts:Ensemble.dispatch()` | `pump()` execution loop and `TaskOrigin` |
+| Inter-agent messaging or tool interruption | `collaboration.ts:SendMessage` | `ensemble.ts:injectTaskMessage()` |
+| Subagent cancellation or stuck tool termination | `services.ts:executeCancelActor()` | `cancelActor()` in `ensemble.ts` |
+| Actor default model persistence across restarts | `actor-models-storage.ts` | `~/.logox-ts/actor-models.json` |
+| Actor persona discovery and loading | `catalog.ts:ActorCatalog` | `profiles/*/` and `definitions.ts` |
 
-## 3. Entry Points & Key Workflows
-- **Dispatch**: Director Logox calls `Actor({ tasks: [...] })` -> `EnsembleRuntime.dispatch()` -> queued in `queue` -> executed by `pump()`.
-- **Intervention**: When target actor is active, `SendMessage` injects directly into the running activity context. Mode `'interrupt'` immediately aborts blocked tool processes, while mode `'queue'` delivers at the next model turn without disrupting running commands.
-- **Cancel**: Director Logox calls `CancelActor({ actor, scope: 'tool' | 'activity', reason })` -> surgical tool kill or round termination.
-- **Notice**: On subagent activity completion/failure, Runtime automatically delivers a lightweight Idle Notice to Logox unless cancelled by Director.
+## 3. Hard Boundaries
+- **Single-Writer Safety**: Only one designated actor (typically Techne) writes to a production file during an implementation round. Reviewers (Aletheia, Kalon) produce reports, never competing write handles.
+- **Zero Card Fragmentation**: Messages sent via `SendMessage` (both `mode: "interrupt"` and `mode: "queue"`) MUST be injected directly into the active activity context without opening redundant cards.
+- **Persistence Boundary**: Actor model configurations are user-scoped and MUST be persisted to `~/.logox-ts/actor-models.json`, surviving across sessions and restarts.
+- **Strictly English Interface**: All internal receipts, error diagnostics, and status lines must be 100% English.
 
-## 4. Cross-Reference (关联路标)
-- Runtime engine & store: [`../runtime/AGENTS.md`](../runtime/AGENTS.md)
-- Available tools & execution: [`../tools/AGENTS.md`](../tools/AGENTS.md)
-- TUI card presentation: [`../tui/AGENTS.md`](../tui/AGENTS.md)
-- Architectural rationale & design history: [`../../docs/`](../../docs/)
+## 4. Integration Points
+```text
+application.ts (binds ActorServices & Ensemble)
+  → kernel/agent.ts (runs Director / Subagent loops)
+  → actors/collaboration.ts (delivers mid-turn SendMessage & Director feedback)
+  → store/journal.ts (persists director.jsonl and subagents/<actor>.jsonl)
+```
+
+## 5. Verification
+- **Targeted Test Suite**:
+  - `tests/ensemble.test.ts`: Ensemble dispatch queue, pump, and lifecycle.
+  - `tests/actor-collaboration-enhancements.test.ts`: ListActors, CancelActor, bulletin, SendMessage.
+  - `tests/actor-recovery.test.ts`: Remodeling, timeout recovery, and retry budgets.
+- **Fast Run Command**:
+  ```bash
+  node --test dist/tests/actor*.test.js dist/tests/ensemble.test.js
+  ```

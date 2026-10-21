@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {Resources} from '../src/resources/manager.js';
@@ -39,6 +40,20 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
 
     // Public SOPs
     assert.ok(skillNames.includes('browser-screenshot'));
+    assert.ok(skillNames.includes('skill-internalization'));
+
+    // Check level classification
+    const designPrinciples = snapshot.skills.find(s => s.name === 'design-principles');
+    assert.equal(designPrinciples?.level, 'core');
+    const flatDesign = snapshot.skills.find(s => s.name === 'flat-design');
+    assert.equal(flatDesign?.level, 'domain');
+    assert.equal(flatDesign?.category, 'styling');
+
+    // Check categories parsed from agent.md
+    assert.ok(snapshot.categories.some(c => c.actor === 'kalon' && c.category === 'styling'));
+    assert.ok(snapshot.categories.some(c => c.actor === 'kalon' && c.category === 'color'));
+    assert.ok(snapshot.categories.some(c => c.actor === 'techne' && c.category === 'engineering'));
+    assert.ok(snapshot.categories.some(c => c.actor === 'aletheia' && c.category === 'inspection'));
 
     // Check visibility filtering
     const kalonSkills = resources.skillsFor({actorId: 'kalon'}).map(s => s.name);
@@ -49,6 +64,21 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
     // Borrowing allows cross-actor access
     const borrowed = resources.skillsFor({actorId: 'kalon', borrowed: ['tdd-workflow']}).map(s => s.name);
     assert.ok(borrowed.includes('tdd-workflow'));
+
+    // Progressive Prompt Formatting: Kalon sees Core Principles and Domain Repositories, but NOT individual domain files
+    const kalonPrompt = resources.prompt({actorId: 'kalon'}).context;
+    assert.ok(kalonPrompt.includes('【Core Principles】'));
+    assert.ok(kalonPrompt.includes('design-principles'));
+    assert.ok(kalonPrompt.includes('browser-screenshot'));
+    assert.ok(kalonPrompt.includes('skill-internalization'));
+    assert.ok(kalonPrompt.includes('【Domain Repositories】'));
+    assert.ok(kalonPrompt.includes('styling/: Visual UI design languages'));
+    assert.ok(kalonPrompt.includes('color/: Specialized palettes'));
+    assert.ok(kalonPrompt.includes('literature/: Narrative storytelling'));
+    // Crucial: Domain SOP file names MUST NOT be flattened into the system prompt!
+    assert.ok(!kalonPrompt.includes('flat-design.md'));
+    assert.ok(!kalonPrompt.includes('morandi-palette.md'));
+    assert.ok(!kalonPrompt.includes('material-design.md'));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -72,6 +102,35 @@ test('Hierarchical Skills: project-level skill overrides built-in skill with sam
     assert.ok(morandi);
     assert.equal(morandi.description, 'Custom project Morandi palette');
     assert.ok(morandi.path.includes(join('.logox', 'skills', 'kalon', 'color')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('Hierarchical Skills: non-destructively seeds builtin skills to ~/.logox/skills on first run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-seed-'));
+  try {
+    const userSkillsDir = join(root, '.logox', 'skills');
+    assert.equal(existsSync(userSkillsDir), false);
+
+    const resources = new Resources(root, {home: root});
+    await resources.reload();
+
+    // Verify seeded into user directory
+    assert.ok(existsSync(join(userSkillsDir, 'kalon', 'agent.md')));
+    assert.ok(existsSync(join(userSkillsDir, 'kalon', 'design-principles.md')));
+    assert.ok(existsSync(join(userSkillsDir, 'public', 'skill-internalization.md')));
+
+    // Modify a seeded file in user directory to test non-destructive behavior
+    const testFile = join(userSkillsDir, 'kalon', 'design-principles.md');
+    await writeFile(testFile, '---\nname: design-principles\ndescription: User customized principles\n---\n# Custom', 'utf8');
+
+    // Reload again
+    await resources.reload();
+
+    // Verify it was NOT overwritten
+    const content = await readFile(testFile, 'utf8');
+    assert.ok(content.includes('User customized principles'));
   } finally {
     await rm(root, {recursive: true, force: true});
   }

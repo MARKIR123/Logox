@@ -44,6 +44,7 @@ import {
   parseSgrMouse,
   timelineRows,
   viewport,
+  normalizeSelection,
   type Anchor,
   type Row,
   type SgrMouseEvent,
@@ -124,7 +125,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   });
   const [hoveredFoldId, setHoveredFoldId] = useState<string | null>(null);
   const contentSelection = useRef<ContentSelection | null>(null);
-  const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow} | null>(null);
+  const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow; lastDragX?: number; lastDragY?: number} | null>(null);
+  const lastHoverRef = useRef<{x: number; y: number}>({x: -1, y: -1});
   const edgeTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const edgePointer = useRef<{x: number; y: number} | null>(null);
   const stopEdgeScroll = () => {if (edgeTimer.current) clearInterval(edgeTimer.current); edgeTimer.current = undefined; edgePointer.current = null;};
@@ -355,11 +357,22 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (surface?.kind === 'page') plane.hide();
     else plane.present({...view, width, height: timelineHeight, selection, motion: layout?.motion ?? true});
   });
-  const copySelection = () => extractSelection(messageRows.map(row => decorateRow(row, plane?.time ?? Date.now(), layout?.motion ?? true)), selectionRange(messageRows, contentSelection.current));
+  const copySelection = () => {
+    const range = selectionRange(messageRows, contentSelection.current);
+    if (!range) return '';
+    const {start, end} = normalizeSelection(range);
+    const firstY = Math.max(0, start.y);
+    const lastY = Math.min(messageRows.length - 1, end.y);
+    if (firstY > lastY) return '';
+    const decoratedRows = [...messageRows];
+    for (let y = firstY; y <= lastY; y++) {
+      decoratedRows[y] = decorateRow(messageRows[y]!, plane?.time ?? Date.now(), layout?.motion ?? true);
+    }
+    return extractSelection(decoratedRows, range);
+  };
   const readingRows = () => {
-    if (!plane) return view.rows;
-    plane.flush();
-    return plane.rows;
+    if (plane && plane.rows.length) return plane.rows;
+    return view.rows;
   };
   const scroll = (amount: number) => {
     const maxStart = Math.max(0, messageRows.length - timelineHeight);
@@ -520,12 +533,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
     const selected = contentSelection.current;
     if (!selected || !gesture.current) return;
-    contentSelection.current = {...selected, focus: contentPoint(messageRows, current.start + Math.max(0, Math.min(timelineHeight - 1, y)), x)};
+    const rowIndex = current.start + Math.max(0, Math.min(timelineHeight - 1, y));
+    contentSelection.current = {...selected, focus: contentPoint(messageRows, rowIndex, x)};
     presentReading();
   };
   const dragAt = (x: number, y: number) => {
     if (!gesture.current) return;
     if (x !== gesture.current.x || y !== gesture.current.y) gesture.current.dragged = true;
+    if (gesture.current.lastDragX === x && gesture.current.lastDragY === y) return;
+    gesture.current.lastDragX = x;
+    gesture.current.lastDragY = y;
     updateDrag(x, y);
     edgePointer.current = {x, y};
     if (gesture.current.dragged && (y <= 0 || y >= timelineHeight - 1) && !edgeTimer.current) {
@@ -543,10 +560,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (event.action === 'wheel_up') { if (event.y < timelineHeight) scroll(-3); return; }
     if (event.action === 'wheel_down') { if (event.y < timelineHeight) scroll(3); return; }
     if (event.action === 'move') {
-      const control = event.y < timelineHeight ? (readingRows()[event.y] as SceneRow | undefined)?.controls?.find(item => event.x >= item.startCol && event.x < item.endCol && !item.disabled) : undefined;
-      setHoveredStop(control?.action.foldId ?? '');
+      if (lastHoverRef.current.x === event.x && lastHoverRef.current.y === event.y) return;
+      lastHoverRef.current = {x: event.x, y: event.y};
+      const rows = readingRows();
+      const row = event.y < timelineHeight ? (rows[event.y] as SceneRow | undefined) : undefined;
+      const control = row?.controls?.find(item => event.x >= item.startCol && event.x < item.endCol && !item.disabled);
+      const nextStop = control?.action.foldId ?? '';
+      setHoveredStop(prev => prev === nextStop ? prev : nextStop);
       const target = (demoScene || stage) && event.y < timelineHeight
-        ? hoveredCardAt(readingRows()[event.y] as SceneRow | undefined, event.x)
+        ? hoveredCardAt(row, event.x)
         : !demoScene && activity && !expanded && event.y >= timelineHeight && event.y < timelineHeight + activityHeight && event.x < width
           ? activity.activityId : null;
       setHoveredFoldId(prev => prev === target ? prev : target);
@@ -623,8 +645,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       const chunk = originalRead(size);
       if (chunk !== null && chunk !== undefined) {
         const text = carry + (typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
-        for (const event of parseSgrMouse(text)) {
-          mouseHandlerRef.current(event);
+        const events = parseSgrMouse(text);
+        for (let i = 0; i < events.length; i++) {
+          const ev = events[i]!;
+          if (ev.action === 'drag' && i + 1 < events.length && events[i + 1]!.action === 'drag') continue;
+          if (ev.action === 'move' && i + 1 < events.length && events[i + 1]!.action === 'move') continue;
+          mouseHandlerRef.current(ev);
         }
         const tail = /\x1b\[<[\d;]*$/.exec(text);
         carry = tail ? tail[0] : '';

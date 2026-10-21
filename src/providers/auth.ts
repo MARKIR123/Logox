@@ -37,16 +37,16 @@ type Credentials = z.infer<typeof schema>;
 export class AuthStorage {
   readonly fallbackPaths: readonly string[];
   constructor(
-    readonly path = join(homedir(), '.logox-ts', 'auth.json'),
+    readonly path = join(homedir(), '.logox', 'auth.json'),
     fallbackPaths?: string | readonly string[],
   ) {
     if (typeof fallbackPaths === 'string') {
       this.fallbackPaths = [fallbackPaths];
     } else if (fallbackPaths !== undefined) {
       this.fallbackPaths = fallbackPaths;
-    } else if (path === join(homedir(), '.logox-ts', 'auth.json')) {
+    } else if (path === join(homedir(), '.logox', 'auth.json')) {
       this.fallbackPaths = [
-        join(homedir(), '.logox', 'auth.json'),
+        join(homedir(), '.logox-ts', 'auth.json'),
       ];
     } else {
       this.fallbackPaths = [];

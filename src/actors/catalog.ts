@@ -26,8 +26,8 @@ export class ActorCatalog {
   constructor(readonly cwd: string, readonly options: ActorCatalogOptions = {}) {
     const home = options.home ?? homedir();
     this.modelStorage = new ActorModelStorage(
-      join(home, '.logox-ts', 'actor-models.json'),
       join(home, '.logox', 'actor-models.json'),
+      join(home, '.logox-ts', 'actor-models.json'),
     );
   }
   snapshot(): ActorSnapshot {return this.value;}

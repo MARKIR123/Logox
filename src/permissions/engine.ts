@@ -40,7 +40,11 @@ export class PermissionEngine {
     let raw: string;
     try {raw = await readFile(this.file, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error;}
     const saved = z.strictObject({root: z.string(), mode: permissionModeSchema.optional(), rules: z.array(permissionRuleSchema)}).parse(JSON.parse(raw));
-    if (saved.root !== await realpath(this.root) || saved.rules.some(rule => rule.scope !== 'project')) throw new Error('权限文件项目身份不符');
+    const currentRoot = await realpath(this.root);
+    const samePath = process.platform === 'win32'
+      ? saved.root.toLowerCase() === currentRoot.toLowerCase()
+      : saved.root === currentRoot;
+    if (!samePath || saved.rules.some(rule => rule.scope !== 'project')) throw new Error('权限文件项目身份不符');
     if (new Set(saved.rules.map(rule => rule.id)).size !== saved.rules.length) throw new Error('权限规则 ID 重复，原文件保留');
     return saved;
   }

@@ -1,9 +1,10 @@
 {
-  "name": "logox-ts",
+  "name": "logox",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
+    "logox": "./dist/src/cli.js",
     "logox-ts": "./dist/src/cli.js"
   },
   "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",

@@ -14,8 +14,8 @@ export class ActorModelStorage {
   private cache: ActorModelMap = {};
 
   constructor(
-    readonly path = join(homedir(), '.logox-ts', 'actor-models.json'),
-    readonly fallbackPath = join(homedir(), '.logox', 'actor-models.json'),
+    readonly path = join(homedir(), '.logox', 'actor-models.json'),
+    readonly fallbackPath = join(homedir(), '.logox-ts', 'actor-models.json'),
   ) {
     this.loadSync();
   }

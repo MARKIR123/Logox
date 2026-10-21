@@ -29,7 +29,7 @@ export class ModelPool {
 
   constructor(
     private readonly registry?: ProviderRegistry,
-    readonly cachePath = join(homedir(), '.logox-ts', 'models-store.json'),
+    readonly cachePath = join(homedir(), '.logox', 'models-store.json'),
   ) {
     this.loadCacheSync();
   }

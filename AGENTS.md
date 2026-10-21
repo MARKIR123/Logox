@@ -1,30 +1,36 @@
 # AGENTS.md — LOGOX Core Technical Map & Agent Navigation Signpost
 
-This document is the primary navigational map for AI coding agents (Claude, Codex, Cursor, local models) working on `logox-ts`.
+This document establishes the **Fractal Signpost Protocol (FSP)** for AI coding agents (Claude, Codex, Cursor, local models) working on `Logox`.
 It defines global architectural invariants, module topologies, and disciplined exploration protocols.
+All subsystem development and maintenance must strictly adhere to the FSP paradigm.
 
 ---
 
-## 1. Information Retrieval Protocol (阅读与检索优先级)
+## 1. Fractal Signpost Protocol (FSP) & Look-Ahead Navigation
 
-When exploring and reasoning about this repository, follow this two-tier priority:
+Before exploring, reading, or modifying files in any subsystem directory (`src/<subsystem>/`), adhere to this strict sequence:
 
-1. **First Priority (Primary Route) — Directory `AGENTS.md` + Typed Interfaces (`*.ts`)**:
-   - Subtree signposts (`src/*/AGENTS.md`) define exact file routes, invariant boundaries, and entrypoints.
+1. **Check Local Signpost First (`src/<subsystem>/AGENTS.md`)**:
+   - Subtree signposts define exact file routes, invariant boundaries, and entrypoints.
+   - Read the localized signpost FIRST before reading actual source files or running repo-wide greps.
+   - If a subdirectory lacks an `AGENTS.md`, fall back to the nearest ancestor signpost and follow symbol imports.
+2. **6-Section Minimal Signpost Template**:
+   - Localized signposts strictly adhere to the 6 sections:
+     `Scope` → `Start Here (Task Router)` → `Hard Boundaries` → `Integration Points` → `Verification` → `Known Gaps`.
+3. **Type Contracts Over Prose**:
    - Types and schemas never lie (`zod` schemas in `contracts.ts`, `definitions.ts`, `types.ts`).
-   - Read localized signposts first, then navigate straight to specific lines with `Read`. Do NOT run unguided repo-wide greps.
-2. **Second Priority (Context & Rationale) — `docs/`**:
-   - Code and type definitions tell you **HOW** the system is built.
-   - `docs/` explains **WHY** it was built this way (architectural motivations, design tree decisions, and cross-module collaboration choreography).
-   - Consult `docs/` when facing ambiguous tradeoffs, refactoring boundaries, or when understanding inter-module design intent.
+   - Type definitions tell you **HOW** the system behaves; signposts define **BOUNDARIES**.
+4. **Public Documentation (`docs/`)**:
+   - Start with [the documentation index](docs/README.md) for usage and current module behavior.
+   - Public guides must stand alone; local development instructions and working documents are not publication dependencies.
 
 ---
 
-## 2. Core Invariants (刚性架构红线)
+## 2. Core Invariants
 
 1. **English System Interface**:
    - All internal prompts, tool names, schemas, descriptions, error diagnostics, and terminal status lines must be **strictly 100% English**.
-   - No bilingual parenthetical clutter (e.g. avoid `Updated (已修改)`).
+   - No bilingual parenthetical clutter or mixed-language tags.
    - Conversational responses to the user follow the language used by the user.
 2. **Continuous Natural Execution Loop**:
    - `max_iterations = 0` (unlimited natural while(true) loop). No 50-turn blocking popups; stops on task completion or user cancel (`Esc` / `Ctrl+C`).
@@ -35,21 +41,29 @@ When exploring and reasoning about this repository, follow this two-tier priorit
    - For web/SVG/UI preview inspections: run the pre-injected CLI `browser-shot <target> [outputPng] [--time <ms>]` via `Shell`, followed by `Read`. Never write custom CDP scripts or start background debugging servers.
 5. **Single-Writer Safety**:
    - Production source code files have strictly one designated writer at any time (typically Techne). Reviewers (Aletheia, Kalon) provide coordinates and visual QA, never competing write handles.
-6. **Persistent User Configuration in `~/.logox-ts/`**:
-   - User credentials, custom providers, discovered model stores, and actor model bindings persist in `~/.logox-ts/` (fallback `~/.logox/`), never in project git trees or external tool paths.
+6. **Persistent User Configuration in `~/.logox/`**:
+   - Primary user storage is `~/.logox/`. Some components still load `~/.logox-ts/` for compatibility, with component-specific precedence; see [usage](docs/USAGE.md). Credentials and runtime data stay outside tracked source files.
+7. **Four-Pillar English Round Compaction**:
+   - Round summaries and compaction reports strictly use the 4-pillar punch list under 250 words (`Exports & Changes`, `Decisions & Boundaries`, `Verification`, `Missing/Next`).
+8. **Fractal Signpost Protocol (FSP) Enforcement**:
+   - All subsystems, tools, and test suites must maintain self-similar, FSP-compliant localized `AGENTS.md` signposts following the 6-section template.
 
 ---
 
-## 3. Subsystem Map (子系统路标索引)
+## 3. Subsystem Map
 
 | Subsystem | Signpost Path | Core Responsibility |
 |---|---|---|
 | **Actors & Ensemble** | [`src/actors/AGENTS.md`](src/actors/AGENTS.md) | Actor personas, ensemble lifecycle, actor model persistence, `SendMessage` (queue vs interrupt), `.logox/bulletin.md` |
-| **Providers & Models** | [`src/providers/AGENTS.md`](src/providers/AGENTS.md) | Model pool, Undici transport, proxy auto-fallback, OpenAI dual-auth (API Key vs Responses API), 6-tier thinking |
 | **Tools & Execution** | [`src/tools/AGENTS.md`](src/tools/AGENTS.md) | PascalCase tools, process tree management, 1.5s forced cleanup, `browser-shot` CLI, `ListActors` & `CancelActor` |
-| **Terminal UI (TUI)** | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink plane rendering, 180-200ms frame pacing, dual-harmonic breathing wave, active actor animation, anti-noise inline cards |
+| **Providers & Models** | [`src/providers/AGENTS.md`](src/providers/AGENTS.md) | Model pool, Undici transport, proxy auto-fallback, OpenAI dual-auth (API Key vs Responses API), 6-tier thinking |
 | **Runtime & Store** | [`src/runtime/AGENTS.md`](src/runtime/AGENTS.md) | While(true) engine, task progress tracking, dual-write session transcripts (`director.jsonl`, `tasks.json`) |
+| **Terminal UI (TUI)** | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink plane rendering, 180-200ms frame pacing, dual-harmonic breathing wave, active actor animation, anti-noise inline cards |
 | **Resources & Skills** | [`src/resources/AGENTS.md`](src/resources/AGENTS.md) | Hierarchical skills (`skills/<actor>/<domain>/*.md`), Path as Prompt, three-tier waterfall priority |
+| **Permissions & Sandbox** | [`src/permissions/AGENTS.md`](src/permissions/AGENTS.md) | Three-tier security matrix, scratchpad auto-approval, sensitive path protection, persistent rules |
+| **Context & Compaction** | [`src/context/AGENTS.md`](src/context/AGENTS.md) | Dual-watermark pruning, four-pillar English compaction, tool output disk archiving, token metering |
+| **Configuration & Storage** | [`src/config/AGENTS.md`](src/config/AGENTS.md) | Hierarchical config cascade, atomic `StateFile` locking, thinking protocol and level sets |
+| **Test Suite & Verification** | [`tests/AGENTS.md`](tests/AGENTS.md) | Domain test groups, fast verification commands (~1-3s), test sandbox isolation rules |
 
 ---
 
@@ -57,5 +71,6 @@ When exploring and reasoning about this repository, follow this two-tier priorit
 
 - Check types and documentation integrity: `npm run check`
 - Build TypeScript & copy assets: `npm run build`
-- Run test suite: `npm test`
+- Run targeted domain test group: see [`tests/AGENTS.md`](tests/AGENTS.md)
+- Run full test suite: `node --test --test-concurrency=4 dist/tests/*.test.js`
 - Start TUI interactive assistant: `npm start`

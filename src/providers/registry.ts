@@ -39,7 +39,9 @@ async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv)
 
 function readStoredModelsForProvider(name: string): string[] {
   const storePaths = [
+    join(homedir(), '.logox', 'models-store.json'),
     join(homedir(), '.logox-ts', 'models-store.json'),
+    join(homedir(), '.logox', 'models-cache.json'),
     join(homedir(), '.logox-ts', 'models-cache.json'),
   ];
   for (const p of storePaths) {

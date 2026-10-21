@@ -27,40 +27,90 @@ function check(files: Record<string, string>): {status: number; output: string} 
   }
 }
 
-test('文档检查支持中文章节、重复标题、空格路径、引用链接与按主题记录的验收', () => {
+test('local-only documents do not participate in public documentation checks', () => {
   const result = check({
-    'README.md': '# LOGOX\n\n日期：2026-10-12\n[导航](docs/README.md)\n',
-    'docs/README.md': '# 导航\n\n[压缩][design]\n[design]: <development/designs/context design.md>\n[章节](<development/designs/context design.md#中文章节-1>)\n',
-    'docs/development/designs/context design.md': '# 压缩\n状态：已确认待实现\n## 中文章节\n## 中文章节\n## 2026-10-12 验收\n~~~text\n[代码示例](missing.md)\n~~~\n',
+    'README.md': '# Logox\n',
+    'CLAUDE.md': '```\n[private](missing.md)',
+    'glossary.md': 'private without a trailing newline',
+    'docs/development/designs/private.md': '# Private\n[missing](missing.md)',
+    'docs/superpowers/plans/private.md': '# Private',
+    'docs/PROJECT-REPORT.md': '# Private',
+  });
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /1 Markdown/);
+});
+
+test('public links cannot rely on local-only material even when it exists', () => {
+  for (const target of ['CLAUDE.md', 'glossary.md', 'docs/development/private.md', 'docs/superpowers/private.md', 'docs/PROJECT-REPORT.md']) {
+    for (const link of [`[private](${target})`, `[private][ref]\n[ref]: ${target}`]) {
+      const result = check({'README.md': '# Logox\n' + link + '\n', [target]: '# Private\n'});
+      assert.notEqual(result.status, 0, target);
+      assert.match(result.output, /local-only material/, target);
+    }
+  }
+});
+
+test('module-relative and encoded links obey the private-document boundary', () => {
+  for (const target of ['../development/private.md', '../%64evelopment/private.md', '../../ClAuDe.md']) {
+    const result = check({
+      'README.md': '# Logox\n[modules](docs/modules/README.md)\n',
+      'docs/modules/README.md': '# Modules\n[private](' + target + ')\n',
+      'docs/development/private.md': '# Private\n',
+      'ClAuDe.md': '# Private\n',
+    });
+    assert.notEqual(result.status, 0, target);
+    assert.match(result.output, /local-only material/, target);
+  }
+});
+
+test('source signposts are checked without collecting runtime Markdown assets', () => {
+  const files = {
+    'README.md': '# Logox\n[actors](src/actors/AGENTS.md)\n',
+    'src/actors/AGENTS.md': '# Actors\n[persona](profiles/logox/persona.md)\n',
+    'src/actors/profiles/logox/persona.md': 'Runtime prompt, not a public guide',
+    'src/resources/builtin-skills/public/agent.md': 'Runtime taxonomy, not a public guide',
+  };
+  const valid = check(files);
+  assert.equal(valid.status, 0, valid.output);
+  assert.match(valid.output, /2 Markdown/);
+  const invalid = check({...files, 'src/actors/AGENTS.md': '# Actors\n[private](../../CLAUDE.md)\n', 'CLAUDE.md': '# Private\n'});
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.output, /local-only material/);
+});
+
+test('public modules support Chinese anchors, duplicate headings, spaces and reference links', () => {
+  const result = check({
+    'README.md': '# LOGOX\n\n[导航](docs/README.md)\n',
+    'docs/README.md': '# 导航\n\n[压缩][module]\n[module]: <modules/context guide.md>\n[章节](<modules/context guide.md#中文章节-1>)\n',
+    'docs/modules/context guide.md': '# 压缩\n## 中文章节\n## 中文章节\n~~~text\n[代码示例](missing.md)\n~~~\n',
     'docs/legacy/ignored.md': '# 不检查这个目录',
     '.logox/private.md': '# 不读取私人目录',
   });
   assert.equal(result.status, 0, result.output);
-  assert.match(result.output, /3 份 Markdown/);
+  assert.match(result.output, /3 Markdown/);
 });
 
-test('文档检查拒绝失效文件与章节，并准确定位所属文档', () => {
+test('broken files and anchors identify the source document', () => {
   const result = check({'README.md': '# 项目\n[缺文件](missing.md)\n[缺章节](#不存在)\n'});
   assert.notEqual(result.status, 0);
-  assert.match(result.output, /README.md: 链接不存在：missing.md/);
-  assert.match(result.output, /README.md: 章节不存在：#不存在/);
+  assert.match(result.output, /README.md: Missing link target: missing.md/);
+  assert.match(result.output, /README.md: Missing heading:#不存在/);
 });
 
-test('文档检查拒绝无导航专题、缺少设计状态和当前说明中的流水账标题', () => {
+test('orphan public pages and working-log headings are rejected', () => {
   const result = check({
     'README.md': '# 项目\n## 2026-10-12 新增内容\n## 更新记录\n',
-    'docs/development/designs/orphan.md': '# 独立设计\n',
+    'docs/modules/orphan.md': '# 独立模块\n',
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.output, /当前说明含流水账标题：2026-10-12/);
-  assert.match(result.output, /当前说明含流水账标题：更新记录/);
-  assert.match(result.output, /专题设计缺少状态/);
-  assert.match(result.output, /文档未接入导航/);
+  assert.match(result.output, /Working-log heading in public documentation: 2026-10-12/);
+  assert.match(result.output, /Working-log heading in public documentation: 更新记录/);
+  assert.match(result.output, /Document is not linked from navigation/);
 });
 
-test('文档检查拒绝未关闭围栏和缺少末尾换行', () => {
+test('unclosed fences and missing trailing newlines are rejected', () => {
   const result = check({'README.md': '# 项目\n~~~text\n未关闭'});
   assert.notEqual(result.status, 0);
-  assert.match(result.output, /代码围栏未关闭/);
-  assert.match(result.output, /缺少末尾换行/);
+  assert.match(result.output, /Unclosed code fence/);
+  assert.match(result.output, /Missing trailing newline/);
 });

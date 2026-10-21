@@ -17,7 +17,7 @@ const customStorageSchema = z.record(z.string(), customProviderSchema);
 type CustomStorageMap = z.infer<typeof customStorageSchema>;
 
 export class CustomProviderStorage {
-  constructor(readonly path = join(homedir(), '.logox-ts', 'custom-providers.json')) {}
+  constructor(readonly path = join(homedir(), '.logox', 'custom-providers.json')) {}
 
   private async read(): Promise<CustomStorageMap> {
     try {

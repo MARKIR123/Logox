@@ -278,3 +278,55 @@ test('内置 antigravity 预设走本地 8045 端口与 openai_compat 协议，�
     await f.cleanup();
   }
 });
+
+test('OpenAI Responses API 强制保持流式，且非流式 JSON 解析异常转为可重试传输错误', async () => {
+  const requests: {url: string; body: any}[] = [];
+  const fetcher: typeof fetch = async (url, init) => {
+    requests.push({url: String(url), body: JSON.parse(String(init?.body))});
+    return new Response('data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: [DONE]\n\n', {
+      headers: {'content-type': 'text/event-stream'},
+    });
+  };
+  const responsesProvider = createProvider({
+    kind: 'openai_compat',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-6.1-sol',
+    key: 'oauth-token-not-sk',
+    temperature: 0,
+    maxTokens: 100,
+    timeoutMs: 2000,
+  }, fetcher);
+
+  // Even with stream: false requested (non-streaming fallback), Responses API stays stream: true
+  await responsesProvider.respond({system: '', messages: [], tools: [], stream: false}, () => {}, new AbortController().signal);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]!.url, 'https://api.openai.com/v1/responses');
+  assert.equal(requests[0]!.body.stream, true, 'Responses API 请求始终保持 stream: true');
+
+  // Verify non-streaming bad JSON / HTML error from proxy is classified as temporary retryable error
+  const htmlErrorFetcher: typeof fetch = async () => {
+    return new Response('<html>502 Bad Gateway</html>', {
+      status: 200,
+      headers: {'content-type': 'text/html'},
+    });
+  };
+  const standardProvider = createProvider({
+    kind: 'openai_compat',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o',
+    key: 'sk-actual-api-key',
+    temperature: 0,
+    maxTokens: 100,
+    timeoutMs: 2000,
+  }, htmlErrorFetcher);
+
+  await assert.rejects(
+    standardProvider.respond({system: '', messages: [], tools: [], stream: false}, () => {}, new AbortController().signal),
+    (error: any) => {
+      assert.ok(error instanceof ProviderError);
+      assert.equal(error.retryable, true, '非流式响应异常必须是可重试的临时故障，不能直接熔断');
+      assert.equal(error.category, 'temporary');
+      return true;
+    }
+  );
+});

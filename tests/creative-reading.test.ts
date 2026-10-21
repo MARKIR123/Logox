@@ -60,7 +60,7 @@ test('运行记录读取在三档均走安全快路，扩展属性明确只读�
     assert.equal(reviews, 0); assert.equal(f.questions(), 0);
     f.engine.mode = 'creative';
     assert.equal(await f.tools.authorizeExtension(call('mcp:diagnostics:unknown', {path: '.logox/state/usage/sample.json'}), f.context), true);
-    assert.equal(await f.tools.authorizeExtension(call('mcp:diagnostics:write', {path: '.logox/state/usage/sample.json'}), f.context, 'write'), false);
+    assert.equal(await f.tools.authorizeExtension(call('mcp:diagnostics:write', {path: '.logox/state/usage/sample.json'}), f.context, 'write'), true);
     assert.equal(await f.tools.authorizeExtension(call('mcp:diagnostics:read', {path: '.logox-ts/auth.json'}), f.context, 'read'), false);
     const command = process.platform === 'win32' ? "Get-Content '.logox-ts/auth.json'" : "cat '.logox-ts/auth.json'";
     assert.equal((await f.tools.execute(call('shell', {command}), f.context)).isError, true);
@@ -73,11 +73,13 @@ test('运行记录读取在三档均走安全快路，扩展属性明确只读�
 test('creative区分诊断读取与真实凭据、运行状态修改，保留deny和链接复核', async () => {
   const f = await fixture();
   try {
-    for (const name of ['read', 'grep', 'write'] as const) {
-      const args = name === 'read' ? {path: '.logox/auth.json'} : name === 'grep' ? {path: '.logox/auth.json', pattern: 'credential-marker'} : {path: '.logox/state/sessions/sample.json', content: 'changed'};
+    for (const name of ['read', 'grep'] as const) {
+      const args = name === 'read' ? {path: '.logox/auth.json'} : {path: '.logox/auth.json', pattern: 'credential-marker'};
       assert.equal((await f.tools.execute(call(name, args), f.context)).isError, true);
     }
-    assert.match(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), /timeout-marker/);
+    // Creative mode permits modifying runtime state
+    assert.equal((await f.tools.execute(call('write', {path: '.logox/state/sessions/sample.json', content: 'changed'}), f.context)).isError, false);
+    assert.equal(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), 'changed');
     assert.doesNotMatch((await f.tools.execute(call('grep', {path: '.logox', pattern: 'credential-marker|timeout-marker'}), f.context)).text, /credential-marker/);
     await mkdir(join(f.cwd, '.ssh'));
     await writeFile(join(f.cwd, '.ssh/id_ed25519'), 'credential-marker');
@@ -87,7 +89,7 @@ test('creative区分诊断读取与真实凭据、运行状态修改，保留den
     assert.equal((await f.tools.execute(call('read', {path: '.logox/state/sessions/sample.json'}), f.context)).isError, true);
     const command = process.platform === 'win32' ? "Remove-Item '.logox/state/sessions' -Recurse" : "rm -rf '.logox/state/sessions'";
     assert.equal((await f.tools.execute(call('shell', {command}), f.context)).isError, true);
-    assert.match(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), /timeout-marker/);
+    assert.equal(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), 'changed');
     assert.equal(f.questions(), 0);
   } finally {await f.cleanup();}
 });

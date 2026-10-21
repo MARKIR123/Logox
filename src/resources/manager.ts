@@ -1,4 +1,4 @@
-import {lstat, open, readdir, realpath} from 'node:fs/promises';
+import {lstat, open, readdir, realpath, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {basename, dirname, join, resolve, relative} from 'node:path';
@@ -10,11 +10,24 @@ import {actorIdSchema} from '../actors/definitions.js';
 export type ResourceKind = 'guidelines' | 'skills' | 'commands';
 export interface ResourceIssue {readonly kind: ResourceKind; readonly path: string; readonly reason: string}
 export interface TextResource {readonly path: string; readonly text: string}
-export interface SkillResource {readonly name: string; readonly description: string; readonly path: string; readonly actors?: readonly string[]}
+export interface SkillResource {
+  readonly name: string;
+  readonly description: string;
+  readonly path: string;
+  readonly actors?: readonly string[];
+  readonly level?: 'core' | 'domain';
+  readonly category?: string;
+}
+export interface DomainCategorySignpost {
+  readonly actor: string;
+  readonly category: string;
+  readonly description: string;
+}
 export interface CommandResource extends SkillResource {readonly template: string}
 export interface ResourceSnapshot {
   readonly guidelines: readonly TextResource[];
   readonly skills: readonly SkillResource[];
+  readonly categories: readonly DomainCategorySignpost[];
   readonly commands: readonly CommandResource[];
   readonly issues: readonly ResourceIssue[];
 }
@@ -39,6 +52,21 @@ async function collectSkillFiles(dir: string): Promise<string[]> {
     }
   } catch {}
   return files;
+}
+export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkillsDir: string): Promise<void> {
+  try {
+    if (!existsSync(builtinSkillsDir)) return;
+    const files = await collectSkillFiles(builtinSkillsDir);
+    for (const file of files) {
+      const rel = relative(builtinSkillsDir, file);
+      const target = join(userSkillsDir, rel);
+      if (!existsSync(target)) {
+        await mkdir(dirname(target), {recursive: true});
+        const content = await readFile(file);
+        await writeFile(target, content);
+      }
+    }
+  } catch {}
 }
 function metadata(text: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
@@ -66,7 +94,8 @@ async function ancestors(cwd: string, boundary?: string) {
 }
 export class Resources {
   private readonly assignments = new Map<string, Set<string>>();
-  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], commands: [], issues: []});
+  private readonly categoriesMap = new Map<string, Map<string, string>>();
+  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: []});
   constructor(readonly cwd: string, readonly options: ResourceOptions = {}) {}
   snapshot(): ResourceSnapshot {return this.value;}
   /** 显式分配只改变此 Resources 实例；借阅由单次任务输入提供，不写分配表。 */
@@ -85,14 +114,87 @@ export class Resources {
         || (input.actorId === 'logox' && skill.actors === undefined);
     }));
   }
+  categoriesFor(actorId: string, domainSkills?: readonly SkillResource[]): readonly DomainCategorySignpost[] {
+    const result: DomainCategorySignpost[] = [];
+    const seen = new Set<string>();
+
+    const registered = this.categoriesMap.get(actorId);
+    if (registered) {
+      for (const [category, description] of registered) {
+        if (!seen.has(category)) {
+          seen.add(category);
+          result.push(Object.freeze({actor: actorId, category, description}));
+        }
+      }
+    }
+
+    const publicRegistered = this.categoriesMap.get('public');
+    if (publicRegistered) {
+      for (const [category, description] of publicRegistered) {
+        if (!seen.has(category)) {
+          seen.add(category);
+          result.push(Object.freeze({actor: 'public', category, description}));
+        }
+      }
+    }
+
+    if (domainSkills) {
+      for (const skill of domainSkills) {
+        if (skill.category && !seen.has(skill.category)) {
+          seen.add(skill.category);
+          let desc = registered?.get(skill.category) ?? publicRegistered?.get(skill.category);
+          if (!desc) {
+            for (const catMap of this.categoriesMap.values()) {
+              if (catMap.has(skill.category)) {
+                desc = catMap.get(skill.category);
+                break;
+              }
+            }
+          }
+          desc = desc ?? `${skill.category} specialized workflows and domain SOPs`;
+          result.push(Object.freeze({actor: actorId, category: skill.category, description: desc}));
+        }
+      }
+    }
+
+    return Object.freeze(result.sort((a, b) => a.category.localeCompare(b.category)));
+  }
   prompt(visibility: SkillVisibility = {actorId: 'logox'}): {context: string} {
     const state = this.value;
     const skills = this.skillsFor(visibility);
-    return {context: [
-      ...state.guidelines.map(item => '项目协作约定：' + item.path + '\n' + item.text),
-      ...(skills.length ? ['可用技能（先按路径用 read 读取正文；技能文件不注册工具）：\n' + skills.map(item =>
-        JSON.stringify({name: item.name, description: item.description, path: item.path})).join('\n')] : []),
-    ].join('\n\n')};
+    const guidelines = state.guidelines.map(item => 'Project Collaboration Guidelines: ' + item.path + '\n' + item.text);
+
+    if (!skills.length) {
+      return {context: guidelines.join('\n\n')};
+    }
+
+    const coreSkills = skills.filter(item => item.level !== 'domain');
+    const domainSkills = skills.filter(item => item.level === 'domain');
+    const actorCategories = this.categoriesFor(visibility.actorId, domainSkills);
+
+    const sections: string[] = [];
+
+    if (coreSkills.length) {
+      sections.push([
+        '【Core Principles】(Always in effect. Read full text via path as needed)',
+        ...coreSkills.map(item => `- ${item.name}: ${item.description} (path: ${item.path})`),
+      ].join('\n'));
+    }
+
+    if (actorCategories.length) {
+      sections.push([
+        `【Domain Repositories】(Base root: skills/${visibility.actorId}/)`,
+        ...actorCategories.map(cat => `- ${cat.category}/: ${cat.description}`),
+        `(Note: For specialized domain workflows, inspect directory via Glob and Read target SOP. See skills/${visibility.actorId}/agent.md for taxonomy boundaries.)`,
+      ].join('\n'));
+    }
+
+    return {
+      context: [
+        ...guidelines,
+        ...sections,
+      ].filter(Boolean).join('\n\n'),
+    };
   }
   expand(name: string, args: string): string | undefined {
     const command = this.value.commands.find(item => item.name === name.toLowerCase());
@@ -144,8 +246,8 @@ export class Resources {
       for (const name of isUser ? ['AGENTS.md', 'CLAUDE.md'] : ['LOGOX.md', 'AGENTS.md', 'CLAUDE.md']) {
         let selected = false;
         const candidatePaths = isUser
-          ? [join(home, '.logox-ts', name), join(home, '.logox', name)]
-          : [join(directory, name), join(directory, '.logox-ts', name), join(directory, '.logox', name)];
+          ? [join(home, '.logox', name), join(home, '.logox-ts', name)]
+          : [join(directory, name), join(directory, '.logox', name), join(directory, '.logox-ts', name)];
         for (const path of candidatePaths) {
           try {await lstat(path); selected = true;} catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {issue('guidelines', path, '无法检查规范文件'); selected = true;}
@@ -171,6 +273,10 @@ export class Resources {
 
     // Scan order: Builtin -> User global -> Project private (so project overrides user, user overrides builtin)
     const allowBuiltin = !this.options.boundary || builtinSkillsDir.toLowerCase().startsWith(this.options.boundary.toLowerCase());
+    const userSkillsDir = join(home, '.logox', 'skills');
+    if (allowBuiltin) {
+      await ensureUserSkillsSeeded(userSkillsDir, builtinSkillsDir);
+    }
     const skillRoots = [...new Set([
       ...(allowBuiltin ? [builtinSkillsDir] : []),
       ...userDirs.map(d => join(d, 'skills')),
@@ -179,12 +285,42 @@ export class Resources {
     ])];
     const commandRoots = [...new Set([...userDirs.map(d => join(d, 'commands')), join(this.cwd, '.logox', 'commands'), join(this.cwd, '.logox-ts', 'commands')])];
 
+    this.categoriesMap.clear();
+
     // 1. Scan hierarchical skill tree (Path as Prompt / Semantic Signposts)
     for (const directory of skillRoots) {
       const files = await collectSkillFiles(directory);
       for (const filePath of files) {
         if (basename(filePath).toLowerCase() === 'agent.md') {
-          // agent.md is the root navigation signpost file, read on-demand via Read
+          const resource = await read(filePath, 'skills');
+          if (resource) {
+            try {
+              const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
+              if (header) {
+                const document = parseDocument(header[1]!, {uniqueKeys: true});
+                const fields: unknown = document.toJS({maxAliasCount: 0});
+                if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'categories')) {
+                  const rawCats = (fields as Record<string, unknown>).categories;
+                  if (rawCats && typeof rawCats === 'object') {
+                    const rel = relative(directory, filePath).replaceAll('\\', '/');
+                    const actorSegment = rel.split('/')[0]?.toLowerCase();
+                    if (actorSegment && ['kalon', 'techne', 'aletheia', 'logox', 'public'].includes(actorSegment)) {
+                      let catMap = this.categoriesMap.get(actorSegment);
+                      if (!catMap) {
+                        catMap = new Map<string, string>();
+                        this.categoriesMap.set(actorSegment, catMap);
+                      }
+                      for (const [catName, catDesc] of Object.entries(rawCats as Record<string, unknown>)) {
+                        if (typeof catDesc === 'string') {
+                          catMap.set(catName.toLowerCase(), catDesc.trim());
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            } catch {}
+          }
           continue;
         }
         const resource = await read(filePath, 'skills');
@@ -203,11 +339,21 @@ export class Resources {
         // Infer default actors from directory path: e.g. skills/kalon/... -> ['kalon']
         let defaultActors: readonly string[] | undefined;
         const rel = relative(directory, filePath).replaceAll('\\', '/');
-        const firstSegment = rel.split('/')[0]?.toLowerCase();
+        const segments = rel.split('/');
+        const firstSegment = segments[0]?.toLowerCase();
         if (firstSegment && ['kalon', 'techne', 'aletheia', 'logox'].includes(firstSegment)) {
           defaultActors = Object.freeze([firstSegment]);
         } else if (firstSegment === 'public') {
           defaultActors = Object.freeze(['logox', 'techne', 'kalon', 'aletheia']);
+        }
+
+        let level: 'core' | 'domain' = 'domain';
+        let category: string | undefined;
+        if (segments.length <= 2) {
+          level = 'core';
+        } else {
+          level = 'domain';
+          category = segments[1]?.toLowerCase();
         }
 
         let actors = defaultActors;
@@ -224,10 +370,12 @@ export class Resources {
             }
           }
 
-          const item = {
+          const item: SkillResource = {
             name,
             description: meta.description || name,
             path: resource.path,
+            level,
+            ...(category ? {category} : {}),
             ...(actors ? {actors} : {}),
           };
           skills.set(name, Object.freeze(item));
@@ -263,8 +411,14 @@ export class Resources {
         commands.set(name, Object.freeze({name, description: meta.description || name, path: resource.path, template: meta.body}));
       }
     }
+    const categoriesList: DomainCategorySignpost[] = [];
+    for (const [actor, catMap] of this.categoriesMap) {
+      for (const [category, description] of catMap) {
+        categoriesList.push(Object.freeze({actor, category, description}));
+      }
+    }
     this.value = Object.freeze({guidelines: Object.freeze(guidelines),
-      skills: Object.freeze([...skills.values()]), commands: Object.freeze([...commands.values()]), issues: Object.freeze(issues)});
+      skills: Object.freeze([...skills.values()]), categories: Object.freeze(categoriesList), commands: Object.freeze([...commands.values()]), issues: Object.freeze(issues)});
     return this.value;
   }
 }
