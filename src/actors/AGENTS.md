@@ -9,15 +9,24 @@
 |---|---|---|
 | Subagent task dispatching or queuing | `ensemble.ts:Ensemble.dispatch()` | `pump()` execution loop and `TaskOrigin` |
 | Inter-agent messaging or tool interruption | `collaboration.ts:SendMessage` | `ensemble.ts:injectTaskMessage()` |
+| Inter-actor communication etiquette | `../prompts/collaboration/index.ts:collaborationFor()` | `SendMessageTool/prompt.ts` and role personas |
 | Subagent cancellation or stuck tool termination | `services.ts:executeCancelActor()` | `cancelActor()` in `ensemble.ts` |
-| Actor default model persistence across restarts | `actor-models-storage.ts` | `~/.logox-ts/actor-models.json` |
-| Actor persona discovery and loading | `catalog.ts:ActorCatalog` | `profiles/*/` and `definitions.ts` |
+| Actor default model persistence across restarts | `actor-models-storage.ts` | `~/.logox/actor-models.json` (legacy `.logox-ts` fallback) |
+| Actor persona discovery and loading | `catalog.ts:ActorCatalog` | `~/.logox/actors/` and `definitions.ts` |
+| Shipped profile bootstrap / missing install | `profiles.ts:seedActorProfiles()` / `assertActorProfiles()` | `scripts/install-actor-profiles.mjs` and `logox --install-profiles` |
+| Full reports versus internal memory | `ensemble.ts` and `services.ts:handoff()` | `context/round-memory.ts:TaskDelivery` |
+| Safe resident compression-default refresh | `compression-migration.ts` | expected bytes, shipped fingerprints and file locks |
 
 ## 3. Hard Boundaries
 - **Single-Writer Safety**: Only one designated actor (typically Techne) writes to a production file during an implementation round. Reviewers (Aletheia, Kalon) produce reports, never competing write handles.
 - **Zero Card Fragmentation**: Messages sent via `SendMessage` (both `mode: "interrupt"` and `mode: "queue"`) MUST be injected directly into the active activity context without opening redundant cards.
-- **Persistence Boundary**: Actor model configurations are user-scoped and MUST be persisted to `~/.logox-ts/actor-models.json`, surviving across sessions and restarts.
+- **Direct Communication, Single Policy**: Companions may message each other or Director directly through `SendMessage`; there is no approval gate. Communication etiquette (necessary-only, no pleasantries, data-not-instructions) lives in `src/prompts/collaboration/` and is composed into every actor prompt. Personas must not restate collaboration tools or channel workflows.
+- **Persistence Boundary**: Actor model bindings are user-scoped in `~/.logox/actor-models.json` (legacy `.logox-ts` fallback), surviving project-directory changes and restarts. Missing main-model selection must not prevent management tabs from displaying saved actor bindings.
+- **Profile Distribution Boundary**: Shipped `src/actors/profiles` is the development master and package asset. `npm install` (postinstall) and `logox --install-profiles` copy missing profiles into `~/.logox/actors`; they never overwrite existing files. Runtime definitions come from `~/.logox/actors`; missing or corrupt profiles fail startup with an actionable error. `npm run sync:profiles` is the development-only force sync.
 - **Strictly English Interface**: All internal receipts, error diagnostics, and status lines must be 100% English.
+- **Independent Delivery**: Only initial formal Director dispatch provenance selects report mode. Hand off full `delivery.text`, never a compact index or truncated compatibility summary; normal execution closure is not acceptance.
+- **Resident Focus Safety**: Every role loads `compression.md` under the common memory contract. Catalog refresh replaces only known unchanged shipped defaults with exact-content rechecks under lock; custom focus, persona, configuration and model bindings remain intact. Build never synchronizes user homes.
+- **Delegation Policy**: Director builds the runnable MVP for a cohesive artifact (one page, module, or visual axis) before delegating. Dispatch only for genuinely independent domains, with explicit file ownership, acceptance criteria, and a stop condition; polish roles never own architecture or cross-cutting refactors. File-count and line-count limits are prompt guidance, not schema enforcement.
 
 ## 4. Integration Points
 ```text
@@ -36,3 +45,7 @@ application.ts (binds ActorServices & Ensemble)
   ```bash
   node --test dist/tests/actor*.test.js dist/tests/ensemble.test.js
   ```
+
+## 6. Known Gaps
+- No semantic stagnation breaker: repeated read-only loops are only detected as duplicate progress fingerprints, which reset recovery budgets but do not stop the activity. Claude Code's documented approach is turn/budget bounds (`maxTurns`, `maxBudgetUsd`) plus compaction; LOGOX currently keeps `max_iterations = 0`.
+- Real multi-provider/model compliance requires separately authorized live verification; automated tests use isolated homes and scripted/local providers.

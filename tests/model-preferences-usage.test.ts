@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig, modelSettings, type Config} from '../src/config/config.js';
 import {preferenceSchema, StateFile} from '../src/config/model-preferences.js';
 import {createProvider} from '../src/providers/http.js';
@@ -150,11 +150,12 @@ test('正式应用真实HTTP用量重启保留，模型切换不改旧归属，�
     for await (const _chunk of request) {}
     requests++;
     response.setHeader('content-type', 'text/event-stream');
-    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'synthetic complete'}, finish_reason: 'stop'}], usage: {prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: {cached_tokens: 4}}}) + '\n\n');
+    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'synthetic complete', tool_calls: [{index: 0, id: 'finish', function: {name: '_FinishRound', arguments: JSON.stringify({title: 'Completed fixture', verification: null, carry_forward: []})}}]}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: {cached_tokens: 4}}}) + '\n\n');
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert.ok(address && typeof address === 'object');
-  const load = () => f.load({providers: {local: {base_url: 'http://127.0.0.1:' + address.port}}});
+  const load = () => f.load({providers: {local: {base_url: 'http://127.0.0.1:' + address.port}},
+    models: {'local/first': {context_window: 16384}, 'local/second': {context_window: 16384}}});
   let app = await f.app(await load(), 'http-session');
   try {
     const task = app.ensemble.dispatch('logox', 'synthetic request'); await task.done;

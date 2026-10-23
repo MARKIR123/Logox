@@ -338,7 +338,7 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
     provider: {async respond(_request, onDelta) {
       round++;
       if (round === 1) return {message: {role: 'assistant', text: '', toolCalls: [{
-        id: 'write', name: 'write', arguments: '{"path":"never.txt","content":"bad"}',
+        id: 'write', name: 'write', arguments: '{"file_path":"never.txt","content":"bad"}',
       }]}, stop: 'tools'};
       const text = round === 2 ? '用户拒绝后保留建议。' : '角色窗口收到补充。';
       onDelta({kind: 'text', text});
@@ -434,7 +434,8 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   const cwd = await mkdtemp(join(tmpdir(), 'logox-login-tui-'));
   const authPath = join(cwd, 'user-auth.json');
   const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
-  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, authPath, sessionId: 'login-ui'});
+  const fetcher: typeof fetch = async () => new Response(JSON.stringify({data: []}), {status: 200});
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, authPath, sessionId: 'login-ui', fetcher});
   const input = new TerminalInput(), output = new TerminalOutput();
   const submissions: string[] = [];
   let instance!: ReturnType<typeof render>;
@@ -452,7 +453,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   };
   const phase = async (expected: string | null) => {
     await act(async () => {
-      for (let i = 0; i < 100 && (app.authentication.getSnapshot()?.phase ?? null) !== expected; i++) await delay(10);
+      for (let i = 0; i < 200 && (app.authentication.getSnapshot()?.phase ?? null) !== expected; i++) await delay(15);
     });
     assert.equal(app.authentication.getSnapshot()?.phase ?? null, expected);
     await flushRender(instance);

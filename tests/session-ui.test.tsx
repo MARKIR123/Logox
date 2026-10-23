@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ApplicationStage} from '../src/tui/application.js';
 import {renderTerminal} from '../src/tui/terminal.js';

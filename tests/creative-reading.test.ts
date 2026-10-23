@@ -26,16 +26,16 @@ test('creative实际读取与搜索指定运行账本，无审批、不隐藏匹
   const f = await fixture();
   try {
     for (const name of ['read', 'grep', 'glob'] as const) {
-      const args = name === 'read' ? {path: '.logox/state/sessions/sample.json'}
-        : name === 'grep' ? {path: '.logox/state/sessions', pattern: 'timeout-marker'}
+      const args = name === 'read' ? {file_path: '.logox/state/sessions/sample.json'}
+        : name === 'grep' ? {path: '.logox/state/sessions', pattern: 'timeout-marker', output_mode: 'content'}
         : {path: '.logox/state/sessions', pattern: '*.json'};
       const result = await f.tools.execute(call(name, args), f.context);
       assert.equal(result.isError, false, name + ': ' + result.text);
       assert.match(result.text, name === 'glob' ? /sample.json/ : /timeout-marker/);
     }
-    assert.match((await f.tools.execute(call('grep', {path: '.logox/state/sessions/sample.json', pattern: 'timeout-marker'}), f.context)).text, /timeout-marker/);
+    assert.match((await f.tools.execute(call('grep', {path: '.logox/state/sessions/sample.json', pattern: 'timeout-marker', output_mode: 'content'}), f.context)).text, /timeout-marker/);
     assert.match((await f.tools.execute(call('glob', {pattern: '.logox/state/sessions/*.json'}), f.context)).text, /sample.json/);
-    assert.match((await f.tools.execute(call('read', {path: '.logox/state/usage/sample.json'}), f.context)).text, /input/);
+    assert.match((await f.tools.execute(call('read', {file_path: '.logox/state/usage/sample.json'}), f.context)).text, /input/);
     const shell = process.platform === 'win32' ? "Get-Content '.logox/state/sessions/sample.json'" : "cat '.logox/state/sessions/sample.json'";
     assert.match((await f.tools.execute(call('shell', {command: shell}), f.context)).text, /timeout-marker/);
     assert.doesNotMatch((await f.tools.execute(call('grep', {pattern: 'timeout-marker|credential-marker'}), f.context)).text, /sample.json|credential-marker/);
@@ -54,7 +54,7 @@ test('运行记录读取在三档均走安全快路，扩展属性明确只读�
     await writeFile(join(f.cwd, '.logox-ts/auth.json'), 'credential-marker');
     for (const mode of ['default', 'auto', 'creative'] as const) {
       f.engine.mode = mode;
-      assert.equal((await f.tools.execute(call('read', {path: '.logox-ts/state/sample.json'}), f.context)).isError, false);
+      assert.equal((await f.tools.execute(call('read', {file_path: '.logox-ts/state/sample.json'}), f.context)).isError, false);
       assert.equal(await f.tools.authorizeExtension(call('mcp:diagnostics:read', {path: '.logox/state/usage/sample.json'}), f.context, 'read'), true);
     }
     assert.equal(reviews, 0); assert.equal(f.questions(), 0);
@@ -78,15 +78,15 @@ test('creative区分诊断读取与真实凭据、运行状态修改，保留den
       assert.equal((await f.tools.execute(call(name, args), f.context)).isError, true);
     }
     // Creative mode permits modifying runtime state
-    assert.equal((await f.tools.execute(call('write', {path: '.logox/state/sessions/sample.json', content: 'changed'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('write', {file_path: '.logox/state/sessions/sample.json', content: 'changed'}), f.context)).isError, false);
     assert.equal(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), 'changed');
     assert.doesNotMatch((await f.tools.execute(call('grep', {path: '.logox', pattern: 'credential-marker|timeout-marker'}), f.context)).text, /credential-marker/);
     await mkdir(join(f.cwd, '.ssh'));
     await writeFile(join(f.cwd, '.ssh/id_ed25519'), 'credential-marker');
     await symlink(join(f.cwd, '.ssh'), join(f.cwd, '.logox/state/sessions/linked'), 'junction');
-    assert.equal((await f.tools.execute(call('read', {path: '.logox/state/sessions/linked/id_ed25519'}), f.context)).isError, true);
+    assert.equal((await f.tools.execute(call('read', {file_path: '.logox/state/sessions/linked/id_ed25519'}), f.context)).isError, true);
     await f.engine.add({scope: 'session', decision: 'deny', tool: 'read', pattern: '.logox/state/**'});
-    assert.equal((await f.tools.execute(call('read', {path: '.logox/state/sessions/sample.json'}), f.context)).isError, true);
+    assert.equal((await f.tools.execute(call('read', {file_path: '.logox/state/sessions/sample.json'}), f.context)).isError, true);
     const command = process.platform === 'win32' ? "Remove-Item '.logox/state/sessions' -Recurse" : "rm -rf '.logox/state/sessions'";
     assert.equal((await f.tools.execute(call('shell', {command}), f.context)).isError, true);
     assert.equal(await readFile(join(f.cwd, '.logox/state/sessions/sample.json'), 'utf8'), 'changed');

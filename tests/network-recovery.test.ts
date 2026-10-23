@@ -4,7 +4,7 @@ import {createServer, type ServerResponse} from 'node:http';
 import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {createProvider} from '../src/providers/http.js';
 import {createHttpTransport} from '../src/providers/transport.js';
@@ -40,11 +40,11 @@ async function fixture(reply: (res: ServerResponse, count: number) => void) {
 test('真实 SSE 断流两次后恢复，已执行写入一次，失败输出保存但不入后续上下文', {timeout: 15000}, async () => {
   const f = await fixture((res, count) => {
     if (count === 1) {
-      send(res, {tool_calls: [{index: 0, id: 'write-ready', function: {name: 'write', arguments: JSON.stringify({path: 'ready.txt', content: 'one-write'})}}]}, 'tool_calls');
+      send(res, {tool_calls: [{index: 0, id: 'write-ready', function: {name: 'write', arguments: JSON.stringify({file_path: 'ready.txt', content: 'one-write'})}}]}, 'tool_calls');
       res.end('data: [DONE]\n\n');
     } else if (count <= 3) {
       send(res, {content: 'discarded-partial-' + count});
-      send(res, {tool_calls: [{index: 0, id: 'unfinished', function: {name: 'write', arguments: '{"path":"broken.txt"'}}]});
+      send(res, {tool_calls: [{index: 0, id: 'unfinished', function: {name: 'write', arguments: '{"file_path":"broken.txt"'}}]});
       setTimeout(() => res.destroy(), 20);
     } else {send(res, {content: '网络恢复完成'}, 'stop'); res.end('data: [DONE]\n\n');}
   });
@@ -59,7 +59,7 @@ test('真实 SSE 断流两次后恢复，已执行写入一次，失败输出保
     assert.equal(await readFile(join(f.cwd, 'ready.txt'), 'utf8'), 'one-write');
     await assert.rejects(readFile(join(f.cwd, 'broken.txt')));
     const history = await f.app.journal.load('network', 'logox');
-    assert.equal(history.filter(e => e.role === 'tool').length, 1);
+    assert.equal(history.filter(e => e.role === 'tool' && e.message?.role === 'tool' && e.message.name !== '_FinishRound').length, 1);
     assert.equal(history.filter(e => e.message?.role === 'assistant' && e.message.contextExcluded).length, 2);
     for (const request of f.requests.slice(2)) assert.ok(!JSON.stringify(request).includes('discarded-partial'));
     await f.app.ensemble.dispatch('logox', '下一轮').done;
@@ -109,6 +109,7 @@ test('Actor 请求重试与 Director 接管共用预算，不叠加第三次自�
     await waitForSnapshot(f.app.store, s => s.activities.some(a => a.ownerId === 'logox' && a.status === 'completed'), 15000);
     assert.equal(f.requests.length, 4, 'Actor 三次请求后只允许 Director 说明，不继续派工');
     assert.match(JSON.stringify(f.requests[3]), /同一故障.*两次/);
-    assert.deepEqual(f.requests[3]?.tools, []);
+    assert.equal(f.requests[3]?.tools.length, 1);
+    assert.match(JSON.stringify(f.requests[3]?.tools), /_FinishRound/);
   } finally {await f.close();}
 });

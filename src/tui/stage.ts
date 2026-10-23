@@ -1,7 +1,9 @@
 import type {Interaction, Message, RuntimeSnapshot} from '../runtime/contracts.js';
 import {choiceStyle, ownerColor, palette, type QuestionDraft, type ActorStyles} from './cards.js';
 import {cast} from '../actors/ensemble.js';
-import {appendActorCard, createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
+import {createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
+import {getToolUI, isVisibleToolMessage} from '../tools/ui-registry.js';
+import {messageToolCall, renderDefaultTool} from './tool-ui.js';
 import {clipLine} from './viewport.js';
 import stringWidth from 'string-width';
 import {inputKind} from '../runtime/provenance.js';
@@ -31,7 +33,7 @@ const messageLayouts = new WeakMap<Message, Map<string, readonly SceneRow[]>>();
 const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof projectMessages>>>();
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   const messages = snapshot.messages.filter(message => message.sessionId === sessionId && (view === 'logox' || message.ownerId === view) &&
-    !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
+    isVisibleToolMessage(message) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
   const grouped = new Map<string, Message[]>();
   for (const message of messages) if (message.activityId) {
@@ -68,7 +70,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     !['approval', 'question', 'retry'].includes(activity.phase ?? '') && !requests.has(activity.activityId) &&
     !(grouped.get(activity.activityId) ?? []).some(message => message.step?.state === 'waiting');
   const seen = new Set<string>();
-  type Frame = Parameters<Parameters<typeof appendActorCard>[1]['renderBody']>[0];
+  type Frame = Parameters<typeof insetFrame>[0];
   const open = (id: string) => stageFoldOpen(snapshot, id, folds);
   const stageIds = new Map<string, string>();
   const body = (message: Message, frame?: Frame) => {
@@ -83,6 +85,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     const request = thinking.get(message.id);
     if (request) {
+      const hasContent = Boolean(message.text.trim() || (request.tokens && request.tokens > 0) || request.step.note);
+      if (request.step.state === 'completed' && !hasContent) {
+        return;
+      }
       builder.pushOrdinaryCard({id: request.id, ownerId: message.ownerId, kind: 'Thinking', title: 'Thinking', bodyLines: [],
         step: request.step, tokens: request.tokens, open: open(request.id), railColor: ownerColor(message.ownerId, roles),
         ...(frame ? {parentFrame: frame} : {}),
@@ -108,14 +114,19 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     let rows = layouts.get(key);
     if (!rows) {
       const chunk = createBuilder(width, hovered, roles);
-      if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: message.kind === 'thinking' ? '思考' : '工具调用',
-        title: message.step?.title ?? message.text.split('\n')[0]?.slice(0, 100) ?? '处理中', bodyLines: [message.text],
+      if (message.kind === 'tool') {
+        const call = messageToolCall(message);
+        const ui = getToolUI(call?.name ?? '');
+        (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
+          ...(frame ? {frame} : {}), open: open(message.id), accent: rail});
+      } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
+        title: message.step?.title ?? 'Thinking', bodyLines: [message.text],
         ...(message.step ? {step: message.step} : {}),
         open: open(message.id), railColor: rail, ...(frame ? {parentFrame: frame} : {})});
       else if (message.role === 'assistant') chunk.pushMarkdown(message.id, message.text, rail, frame);
       else chunk.pushProse(message.id, message.text, rail, 'body', frame, undefined, isSystem ? palette.muted : undefined);
       rows = chunk.rows;
-      if (layouts.size >= 2) layouts.delete(layouts.keys().next().value!);
+      if (layouts.size >= 4) layouts.delete(layouts.keys().next().value!);
       layouts.set(key, rows);
     }
     for (const row of rows) builder.rows.push(row);
@@ -132,16 +143,6 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     return grouped.get(original.activityId)?.find(message => message.role === 'user' && message.text.trim())?.text ?? original.title;
   };
-  const actorDetails = (activity: RuntimeSnapshot['activities'][number], frame: Frame) => {
-    const color = ownerColor(activity.ownerId, roles);
-    builder.pushProse(activity.activityId + '-goal', '目标：' + actorGoal(activity), color, 'body', frame);
-    const requests = (grouped.get(activity.activityId) ?? []).flatMap(message => {
-      const request = thinking.get(message.id); return request ? [request] : [];
-    });
-    if (requests.length) builder.pushProse(activity.activityId + '-usage',
-      '累计思考：' + Math.round(requests.reduce((sum, request) => sum + stepElapsed(request.step, Date.now()), 0) / 1000) + 's · ' +
-      requests.reduce((sum, request) => sum + request.tokens, 0) + ' Tokens', color, 'body', frame, undefined, palette.muted);
-  };
   const failure = (activityId: string) => {
     const activity = activities.get(activityId);
     if (!activity || !['failed', 'cancelled'].includes(activity.status)) return;
@@ -154,19 +155,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const interaction = (request: Interaction, parent?: Frame) => {
     const rail = ownerColor(request.ownerId, roles);
     const draft = responses[request.requestId] ?? {questionIndex: 0, selected: request.kind === 'permission' ? 1 : 0, text: '', error: ''};
-    const question = request.kind === 'question' ? request.questions[draft.questionIndex] : undefined;
-    builder.pushOrdinaryCard({id: request.requestId, kind: request.kind === 'permission' ? '许可' : '提问',
-      title: request.title, status: '待回答', bodyLines: [], open: open(request.requestId), railColor: rail,
+    if (request.kind === 'question') {
+      getToolUI('AskUserQuestion').interaction?.render({builder, request, draft, answers: {},
+        ...(parent ? {frame: parent} : {}), open: open(request.requestId), accent: rail});
+      return;
+    }
+    builder.pushOrdinaryCard({id: request.requestId, kind: '许可', title: request.title, status: '待回答', bodyLines: [], open: open(request.requestId), railColor: rail,
       ...(parent ? {parentFrame: parent} : {})});
     if (!open(request.requestId)) return;
     const frame = insetFrame(parent ?? {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth}, parent?.bg);
     builder.pushBlank(rail, frame);
-    builder.pushProse(request.requestId + '-question', request.kind === 'permission'
-      ? request.reason + '\n' + request.tool + ' · ' + JSON.stringify(request.arguments, null, 2)
-      : (draft.questionIndex + 1) + '/' + request.questions.length + ' · ' + (question?.question ?? ''), rail, 'body', frame);
-    const options = request.kind === 'permission'
-      ? [{label: '仅本次允许', description: '只允许这一次工具执行。'}, {label: '拒绝（默认）', description: '保留建议，不执行该工具。'}]
-      : [...question?.options ?? [], {label: '自由输入', description: draft.text || '在输入区写下回答。'}];
+    builder.pushProse(request.requestId + '-question', request.reason + '\n' + request.tool + ' · ' + JSON.stringify(request.arguments, null, 2), rail, 'body', frame);
+    const options = [{label: '仅本次允许', description: '只允许这一次工具执行。'}, {label: '拒绝（默认）', description: '保留建议，不执行该工具。'}];
     for (const [index, option] of options.entries()) {
       const style = choiceStyle(index === draft.selected, rail);
       const action: SceneAction = {kind: 'select_answer', requestId: request.requestId, value: String(index)};
@@ -192,33 +192,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       seen.add(activity.activityId);
       const actorColor = ownerColor(activity.ownerId, roles);
       if (!builder.rows.at(-1)?.action?.owner) builder.pushBlank(actorColor);
-      appendActorCard(builder, {
-        id: activity.activityId, owner: activity.ownerId, roles,
-        task: activityTitle(activity),
-        active: animated(activity),
-        status: activityStatus(activity), open: open(activity.activityId), railColor: actorColor,
-        ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: activeStop(activity.activityId)} : {}),
-        renderBody(frame) {
-          actorDetails(activity, frame);
-          if (activity.taskModel) {
-            const model = activity.taskModel;
-            builder.pushProse(activity.activityId + '-model', '任务模型：' + model.actual.provider + '/' + model.actual.model +
-              (model.switched ? ' · 本任务已转用（原模型：' + model.initial.provider + '/' + model.initial.model + '）' : ''), actorColor, 'body', frame);
-          }
-          if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
-          for (const item of grouped.get(activity.activityId) ?? []) {
-            if (item.inputKind === 'collaboration_interrupt') {
-              builder.pushBlank(actorColor, frame);
-              builder.pushProse(item.id + '-interrupt', item.text, '#d97757', 'body', frame, undefined, '#d97757');
-              builder.pushBlank(actorColor, frame);
-            } else if (item.role !== 'user' && !(item.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) {
-              body(item, frame);
-            }
-          }
-          for (const request of requests.get(activity.activityId) ?? []) interaction(request, frame);
-          if (activity.status === 'failed' || activity.status === 'cancelled') builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);
-        },
-      });
+      getToolUI('Actor').renderActivity?.({builder, activity, roles, title: activityTitle(activity), status: activityStatus(activity),
+        active: animated(activity), open: open(activity.activityId), stop: activeStop(activity.activityId),
+        messages: grouped.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [],
+        thinking, originalPrompt: actorGoal(activity), detailed: true, renderMessage: body, renderInteraction: interaction});
       continue;
     }
     if (actor && activity && !seen.has(activity.activityId)) {
@@ -226,24 +203,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (view !== 'logox' && activity.status === 'completed') {
         // 在 actor 自己的对话窗口中，已完成的任务不重复渲染自引用的外层 Actor 卡片，直接呈现对话正文。
       } else {
-        const actorColor = ownerColor(activity.ownerId, roles);
-        appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles, task: activityTitle(activity),
-          active: animated(activity),
-          status: activityStatus(activity), open: open(activity.activityId), railColor: actorColor,
-          ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: activeStop(activity.activityId)} : {}),
-          renderBody(frame) {
-            actorDetails(activity, frame);
-            if (activity.summary) builder.pushProse(activity.activityId + '-summary', activity.summary.report, actorColor, 'body', frame);
-            for (const item of grouped.get(activity.activityId) ?? []) {
-              if (item.inputKind === 'collaboration_interrupt') {
-                builder.pushBlank(actorColor, frame);
-                builder.pushProse(item.id + '-interrupt', item.text, '#d97757', 'body', frame, undefined, '#d97757');
-                builder.pushBlank(actorColor, frame);
-              }
-            }
-            if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', frame, undefined, palette.muted);
-          },
-        });
+        getToolUI('Actor').renderActivity?.({builder, activity, roles, title: activityTitle(activity), status: activityStatus(activity),
+          active: animated(activity), open: open(activity.activityId), stop: activeStop(activity.activityId),
+          messages: grouped.get(activity.activityId) ?? [], pending: [], thinking, originalPrompt: actorGoal(activity),
+          detailed: false, renderMessage: body, renderInteraction: interaction});
       }
     }
     if (actor && activity && view !== 'logox' && message.role === 'system' && ['failed', 'cancelled'].includes(activity.status)) continue;

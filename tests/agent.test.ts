@@ -5,7 +5,7 @@ import {mkdtemp, readFile, writeFile, mkdir, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -51,7 +51,7 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     const send = (value: unknown) => response.write('data: ' + JSON.stringify(value) + '\r\n\r\n');
     if (requests.length === 1) {
       send({choices: [{delta: {reasoning_content: '核对文件'}}]});
-      send({choices: [{delta: {tool_calls: [{index: 0, id: 'write-1', function: {name: 'write', arguments: '{"path":"hello.ts",'}}]}}]});
+      send({choices: [{delta: {tool_calls: [{index: 0, id: 'write-1', function: {name: 'write', arguments: '{"file_path":"hello.ts",'}}]}}]});
       send({choices: [{delta: {tool_calls: [{index: 0, function: {arguments: '"content":"export const 你好 = 1;\\n"}'}}]}, finish_reason: 'tool_calls'}]});
     } else {
       send({choices: [{delta: {content: '文件已写入。'}, finish_reason: 'stop'}]});
@@ -77,7 +77,7 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     assert.equal(second.messages.at(-1)?.role, 'tool');
     assert.match(second.messages.at(-1)!.content, /(?:Updated|已修改)/);
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant']);
+    assert.deepEqual(entries.map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
     assert.equal(entries[1]?.message?.role, 'assistant');
     await f.app.close();
     const restored = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, sessionId: 'test', config: f.config, provider});
@@ -91,7 +91,7 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
 });
 
 test('拒绝审批不写文件；模型收到真实拒绝结果', async () => {
-  const f = await fixture(scripted([call('write', {path: 'denied.txt', content: 'bad'}), request => {
+  const f = await fixture(scripted([call('write', {file_path: 'denied.txt', content: 'bad'}), request => {
     assert.match(request.messages.at(-1)!.text, /拒绝/);
     return assistant('保留建议。');
   }]));
@@ -105,8 +105,8 @@ test('拒绝审批不写文件；模型收到真实拒绝结果', async () => {
 });
 
 test('取消多工具批次补齐全部结果，下一轮能继续，恢复不重放副作用', async () => {
-  const turn = call('write', {path: 'cancelled.txt', content: 'bad'});
-  turn.message.toolCalls!.push({id: 'second', name: 'read', arguments: '{"path":"cancelled.txt"}'});
+  const turn = call('write', {file_path: 'cancelled.txt', content: 'bad'});
+  turn.message.toolCalls!.push({id: 'second', name: 'read', arguments: '{"file_path":"cancelled.txt"}'});
   let nextSeen = false;
   const f = await fixture(scripted([turn, request => {
     const results = request.messages.filter(message => message.role === 'tool');
@@ -131,7 +131,7 @@ test('取消多工具批次补齐全部结果，下一轮能继续，恢复不�
 
 test('响应截断或任一参数不完整时整批工具都不执行', async () => {
   for (const truncated of [true, false]) {
-    const turn = call('write', {path: 'never.txt', content: 'bad'});
+    const turn = call('write', {file_path: 'never.txt', content: 'bad'});
     if (truncated) turn.stop = 'length';
     else turn.message.toolCalls!.push({id: 'invalid', name: 'read', arguments: '{'});
     const f = await fixture(scripted([turn, request => {
@@ -149,8 +149,8 @@ test('响应截断或任一参数不完整时整批工具都不执行', async ()
 test('读取工作目录之外和敏感路径需要审批；普通文件直接读', async () => {
   const outside = await mkdtemp(join(tmpdir(), 'logox-outside-'));
   await writeFile(join(outside, 'secret.txt'), 'outside');
-  const f = await fixture(scripted([call('read', {path: 'normal.txt'}), call('read', {path: '.env'}),
-    call('read', {path: join(outside, 'secret.txt')}), assistant()]));
+  const f = await fixture(scripted([call('read', {file_path: 'normal.txt'}), call('read', {file_path: '.env'}),
+    call('read', {file_path: join(outside, 'secret.txt')}), assistant()]));
   try {
     await writeFile(join(f.cwd, 'normal.txt'), 'normal');
     await writeFile(join(f.cwd, '.env'), 'secret');
@@ -158,7 +158,7 @@ test('读取工作目录之外和敏感路径需要审批；普通文件直接�
     await waitForSnapshot(f.app.store, snapshot => snapshot.interactions.filter(item => item.status === 'pending').length === 1);
     const sensitiveRequest = f.app.store.interactions.list()[0]!;
     assert.equal(sensitiveRequest.kind, 'permission');
-    if (sensitiveRequest.kind === 'permission') assert.equal(sensitiveRequest.arguments.path, '.env');
+    if (sensitiveRequest.kind === 'permission') assert.equal(sensitiveRequest.arguments.file_path, '.env');
     approve(f.app, 'deny');
     await waitForSnapshot(f.app.store, snapshot => snapshot.interactions.filter(item => item.status === 'pending').length === 1 &&
       snapshot.interactions.some(item => item.status === 'answered'));
@@ -169,7 +169,7 @@ test('读取工作目录之外和敏感路径需要审批；普通文件直接�
 });
 
 test('精确编辑保留 UTF-8 BOM、CRLF 和字面替换符；撤销不覆盖用户后续修改', async () => {
-  const f = await fixture(scripted([call('edit', {path: 'file.txt', old_text: 'old\nline', new_text: '$&\n新行'}), assistant()]));
+  const f = await fixture(scripted([call('edit', {file_path: 'file.txt', old_string: 'old\nline', new_string: '$&\n新行'}), assistant()]));
   try {
     await writeFile(join(f.cwd, 'file.txt'), '\uFEFFold\r\nline\r\n');
     const handle = f.app.ensemble.dispatch('techne', '编辑');
@@ -233,13 +233,15 @@ test('真实 Shell 成功、非零退出、取消和超时均回收进程', {tim
 
 test('Director 派发后角色串行执行，结果自动返回且上下文隔离', {timeout: 5000}, async () => {
   let round = 0;
+  const actorReport = '侦察结果\n' + 'Evidence detail. '.repeat(200) + '\nEND_FULL_REPORT';
   const f = await fixture({async respond(request, onDelta) {
     round++;
     if (round === 1) return call('dispatch_role', {tasks: [{ownerId: 'aletheia', prompt: '查资料'}, {ownerId: 'techne', prompt: '构建'}]});
     if (round === 2) return assistant('角色已安排');
-    if (request.system.includes('You are Aletheia') || request.system.includes('你是 Aletheia')) {assert.equal(request.messages.length, 1); return assistant('侦察结果');}
+    if (request.system.includes('You are Aletheia') || request.system.includes('你是 Aletheia')) {assert.equal(request.messages.length, 1); return assistant(actorReport);}
     if (request.system.includes('You are Techne') || request.system.includes('你是 Techne')) {assert.equal(request.messages.length, 1); return assistant('构建结果');}
     assert.match(request.messages.at(-1)!.text, /侦察结果/);
+    assert.ok(request.messages.at(-1)!.text.includes(actorReport), 'Director receives the full report, not a bounded round summary');
     assert.match(request.messages.at(-1)!.text, /构建结果/);
     onDelta({kind: 'text', text: '汇总完成'});
     return assistant('汇总完成');
@@ -248,7 +250,7 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     await f.app.submit('处理任务');
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.length === 4 && snapshot.activities.every(a => a.status === 'completed'));
     assert.equal(round, 5);
-    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).map(entry => entry.role), ['user', 'assistant']);
+    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).map(entry => entry.role), ['user', 'assistant', 'tool']);
     const rows = buildStageRows(f.app.store.getSnapshot(), 'test', 'logox', 80, {}, null);
     assert.ok(rows.some(row => row.text.includes('侦察结果')), '完成卡片复用成果摘要标题');
     assert.ok(!rows.some(row => row.text.includes('保留项目内容')), '真实场景不含 portfolio 演示正文');
@@ -266,7 +268,7 @@ test('Anthropic 原生流保留思考签名与工具身份，下一次请求正�
       {type: 'content_block_delta', index: 0, delta: {type: 'thinking_delta', thinking: '思考'}},
       {type: 'content_block_delta', index: 0, delta: {type: 'signature_delta', signature: 'signed'}},
       {type: 'content_block_start', index: 1, content_block: {type: 'tool_use', id: 'c', name: 'read', input: {}}},
-      {type: 'content_block_delta', index: 1, delta: {type: 'input_json_delta', partial_json: '{"path":"x"}'}},
+      {type: 'content_block_delta', index: 1, delta: {type: 'input_json_delta', partial_json: '{"file_path":"x"}'}},
       {type: 'message_delta', delta: {stop_reason: 'tool_use'}, usage: {output_tokens: 8}},
       {type: 'message_stop'},
     ];
@@ -282,7 +284,7 @@ test('Anthropic 原生流保留思考签名与工具身份，下一次请求正�
 });
 test('文件搜索使用实际 rg，忽略敏感文件，达到全局上限后停止', async () => {
   let observed = false;
-  const f = await fixture(scripted([call('glob', {pattern: '**/*.txt'}), call('grep', {pattern: 'needle', limit: 2}), request => {
+  const f = await fixture(scripted([call('glob', {pattern: '**/*.txt'}), call('grep', {pattern: 'needle', output_mode: 'content', head_limit: 2}), request => {
     const tools = request.messages.filter(message => message.role === 'tool');
     assert.equal(tools.length, 2);
     assert.match(tools[0]!.text, /public.txt/);
@@ -303,8 +305,8 @@ test('文件搜索使用实际 rg，忽略敏感文件，达到全局上限后�
   } finally {await f.cleanup();}
 });
 test('同一轮同一文件多次修改按倒序撤销；新建文件撤销后消失', async () => {
-  const f = await fixture(scripted([call('write', {path: 'repeated.txt', content: 'one'}, 'c1'),
-    call('write', {path: 'repeated.txt', content: 'two'}, 'c2'), assistant()]));
+  const f = await fixture(scripted([call('write', {file_path: 'repeated.txt', content: 'one'}, 'c1'),
+    call('write', {file_path: 'repeated.txt', content: 'two'}, 'c2'), assistant()]));
   try {
     const handle = f.app.ensemble.dispatch('techne', '多次写');
     for (let index = 0; index < 2; index++) {
@@ -327,15 +329,15 @@ test('进程退出前留下的未配对调用恢复为失败结果，下一轮�
   const f = await fixture(provider);
   try {
     await f.app.journal.append({version: 1, sessionId: 'test', ownerId: 'techne', role: 'assistant', text: '',
-      message: {role: 'assistant', text: '', toolCalls: [{id: 'orphan', name: 'write', arguments: '{"path":"orphan.txt","content":"bad"}'}]}});
+      message: {role: 'assistant', text: '', toolCalls: [{id: 'orphan', name: 'write', arguments: '{"file_path":"orphan.txt","content":"bad"}'}]}});
     await f.app.ensemble.dispatch('techne', '继续').done;
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant']);
+    assert.deepEqual(entries.map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant', 'tool']);
     await assert.rejects(readFile(join(f.cwd, 'orphan.txt')));
   } finally {await f.cleanup();}
 });
 test('审批等待期间文件被用户修改或创建时，写工具保留新内容', async () => {
-  const f = await fixture(scripted([call('write', {path: 'waiting.txt', content: 'model'}), request => {
+  const f = await fixture(scripted([call('write', {file_path: 'waiting.txt', content: 'model'}), request => {
     const result = request.messages.at(-1)!;
     assert.equal(result.role, 'tool');
     assert.match(result.text, /等待审批期间发生变化/);

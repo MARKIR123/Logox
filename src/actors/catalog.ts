@@ -7,6 +7,7 @@ import {withFileLock} from '../store/file-lock.js';
 import {builtinActors} from './builtins.js';
 import {actorIdSchema, parseActor, parseActorProfile, serializeActor, type ActorDefinition} from './definitions.js';
 import {ActorModelStorage} from './actor-models-storage.js';
+import {refreshShippedCompression} from './compression-migration.js';
 
 export interface ActorIssue {readonly path: string; readonly reason: string}
 export interface ActorSnapshot {readonly definitions: readonly ActorDefinition[]; readonly issues: readonly ActorIssue[]; readonly revision: number}
@@ -103,9 +104,16 @@ export class ActorCatalog {
               const decoder = new TextDecoder('utf-8', {fatal: true});
               const config = decoder.decode(configRaw);
               const persona = decoder.decode(personaRaw);
-              const compression = compressionRaw ? decoder.decode(compressionRaw) : undefined;
-              const actor = parseActorProfile({config, persona, compression});
+              let compression = compressionRaw ? decoder.decode(compressionRaw) : undefined;
+              let actor = parseActorProfile({config, persona, compression});
               if (entry.name !== actor.id) throw new Error('目录名必须与角色 id 相同');
+              if (compression !== undefined) {
+                await refreshShippedCompression(compressionPath, actor.id, compression);
+                await assertActorPath(compressionPath);
+                try {compression = decoder.decode(await readFile(compressionPath));}
+                catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; compression = undefined;}
+                actor = parseActorProfile({config, persona, compression});
+              }
               definitions.set(actor.id, actor);
             } catch (error) {
               issues.push({path: actorDir, reason: error instanceof Error ? error.message : '加载失败'});

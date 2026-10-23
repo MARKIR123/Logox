@@ -10,16 +10,24 @@ const distBin = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
 const srcBin = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src', 'tools', 'bin');
 const toolsBinDir = existsSync(distBin) ? distBin : srcBin;
 
-export const shellSchema = z.strictObject({
-  command: z.string().min(1),
-  description: z.string().optional().describe('Clear, concise description of what this command does in active voice (5-10 words)'),
-  timeout: z.preprocess(
-    val => typeof val === 'number' && val > 600 ? Math.round(val / 1000) : val,
-    z.number().int().min(1).max(600).default(60),
-  ),
-});
+export const shellSchema = z.preprocess(
+  // Legacy callers used seconds; values <= 600 are treated as seconds and converted to milliseconds.
+  value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const result = {...(value as Record<string, unknown>)};
+    if (typeof result.timeout === 'number' && result.timeout <= 600) result.timeout = Math.round(result.timeout * 1000);
+    return result;
+  },
+  z.strictObject({
+    command: z.string().min(1).describe('The command to execute'),
+    description: z.string().optional().describe('Clear, concise description of what this command does in active voice (5-10 words)'),
+    timeout: z.number().int().min(1).max(600_000).optional().describe('Optional timeout in milliseconds (max 600000). Defaults to 120000.'),
+  }),
+);
 
 export type ShellArgs = z.infer<typeof shellSchema>;
+
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 export async function executeShell(
   args: ShellArgs,
@@ -37,7 +45,7 @@ export async function executeShell(
     PATH: toolsBinDir + delimiter + (process.env.PATH || ''),
   };
 
-  const timeoutSec = typeof args.timeout === 'number' && Number.isFinite(args.timeout) ? args.timeout : 60;
+  const timeoutMs = args.timeout ?? DEFAULT_TIMEOUT_MS;
 
   const result = await runProcess(
     process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',
@@ -46,7 +54,7 @@ export async function executeShell(
       : ['-c', command],
     cwd,
     signal,
-    timeoutSec * 1000,
+    timeoutMs,
     64_000,
     undefined,
     extraEnv,

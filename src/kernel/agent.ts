@@ -8,6 +8,7 @@ import type {RuntimeStore} from '../runtime/store.js';
 import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
 import {Tools, toolDefinitions, validToolCall, validateToolCall, canonicalToolName, type ToolResult} from '../tools/tools.js';
+import {diagnoseToolError} from '../tools/diagnostics.js';
 
 import type {ContextManager} from '../context/manager.js';
 import {inputKind, inputMessage} from '../runtime/provenance.js';
@@ -17,8 +18,12 @@ import type {TaskModels} from '../actors/task-models.js';
 import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFingerprint, type ExecutionRecoveryKind} from './execution-recovery.js';
-import {composeBaseSystemPrompt, composeRuntimeSystemPrompt} from '../prompts/index.js';
+import {composeBaseSystemPrompt, composeRuntimeSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
 import {maybePersistLargeOutput} from './scratchpad.js';
+import {omitInternalToolPairs} from '../context/round-memory.js';
+import {finishRoundTool, isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
+import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/_FinishRoundTool/prompt.js';
+import {TASK_REPORT_CONTRACT} from '../prompts/collaboration/index.js';
 
 export class UserCancelledError extends Error {
   readonly stopReason = 'user' as const;
@@ -51,7 +56,7 @@ export interface AgentOptions {
   executeExtra?(call: ToolCall, context: Parameters<ActorExecutor<string>>[1]): Promise<ToolResult>;
 }
 export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly ToolDefinition[] = [], resources?: Resources,
-  role?: {prompt: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string) {
+  role?: {prompt: string; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string) {
   const effective = resources ?? new Resources(cwd);
   if (!resources) await effective.reload();
   const rules = effective.prompt(role?.visibility);
@@ -61,6 +66,7 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     ownerId,
     builtinPrompt: builtin?.prompt,
     customPrompt: role?.prompt,
+    memoryFocus: role?.compression,
     rulesContext: rules.context,
     includeSummary,
     scratchpadDir,
@@ -83,8 +89,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
     const taskModel = await options.taskModels?.begin(context);
     let outcome: 'completed' | 'failed' | 'cancelled' = 'failed';
     try {
-      const messages: ModelMessage[] = normalizeMessages(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
-        : entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text}));
+      const messages: ModelMessage[] = normalizeMessages(omitInternalToolPairs(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
+        : entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text})));
       messages.push(inputMessage(prompt, context));
       // 请求修复可能把未配对工具记录转换成 user；审批授权只取原始用户记录。
       const humanTexts = context.authorization ?? [...context.history.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
@@ -97,6 +103,18 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       let recovery = '';
       let recoveringKind: ExecutionRecoveryKind | undefined;
       let adjustments = 0;
+      let memoryRepair = false;
+      let finalText = '';
+      const correctionCalls = new Set<string>();
+      context.acceptRoundMemory?.(null);
+      const drainInbox = async (closing = false): Promise<boolean> => {
+        const incoming = await (closing && context.closeInbox ? context.closeInbox() : context.drainInbox?.()) ?? [];
+        if (!incoming.length) return false;
+        messages.push(...incoming);
+        context.acceptRoundMemory?.(null);
+        memoryRepair = false; finalText = ''; correctionCalls.clear();
+        return true;
+      };
       const recoverOutput = async (kind: ExecutionRecoveryKind, thinkingId: string): Promise<void> => {
         context.signal.throwIfAborted();
         const decision = await (options.recoverExecution?.(context, kind) ?? localRecovery.execution(root, kind, context.ownerId));
@@ -114,11 +132,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
         if (options.requestBase) instruction = await options.requestBase(context);
-        const incoming = context.drainInbox?.() ?? [];
-        for (const msg of incoming) {
-          messages.push(msg);
-        }
-        if (options.iterations > 0 && iteration >= options.iterations) {
+        await drainInbox();
+        if (!memoryRepair && options.iterations > 0 && iteration >= options.iterations) {
           const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
             id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
             options: [{id: 'yes', label: 'Continue', description: 'Add another budget quota of round trips.'}, {id: 'no', label: 'Stop', description: 'Keep current results and end task.'}],
@@ -129,7 +144,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           iteration = 0;
         }
-        const definitions = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? instruction.tools :
+        const definitions = memoryRepair ? [finishRoundTool] : context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? instruction.tools :
           [...instruction.tools.filter(tool => tool.name !== taskProgressTool.name && canonicalToolName(tool.name) !== 'UpdateTaskProgress'), taskProgressTool];
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const baseSystem = composeRuntimeSystemPrompt({
@@ -137,20 +152,24 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           supportsVision: visionEnabled,
           progressInstruction: progress.instruction(),
           recoveryInstruction: recovery,
+          deliveryInstruction: context.ownerId !== 'logox' && context.inputKind === 'director' ? TASK_REPORT_CONTRACT : '',
+          finalizationInstruction: memoryRepair ? finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT : '',
         });
         const base = {system: baseSystem,
           // 工具字段与校验不变；省去每份 schema 重复的草案版本 URL。
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
-        const prepared = await options.context?.prepare(context, base, context.signal);
+        const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
         if (taskModel && prepared && prepared.model.identity !== taskModel.model().identity) {
           throw new ProviderError('任务模型与上下文预算身份不一致；请将 ContextManager.model 接入 TaskModels.model');
         }
-        const projected = prepared?.request ?? {...base, messages: normalizeMessages(messages)};
+        const initialProjection = prepared?.request ?? {...base, messages};
+        const projected = {...initialProjection, messages: normalizeMessages(omitInternalToolPairs(initialProjection.messages, correctionCalls))};
         // 签名只属于生成它的模型；保留完整账本与工具配对，转用请求不回放旧签名思考。
         let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
             ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled};
-        iteration++;
+        if (!memoryRepair) iteration++;
+        const metadataOnly = memoryRepair && !!finalText;
         context.report(recoveringKind ? recoveringKind === 'no_delivery' ? '调整中' : '接续中' : '模型处理中',
           recoveringKind ? recovery : '第 ' + iteration + ' 次往返');
         let emitted = false, textId: string | undefined;
@@ -161,6 +180,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             turn = await (taskModel?.provider() ?? options.provider()).respond(request, delta => {
               emitted = true;
               const kind = delta.kind;
+              if (metadataOnly && kind === 'text') return;
               if (kind === 'text' && steps.get(thinkingId).state === 'running') {
                 steps.finish(thinkingId, 'completed'); steps.endGroup('completed'); steps.phase('text');
               }
@@ -206,7 +226,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
             const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
             const step = steps.finish(thinkingId, context.signal.aborted ? 'cancelled' : 'failed');
-            await persist({role: 'assistant', text, ...(reasoning ? {reasoning} : {})}, step);
+            await persist({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), ...(metadataOnly ? {memoryOnly: true as const} : {})}, step);
+            if (memoryRepair && finalText && !context.signal.aborted) {
+              if (await drainInbox(true)) continue requestLoop;
+              context.signal.throwIfAborted();
+              outcome = 'completed'; return;
+            }
             if (await taskModel?.fallback(error)) {
               for (const message of messages) if (message.role === 'assistant' && message.signature) foreignSignatures.add(message.signature);
               options.context?.meter(context).invalidate();
@@ -216,7 +241,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             throw error;
           }
         }
-        if (turn.message.text && !textId) {
+        if (metadataOnly) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
+        if (turn.message.text && !textId && !metadataOnly) {
           if (steps.get(thinkingId).state === 'running') steps.finish(thinkingId, 'completed');
           steps.endGroup('completed'); steps.phase('text');
           options.store.message(context.sessionId, context.ownerId, 'assistant', turn.message.text, {activityId: context.activityId});
@@ -229,6 +255,45 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           ids.add(call.id);
         }
         const calls = turn.message.toolCalls ?? [];
+        if (calls.some(call => isFinishRound(call.name)) || memoryRepair && calls.length) {
+          const truncated = turn.stop !== 'tools' || calls.some(call => {try {JSON.parse(call.arguments); return false;} catch {return true;}});
+          const onlyFinalizer = calls.length === 1 && isFinishRound(calls[0]!.name);
+          const check = onlyFinalizer && !truncated ? validateToolCall(calls[0]!) : undefined;
+          if (!metadataOnly && turn.message.text.trim()) finalText = turn.message.text;
+          const allowed = base.tools.some(tool => isFinishRound(tool.name));
+          const valid = allowed && onlyFinalizer && !truncated && check?.valid && !!finalText.trim();
+          const error = !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
+            : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
+            : !allowed ? 'Terminal metadata is not available in this request.'
+            : check && !check.valid ? check.error : 'Deliver the final answer or task report before submitting round memory.';
+          const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
+          await persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
+          if (prepared) options.context?.observe(context, request, turn, prepared.model);
+          correctionCalls.clear();
+          try {
+            for (const call of calls) {
+              await persist({role: 'tool', callId: call.id, name: call.name, text: valid ? '' : error, isError: !valid});
+              if (!valid && !truncated && isFinishRound(call.name)) correctionCalls.add(call.id);
+            }
+          } catch (error) {
+            context.signal.throwIfAborted();
+            if (!finalText) throw error;
+            if (await drainInbox(true)) continue;
+            context.signal.throwIfAborted();
+            options.store.message(context.sessionId, context.ownerId, 'notice', 'The response is preserved; round memory could not be recorded.', {activityId: context.activityId});
+            outcome = 'completed'; return;
+          }
+          context.signal.throwIfAborted();
+          if (await drainInbox(valid || memoryRepair)) continue;
+          context.signal.throwIfAborted();
+          if (valid) {context.acceptRoundMemory?.(calls[0]!.id); outcome = 'completed'; return;}
+          if (memoryRepair) {
+            if (!finalText) throw new ExecutionRecoveryError('no_delivery', 'stop');
+            outcome = 'completed'; return;
+          }
+          memoryRepair = true;
+          continue;
+        }
         if (calls.length) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {
             try { JSON.parse(call.arguments); return false; } catch { return true; }
@@ -274,9 +339,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           if (truncated) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: '工具参数不完整，此批未执行，改为更小的完整调用。'}});
           else if (schemaError) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: '工具参数校验未通过，整批未执行：' + schemaError.error}});
-          await persist(truncated ? {...turn.message, toolsExcluded: true} : turn.message, steps.get(thinkingId));
+          const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
+          await persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, steps.get(thinkingId));
           if (prepared) options.context?.observe(context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
           const completed = new Set<string>();
+          const failedTools: {name: string; error: string}[] = [];
           const toolIds = new Map(calls.map(call => [call.id, steps.tool(call)]));
           try {
             const execute = async (call: ToolCall): Promise<ToolResult> => {
@@ -333,18 +400,21 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 const results = await Promise.allSettled(group.map(async call => {
                   const id = toolIds.get(call.id)!;
                   try {
-                    const result = await execute(call);
+                    const rawResult = await execute(call);
+                    const result = diagnoseToolError(call, rawResult);
                     steps.finish(id, context.signal.aborted ? 'cancelled' : result.isError ? 'failed' : 'completed', call.name + '\n' + result.text,
                       result.isError ? result.disposition ?? 'error' : undefined);
                     return result;
                   } catch (error) {
-                    steps.finish(id, context.signal.aborted ? 'cancelled' : 'failed', call.name + '\n' + (context.signal.aborted ? '工具已取消。' : String(error)));
+                    const rawErr: ToolResult = {text: context.signal.aborted ? '工具已取消。' : String(error), isError: true};
+                    const result = diagnoseToolError(call, rawErr);
+                    steps.finish(id, context.signal.aborted ? 'cancelled' : 'failed', call.name + '\n' + (context.signal.aborted ? '工具已取消。' : result.text));
                     throw error;
                   }
                 }));
                 for (let index = 0; index < group.length; index++) {
                   const call = group[index]!, settled = results[index]!;
-                  const result: ToolResult = settled.status === 'fulfilled' ? settled.value : {text: context.signal.aborted ? '工具已取消。' : String(settled.reason), isError: true};
+                  const result: ToolResult = settled.status === 'fulfilled' ? settled.value : diagnoseToolError(call, {text: context.signal.aborted ? '工具已取消。' : String(settled.reason), isError: true});
                   const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId);
                   const step = steps.get(toolIds.get(call.id)!);
                   const toolMessage: ModelMessage = {
@@ -355,6 +425,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                   await persist(toolMessage, step);
                   const fingerprint = !truncated && !schemaError ? toolProgressFingerprint(call, result) : undefined;
                   if (fingerprint) await observeProgress(fingerprint);
+                  if (result.isError) failedTools.push({name: call.name, error: result.text});
                   completed.add(call.id);
                 }
               }
@@ -367,20 +438,41 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             }
           }
           if (truncated) await recoverOutput('truncated_tools', thinkingId);
-          else {recovery = ''; recoveringKind = undefined;}
+          else if (schemaError) {
+            recovery = toolErrorRecoveryInstruction([{name: schemaError.name, error: schemaError.error}]);
+            recoveringKind = undefined;
+          } else if (failedTools.length > 0) {
+            recovery = toolErrorRecoveryInstruction(failedTools);
+            recoveringKind = undefined;
+          } else {
+            recovery = '';
+            recoveringKind = undefined;
+          }
           continue;
         }
         if (prepared && !context.signal.aborted) options.context?.observe(context, request, turn, prepared.model);
+        if (memoryRepair) {
+          await persist(turn.message, thinkingStep);
+          context.signal.throwIfAborted();
+          if (await drainInbox(true)) continue;
+          context.signal.throwIfAborted();
+          if (!finalText) throw new ExecutionRecoveryError('no_delivery', 'stop');
+          outcome = 'completed'; return;
+        }
         const kind: ExecutionRecoveryKind | undefined = !turn.message.text.trim() && ['complete', 'length'].includes(turn.stop) ? 'no_delivery' : turn.stop === 'length' ? 'truncated_text' : undefined;
         if (kind) {
           try {await recoverOutput(kind, thinkingId);}
           finally {await persist(turn.message, steps.get(thinkingId));}
         } else await persist(turn.message, thinkingStep);
         if (turn.stop === 'complete' && turn.message.text.trim()) {
-          const incoming = context.drainInbox?.() ?? [];
-          if (incoming.length > 0) {
-            for (const msg of incoming) messages.push(msg);
-            continue requestLoop;
+          const needsMemory = base.tools.some(tool => isFinishRound(tool.name));
+          if (await drainInbox(!needsMemory)) continue requestLoop;
+          context.signal.throwIfAborted();
+          if (needsMemory) {
+            finalText = turn.message.text;
+            memoryRepair = true;
+            correctionCalls.clear();
+            continue;
           }
           outcome = 'completed';
           return;

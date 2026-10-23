@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {Resources} from '../src/resources/manager.js';
 import {agentRequestBase} from '../src/kernel/agent.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';

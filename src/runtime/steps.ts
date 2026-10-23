@@ -2,34 +2,12 @@ import type {Activity, Step} from './contracts.js';
 import {randomUUID} from 'node:crypto';
 import type {ToolCall} from './messages.js';
 import {RuntimeStore} from './store.js';
+import {legacyToolTitle} from '../tools/ui-format.js';
 
 export function stepElapsed(step: Step, now = Date.now()): number {
   return step.elapsedMs + (step.state === 'running' && step.runningSince !== undefined ? Math.max(0, now - step.runningSince) : 0);
 }
-export function toolTitle(call: ToolCall): string {
-  try {
-    const args: unknown = JSON.parse(call.arguments);
-    if (args && typeof args === 'object') {
-      const desc = Reflect.get(args, 'description') ?? Reflect.get(args, 'summary');
-      const descText = typeof desc === 'string' && desc.trim() ? desc.trim() : '';
-
-      for (const key of ['path', 'command', 'tool', 'to', 'actor', 'ownerId', 'name', 'url']) {
-        const value: unknown = Reflect.get(args, key);
-        if (typeof value === 'string') {
-          const detail = value.replace(/\s+/g, ' ').slice(0, 90);
-          if (descText) {
-            return `${call.name} · ${descText} (${detail})`;
-          }
-          return `${call.name} ${detail}`;
-        }
-      }
-      if (descText) {
-        return `${call.name} · ${descText}`;
-      }
-    }
-  } catch {}
-  return call.name;
-}
+export {legacyToolTitle as toolTitle} from '../tools/ui-format.js';
 
 /** Runtime owns each request/call clock. Rendering samples it without publishing timer ticks. */
 export class Steps {
@@ -55,7 +33,7 @@ export class Steps {
     this.groupId = undefined; this.groupThinking = undefined;
   }
   tool(call: ToolCall): string {
-    return this.create('tool', {title: toolTitle(call), callId: call.id, ...(this.groupId ? {groupId: this.groupId} : {}), state: 'queued', elapsedMs: 0}, call.name + '\n' + call.arguments);
+    return this.create('tool', {title: legacyToolTitle(call), callId: call.id, call, ...(this.groupId ? {groupId: this.groupId} : {}), state: 'queued', elapsedMs: 0}, call.name + '\n' + call.arguments);
   }
   private create(kind: 'thinking' | 'tool', step: Step, text: string): string {
     const stage = this.currentStage();

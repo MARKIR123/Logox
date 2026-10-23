@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, realpath, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {UsageLedger} from '../src/context/usage.js';
 import {acquireFileLock} from '../src/store/file-lock.js';
@@ -112,10 +112,10 @@ test('MCP长驻进程跨new/resume/rewind复用，Tools观察不重复；reload�
     app.contexts.prepare = async (identity, base, signal, force) => {compactSystem = base.system; return prepare(identity, base, signal, force);};
     await app.submit('/compact');
     const agentSystem = f.requests.at(-1)!.system;
-    const environmentStart = agentSystem.indexOf('当前执行环境（以本次请求为准）：');
-    const contractStart = agentSystem.indexOf('角色摘要保留重点：', environmentStart);
-    assert.ok(environmentStart >= 0 && contractStart > environmentStart);
-    assert.equal(compactSystem, agentSystem.slice(0, environmentStart) + agentSystem.slice(contractStart),
+    const environmentStart = agentSystem.indexOf('Current execution environment (authoritative for this request):');
+    const contractStart = agentSystem.indexOf('Role memory focus (guidance under the round memory contract):');
+    assert.ok(environmentStart >= 0 && contractStart >= 0 && environmentStart > contractStart);
+    assert.equal(compactSystem, agentSystem.slice(0, environmentStart - 1),
       '资源规范和摘要契约一致；请求时的执行环境由普通任务单独补充');
     assert.match(compactSystem, /规则第二版/); assert.ok(!compactSystem.includes('规则第一版'));
     // 资源重载尚未完成时，禁止构造带旧前缀的候选会话。

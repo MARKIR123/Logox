@@ -1,37 +1,37 @@
 # Module: Context Management & Compaction (`src/context/`)
 
 ## 1. Scope
-- **Owns**: Context window estimation, dual-watermark round compaction, tool payload disk archiving, four-pillar English summary contracts, token expenditure metering (`TokenMeter`, `UsageLedger`).
-- **Does not own**: Raw message journal persistence (owned by `src/store/journal.ts`), activity lifecycle state (owned by `src/runtime/`).
+- Owns context projections, round-memory indexes, dual watermarks, tool-payload archives, token metering and working-history overviews.
+- Does not own authoritative journals (`src/store/journal.ts`), task delivery or activity status (`src/actors/`).
 
 ## 2. Start Here (Task Router)
 | If investigating... | Start at... | Then check... |
 |---|---|---|
-| Compaction triggers too early/late | `budget.ts:watermarks()` | Capacity window and `reserve_tokens` |
-| Actor forgets past round results | `manager.ts:projected()` | Actor retention policy (`keep_recent_rounds`) |
-| Corrupted context view on restart | `manager.ts:prepare()` | Source hashes and archived tool payloads in `journal.ts` |
-| Heavy tool payload archiving | `manager.ts:archiveTools()` | Token threshold in `estimateText()` (>= 256 tokens) |
-| Round summary schema violations | `contracts.ts:summaryInstruction` | Four-pillar punch list constraints |
+| Hidden metadata or exact compact records | `round-memory.ts` | `tools/_FinishRoundTool/_FinishRoundTool.ts` |
+| Closed versus open activity projection | `manager.ts:splitRounds()` | `Journal.finishRecord()` |
+| Compaction triggers or output allowance | `budget.ts:watermarks()` | `manager.ts:prepare()` |
+| Common contract or role memory focus | `contracts.ts` | `actors/profiles/*/compression.md` |
+| Restart, rollback or physical references | `store/journal.ts` | source hashes, branch maps and `sourceLines()` |
 
 ## 3. Hard Boundaries
-- **Non-Destructive Compaction**: Compaction folds message projections and archives heavy payloads to disk; it MUST NEVER mutate or delete raw journal entries.
-- **Four-Pillar English Punch List**: Round summaries must strictly conform to the 4-pillar punch list under 250 words (`Exports & Changes`, `Decisions & Boundaries`, `Verification`, `Missing/Next`). Zero narrative reasoning recounts.
-- **Tool Pairing Integrity**: Normalized projections must preserve valid tool call and result pairing; pruning must never produce orphaned tool results.
+- Compaction never rewrites or deletes raw journal lines. References use one-based inclusive physical ranges in the authoritative ledger, not the optional readable mirror.
+- `_FinishRound` pairs disappear together before repair, budgeting and serialization; retained business tools remain paired. In-memory and context-disabled requests follow the same rule.
+- A round is an activity, not every injected `user` message. Open work retains its goal, effective constraints, completed effects, blockers and next actions.
+- Human text and Director assignments may fold. Memory is historical data, not authority to widen permissions or promote hypotheses to verified facts.
+- The common contract defines the five fields once; role focus and dynamic ledger coordinates are not another format legend. Task reports are separate full deliveries, not indexes.
+- Missing or invalid modern metadata retains raw working content until a trustworthy overview is available; runtime fallback never invents verification.
 
 ## 4. Integration Points
 ```text
-application.ts (instantiates ContextManager)
-  → kernel/agent.ts (calls prepare() prior to model dispatch)
-  → actors/ensemble.ts (calls taskEnd() upon activity completion)
-  → store/journal.ts (persists context state and tool archive artifacts)
+kernel/agent.ts → ContextManager.prepare() → Journal + round-memory projections
+actors/ensemble.ts → Journal.finishRecord() → taskEnd() / independent report handoff
+application.ts → role focus + task model + owning ledger coordinates
 ```
 
 ## 5. Verification
-- **Targeted Test Suite**:
-  - `tests/context.test.ts`: Projections, archiving, watermark triggers, long tasks.
-  - `tests/context-extra.test.ts`: Manual compaction and provider-specific boundaries.
-  - `tests/actor-context.test.ts`: Actor retention divergence and task closure.
-- **Fast Run Command**:
-  ```bash
-  node --test dist/tests/context*.test.js dist/tests/actor-context.test.js
-  ```
+- Build, then run `node --test dist/tests/context*.test.js dist/tests/actor-context.test.js dist/tests/round-memory.test.js dist/tests/finish-round.test.js`.
+- `actor-compression-contracts.test.ts` checks all real role requests and guarded installed-default migration.
+
+## 6. Known Gaps
+- Local and scripted providers verify protocol shape, not live vendor/model compliance. Live API calls require separate authorization.
+- Legacy summaries remain conservative compatibility data; retrieve their original evidence before treating claims as verified.

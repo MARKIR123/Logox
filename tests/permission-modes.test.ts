@@ -69,8 +69,8 @@ test('真实Tools：auto静态快路零模型调用，不确定Shell独立审批
       reviews++; assert.deepEqual(request.tools, []); assert.equal(request.thinking, false);
       assert.ok(request.messages[0]?.text.includes('在当前项目完成指定任务')); return turn();
     }}}), charge: async (_context, usage) => {charged += usage?.input ?? 0;}});
-    assert.equal((await f.tools.execute(call('write', {path: 'safe.txt', content: 'ok'}), f.context)).isError, false);
-    assert.equal((await f.tools.execute(call('read', {path: 'safe.txt'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('write', {file_path: 'safe.txt', content: 'ok'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('read', {file_path: 'safe.txt'}), f.context)).isError, false);
     assert.equal(reviews, 0);
     const command = process.platform === 'win32' ? 'Write-Output mode-ready' : 'echo mode-ready';
     assert.match((await f.tools.execute(call('shell', {command}), f.context)).text, /mode-ready/);
@@ -244,7 +244,7 @@ test('审批等待中切creative释放旧请求并重新执行；真实应用模
     const outside = join(f.cwd, '..', 'logox-outside-' + f.cwd.split(/[\\/]/).at(-1) + '.txt');
     const app = await createApplication({cwd: f.cwd, config, provider: {respond: async request => {
       if (request.system.startsWith('你是独立的工具权限审查者')) {reviews++; throw new Error('offline');}
-      return calls++ === 0 ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {path: mode === 'auto' ? outside : 'result.txt', content: 'once'})]}}
+      return calls++ === 0 ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: mode === 'auto' ? outside : 'result.txt', content: 'once'})]}}
         : {stop: 'complete', message: {role: 'assistant', text: '完成'}};
     }}, resourceOptions: {home: f.cwd, boundary: f.cwd}, statusbarPath: join(f.cwd, 'statusbar.json')});
     try {

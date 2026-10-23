@@ -24,10 +24,16 @@ export function stepStatus(step: Step, now: number): string {
   const state = step.state === 'waiting' ? step.waiting ?? '等待中' : step.state === 'queued' ? '排队中' : step.state === 'cancelled' ? '已取消' : '';
   return duration + (state ? ' ' + state : '');
 }
-export function rowSegments(row: SceneRow): readonly SceneSegment[] {
-  if (row.segments?.length) return row.segments;
-  const color = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
-  return [...row.prefixSegments ?? [], {text: row.text, color, ...(row.bg ? {bg: row.bg} : {}), bold: row.tone === 'header', italic: row.tone === 'direction'}, ...row.suffixSegments ?? []];
+export function rowSegments(row: SceneRow, isHovered = false): readonly SceneSegment[] {
+  let segments = row.segments;
+  if (!segments || !segments.length) {
+    const color = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
+    segments = [...row.prefixSegments ?? [], {text: row.text, color, ...(row.bg ? {bg: row.bg} : {}), bold: row.tone === 'header', italic: row.tone === 'direction'}, ...row.suffixSegments ?? []];
+  }
+  if (isHovered && row.railColor) {
+    return segments.map(s => (!s.color || s.color === palette.muted ? {...s, color: row.railColor} : s));
+  }
+  return segments;
 }
 function transform(segments: readonly SceneSegment[], fn: (glyph: SceneSegment, column: number) => SceneSegment): SceneSegment[] {
   const result: SceneSegment[] = [];
@@ -76,9 +82,9 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   });
   return {...row, segments, displayText: segments.map(segment => segment.text).join('')};
 }
-export function presentedSegments(row: SceneRow, index: number, selection: SelectionRange | null): readonly SceneSegment[] {
+export function presentedSegments(row: SceneRow, index: number, selection: SelectionRange | null, isHovered = false): readonly SceneSegment[] {
   const bounds = rowSelectionBounds(row, index, selection);
-  const segments = rowSegments(row);
+  const segments = rowSegments(row, isHovered);
   if (!bounds) return segments;
   let column = 0;
   return segments.flatMap(segment => {

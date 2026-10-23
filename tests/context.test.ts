@@ -11,7 +11,7 @@ import {contextPolicySchema, loadConfig} from '../src/config/config.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import type {ModelMessage, ModelRequest, Provider} from '../src/runtime/messages.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 
 const identity = {sessionId: 's', ownerId: 'logox'};
 const signal = new AbortController().signal;
@@ -46,7 +46,7 @@ test('常规压缩保留两轮已结束对话、当前输入和跨轮最近两�
       const id = 'round-' + round;
       await f.append(id, {role: 'user', text: '任务' + round});
       if (!round) {
-        await f.append(id, {role: 'assistant', text: '', toolCalls: [0, 1, 2].map(index => ({id: 'call-' + index, name: 'read', arguments: '{"path":"example"}'}))});
+        await f.append(id, {role: 'assistant', text: '', toolCalls: [0, 1, 2].map(index => ({id: 'call-' + index, name: 'read', arguments: '{"file_path":"example"}'}))});
         for (let index = 0; index < 3; index++) await f.append(id, {role: 'tool', callId: 'call-' + index, name: 'read', text: '结果' + index, isError: false});
       }
       await f.append(id, final('R' + round));
@@ -76,7 +76,7 @@ test('保留完整旧轮为零时仍保护当前任务，摘要携带真实行�
     const {request} = await f.contexts.prepare(identity, base, signal, true);
     assert.ok(!request.messages.some(message => message.text.startsWith('OLD'.repeat(1000))));
     assert.equal(request.messages.at(-1)?.text, '当前进展');
-    assert.match(request.messages[1]!.text, /行 1–2/);
+    assert.match(request.messages[0]!.text, /^1 \| .* \| Completed \| .* \| 1:2$/);
     assert.ok(request.messages.some(message => message.text === '新的完整目标'));
   } finally {await f.cleanup();}
 });
@@ -85,7 +85,7 @@ test('工具参数及结果落盘后才替换；重启复用有效视图，缺�
   const f = await fixture({keep_recent_tools: 0});
   try {
     await f.append('old', {role: 'user', text: '保存证据'});
-    await f.append('old', {role: 'assistant', text: '', toolCalls: [{id: 'read-1', name: 'read', arguments: JSON.stringify({path: 'source', note: '参数'.repeat(1000)})}]});
+    await f.append('old', {role: 'assistant', text: '', toolCalls: [{id: 'read-1', name: 'read', arguments: JSON.stringify({file_path: 'source', note: '参数'.repeat(1000)})}]});
     await f.append('old', {role: 'tool', callId: 'read-1', name: 'read', isError: false, text: '真实证据'.repeat(3000)});
     await f.append('old', {role: 'assistant', text: '已读取'});
     await f.journal.finish('s', 'logox', 'old', 'completed');
@@ -171,16 +171,18 @@ test('历史摘要仍超水位时有界分段汇总，禁用工具和 thinking�
     return {message: {role: 'assistant', text: '确认目标及旧历史结果，保留来源；后续核对验证。'}, stop: 'complete'};
   }});
   try {
-    await f.append('old', {role: 'user', text: '历史要求'.repeat(2200)});
-    await f.append('old', final('OLD'));
-    await f.journal.finish('s', 'logox', 'old', 'completed');
+    for (let n = 0; n < 4; n++) {
+      await f.append('old-' + n, {role: 'user', text: '历史要求'.repeat(2200)});
+      await f.append('old-' + n, {role: 'assistant', text: '[Round Summary]\nTitle: Historical decisions\nReport: ' + '保留要求'.repeat(400)});
+      await f.journal.finish('s', 'logox', 'old-' + n, 'completed');
+    }
     await f.append('current', {role: 'user', text: 'CURRENT_ONLY'});
     const result = await f.contexts.prepare(identity, base, signal);
     assert.ok(requests.length > 1 && requests.length <= 16);
-    assert.match(result.request.messages[0]!.text, /历史备忘录/);
+    assert.match(result.request.messages[0]!.text, /Historical working overview/);
     assert.equal(result.request.messages.at(-1)?.text, 'CURRENT_ONLY');
     const state = await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox'));
-    assert.equal(state?.memo?.end, 2);
+    assert.equal(state?.memo?.end, 8);
   } finally {await f.cleanup();}
 });
 
@@ -192,9 +194,11 @@ test('无收益汇总和取消不替换历史，也不会继续发送超预算�
       return {message: {role: 'assistant', text: request.messages[0]!.text}, stop: 'complete'};
     }});
     try {
-      await f.append('old', {role: 'user', text: '历史'.repeat(5000)});
-      await f.append('old', final('RESULT'));
-      await f.journal.finish('s', 'logox', 'old', 'completed');
+      for (let n = 0; n < 4; n++) {
+        await f.append('old-' + n, {role: 'user', text: '历史'.repeat(5000)});
+        await f.append('old-' + n, {role: 'assistant', text: '[Round Summary]\nTitle: Historical decisions\nReport: ' + '保留要求'.repeat(400)});
+        await f.journal.finish('s', 'logox', 'old-' + n, 'completed');
+      }
       await f.append('current', {role: 'user', text: '继续'});
       const raw = await f.journal.load('s', 'logox');
       await assert.rejects(f.contexts.prepare(identity, base, controller.signal), cancelled ? {name: 'AbortError'} : ContextBudgetError);
@@ -260,7 +264,7 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
   try {
     for (let index = 0; index < 3; index++) await app.ensemble.dispatch('logox', '目标' + index).done;
     assert.equal(requests.length, 3, JSON.stringify(app.store.getSnapshot().activities));
-    assert.ok(requests[2]!.messages.some(message => message.text.includes('【轮次摘要】已完成核对')));
+    assert.ok(requests[2]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
     const before = await app.journal.load('context-app', 'logox');
     await app.submit('/compact');
     assert.deepEqual(await app.journal.load('context-app', 'logox'), before);
@@ -269,7 +273,7 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
     app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
     assert.equal(requests.length, 3, '恢复不执行模型');
     await app.ensemble.dispatch('logox', '继续').done;
-    assert.ok(requests[3]!.messages.some(message => message.text.includes('【轮次摘要】已完成核对')));
+    assert.ok(requests[3]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
     assert.equal(requests[3]!.messages.at(-1)?.text, '继续');
     assert.ok(requests[3]!.maxTokens! < config.provider.max_tokens);
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
@@ -291,9 +295,11 @@ test('旧任务进展被备忘录覆盖后清理重叠范围，重启保留备�
     assert.ok((await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox')))?.working);
     await f.append('work', {role: 'assistant', text: '【轮次摘要】\n标题：已核对\n报告：保留两个证据，验证待续。'});
     await f.journal.finish('s', 'logox', 'work', 'completed');
-    await f.append('next', {role: 'user', text: '历史要求'.repeat(1500)});
-    await f.append('next', {role: 'assistant', text: '【轮次摘要】\n标题：已确认\n报告：保留确认要求。'});
-    await f.journal.finish('s', 'logox', 'next', 'completed');
+    for (let n = 0; n < 4; n++) {
+      await f.append('next-' + n, {role: 'user', text: '历史要求'.repeat(1500)});
+      await f.append('next-' + n, {role: 'assistant', text: '【轮次摘要】\n标题：已确认\n报告：' + '保留确认要求'.repeat(300)});
+      await f.journal.finish('s', 'logox', 'next-' + n, 'completed');
+    }
     await f.append('current', {role: 'user', text: '当前目标'});
     const first = await f.contexts.prepare(identity, base, signal);
     const state = await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox'));

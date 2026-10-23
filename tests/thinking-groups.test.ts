@@ -52,10 +52,25 @@ function fixture(ownerId = 'logox') {
     requests: () => thinkingRequests(store.getSnapshot().messages)};
 }
 
+test('无 token 的空思考完成后不展示，运行中的空思考保持可见（对齐 Claude Code 与 Pi）', () => {
+  const f = fixture();
+  const blank = f.steps.thinking(); f.advance(8000); f.steps.finish(blank, 'completed'); f.steps.endGroup('completed');
+  let rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {}, null);
+  assert.ok(!rows.some(row => row.messageId === blank), '完成的空思考不生成空卡片');
+
+  const running = f.steps.thinking(); f.advance(2000);
+  rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {}, null);
+  assert.ok(rows.some(row => row.messageId === running && row.displayText?.includes('Thinking')));
+
+  f.steps.finish(running, 'completed'); f.steps.endGroup('completed');
+  rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {}, null);
+  assert.ok(!rows.some(row => row.messageId === running), '完成后无 token 自动消失');
+});
+
 test('每次思考独立收起并计时，工具是同级卡片，工具等待与执行不计入思考时间', () => {
   const f = fixture(), first = f.steps.thinking();
   f.store.appendMessage(first, '先检查'); f.advance(500); f.steps.finish(first, 'completed');
-  const tool = f.steps.tool({id: 'read', name: 'read', arguments: '{"path":"README.md"}'});
+  const tool = f.steps.tool({id: 'read', name: 'read', arguments: '{"file_path":"README.md"}'});
   const resume = f.steps.wait(tool, '等待审批'); f.advance(1000);
   assert.equal(f.requests().get(first)!.step.state, 'completed');
   assert.equal(f.requests().get(first)!.step.elapsedMs, 500); resume();
@@ -119,14 +134,14 @@ test('Thinking 点阵在标题前，点阵和流光取角色主题色；失败�
 
 test('工具指示始终为灰方块，异常红方块，标题保持浅灰且等待不动画', () => {
   const f = fixture('techne');
-  const tool = f.steps.tool({id: 'read', name: 'read', arguments: '{"path":"README.md"}'});
+  const tool = f.steps.tool({id: 'read', name: 'read', arguments: '{"file_path":"README.md"}'});
   const header = (id: string, open = false, hovered: string | null = null) => buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {[id]: open}, hovered).find(row => row.messageId === id)!;
   let row = header(tool);
-  assert.match(row.displayText!, /▮ read README.md/);
+  assert.match(row.displayText!, /▮\s*read[\s(]README\.md/i);
   f.steps.start(tool); f.advance(1200);
   row = header(tool);
   const running = decorateRow(row, f.now());
-  assert.match(running.displayText!, /▮ read README.md/);
+  assert.match(running.displayText!, /▮\s*read[\s(]README\.md/i);
   assert.equal(running.segments!.find(segment => segment.selectionKey === tool + ':icon')!.color, palette.muted);
   assert.equal(running.segments!.find(segment => segment.selectionKey === tool + ':title')!.color, palette.muted);
   const later = decorateRow(row, f.now() + 320);
@@ -137,7 +152,7 @@ test('工具指示始终为灰方块，异常红方块，标题保持浅灰且�
     if (id !== tool) f.steps.finish(id, state);
     for (const open of [false, true]) {
       row = header(id, open);
-      assert.match(row.displayText!, /▮ (read|shell)/);
+      assert.match(row.displayText!, /▮\s*(read|shell)/i);
       assert.ok(!/[✓!×]/.test(row.displayText!));
       assert.equal(row.segments!.find(segment => segment.selectionKey === id + ':icon')!.color, state === 'failed' ? palette.error : palette.muted);
       assert.equal(row.segments!.find(segment => segment.selectionKey === id + ':title')!.color, palette.muted);

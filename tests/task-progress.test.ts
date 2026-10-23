@@ -67,11 +67,11 @@ test('单请求 Thinking 和工具领取稳定阶段，初始探查不事后归�
   const {store, progress} = fixture(); let time = 0;
   const steps = new Steps(store, {sessionId: 's', ownerId: 'techne', activityId: 'a'}, () => time, () => progress.current());
   const initial = steps.thinking(); time = 10; steps.finish(initial, 'completed');
-  const probe = steps.tool({id: 'probe', name: 'read', arguments: '{"path":"README.md"}'});
+  const probe = steps.tool({id: 'probe', name: 'read', arguments: '{"file_path":"README.md"}'});
   await progress.update({stages: [foundation, motion], update: {id: foundation.id, status: 'in_progress'}});
   const build = steps.thinking(); time = 40; steps.finish(build, 'completed');
   await progress.update({update: {id: motion.id, status: 'in_progress'}});
-  const edit = steps.tool({id: 'edit', name: 'edit', arguments: '{"path":"animation.html"}'});
+  const edit = steps.tool({id: 'edit', name: 'edit', arguments: '{"file_path":"animation.html"}'});
   steps.finish(edit, 'failed', '被权限规则拒绝', 'denied');
   assert.equal(steps.get(initial).stage?.id, 'planning');
   assert.equal(steps.get(probe).stage?.id, 'planning');
@@ -136,4 +136,36 @@ test('阶段落盘期间主动停止保留提交记录，终态不被晚到 runn
     assert.equal(checkpoint.progress?.activeStageId, foundation.id);
     assert.equal(store.activities.get('s', task.activityId)?.status, 'cancelled');
   } finally {release(); await ensemble.close(); await rm(directory, {recursive: true, force: true});}
+});
+
+test('防御性容错：仅提供 title 自动推导 id、purpose 和 activeForm，支持按 title 更新', async () => {
+  const {store, progress} = fixture();
+  const res1 = await progress.update({
+    stages: [
+      {title: '搭建骨架', status: 'in_progress'},
+      {title: '填充细节'},
+    ],
+  });
+  assert.equal(res1.isError, false);
+  const snap1 = progress.snapshot();
+  assert.equal(snap1.stages.length, 2);
+  assert.equal(snap1.stages[0]?.title, '搭建骨架');
+  assert.equal(snap1.stages[0]?.purpose, '搭建骨架');
+  assert.equal(snap1.stages[0]?.activeForm, '正在搭建骨架');
+  assert.equal(snap1.stages[0]?.status, 'in_progress');
+  assert.equal(snap1.activeStageId, snap1.stages[0]?.id);
+
+  const res2 = await progress.update({
+    update: {id: '搭建骨架', status: 'completed', result: '已完成骨架搭建'},
+  });
+  assert.equal(res2.isError, false);
+  assert.equal(progress.snapshot().stages[0]?.status, 'completed');
+  assert.equal(progress.snapshot().stages[0]?.result, '已完成骨架搭建');
+
+  const res3 = await progress.update({
+    update: {id: '不存在的阶段', status: 'completed', result: 'xxx'},
+  });
+  assert.equal(res3.isError, true);
+  assert.match(res3.text, /Phase not found/);
+  assert.match(res3.text, /Available phases/);
 });

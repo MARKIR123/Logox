@@ -110,7 +110,7 @@ export class ActorServices {
   }
   policy(ownerId: string) {
     const role = this.active.get(ownerId) ?? this.options.catalog.find(ownerId);
-    if (ownerId === 'logox' && role === builtinActors[0]) return this.options.config.context;
+    if (ownerId === 'logox' && role?.id === 'logox') return this.options.config.context;
     return contextPolicySchema.parse({...this.options.config.context, ...role?.context});
   }
   contract(ownerId: string): string | undefined {return (this.active.get(ownerId) ?? this.options.catalog.find(ownerId))?.compression;}
@@ -304,7 +304,7 @@ export class ActorServices {
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
     const cause = executionError?.message ?? (result.error instanceof ProviderError ? result.error.message : undefined);
     const failure = cause ? '\n终止原因（运行时）：' + cause + '。此前工具报错不等于本次终止原因，请分别判断。' : '';
-    const report = `角色 ${result.ownerId} 任务 ${result.activityId}（${result.status}）${failure}\n标题：${result.summary.title}\n报告：${result.summary.report}`;
+    const report = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
     if (group) {
       group.reports.push(report); group.remaining.delete(result.activityId); this.groups.delete(result.activityId);
     }

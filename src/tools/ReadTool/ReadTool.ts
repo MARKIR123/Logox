@@ -2,14 +2,18 @@ import {stat} from 'node:fs/promises';
 import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing} from '../snapshots.js';
+import {normalizeAliases} from '../aliases.js';
 
-export const readSchema = z.strictObject({
-  path: pathArg,
-  offset: z.number().int().positive().default(1),
-  limit: z.number().int().min(1).max(2000).default(2000),
+const readArgs = z.strictObject({
+  file_path: pathArg.describe('The absolute path to the file to read'),
+  offset: z.number().int().positive().optional().describe('The line number to start reading from (1-indexed). Only provide if the file is too large to read at once.'),
+  limit: z.number().int().min(1).max(2000).optional().describe('The number of lines to read. Only provide if the file is too large to read at once.'),
 });
 
-export type ReadArgs = z.infer<typeof readSchema>;
+/** Deprecated alias: `path` is accepted during the migration window. */
+export const readSchema = z.preprocess(value => normalizeAliases(value, {path: 'file_path'}), readArgs);
+
+export type ReadArgs = z.infer<typeof readArgs>;
 
 const imageMimes: Record<string, string> = {
   '.png': 'image/png',
@@ -37,7 +41,7 @@ export async function executeRead(args: ReadArgs, canonicalPath: string): Promis
   if (size > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
 
   const bytes = await bytesOrMissing(canonicalPath);
-  if (!bytes) throw new Error('File not found: ' + args.path);
+  if (!bytes) throw new Error('File not found: ' + args.file_path);
   if (bytes.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
 
   const ext = canonicalPath.slice(canonicalPath.lastIndexOf('.')).toLowerCase();
@@ -45,17 +49,18 @@ export async function executeRead(args: ReadArgs, canonicalPath: string): Promis
   if (mime) {
     if (bytes.length > 10 * 1024 * 1024) throw new Error('Image exceeds 10 MiB limit');
     return {
-      text: `[Image file: ${args.path}, size: ${bytes.length} bytes, format: ${mime}. Visual content presented to model.]`,
+      text: `[Image file: ${args.file_path}, size: ${bytes.length} bytes, format: ${mime}. Visual content presented to model.]`,
       isError: false,
       images: [{data: bytes.toString('base64'), mimeType: mime}],
     };
   }
 
+  const offset = args.offset ?? 1;
+  const limit = args.limit ?? 2000;
   const lines = decode(bytes).text.split(/\r?\n/);
   return {
-    text: lines.slice(args.offset - 1, args.offset - 1 + args.limit)
-      .map((line, index) => (args.offset + index) + ': ' + line.slice(0, 2000)).join('\n') +
-      (lines.length > args.offset - 1 + args.limit ? '\n(Remaining lines omitted)' : ''),
+    text: lines.slice(offset - 1, offset - 1 + limit)
+      .map((line, index) => (offset + index) + ': ' + line.slice(0, 2000)).join('\n') +
+      (lines.length > offset - 1 + limit ? '\n(Remaining lines omitted)' : ''),
     isError: false,
-  };
-}
+  };}

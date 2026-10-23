@@ -2,15 +2,22 @@ import {stat} from 'node:fs/promises';
 import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
+import {normalizeAliases} from '../aliases.js';
 
-export const editSchema = z.strictObject({
-  path: pathArg,
-  old_text: z.string().min(1),
-  new_text: z.string(),
-  replace_all: z.boolean().default(false),
+const editArgs = z.strictObject({
+  file_path: pathArg.describe('The absolute path to the file to modify'),
+  old_string: z.string().min(1).describe('The text to replace'),
+  new_string: z.string().describe('The text to replace it with (must be different from old_string)'),
+  replace_all: z.boolean().optional().describe('Replace all occurrences of old_string (default false)'),
 });
 
-export type EditArgs = z.infer<typeof editSchema>;
+/** Deprecated aliases: `path`, `old_text`, `new_text` are accepted during the migration window. */
+export const editSchema = z.preprocess(
+  value => normalizeAliases(value, {path: 'file_path', old_text: 'old_string', new_text: 'new_string'}),
+  editArgs,
+);
+
+export type EditArgs = z.infer<typeof editArgs>;
 
 function decode(bytes: Buffer): {text: string; bom: boolean} {
   if (bytes.includes(0)) throw new Error('Binary or UTF-16 files are not supported yet');
@@ -41,16 +48,17 @@ export async function executeEdit(
 
   const decoded = decode(before);
   const newline = decoded.text.includes('\r\n') ? '\r\n' : '\n';
-  const old = args.old_text.replace(/\r?\n/g, newline);
-  const replacement = args.new_text.replace(/\r?\n/g, newline);
+  const old = args.old_string.replace(/\r?\n/g, newline);
+  const replacement = args.new_string.replace(/\r?\n/g, newline);
   const count = decoded.text.split(old).length - 1;
+  const replaceAll = args.replace_all ?? false;
 
-  if (!count) throw new Error('No match found for old_text; please re-read file');
-  if (count > 1 && !args.replace_all) throw new Error('Multiple matches found; provide more context or set replace_all: true');
+  if (!count) throw new Error('No match found for old_string; please re-read file');
+  if (count > 1 && !replaceAll) throw new Error('Multiple matches found; provide more context or set replace_all: true');
 
   const after = Buffer.from(
     (decoded.bom ? '﻿' : '') +
-      (args.replace_all ? decoded.text.split(old).join(replacement) : decoded.text.replace(old, () => replacement))
+      (replaceAll ? decoded.text.split(old).join(replacement) : decoded.text.replace(old, () => replacement))
   );
 
   if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');

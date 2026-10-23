@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {toolCallSchema} from './messages.js';
 import {inputKindSchema, type InputKind} from './provenance.js';
 
 const id = z.string().trim().min(1);
@@ -55,6 +56,7 @@ const optionSchema = z.strictObject({id, label: z.string().min(1), description: 
 export const questionSchema = z.strictObject({
   id, header: z.string().min(1).max(12), question: z.string().min(1),
   options: z.array(optionSchema).min(2).max(4).optional(),
+  multiSelect: z.boolean().optional(),
 }).superRefine((question, ctx) => {
   const ids = question.options?.map(option => option.id) ?? [];
   if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: '选项 ID 必须唯一'});
@@ -79,6 +81,7 @@ export const responseSchema = z.discriminatedUnion('kind', [
     ...identity, requestId: id, kind: z.literal('question'),
     answers: z.record(z.string(), z.discriminatedUnion('type', [
       z.strictObject({type: z.literal('option'), optionId: id}),
+      z.strictObject({type: z.literal('options'), optionIds: z.array(id).min(1)}),
       z.strictObject({type: z.literal('text'), text: z.string().trim().min(1)}),
     ])),
   }),
@@ -111,7 +114,7 @@ export interface Message {
   readonly step?: Step;
   readonly time?: number;
 }
-export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(),
+export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),
   stage: stepStageSchema.optional(), disposition: z.enum(['denied', 'error']).optional(), note: z.string().max(1000).optional(),
   groupId: z.string().optional(), groupState: z.enum(['completed', 'failed', 'cancelled']).optional(),
   state: z.enum(['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled']),

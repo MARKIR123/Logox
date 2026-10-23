@@ -9,8 +9,11 @@
   },
   "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",
   "dependencies": {
+    "@types/diff": "^7.0.2",
+    "@vscode/ripgrep": "1.18.0",
     "ajv": "8.18.0",
     "ajv-formats": "3.0.1",
+    "diff": "^9.0.0",
     "ink": "8.0.0",
     "react": "19.3.0",
     "smol-toml": "1.9.1",
@@ -26,11 +29,13 @@
     "typescript": "7.0.2"
   },
   "scripts": {
+    "postinstall": "node scripts/install-actor-profiles.mjs",
     "check": "npm run check:docs && tsc --noEmit",
     "start": "node dist/src/cli.js",
     "test": "npm run check:docs && npm run build && node --test dist/tests/*.test.js",
     "build": "tsc && node scripts/copy-actor-profiles.mjs",
     "demo": "npm run build && node dist/src/cli.js --demo",
+    "sync:profiles": "node scripts/sync-actor-profiles.mjs",
     "check:docs": "node scripts/check-docs.mjs"
   },
   "engines": {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ActorRecovery} from '../src/actors/recovery.js';
 import {Ensemble} from '../src/actors/ensemble.js';
@@ -43,7 +43,7 @@ test('多模态视觉能力：read 读取 PNG 等图片返回 Base64 内容块�
 
     // 1. read 工具能读取图片文件并返回 images 内容
     const result = await tools.execute({
-      id: 'read-img', name: 'read', arguments: JSON.stringify({path: 'pelican.png'}),
+      id: 'read-img', name: 'read', arguments: JSON.stringify({file_path: 'pelican.png'}),
     }, context);
 
     assert.equal(result.isError, false);
@@ -136,7 +136,7 @@ test('参数校验错误原位返回 ToolResult 且不扣截断预算，整批�
             {
               id: 'call-1',
               name: 'write',
-              arguments: JSON.stringify({path: 'bad-side-effect.txt', content: 'should not exist'}),
+              arguments: JSON.stringify({file_path: 'bad-side-effect.txt', content: 'should not exist'}),
             },
             {
               id: 'call-2',
@@ -225,7 +225,7 @@ test('非流式降级支持：stream: false 正确解析非流式响应并交付
       choices: [{
         message: {
           content: '非流式回复完成',
-          tool_calls: [{id: 'call_1', function: {name: 'read', arguments: '{"path":"test.txt"}'}}],
+          tool_calls: [{id: 'call_1', function: {name: 'read', arguments: '{"file_path":"test.txt"}'}}],
         },
         finish_reason: 'tool_calls',
       }],

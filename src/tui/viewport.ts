@@ -4,6 +4,7 @@ import type {Message} from '../runtime/contracts.js';
 import {ownerColor, ownerHeader, palette, safeText} from './cards.js';
 import type {SourceCell} from './markdown.js';
 import {railColumns, visibleText, type ContentCell} from './selection.js';
+import {isVisibleToolMessage} from '../tools/ui-registry.js';
 
 export interface Row {
   readonly displayText?: string;
@@ -37,7 +38,7 @@ const cache = new WeakMap<Message, Map<number, readonly Row[]>>();
 
 export function timelineRows(messages: readonly Message[], width: number): readonly Row[] {
   width = Math.max(1, width);
-  return messages.flatMap(message => {
+  return messages.filter(isVisibleToolMessage).flatMap(message => {
     let widths = cache.get(message);
     if (!widths) { widths = new Map(); cache.set(message, widths); }
     const known = widths.get(width);

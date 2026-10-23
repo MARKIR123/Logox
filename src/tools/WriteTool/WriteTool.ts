@@ -2,13 +2,17 @@ import {stat} from 'node:fs/promises';
 import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
+import {normalizeAliases} from '../aliases.js';
 
-export const writeSchema = z.strictObject({
-  path: pathArg,
-  content: z.string(),
+const writeArgs = z.strictObject({
+  file_path: pathArg.describe('The absolute path to the file to write'),
+  content: z.string().describe('The content to write to the file'),
 });
 
-export type WriteArgs = z.infer<typeof writeSchema>;
+/** Deprecated alias: `path` is accepted during the migration window. */
+export const writeSchema = z.preprocess(value => normalizeAliases(value, {path: 'file_path'}), writeArgs);
+
+export type WriteArgs = z.infer<typeof writeArgs>;
 
 export async function executeWrite(
   args: WriteArgs,

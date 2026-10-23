@@ -23,7 +23,7 @@ function fixture() {
   let current = skeleton, now = 100;
   const steps = new Steps(store, {sessionId: 's', activityId: 'a', ownerId: 'techne'}, () => now, () => current);
   const first = steps.thinking(); store.appendMessage(first, '明确SVG场景'); now += 1000; steps.finish(first, 'completed');
-  const tool = steps.tool({id: 'write', name: 'write', arguments: '{"path":"pelican.html"}'});
+  const tool = steps.tool({id: 'write', name: 'write', arguments: '{"file_path":"pelican.html"}'});
   steps.start(tool); now += 200; steps.finish(tool, 'completed', 'write\n文件已创建');
   current = riding;
   const second = steps.thinking(); store.appendMessage(second, '核对传动比例');
@@ -45,7 +45,7 @@ test('Actor 自然动作标题，阶段只有顶格主题色粗体标题，动�
     assert.equal(rows.find(row => row.messageId === f.first)!.gutterCols, heading.gutterCols + 2);
     assert.equal(rows.find(row => row.messageId === f.tool)!.gutterCols, heading.gutterCols + 2);
     assert.match(rows.find(row => row.messageId === f.first)!.text, /Thought for 1s/);
-    assert.match(rows.find(row => row.messageId === f.tool)!.text, /write pelican.html/);
+    assert.match(rows.find(row => row.messageId === f.tool)!.text, /write[\s(]pelican\.html/i);
     assert.ok(rows.find(row => row.messageId === f.second + '-stage'));
     assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 2);
     assert.ok(!rows.some(row => row.text.includes('核对传动比例')), '每条思考独立默认收起');
@@ -75,7 +75,7 @@ test('展开某次 Thinking 不吞掉其它动作；灰底命中和标题复制�
 test('Denied 和 Error 使用运行时分类，红方块红粗体后缀，正常工具无异常后缀', () => {
   const f = fixture();
   for (const disposition of ['denied', 'error'] as const) {
-    const id = f.steps.tool({id: disposition, name: 'read', arguments: '{"path":"README.md"}'});
+    const id = f.steps.tool({id: disposition, name: 'read', arguments: '{"file_path":"README.md"}'});
     f.steps.finish(id, 'failed', 'read\n原始错误可展开查看', disposition);
     const row = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true}, null).find(row => row.messageId === id)!;
     assert.match(row.text, disposition === 'denied' ? /Denied$/ : /Error$/);
@@ -107,7 +107,7 @@ test('恢复时只显示自然状态，完成标题回到摘要，旧无阶段�
   store.message('s', 'logox', 'notice', 'read\n文件内容', {kind: 'tool'});
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {}, null);
   assert.ok(!rows.some(row => row.messageId.endsWith('-stage')));
-  assert.ok(rows.some(row => /▮ read/.test(row.text)));
+  assert.ok(rows.some(row => /▮\s*read/i.test(row.text)));
 });
 
 test('没有思考文本的纠偏请求仍显示并复制独立说明，原始消息与其它选区不受影响', () => {
@@ -172,7 +172,7 @@ test('Actor 续做沿同角色任务链显示完整原目标，不把职能和�
   for (const view of ['logox', 'techne']) {
     const rows = buildStageRows(store.getSnapshot(), 's', view, 40, {'resume-again': true}, null);
     const goalRows = rows.filter(row => row.messageId === 'resume-again-goal');
-    assert.equal(goalRows.map((row, index) => row.text + (index < goalRows.length - 1 && !row.softWrap ? '\n' : '')).join(''), '目标：' + goal);
+    assert.equal(goalRows.map((row, index) => row.text + (index < goalRows.length - 1 && !row.softWrap ? '\n' : '')).join(''), 'Goal: ' + goal);
     assert.ok(goalRows.length > 2, '完整目标折行呈现，不截断');
   }
 });
@@ -188,7 +188,7 @@ test('Actor 目标链忽略其它角色、断链回落原消息，无消息与�
   store.message('s', 'techne', 'user', '自己的正式目标', {activityId: 'foreign-link'});
   store.message('s', 'techne', 'user', '断链后的正式目标', {activityId: 'broken-link'});
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {'foreign-link': true, 'broken-link': true, 'cycle-a': true}, null);
-  assert.equal(rows.find(row => row.messageId === 'foreign-link-goal')!.text, '目标：自己的正式目标');
-  assert.equal(rows.find(row => row.messageId === 'broken-link-goal')!.text, '目标：断链后的正式目标');
-  assert.equal(rows.find(row => row.messageId === 'cycle-a-goal')!.text, '目标：目标信息缺失');
+  assert.equal(rows.find(row => row.messageId === 'foreign-link-goal')!.text, 'Goal: 自己的正式目标');
+  assert.equal(rows.find(row => row.messageId === 'broken-link-goal')!.text, 'Goal: 断链后的正式目标');
+  assert.equal(rows.find(row => row.messageId === 'cycle-a-goal')!.text, 'Goal: 目标信息缺失');
 });

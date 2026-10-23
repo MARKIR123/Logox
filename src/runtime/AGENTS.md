@@ -20,6 +20,7 @@
 - **Dual-Write Session Transcripts**:
   - Session history maintains a clean dual-write hierarchy under `state/sessions/<sessionId>/`:
     `director.jsonl`, `tasks.json`, `events.json`, `README.md`, `subagents/<actor>.jsonl`.
+- **Round Closure**: Normal completion delivers text and terminal `_FinishRound` metadata. Successful receipts require no further model request; mixed terminal/business batches execute no side effects. A single metadata-only correction preserves prior text and completed effects; cancellation and failures retain their real outcome.
 - **Immutable State Snapshots**:
   - `RuntimeStore` maintains deep-frozen snapshots (`immutable()`). Modifying store arrays in-place is forbidden; state transitions produce new snapshots.
 
@@ -39,5 +40,8 @@ kernel/agent.ts (runs execution loop)
   - `tests/agent.test.ts`: Agent loop convergence and tool dispatch.
 - **Fast Run Command**:
   ```bash
-  node --test dist/tests/task-progress.test.js dist/tests/runtime-steps.test.js
+  node --test dist/tests/task-progress.test.js dist/tests/runtime-steps.test.js dist/tests/finish-round.test.js
   ```
+
+## 6. Known Gaps
+- Scripted tests exercise closure races and recovery; real model compliance with the finalizer contract still requires authorized live checks.

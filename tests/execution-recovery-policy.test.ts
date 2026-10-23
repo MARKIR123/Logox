@@ -34,7 +34,7 @@ test('Actor一次纠偏、Director一次调整共用根预算，改派和重启�
 
 test('Logox两次调整后停止；重复工具、计划和派工不重置，新的成果可以开启下一段问题', async () => {
   const recovery = new ActorRecovery('s');
-  const read = {id: 'read', name: 'read', arguments: '{"path":"scene.html","offset":1}'};
+  const read = {id: 'read', name: 'read', arguments: '{"file_path":"scene.html","offset":1}'};
   const signature = toolProgressFingerprint(read, {text: '1: initial scene', isError: false})!;
   assert.equal(await recovery.progress('root', signature), true);
   assert.equal(await recovery.execution('root', 'no_delivery', 'logox'), 'retry');
@@ -47,7 +47,7 @@ test('Logox两次调整后停止；重复工具、计划和派工不重置，新
   const changed = toolProgressFingerprint(read, {text: '1: improved scene', isError: false})!;
   assert.equal(await recovery.progress('root', changed), true);
   assert.equal(await recovery.execution('root', 'no_delivery', 'techne'), 'retry');
-  const equivalent = {...read, arguments: '{ "offset": 1, "path": "scene.html" }'};
+  const equivalent = {...read, arguments: '{ "offset": 1, "file_path": "scene.html" }'};
   assert.equal(toolProgressFingerprint(equivalent, {text: '1: improved scene', isError: false}), changed);
 });
 
@@ -147,7 +147,7 @@ test('用户停止与主循环暂停优先，均不自动消费Director纠偏机
 
 test('恢复指令具体缩小步骤，不携带长思考或修改模型额度', () => {
   assert.match(executionRecoveryInstruction('no_delivery', 'techne'), /minimum deliverable step/i);
-  assert.match(executionRecoveryInstruction('no_delivery', 'logox', true), /Pivot action plan/i);
+  assert.match(executionRecoveryInstruction('no_delivery', 'logox', true), /Pivot the action plan/i);
   assert.match(executionRecoveryInstruction('truncated_tools', 'techne'), /batch was not executed/i);
   assert.match(executionRecoveryInstruction('truncated_text', 'logox'), /from the break point/i);
 });

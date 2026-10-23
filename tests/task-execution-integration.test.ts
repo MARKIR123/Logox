@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
 import {buildStageRows} from '../src/tui/stage.js';
@@ -36,8 +36,8 @@ test('真实主会话三次只有思考即收束，原文和用量保留，纠�
     const handle = f.app.ensemble.dispatch('logox', '核对这个任务'); await handle.done;
     assert.equal(f.requests.length, 3);
     assert.equal(f.app.store.activities.get('task-flow', handle.activityId)?.status, 'failed');
-    assert.match(f.requests[1]!.system, /最小可交付步骤/);
-    assert.match(f.requests[2]!.system, /改变下一步行动方案/);
+    assert.match(f.requests[1]!.system, /minimum deliverable step/i);
+    assert.match(f.requests[2]!.system, /Pivot the action plan/i);
     for (const request of f.requests) assert.ok(request.messages.every(message => message.role !== 'assistant' || message.text.trim() || message.toolCalls?.length));
     const history = await f.app.journal.load('task-flow', 'logox');
     const reasoning = history.filter(entry => entry.message?.role === 'assistant' && entry.message.reasoning);
@@ -51,8 +51,8 @@ test('真实主会话三次只有思考即收束，原文和用量保留，纠�
 
 test('参数截断整批零执行，最多两次接续，畸形工具历史不送回API', async () => {
   const truncated: ModelTurn = {message: {role: 'assistant', text: '已确认目标是独立文件。', toolCalls: [
-    {id: 'first', name: 'write', arguments: '{"path":"bad.txt","content":"must not write"}'},
-    {id: 'second', name: 'read', arguments: '{"path":'},
+    {id: 'first', name: 'write', arguments: '{"file_path":"bad.txt","content":"must not write"}'},
+    {id: 'second', name: 'read', arguments: '{"file_path":'},
   ]}, stop: 'length'};
   const f = await fixture([truncated, truncated, truncated]);
   try {

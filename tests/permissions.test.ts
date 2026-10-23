@@ -12,7 +12,7 @@ import {PermissionEngine, shellWords} from '../src/permissions/engine.js';
 
 import {pathDanger} from '../src/permissions/paths.js';
 
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication, finalizingProvider} from './runtime-fixture.js';
 
 import {loadConfig} from '../src/config/config.js';
 
@@ -67,19 +67,19 @@ test('真实 Tools：deny 优先、creative 普通写、敏感和链接直接阻
 
     const denied = await f.permissions.add({scope: 'session', decision: 'deny', tool: 'read', pattern: 'a.txt'});
 
-    assert.match((await f.tools.execute(call('read', {path: 'a.txt'}), f.context)).text, /(?:denied|拒绝)/i);
+    assert.match((await f.tools.execute(call('read', {file_path: 'a.txt'}), f.context)).text, /(?:denied|拒绝)/i);
 
     await f.permissions.revoke(denied.id);
 
-    assert.equal((await f.tools.execute(call('read', {path: 'a.txt'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('read', {file_path: 'a.txt'}), f.context)).isError, false);
 
     f.permissions.mode = 'creative';
 
-    assert.equal((await f.tools.execute(call('write', {path: 'b.txt', content: 'b'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('write', {file_path: 'b.txt', content: 'b'}), f.context)).isError, false);
 
     await writeFile(join(f.cwd, '.env'), 'secret');
 
-    assert.equal((await f.tools.execute(call('read', {path: '.env'}), f.context)).isError, true);
+    assert.equal((await f.tools.execute(call('read', {file_path: '.env'}), f.context)).isError, true);
 
     await mkdir(join(f.cwd, '.git'));
 
@@ -87,7 +87,7 @@ test('真实 Tools：deny 优先、creative 普通写、敏感和链接直接阻
 
     await symlink(join(f.cwd, '.git'), join(f.cwd, 'link'), 'junction');
 
-    assert.equal((await f.tools.execute(call('read', {path: 'link/config'}), f.context)).isError, true);
+    assert.equal((await f.tools.execute(call('read', {file_path: 'link/config'}), f.context)).isError, true);
 
     assert.equal((await f.tools.execute(call('shell', {command: 'Get-Content link/config'}), f.context)).isError, true);
 
@@ -234,17 +234,17 @@ test('真实 Agent 有界只读并发、模型序落账、写工具边界与整�
 
     await writeFile(join(f.cwd, 'a'), 'a'); f.permissions.mode = 'creative';
 
-    const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('read', {path: 'a'}, 'r1'), call('read', {path: 'a'}, 'r2'), call('read', {path: 'a'}, 'r3'), call('write', {path: 'b', content: 'b'}, 'w'), call('read', {path: 'b'}, 'r4')]}}, {stop: 'complete', message: {role: 'assistant', text: '完成'}}];
+    const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('read', {file_path: 'a'}, 'r1'), call('read', {file_path: 'a'}, 'r2'), call('read', {file_path: 'a'}, 'r3'), call('write', {file_path: 'b', content: 'b'}, 'w'), call('read', {file_path: 'b'}, 'r4')]}}, {stop: 'complete', message: {role: 'assistant', text: '完成'}}];
 
-    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => ({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0, readonlyConcurrency: 2});
+    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0, readonlyConcurrency: 2});
 
     await run('任务', f.context);
 
     assert.equal(maximum, 2); assert.deepEqual(execution, ['r1', 'r2', 'r3', 'w', 'r4']);
 
-    assert.deepEqual(f.messages.filter(m => m.role === 'tool').map(m => m.role === 'tool' ? m.callId : ''), execution);
+    assert.deepEqual(f.messages.filter(m => m.role === 'tool' && m.name !== '_FinishRound').map(m => m.role === 'tool' ? m.callId : ''), execution);
 
-    turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {path: 'bad', content: 'x'}), call('read', {path: 'a', limit: -1})]}}, {stop: 'complete', message: {role: 'assistant', text: '已修正'}});
+    turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: 'bad', content: 'x'}), call('read', {file_path: 'a', limit: -1})]}}, {stop: 'complete', message: {role: 'assistant', text: '已修正'}});
 
     await run('参数错误', f.context); await assert.rejects(readFile(join(f.cwd, 'bad')));
 
@@ -268,7 +268,7 @@ test('真实 Agent 扩展 schema 合法才审批；拒绝不执行；无效扩�
 
     const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('mcp_test', {path: 'a'})]}}, {stop: 'complete', message: {role: 'assistant', text: '完成'}}];
 
-    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => ({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
+    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
 
       extraTools: [{name: 'mcp_test', description: 'test', parameters: {type: 'object', properties: {path: {type: 'string'}}, required: ['path'], additionalProperties: false}}],
 
@@ -276,7 +276,7 @@ test('真实 Agent 扩展 schema 合法才审批；拒绝不执行；无效扩�
 
     await run('扩展', f.context); assert.deepEqual(f.requests, ['mcp_test']); assert.equal(executed, 0);
 
-    turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {path: 'bad', content: 'x'}), call('mcp_test', {path: 5})]}}, {stop: 'complete', message: {role: 'assistant', text: '修正'}});
+    turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: 'bad', content: 'x'}), call('mcp_test', {path: 5})]}}, {stop: 'complete', message: {role: 'assistant', text: '修正'}});
 
     await run('无效', f.context); await assert.rejects(readFile(join(f.cwd, 'bad'))); assert.equal(f.requests.length, 1);
 
@@ -298,9 +298,9 @@ test('真实 Tools 审批等待取消释放，Agent 保持工具配对', async (
 
     f.context.permission = async () => {entered(); await new Promise<void>(resolve => f.controller.signal.addEventListener('abort', () => resolve(), {once: true})); return false;};
 
-    const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {path: 'bad', content: 'x'}, 'w1'), call('write', {path: 'bad2', content: 'x'}, 'w2')]}}];
+    const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: 'bad', content: 'x'}, 'w1'), call('write', {file_path: 'bad2', content: 'x'}, 'w2')]}}];
 
-    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => ({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0});
+    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0});
 
     const task = run('等待', f.context); await waiting; f.controller.abort(); await assert.rejects(task);
 
@@ -353,7 +353,7 @@ test('可信装配交接 MCP 审批：远端参数无效不询问，有效唯一
     let remoteExecutions = 0, validations = 0;
     const turns: ModelTurn[] = [];
     const outer = {name: 'mcp', description: 'MCP入口', parameters: {type: 'object', properties: {server: {type: 'string'}, tool: {type: 'string'}, arguments: {type: 'object'}}, required: ['server', 'tool', 'arguments'], additionalProperties: false}};
-    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => ({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
+    const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
       extraTools: [outer], extraApprovalHandled: ['mcp'], async executeExtra(item, context) {
         validations++;
         const raw: {arguments: {path?: unknown}} = JSON.parse(item.arguments);
@@ -367,7 +367,7 @@ test('可信装配交接 MCP 审批：远端参数无效不询问，有效唯一
     await run('无效', f.context); assert.equal(validations, 1); assert.equal(f.requests.length, 0); assert.equal(remoteExecutions, 0);
     turns.push(turn({server: 'test', tool: 'read', arguments: {path: 'a'}}), complete);
     await run('有效', f.context); assert.deepEqual(f.requests, ['mcp:test:read']); assert.equal(remoteExecutions, 0);
-    const unknownRun = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => ({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
+    const unknownRun = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
       extraTools: [{name: 'unknown', description: 'unknown', parameters: {type: 'object', additionalProperties: true}}], async executeExtra() {remoteExecutions++; return {text: 'bad', isError: false};}});
     turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('unknown', {extraApprovalHandled: ['unknown']})]}}, complete);
     await unknownRun('模型伪造', f.context); assert.deepEqual(f.requests, ['mcp:test:read', 'unknown']); assert.equal(remoteExecutions, 0);

@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps, stepElapsed} from '../src/runtime/steps.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -30,7 +30,7 @@ test('每个步骤独立计时，排队和嵌套等待不累计，终态冻结',
   assert.equal(stepElapsed(steps.get(thinking), now), 500);
   resume(); now = 1800;
   assert.equal(steps.finish(thinking, 'completed').elapsedMs, 700);
-  const id = steps.tool({id: 'read', name: 'read', arguments: '{"path":"README.md"}'});
+  const id = steps.tool({id: 'read', name: 'read', arguments: '{"file_path":"README.md"}'});
   assert.equal(steps.get(id).title, 'read README.md');
   now = 3800; const permission = steps.wait(id, '等待许可'); now = 4800;
   const nested = steps.wait(id, '等待回答'); now = 5800; nested(); permission();
@@ -54,7 +54,7 @@ test('并发读取各自在返回时冻结，较慢工具不延长已完成工�
   let requests = 0;
   const agent = createAgent({cwd, store, tools, iterations: 3, retries: 0, requestBase: async () => ({system: 'fixture', tools: [{name: 'read', description: 'read', parameters: {type: 'object'}}]}),
     provider: () => ({async respond() {return ++requests === 1 ? {message: {role: 'assistant', text: '', toolCalls: [
-      {id: 'slow', name: 'read', arguments: '{"path":"slow"}'}, {id: 'fast', name: 'read', arguments: '{"path":"fast"}'},
+      {id: 'slow', name: 'read', arguments: '{"file_path":"slow"}'}, {id: 'fast', name: 'read', arguments: '{"file_path":"fast"}'},
     ]}, stop: 'tools'} : complete('完成');}})});
   const running = agent('读取两个文件', context);
   try {
@@ -178,7 +178,7 @@ test('真实多次模型往返各有独立 Thinking，工具同级可见，重�
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
     const folded = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
     assert.equal(folded.filter(row => row.text.includes('Thinking...')).length, 1);
-    assert.ok(folded.some(row => row.text.includes('read sample.txt')), '工具独立于 Thinking，可直接浏览');
+    assert.ok(folded.some(row => /read.*sample\.txt/i.test(row.text)), '工具独立于 Thinking，可直接浏览');
     release.resolve();
     await waitForSnapshot(app.store, state => state.activities.some(activity => activity.status === 'completed'));
     snapshot = app.store.getSnapshot();

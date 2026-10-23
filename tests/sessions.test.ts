@@ -4,7 +4,7 @@ import {mkdtemp, rm, readFile, writeFile, realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {Journal} from '../src/store/journal.js';
 import {SessionManager} from '../src/store/sessions.js';
@@ -108,8 +108,8 @@ test('/clear 只清显示，下一请求保留历史；恢复原文与压缩摘�
     try {
       assert.ok(app.store.getSnapshot().messages.some(message => message.text === '需要保留的输入'));
       await submit(app, '新输入');
-      assert.ok(requests.at(-1)?.messages.some(message => message.text.includes('【轮次摘要】')));
-      assert.ok(requests.at(-1)?.messages.some(message => message.text === '需要保留的输入'));
+      assert.ok(requests.at(-1)?.messages.some(message => /^\d+ \| .* \| Completed/.test(message.text)));
+      assert.ok(requests.at(-1)?.messages.every(message => message.text !== '需要保留的输入'), 'Closed human input may fold; original remains in the journal');
     } finally {await app.close();}
   } finally {await f.cleanup();}
 });
@@ -278,7 +278,7 @@ test('重启的排队/待回答检查点标记中断，未配对工具不会自�
     await j.checkpoint('first', {activityId: 'waiting', ownerId: 'logox', prompt: '等待许可', source: 'logox', status: 'waiting_input', time: 2});
     await j.append({version: 1, sessionId: 'first', ownerId: 'logox', activityId: 'waiting', role: 'user', text: '等待许可'});
     await j.append({version: 1, sessionId: 'first', ownerId: 'logox', activityId: 'waiting', role: 'assistant', text: '',
-      message: {role: 'assistant', text: '', toolCalls: [{id: 'never-repeat', name: 'write', arguments: '{"path":"must-not-exist","content":"x"}'}]}});
+      message: {role: 'assistant', text: '', toolCalls: [{id: 'never-repeat', name: 'write', arguments: '{"file_path":"must-not-exist","content":"x"}'}]}});
     await f.app.close();
     const app = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, env: {}, authPath: join(f.cwd, "auth.json"), resume: true, config: f.config, provider: f.provider});
     try {
@@ -342,7 +342,7 @@ test('跨进程会话锁竞争、退出释放和死亡锁恢复；损坏锁不�
 test('真实审批等待检查点、取消与退出收尾保存终态', async () => {
   const f = await fixture({async respond(request) {
     if (request.messages.at(-1)?.role === 'tool') return {message: {role: 'assistant', text: '结果'}, stop: 'complete'};
-    return {message: {role: 'assistant', text: '', toolCalls: [{id: 'approval', name: 'write', arguments: JSON.stringify({path: 'file.txt', content: 'value'})}]}, stop: 'tools'};
+    return {message: {role: 'assistant', text: '', toolCalls: [{id: 'approval', name: 'write', arguments: JSON.stringify({file_path: 'file.txt', content: 'value'})}]}, stop: 'tools'};
   }});
   try {
     await f.app.submit('写文件');

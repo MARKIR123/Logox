@@ -52,8 +52,19 @@ import {
 
 import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './selection.js';
 import {decorateRow, presentedSegments} from './row-presentation.js';
+import {getInteractionUI} from '../tools/ui-registry.js';
+import type {ToolInteractionAction} from '../tools/ui-types.js';
 
 interface ResponseDraft extends QuestionDraft {answers: Record<string, Answer>; editor: Draft}
+function interactionState(request: Interaction, response: ResponseDraft) {
+  return {request, draft: {...response, text: response.editor.text}, answers: response.answers};
+}
+function reduceResponse(request: Interaction, response: ResponseDraft, action: ToolInteractionAction): ResponseDraft {
+  const next = getInteractionUI(request)?.reduce(interactionState(request, response), action);
+  if (!next) return response;
+  return {...response, ...next.draft, answers: next.answers,
+    editor: next.draft.questionIndex !== response.questionIndex ? emptyDraft : response.editor};
+}
 function initialResponse(request: Interaction): ResponseDraft {
   return {questionIndex: 0, selected: request.kind === 'permission' ? 1 : 0, text: '', error: '', answers: {}, editor: emptyDraft};
 }
@@ -124,6 +135,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     kalon: topAnchor,
   });
   const [hoveredFoldId, setHoveredFoldId] = useState<string | null>(null);
+  const hoveredFoldIdRef = useRef<string | null>(null);
   const contentSelection = useRef<ContentSelection | null>(null);
   const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow; lastDragX?: number; lastDragY?: number} | null>(null);
   const lastHoverRef = useRef<{x: number; y: number}>({x: -1, y: -1});
@@ -135,6 +147,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const [focus, setFocus] = useState<'input' | 'question' | 'stop'>('input');
   const [focusedStop, setFocusedStop] = useState('');
   const [hoveredStop, setHoveredStop] = useState('');
+  const hoveredStopRef = useRef('');
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
   const stoppingIds = useRef(new Set<string>());
   const [selectedRequestId, setSelectedRequestId] = useState('');
@@ -170,6 +183,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     setEditingCustom(false);
     clearSelection();
     setHoveredFoldId(null);
+    hoveredFoldIdRef.current = null;
+    hoveredStopRef.current = '';
     setHoveredStop(''); setFocus('input');
   };
 
@@ -235,8 +250,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       : backLabel + keysLabel;
   const footerHeight = screenRows < 2 ? 0 : 1;
   const hairlineHeight = screenRows >= 4 ? 2 : 0;
-  const freeAnswer = (!inlineRequest || stage) && focus === 'question' && request?.kind === 'question' && response &&
-    response.selected === (request.questions[response.questionIndex]?.options?.length ?? 0);
+  const freeAnswer = (!inlineRequest || stage) && focus === 'question' && request && response &&
+    getInteractionUI(request)?.describe(interactionState(request, response)).editing;
   const activeDraft = editingCustom ? customDraft : freeAnswer && response ? response.editor : draft;
   const editableComposer = focus === 'input' || Boolean(freeAnswer) || editingCustom;
   const promptGlyph = editingCustom ? '补充偏好 › ' : freeAnswer ? '答 › ' : '❯ ';
@@ -256,7 +271,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : request && response
     ? request.kind === 'permission'
       ? '许可：' + (response.selected === 0 ? '仅本次允许' : '拒绝（默认）') + ' · Enter 确认'
-      : '选择：' + (request.questions[response.questionIndex]?.options?.[response.selected]?.label ?? '') + ' · Enter 确认'
+      : getInteractionUI(request)?.describe(interactionState(request, response)).hint ?? ''
     : '↑↓ 选择 · Enter 确认 · Esc 稍后';
 
   const query = completionQuery(draft, currentView);
@@ -348,14 +363,28 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   }, [snapshot.activities, stopping]);
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
-    if (plane) plane.present({...current, width, height: timelineHeight, selection: selectionInViewport(selectionRange(messageRows, contentSelection.current), current.start), motion: layout?.motion ?? true});
+    if (plane) plane.present({
+      ...current,
+      width,
+      height: timelineHeight,
+      selection: selectionInViewport(selectionRange(messageRows, contentSelection.current), current.start),
+      motion: layout?.motion ?? true,
+      hoveredFoldId: hoveredFoldIdRef.current,
+    });
     else refreshReading(value => value + 1);
   };
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
     if (surface?.kind === 'page') plane.hide();
-    else plane.present({...view, width, height: timelineHeight, selection, motion: layout?.motion ?? true});
+    else plane.present({
+      ...view,
+      width,
+      height: timelineHeight,
+      selection,
+      motion: layout?.motion ?? true,
+      hoveredFoldId: hoveredFoldIdRef.current,
+    });
   });
   const copySelection = () => {
     const range = selectionRange(messageRows, contentSelection.current);
@@ -430,7 +459,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (execute && suggestion.execute) sendSceneInput(next.text);
   };
 
-  useEffect(() => { setHoveredFoldId(null); }, [width, screenRows, currentView, anchor, scene.folds, expanded]);
+  useEffect(() => {
+    hoveredFoldIdRef.current = null;
+    hoveredStopRef.current = '';
+    setHoveredFoldId(null);
+  }, [width, screenRows, currentView, anchor, scene.folds, expanded]);
 
   const lastClickRef = useRef<{time: number; key: string}>({time: 0, key: ''});
   const foldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -442,7 +475,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     const now = Date.now();
     if (stage && act.kind === 'select_answer' && act.requestId) {
       const clicked = pending.find(item => item.requestId === act.requestId);
-      if (clicked) {setSelectedRequestId(clicked.requestId); setResponses(prev => ({...prev, [clicked.requestId]: {...prev[clicked.requestId] ?? initialResponse(clicked), selected: Number(act.value), error: ''}})); setFocus('question');}
+      if (clicked) {setSelectedRequestId(clicked.requestId); setResponses(prev => {
+        const current = prev[clicked.requestId] ?? initialResponse(clicked);
+        return {...prev, [clicked.requestId]: clicked.kind === 'permission'
+          ? {...current, selected: Number(act.value), error: ''}
+          : reduceResponse(clicked, current, {kind: 'select', index: Number(act.value)})};
+      }); setFocus('question');}
       return;
     }
     if (stage && act.kind === 'confirm_answer' && act.requestId) {
@@ -566,12 +604,19 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       const row = event.y < timelineHeight ? (rows[event.y] as SceneRow | undefined) : undefined;
       const control = row?.controls?.find(item => event.x >= item.startCol && event.x < item.endCol && !item.disabled);
       const nextStop = control?.action.foldId ?? '';
-      setHoveredStop(prev => prev === nextStop ? prev : nextStop);
+      if (hoveredStopRef.current !== nextStop) {
+        hoveredStopRef.current = nextStop;
+        setHoveredStop(nextStop);
+      }
       const target = (demoScene || stage) && event.y < timelineHeight
         ? hoveredCardAt(row, event.x)
         : !demoScene && activity && !expanded && event.y >= timelineHeight && event.y < timelineHeight + activityHeight && event.x < width
           ? activity.activityId : null;
-      setHoveredFoldId(prev => prev === target ? prev : target);
+      if (hoveredFoldIdRef.current !== target) {
+        hoveredFoldIdRef.current = target;
+        presentReading();
+        setHoveredFoldId(target);
+      }
       return;
     }
     if (event.button !== 0) return;
@@ -638,7 +683,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   useEffect(() => {
     if (!stdin) return;
-    stdout?.write('\x1b[?1003h\x1b[?1006h');
+    stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h');
     const originalRead = stdin.read.bind(stdin);
     let carry = '';
     stdin.read = ((size?: number) => {
@@ -660,7 +705,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     return () => {
       if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
       stdin.read = originalRead;
-      stdout?.write('\x1b[?1006l\x1b[?1003l');
+      stdout?.write('\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
     };
   }, [stdin, stdout]);
 
@@ -672,19 +717,14 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       else changeResponse(current => ({...current, error: result.reason}));
       return;
     }
-    const question = request.questions[response.questionIndex];
-    if (!question) return;
-    const option = question.options?.[response.selected];
-    const answer: Answer | undefined = option ? {type: 'option', optionId: option.id} :
-      response.editor.text.trim() ? {type: 'text', text: response.editor.text} : undefined;
-    if (!answer) { changeResponse(current => ({...current, error: '请输入回答'})); return; }
-    const answers = {...response.answers, [question.id]: answer};
-    if (response.questionIndex + 1 < request.questions.length) {
-      changeResponse(current => ({...current, answers, questionIndex: current.questionIndex + 1, selected: 0, text: '', editor: emptyDraft, error: ''}));
+    const transition = getInteractionUI(request)?.reduce(interactionState(request, response), {kind: 'submit'});
+    if (!transition) return;
+    if (!transition.complete) {
+      changeResponse(current => reduceResponse(request, current, {kind: 'submit'}));
       setDetailOffset(0);
       return;
     }
-    const result = store.interactions.respond(answerEnvelope(request, {kind: 'question', answers}));
+    const result = store.interactions.respond(answerEnvelope(request, {kind: 'question', answers: transition.answers}));
     if (result.ok) { setFocus('input'); setDetailOffset(0); }
     else changeResponse(current => ({...current, error: result.reason}));
   };
@@ -701,7 +741,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if ((!inlineRequest || stage) && focus === 'question' && request?.kind === 'question' && response) {
       changeResponse(current => {
         const editor = fn(current.editor);
-        return {...current, selected: request.questions[current.questionIndex]?.options?.length ?? 0, editor, text: editor.text, error: ''};
+        return reduceResponse(request, {...current, editor, text: editor.text}, {kind: 'text', text: editor.text});
       });
     } else {
       setFocus('input');
@@ -872,8 +912,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       }
     }
     if ((!inlineRequest || stage) && focus === 'question' && request && response && (key.upArrow || key.downArrow)) {
-      const count = request.kind === 'permission' ? 2 : (request.questions[response.questionIndex]?.options?.length ?? 0) + 1;
-      changeResponse(current => ({...current, selected: (current.selected + (key.upArrow ? count - 1 : 1)) % count}));
+      changeResponse(current => request.kind === 'permission'
+        ? {...current, selected: (current.selected + 1) % 2}
+        : reduceResponse(request, current, {kind: 'move', delta: key.upArrow ? -1 : 1}));
       return;
     }
     if (key.ctrl && input === 'j') { edit(current => insert(current, '\n')); return; }

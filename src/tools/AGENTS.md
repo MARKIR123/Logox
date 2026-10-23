@@ -1,20 +1,30 @@
 # Module: Tools & Execution Engine (`src/tools/`)
 
 ## 1. Scope
-- **Owns**: Canonical tool registry, Zod parameter schemas, tool aliases, process tree lifecycle management, `browser-shot` screenshot CLI, and file rollback snapshots (`/undo`).
+- **Owns**: Canonical tool registry, Zod parameter schemas, tool aliases, bundled ripgrep resolution, process tree lifecycle management, `browser-shot` screenshot CLI, and file rollback snapshots (`/undo`).
 - **Does not own**: Permission evaluation engine (owned by `src/permissions/`).
 
 ## 2. Start Here (Task Router)
 | If investigating... | Start at... | Then check... |
 |---|---|---|
 | Tool dispatch, schemas, or execution | `index.ts:Tools.execute()` | `types.ts:canonicalToolMap` and `<ToolName>Tool/` |
+| Model-facing parameter names or legacy aliases | `<ToolName>Tool/<ToolName>Tool.ts` | `aliases.ts:normalizeAliases()` |
+| Missing or broken ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `package.json` `@vscode/ripgrep` dependency |
 | Process tree termination or hanging CLI | `process.ts:runProcess()` | 1.5s forced cleanup timer and `taskkill /T /F` |
 | Visual preview inspection or screenshot CLI | `BrowserShot/cli.ts` | `BrowserShot/cdp.ts` and `ShellTool/prompt.ts` |
 | Atomic file undo and snapshot rollback | `snapshots.ts:Snapshots` | `/undo` command in `src/application.ts` |
 | Missing argument validation error formatting | `index.ts:validateToolCall()` | Specific tool Zod schema in `<ToolName>Tool.ts` |
+| Tool presentation, visibility or question actions | `ui-registry.ts` and sibling `UI.ts` | `ui-types.ts` and shared `tui/tool-ui.ts` |
+| Hidden terminal round metadata | `_FinishRoundTool/` | `kernel/agent.ts` and `context/round-memory.ts` |
 
 ## 3. Hard Boundaries
 - **PascalCase Alignment**: Tools are strictly registered in PascalCase (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Shell`, `AskUserQuestion`, `WebFetch`, `Actor`, `ListActors`, `CancelActor`, `UpdateTaskProgress`). Aliases are normalized via `canonicalToolName()`.
+- **Claude Code Parameter Contract**: Model-facing schemas expose `file_path`, `old_string`, `new_string`, Grep `output_mode`/`glob`/`head_limit`, and Shell millisecond `timeout`. Never add `.default()` to a model-facing field: Zod 4 marks defaulted fields as `required` in `toJSONSchema`, which forces the model to send them. Legacy names (`path`, `old_text`, `new_text`, Grep `limit`) are accepted only through `normalizeAliases()` and are scheduled for removal.
+- **Bundled ripgrep**: Grep must resolve the ripgrep binary from the `@vscode/ripgrep` dependency (or `LOGOX_RIPGREP_PATH`); never rely on the host PATH as the primary source. The JS traversal is a last-resort fallback only.
+- **Internal Tool Policy**: `_FinishRound` is an explicitly terminal, hidden, omit-pair tool, not a prefix-based permission exception. Its minimal receipt is recorded without another model request; it creates no visible tool step.
+- **Presentation Ownership**: Built-ins, including collaboration tools, own `UI.ts`; common hosts retain layout, focus and permission scheduling. Execution never imports the renderer registry. Unknown extension tools use a safe visible fallback. Add tool-local signposts only for non-obvious constraints.
+- **Tool-Owned Titles**: Each `UI.ts` names the most decision-relevant parameter first: `file_path` for Read/Write/Edit, `pattern` for Grep/Glob, task owner/goal for Actor, question header for AskUserQuestion, and channel for channel-scoped SendMessage. Titles must stay one line and never dump payload bodies.
+- **Prompt Ownership**: Tool-specific descriptions and repair prompts stay co-located in `src/tools/<Tool>/prompt.ts`. Cross-cutting rules (charter, collaboration, reporting, recovery, runtime state) live under `src/prompts/`; do not move tool descriptions into that tree.
 - **1.5s Process Cleanup Guarantee**: `runProcess()` enforces a 1.5-second safety timer after kill signals to destroy unclosed stdio streams and reject immediately, preventing orphaned child processes from deadlocking the session.
 - **Deadlock Guard**: `--virtual-time-budget=0` is strictly forbidden in Shell commands.
 - **Deterministic Capture**: The `browser-shot` CLI freezes the virtual clock *after* page load and advances by explicit 16.67ms increments. `--time` means animation time, not load wait.
@@ -30,9 +40,15 @@ kernel/agent.ts (receives tool calls from model)
 
 ## 5. Verification
 - **Targeted Test Suite**:
+  - `tests/tool-parameter-alignment.test.ts`: Model-facing schemas, legacy aliases, Grep modes, Shell timeout, AskUserQuestion multiSelect, bundled ripgrep.
   - `tests/tools-claude-alignment.test.ts`: PascalCase alignment and execution for all tools.
   - `tests/subagent-efficiency-vision.test.ts`: Multimodal reading and process error tolerance.
 - **Fast Run Command**:
   ```bash
-  node --test dist/tests/tools-*.test.js dist/tests/subagent-efficiency-vision.test.js
+  node --test dist/tests/tools-*.test.js dist/tests/tool-parameter-alignment.test.js dist/tests/tool-ui.test.js dist/tests/finish-round.test.js dist/tests/subagent-efficiency-vision.test.js
   ```
+
+## 6. Known Gaps
+- `Shell` does not yet support `run_in_background`, `BashOutput`, or `KillShell`; background execution is deferred.
+- Legacy parameter aliases (`path`, `old_text`, `new_text`, Grep `limit`) remain accepted for migration and are scheduled for removal in a later version.
+- Provider wire compatibility is tested with local fixtures; live model behavior is not certified by registry or UI tests.

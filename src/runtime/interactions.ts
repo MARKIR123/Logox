@@ -41,8 +41,14 @@ export class Interactions {
       const keys = Object.keys(response.answers);
       if (keys.length !== request.questions.length || request.questions.some(question => {
         const answer = response.answers[question.id];
-        return !answer || (answer.type === 'option' &&
-          !question.options?.some(option => option.id === answer.optionId));
+        if (!answer) return true;
+        if (answer.type === 'option') return !question.options?.some(option => option.id === answer.optionId);
+        if (answer.type === 'options') {
+          if (question.multiSelect !== true) return true;
+          if (new Set(answer.optionIds).size !== answer.optionIds.length) return true;
+          return answer.optionIds.some(id => !question.options?.some(option => option.id === id));
+        }
+        return false;
       })) return {ok: false, reason: '请完整回答每个问题并使用有效选项'};
     }
     this.settle(request, {status: 'answered', response: immutable(response)});

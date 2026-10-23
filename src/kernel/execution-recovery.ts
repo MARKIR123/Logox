@@ -14,19 +14,10 @@ export class ExecutionRecoveryError extends Error {
   }
 }
 
-export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerId: string, adjustment = false): string {
-  const next = kind === 'no_delivery'
-    ? adjustment && ownerId === 'logox'
-      ? 'Pivot action plan (改变下一步行动方案): Narrow current phase or delegate explicit smaller steps to a suitable actor. Deliver concrete artifacts or complete tool calls first.'
-      : 'Previous turn returned only thinking or an empty response (output quota exhausted before tools were called). Narrow to the minimum deliverable step (最小可交付步骤), avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
-    : kind === 'truncated_tools'
-      ? 'Previous tool arguments were truncated; the entire batch was not executed (整批调用未执行). Issue smaller, complete tool calls without replaying completed tools.'
-      : 'Previous output reached token limits. Continue the current step from the break point using existing text (沿已有正文从断点完成当前小步); do not replan or regenerate delivered content.';
-  return next + ' Adhere to confirmed goals, active stage, and completed tool results. Do not bypass approval denials or change model effort tiers.';
-}
+export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
 const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress',
-  'request_assist', 'approve_assist', 'send_message', 'ask_user', 'ask', 'read_skill', 'list_skills']);
+  'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
 
 /** 参数 JSON 的属性顺序和格式差异不算新进展，重复读取同一结果也不刷新预算。 */
 export function toolProgressFingerprint(call: ToolCall, result: ToolResult): string | undefined {

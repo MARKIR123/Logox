@@ -5,8 +5,8 @@ import {pathArg, type ToolResult} from '../types.js';
 import {runtimePath, searchablePath} from '../../permissions/paths.js';
 
 export const globSchema = z.strictObject({
-  pattern: z.string().min(1),
-  path: pathArg.default('.'),
+  pattern: z.string().min(1).describe('The glob pattern to match files against'),
+  path: pathArg.optional().describe('The directory to search in. Defaults to the current working directory.'),
 });
 
 export type GlobArgs = z.infer<typeof globSchema>;

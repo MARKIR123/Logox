@@ -197,6 +197,7 @@ test('SendMessage: injects into active task without opening a new card, and drai
     completeTaskResolve();
     await handle.done;
   } finally {
+    completeTaskResolve();
     await ensemble.close();
     await rm(dir, {recursive: true, force: true});
   }

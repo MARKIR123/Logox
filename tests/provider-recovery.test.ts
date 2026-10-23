@@ -4,7 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {createProvider, providerFailure} from '../src/providers/http.js';
 import {normalizeMessages, type ModelMessage} from '../src/runtime/messages.js';

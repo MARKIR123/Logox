@@ -1,7 +1,9 @@
 import {randomUUID} from 'node:crypto';
-import {join} from 'node:path';
+import {homedir} from 'node:os';
+import {join, resolve} from 'node:path';
 import {z} from 'zod';
 import {ActorCatalog} from './actors/catalog.js';
+import {assertActorProfiles, seedActorProfiles} from './actors/profiles.js';
 import {loadConfig} from './config/config.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {AuthStorage} from './providers/auth.js';
@@ -22,11 +24,14 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const recent = options.sessionId === undefined ? await manager.recent() : undefined;
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
   if (!sessionId) throw new Error('没有可恢复的会话');
-  const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env);
-  const registry = new ProviderRegistry(config, options.env ?? process.env, undefined, new AuthStorage(options.authPath));
+  const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
+  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher, new AuthStorage(options.authPath));
   await registry.syncCustom();
   const journal = new Journal(join(manager.directory, 'sessions'));
-  const actors = new ActorCatalog(cwd, options.resourceOptions?.home ? {home: options.resourceOptions.home} : {});
+  const home = options.resourceOptions?.home ?? homedir();
+  if (options.resourceOptions?.home && resolve(home) !== resolve(homedir())) await seedActorProfiles(home);
+  else await assertActorProfiles(home);
+  const actors = new ActorCatalog(cwd, options.resourceOptions?.home ? {home} : {});
   await actors.load();
   const owners = async (id: string) => [...new Set([...actors.list().map(actor => actor.id), ...(await journal.tasks(id)).map(task => task.ownerId)])];
   let current: Awaited<ReturnType<typeof createSession>>;

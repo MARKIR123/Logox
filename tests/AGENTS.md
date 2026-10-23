@@ -1,11 +1,10 @@
 # Test Suite Navigation & Verification Map (`tests/`)
 
-This document guides AI agents on test taxonomy, domain-specific test groups, and rapid verification workflows.
-Instead of running the entire 380+ test suite, run the targeted group command for the subsystem you modified.
+## 1. Scope
 
----
+This signpost routes verification for runtime, tool UI, providers, actors and storage. Use targeted groups while implementing, then run full regression before completion.
 
-## 1. Domain Test Groups & Fast Verification Commands
+## 2. Start Here (Task Router)
 
 | Subsystem Domain | Targeted Test Files | Fast Run Command (~1-3s) |
 |---|---|---|
@@ -16,11 +15,24 @@ Instead of running the entire 380+ test suite, run the targeted group command fo
 | **Permissions & Sandbox** | `permissions.test.ts`<br>`permission-modes.test.ts`<br>`creative-reading.test.ts` | `node --test dist/tests/permission*.test.js dist/tests/creative-reading.test.js` |
 | **Terminal UI (TUI)** | `tui*.test.tsx`<br>`terminal*.test.tsx`<br>`stage*.test.ts`<br>`thinking-groups.test.ts`<br>`app.test.tsx`<br>`command-panels.test.tsx` | `node --test dist/tests/tui*.test.js dist/tests/terminal*.test.js dist/tests/stage*.test.js dist/tests/thinking-groups.test.js` |
 | **Sessions & Leases** | `sessions.test.ts`<br>`session-leases.test.ts`<br>`session-lifecycle.test.ts`<br>`session-integration.test.ts`<br>`state-file-lock.test.ts` | `node --test dist/tests/session*.test.js dist/tests/state-file-lock.test.js` |
-| **Resources & Skills** | `resources.test.ts`<br>`hierarchical-skills.test.ts`<br>`extensions.test.ts`<br>`docs.test.ts` | `node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/extensions.test.js` |
+| **Resources & Skills** | `resources.test.ts`<br>`hierarchical-skills.test.ts`<br>`extensions.test.ts` | `node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/extensions.test.js` |
+| **Prompts & Documentation** | `prompt-architecture.test.ts`<br>`prompts.test.ts`<br>`docs.test.ts`<br>`actor-compression-contracts.test.ts` | `node --test dist/tests/prompt-architecture.test.js dist/tests/prompts.test.js dist/tests/docs.test.js dist/tests/actor-compression-contracts.test.js` |
 
 ---
 
-## 2. Full Regression & Check Commands
+## 3. Hard Boundaries
+
+- Isolate homes and credentials; fake/local providers only. No API credits are spent implicitly.
+- Ephemeral files belong in isolated temporary roots with deterministic cleanup. Servers use dynamic ports.
+- Raw journals remain append-only. Tests must distinguish authoritative records from UI and model projections.
+- Production finalizer enforcement is never weakened for fixtures; `runtime-fixture.ts` adapts only legacy successful scripted turns. Raw lifecycle and wire tests bypass it.
+
+## 4. Integration Points
+
+- Build emits executable tests under `dist/tests/` and distribution assets without touching user homes.
+- `finish-round.test.ts`, `round-memory.test.ts`, `tool-ui.test.ts`, and `actor-compression-contracts.test.ts` cover terminal closure, indexes, visibility, and safe installed defaults.
+
+## 5. Verification
 
 - **Fast Multi-Threaded Test Suite**:
   ```bash
@@ -37,7 +49,7 @@ Instead of running the entire 380+ test suite, run the targeted group command fo
 
 ---
 
-## 3. Test Invariants & Authoring Rules
+### Test Authoring Rules
 
 1. **Home Directory Sandbox Isolation**:
    - Tests that invoke `loadConfig()` or `createApplication()` MUST pass `resourceOptions: {home: tempCwd, boundary: tempCwd}`.
@@ -49,3 +61,7 @@ Instead of running the entire 380+ test suite, run the targeted group command fo
    - Always bind test HTTP servers to dynamic ports using `server.listen(0, '127.0.0.1')` to prevent EADDRINUSE collisions during parallel execution.
 4. **Deterministic Teardown**:
    - In `finally` blocks, close all HTTP servers (`server.closeAllConnections(); server.close()`) and kill spawned child processes to avoid hanging test runners.
+
+## 6. Known Gaps
+
+- Live provider/model compliance and real-terminal visual acceptance require separate authorized runs. A passing fixture suite does not certify them.

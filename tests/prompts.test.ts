@@ -5,13 +5,10 @@ import {
   composeRuntimeSystemPrompt,
   CORE_EXECUTION_CHARTER,
   TOOL_USAGE_RULES,
-  QUANTITATIVE_ANCHORS,
   NO_VISION_NOTE,
-  DISPATCH_ROLE_PROMPT,
-  CRAFT_ACTOR_PROMPT,
-  READ_ACTOR_PROMPT,
-  BORROW_SKILL_PROMPT,
+  collaborationFor,
 } from '../src/prompts/index.js';
+import {readFileSync} from 'node:fs';
 
 test('提示词工程：基础系统提示词按静态切片分层组装，核心准则在最前，定制人设追加在后', () => {
   const result = composeBaseSystemPrompt({
@@ -26,23 +23,33 @@ test('提示词工程：基础系统提示词按静态切片分层组装，核�
   // 1. 结构化切片数组正确导出
   assert.ok(result.sections.length >= 4);
   const names = result.sections.map(s => s.name);
-  assert.deepEqual(names, ['persona', 'environment', 'tool_rules', 'execution_charter', 'rules_context', 'summary_instruction']);
+  assert.deepEqual(names, ['persona', 'environment', 'tool_rules', 'execution_charter', 'collaboration', 'rules_context']);
 
   // 2. 文本拼接严格遵循前缀顺序
   assert.ok(result.system.includes('与其思考，不如实践'));
-  assert.ok(result.system.includes('【定制补充人设】'));
+  assert.ok(result.system.includes('## Custom Persona Extension'));
   assert.ok(result.system.includes('【特别约束】单文件输出'));
-  assert.ok(result.system.includes('工作目录：/workspace/project'));
+  assert.ok(result.system.includes('Working directory: /workspace/project'));
   assert.ok(result.system.includes(TOOL_USAGE_RULES));
   assert.ok(result.system.includes(CORE_EXECUTION_CHARTER));
+  assert.ok(result.system.includes(collaborationFor('techne')));
   assert.ok(result.system.includes('【项目规则】遵循 AGENTS.md。'));
 
   // 验证基础人设索引 < 定制人设索引 < 工作目录
   const baseIdx = result.system.indexOf('与其思考，不如实践');
   const customIdx = result.system.indexOf('【特别约束】');
-  const cwdIdx = result.system.indexOf('工作目录：/workspace/project');
+  const cwdIdx = result.system.indexOf('Working directory: /workspace/project');
   assert.ok(baseIdx < customIdx);
   assert.ok(customIdx < cwdIdx);
+});
+
+test('协作协议单一来源：角色人设不重复工具名与协作流程', () => {
+  for (const id of ['aletheia', 'techne', 'kalon']) {
+    const persona = readFileSync(new URL('../src/actors/profiles/' + id + '/persona.md', import.meta.url), 'utf8');
+    assert.doesNotMatch(persona, /request_assist|approve_assist|send_message|SendMessage|borrow_skill/i, id);
+  }
+  const base = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'techne', builtinPrompt: 'Techne', includeSummary: false});
+  assert.equal(base.system.split(collaborationFor('techne')).length - 1, 1);
 });
 
 test('提示词工程：纯自定义角色在无内置底座时直接使用自身人设，空人设报错', () => {
@@ -52,11 +59,11 @@ test('提示词工程：纯自定义角色在无内置底座时直接使用自�
     customPrompt: '你是独立侦察兵。',
   });
   assert.ok(result.system.includes('你是独立侦察兵。'));
-  assert.ok(!result.system.includes('【定制补充人设】'));
+  assert.ok(!result.system.includes('## Custom Persona Extension'));
 
   assert.throws(() => {
     composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'ghost'});
-  }, /角色没有有效人设：ghost/);
+  }, /Actor has no valid persona: ghost/);
 });
 
 test('提示词工程：单轮运行时动态组装，安全沉底追加视觉约束、阶段推进与自愈提示', () => {
@@ -83,12 +90,4 @@ test('提示词工程：单轮运行时动态组装，安全沉底追加视觉�
     supportsVision: true,
   });
   assert.equal(cleanSystem, baseSystem);
-});
-
-test('提示词工程：剧团协作工具专属提示词结构化导出，包含高内聚说明', () => {
-  assert.ok(DISPATCH_ROLE_PROMPT.description.includes('派发角色任务'));
-  assert.ok(DISPATCH_ROLE_PROMPT.usageNotes.includes('并行推进'));
-  assert.ok(CRAFT_ACTOR_PROMPT.description.includes('提交完整角色 Markdown'));
-  assert.ok(READ_ACTOR_PROMPT.description.includes('按需读取角色当前有效分支'));
-  assert.ok(BORROW_SKILL_PROMPT.description.includes('为本任务借阅已有技能索引'));
 });

@@ -13,13 +13,7 @@ const updateSchema = updateTaskProgressSchema;
 export const taskProgressTool: ToolDefinition = {
   name: UPDATE_TASK_PROGRESS_TOOL_NAME,
   description: UPDATE_TASK_PROGRESS_DESCRIPTION,
-  // 请求只携带字段结构，长度与修订边界由 updateSchema 在运行时严格校验。
-  parameters: {type: 'object', additionalProperties: false, properties: {
-    stages: {type: 'array', items: {type: 'object', additionalProperties: false,
-      properties: Object.fromEntries(Object.keys(stepStageSchema.shape).map(key => [key, {type: 'string'}])), required: Object.keys(stepStageSchema.shape)}},
-    update: {type: 'object', additionalProperties: false, properties: {id: {type: 'string'},
-      status: {type: 'string', enum: ['in_progress', 'completed', 'skipped']}, result: {type: 'string'}, reason: {type: 'string'}}, required: ['id', 'status']},
-  }},
+  parameters: z.toJSONSchema(updateTaskProgressSchema, {io: 'input'}),
 };
 const planning: StepStage = immutable({id: 'planning', title: '梳理目标与制定阶段',
   purpose: '核对已确认目标，探查必要事实并制定简短阶段计划', activeForm: '正在梳理目标与制定阶段'});
@@ -36,14 +30,12 @@ export class TaskProgress {
     return stage ? {id: stage.id, title: stage.title, purpose: stage.purpose, activeForm: stage.activeForm} : this.value.planned ? undefined : planning;
   }
   instruction(): string {
-    if (!this.value.planned) return 'Current goal: clarify objectives and establish phase milestones. For complex tasks, register phases via UpdateTaskProgress first.';
+    if (!this.value.planned) return 'No task phases are registered yet. Clarify the objective before modifying files.';
     const stage = this.value.stages.find(stage => stage.id === this.value.activeStageId);
     const completed = this.value.stages.filter(stage => stage.status === 'completed').map(stage => stage.title + '：' + stage.result);
     const pending = this.value.stages.filter(stage => stage.status === 'pending').map(stage => stage.title);
-    return ['Task phases are explicitly tracked via UpdateTaskProgress; tools inherit the active phase goal.',
-      stage ? 'Active phase: ' + stage.title + '. Purpose: ' + stage.purpose : 'No phase currently in progress.',
-      completed.length ? 'Completed milestones: ' + completed.join('; ') : '', pending.length ? 'Remaining phases: ' + pending.join('; ') : '',
-      'When completing a phase, report the concrete deliverable; changing phases does not count as achieving results.'].filter(Boolean).join('\n');
+    return [stage ? 'Active phase: ' + stage.title + '. Purpose: ' + stage.purpose : 'No phase currently in progress.',
+      completed.length ? 'Completed milestones: ' + completed.join('; ') : '', pending.length ? 'Remaining phases: ' + pending.join('; ') : ''].filter(Boolean).join('\n');
   }
   async update(arguments_: unknown): Promise<ToolResult> {
     this.context.signal.throwIfAborted();
@@ -51,24 +43,53 @@ export class TaskProgress {
       const input = updateSchema.parse(arguments_);
       let stages = this.value.stages.map(stage => ({...stage}));
       if (input.stages) {
-        if (new Set(input.stages.map(stage => stage.id)).size !== input.stages.length) throw new Error('阶段 ID 必须唯一');
+        // Defensive normalization: auto-generate id, purpose, activeForm
+        const normalizedInput = input.stages.map((stage, index) => {
+          const autoId = stage.id || (stage.title && /^[a-z0-9_-]+$/i.test(stage.title) ? stage.title : `stage-${index + 1}`);
+          const purpose = stage.purpose || stage.title;
+          const activeForm = stage.activeForm || (stage.title.startsWith('正在') ? stage.title : `正在${stage.title}`);
+          const status = stage.status || 'pending';
+          const result = stage.result || (status === 'completed' ? 'Done' : undefined);
+          const reason = stage.reason || (status === 'skipped' ? 'Skipped' : undefined);
+          return {
+            id: autoId,
+            title: stage.title,
+            purpose,
+            activeForm,
+            status,
+            ...(result ? {result} : {}),
+            ...(reason ? {reason} : {}),
+          };
+        });
+
+        if (new Set(normalizedInput.map(stage => stage.id)).size !== normalizedInput.length) throw new Error('Phase milestone ID must be unique');
         for (const previous of stages) {
-          const replacement = input.stages.find(stage => stage.id === previous.id);
-          if (!replacement) throw new Error('已有阶段不能删除；过时阶段请先注明原因后取消');
+          const replacement = normalizedInput.find(stage => stage.id === previous.id);
+          if (!replacement) throw new Error('Existing phases cannot be deleted; mark obsolete phases as skipped instead');
           if (['completed', 'skipped'].includes(previous.status) &&
             (replacement.title !== previous.title || replacement.purpose !== previous.purpose || replacement.activeForm !== previous.activeForm)) {
-            throw new Error('已完成或取消阶段不能改写');
+            throw new Error('Completed or cancelled phases cannot be rewritten');
           }
         }
-        stages = input.stages.map(stage => ({...stages.find(previous => previous.id === stage.id), ...stage,
-          status: stages.find(previous => previous.id === stage.id)?.status ?? 'pending'}));
+        stages = normalizedInput.map(stage => {
+          const previous = stages.find(prev => prev.id === stage.id);
+          return {
+            ...previous,
+            ...stage,
+            status: stage.status !== 'pending' ? stage.status : (previous?.status ?? 'pending'),
+          };
+        });
       }
       if (input.update) {
-        const change = input.update, stage = stages.find(stage => stage.id === change.id);
-        if (!stage) throw new Error('阶段不存在：' + change.id);
-        if (['completed', 'skipped'].includes(stage.status)) throw new Error('终态阶段不能重新推进或改写成果');
-        if (change.status === 'completed' && !change.result) throw new Error('完成阶段必须报告实际成果');
-        if (change.status === 'skipped' && !change.reason) throw new Error('取消阶段必须说明原因');
+        const change = input.update;
+        const stage = stages.find(s => s.id === change.id || s.title.toLowerCase() === change.id.toLowerCase());
+        if (!stage) {
+          const available = stages.map(s => `"${s.id}" (${s.title})`).join(', ');
+          throw new Error(`Phase not found: "${change.id}". Available phases: ${available || 'none'}`);
+        }
+        if (['completed', 'skipped'].includes(stage.status)) throw new Error('Terminal phase cannot be reopened or rewritten');
+        if (change.status === 'completed' && !change.result) throw new Error('Completed phase requires a concrete result (provide result field)');
+        if (change.status === 'skipped' && !change.reason) throw new Error('Skipped phase requires a cancellation reason (provide reason field)');
         if (change.status === 'in_progress') for (const other of stages) if (other.id !== stage.id && other.status === 'in_progress') other.status = 'pending';
         stage.status = change.status;
         if (change.result) stage.result = change.result;
@@ -85,12 +106,13 @@ export class TaskProgress {
       if (activity && !['completed', 'failed', 'cancelled'].includes(activity.status)) {
         this.store.activities.update(this.context.sessionId, this.context.activityId, {progress: next});
       }
-      return {text: input.update?.status === 'completed' ? '阶段成果已记录：' + input.update.result :
-        input.update?.status === 'skipped' ? '阶段已取消：' + input.update.reason : '阶段计划已更新。' + (activeStageId ? '当前：' + this.current()?.title : ''), isError: false};
+      const activeStage = stages.find(s => s.id === activeStageId);
+      const stageName = activeStage ? activeStage.title : (input.update ? input.update.id : 'updated');
+      return {text: `Task progress updated (revision ${revision}). Active phase: ${stageName}.`, isError: false};
     } catch (error) {
       this.context.signal.throwIfAborted();
       const message = error instanceof z.ZodError
-        ? '参数校验失败：' + error.issues.map(i => `${i.path.join('.') || '根参数'}: ${i.message}`).join('；')
+        ? 'Parameter validation failed: ' + error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')
         : error instanceof Error ? error.message : String(error);
       return {text: message, isError: true};
     }

@@ -4,6 +4,7 @@ import stringWidth from 'string-width';
 import type {Activity, Interaction} from '../runtime/contracts.js';
 import {cast} from '../actors/ensemble.js';
 import {deriveActorCardColors} from '../actors/definitions.js';
+import {QuestionCard} from '../tools/AskUserQuestionTool/QuestionCard.js';
 export interface ActorStyle {
   readonly symbol: string;
   readonly name: string;
@@ -35,6 +36,13 @@ export const palette = {
   error: '#e08b90',
   question: '#e8a8dc',
   selectionBg: '#2b3b4e',
+  diffAdded: '#7ee7c4',
+  diffAddedBg: '#1a3024',
+  diffAddedGutter: '#58c79b',
+  diffRemoved: '#e08b90',
+  diffRemovedBg: '#361e22',
+  diffRemovedGutter: '#d96c73',
+  diffContext: '#8a95a0',
 };
 
 export function applyTheme(themeOverrides?: Partial<{user: string; accent: string; dream_collapsed: string; dream_expanded: string}>): typeof palette {
@@ -150,7 +158,7 @@ export function choiceStyle(selected: boolean, accent = palette.accent, textColo
   return {marker: selected ? marker : ' '.repeat(indent), indent,
     color: selected ? accent : textColor, descriptionColor: selected ? accent : mutedColor};
 }
-export interface QuestionDraft {questionIndex: number; selected: number; text: string; error: string}
+export interface QuestionDraft {questionIndex: number; selected: number; text: string; error: string; checked?: readonly number[]}
 export const InteractionCard = memo(function InteractionCard({request, draft, focused}: {
   request: Interaction; draft: QuestionDraft; focused: boolean;
 }) {
@@ -172,21 +180,5 @@ export const InteractionCard = memo(function InteractionCard({request, draft, fo
     })}
     <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ 选择 · Enter 确认许可 · Esc 稍后回答 · Ctrl+X 取消' : 'Tab 聚焦回答 · 主输入仍可编辑'}</Text>
   </Card>;
-  const question = request.questions[draft.questionIndex];
-  if (!question) return null;
-  const options = question.options ?? [];
-  return <Card title={title} color={color} bg={bg}>
-    <Text color={mutedColor} backgroundColor={bg}>{question.header} · {draft.questionIndex + 1}/{request.questions.length}</Text>
-    <Text color={textColor} backgroundColor={bg}>{safeText(question.question)}</Text>
-    {options.map((option, index) => {
-      const style = choiceStyle(draft.selected === index, color, textColor, mutedColor);
-      return <Box key={option.id} flexDirection="column" backgroundColor={bg} marginTop={1}>
-        <Text color={style.color}>{style.marker}{safeText(option.label)}</Text>
-        <Box paddingLeft={style.indent}><Text color={style.descriptionColor}>{safeText(option.description)}</Text></Box>
-      </Box>;
-    })}
-    <Text color={choiceStyle(draft.selected === options.length, color, textColor, mutedColor).color} backgroundColor={bg}>{choiceStyle(draft.selected === options.length, color, textColor, mutedColor).marker}自由输入：{safeText(draft.text) || '…'}</Text>
-    {draft.error && <Text color={palette.error} backgroundColor={bg}>{draft.error}</Text>}
-    <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ 选择 · Enter 确认回答 · Esc 稍后回答 · Ctrl+X 取消' : 'Tab 聚焦回答 · 主输入仍可编辑'}</Text>
-  </Card>;
+  return <QuestionCard request={request} draft={draft} focused={focused}/>;
 });

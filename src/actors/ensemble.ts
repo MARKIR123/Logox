@@ -2,7 +2,8 @@ import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
 import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot} from '../runtime/contracts.js';
 import {repairToolResults, type ModelMessage} from '../runtime/messages.js';
-import type {RoundSummary, RoundStatus} from '../context/contracts.js';
+import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
+import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
 import type {HistoryEntry, HistoryStore, TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {UserCancelledError} from '../kernel/agent.js';
@@ -28,7 +29,7 @@ export interface TaskOrigin {
 }
 export interface TaskResult<Id extends string = string> extends TaskOrigin {
   sessionId: string; ownerId: Id; activityId: string; source: string;
-  summary: RoundSummary; status: RoundStatus; error?: unknown; stopReason?: StopReason;
+  summary: RoundSummary; delivery?: TaskDelivery; status: RoundStatus; error?: unknown; stopReason?: StopReason;
 }
 export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly progress?: TaskProgressSnapshot;
@@ -37,6 +38,8 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   startTool?(): void;
   wait?(reason: string): () => void;
   drainInbox?(): readonly ModelMessage[];
+  closeInbox?(): Promise<readonly ModelMessage[]>;
+  acceptRoundMemory?(callId: string | null): void;
   readonly sessionId: string;
   readonly activityId: string;
   readonly ownerId: Id;
@@ -72,7 +75,7 @@ export class EnsembleRuntime<Id extends string> {
   private readonly pausedBatches = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly pendingWrites = new Set<Promise<void>>();
-  private readonly inboxes = new Map<string, ModelMessage[]>();
+  private readonly inboxes = new Map<string, {messages: ModelMessage[]; pending: Set<Promise<void>>; sealed: boolean}>();
   private closed = false;
   constructor(readonly sessionId: string, readonly store: RuntimeStore, private readonly history: HistoryStore,
     private readonly execute: ActorExecutor<NoInfer<Id>>, private readonly options: EnsembleOptions<Id> = {}) {}
@@ -132,7 +135,8 @@ export class EnsembleRuntime<Id extends string> {
 
   async injectTaskMessage(targetOwnerId: string, message: string, source = 'logox', summary?: string, mode: 'interrupt' | 'queue' = 'queue'): Promise<boolean> {
     const active = this.getActiveTask(targetOwnerId);
-    if (!active) return false;
+    const inbox = active && this.inboxes.get(active.activityId);
+    if (!active || !inbox || inbox.sealed || active.controller.signal.aborted) return false;
     // 1. If interrupt mode, kill active process tree for this activity so blocked tools abort immediately
     if (mode === 'interrupt') {
       killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
@@ -150,24 +154,24 @@ export class EnsembleRuntime<Id extends string> {
       source,
       inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
     });
-    // 4. Append to journal on disk for permanent transcript
-    await this.history.append({
-      version: 1,
-      sessionId: this.sessionId,
-      activityId: active.activityId,
-      ownerId: targetOwnerId,
-      source,
-      inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
-      role: 'user',
-      text: fullText,
-      message: modelMsg,
-      time: Date.now(),
-    });
-    // 5. Enqueue into active task inbox for agent.ts loop to consume
-    const inbox = this.inboxes.get(active.activityId);
-    if (inbox) {
-      inbox.push(modelMsg);
-    }
+    // Terminal closure seals admission and waits for every already admitted append.
+    const write = this.trackWrite((async () => {
+      await this.history.append({
+        version: 1,
+        sessionId: this.sessionId,
+        activityId: active.activityId,
+        ownerId: targetOwnerId,
+        source,
+        inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
+        role: 'user',
+        text: fullText,
+        message: modelMsg,
+        time: Date.now(),
+      });
+      inbox.messages.push(modelMsg);
+    })());
+    inbox.pending.add(write);
+    try {await write;} finally {inbox.pending.delete(write);}
     return true;
   }
 
@@ -306,9 +310,25 @@ export class EnsembleRuntime<Id extends string> {
     const checkpoint = async (status: 'running' | 'waiting_input' | 'completed' | 'failed' | 'cancelled', error?: string) => {
       await this.checkpoint(task, status, error);
     };
+    let delivery: TaskDelivery | undefined;
+    let acceptedFinalizer: string | null | undefined;
     const finish = async (status: 'completed' | 'failed' | 'cancelled') => {
-      try {return await this.history.finish?.(this.sessionId, ownerId, activityId, status);}
-      catch {this.store.message(this.sessionId, ownerId, 'notice', '轮次摘要未能保存，原始消息保留；后续整理使用本地兜底。', {activityId});}
+      const inbox = this.inboxes.get(activityId);
+      if (inbox) {inbox.sealed = true; await Promise.allSettled([...inbox.pending]);}
+      try {
+        if (!this.history.finishRecord) return await this.history.finish?.(this.sessionId, ownerId, activityId, status);
+        const record = await this.history.finishRecord(this.sessionId, ownerId, activityId, status, acceptedFinalizer);
+        delivery = record.delivery;
+        return record.summary;
+      } catch {
+        this.store.message(this.sessionId, ownerId, 'notice', 'Round memory could not be saved; original messages are preserved.', {activityId});
+        const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
+        const messages: ModelMessage[] = entries.map(entry => entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text});
+        const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly), status);
+        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && message.text.trim())?.text;
+        if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text};
+        return summary;
+      }
     };
     const output: string[] = [];
     let recorded = false;
@@ -327,14 +347,14 @@ export class EnsembleRuntime<Id extends string> {
         if (!signal.aborted) update('running', '继续处理');
       }
     };
-    this.inboxes.set(activityId, []);
+    this.inboxes.set(activityId, {messages: [], pending: new Set(), sealed: false});
     try {
       signal.throwIfAborted();
       update('running', '已登场');
       await checkpoint('running');
       const entries = immutable([...await this.history.load(this.sessionId, ownerId)]);
       signal.throwIfAborted();
-      for (const message of repairToolResults(entries.flatMap(entry => entry.message ? [entry.message] : []))) {
+      for (const message of repairToolResults(omitInternalToolPairs(entries.flatMap(entry => entry.message ? [entry.message] : [])))) {
         await this.history.append({version: 1, ...identity, role: 'tool', text: message.text, message});
       }
       await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}});
@@ -342,10 +362,19 @@ export class EnsembleRuntime<Id extends string> {
       context = {
         ...identity, ...origin, source, history: entries, signal,
         drainInbox: () => {
-          const queue = this.inboxes.get(activityId);
-          if (!queue || queue.length === 0) return [];
-          return queue.splice(0, queue.length);
+          const inbox = this.inboxes.get(activityId);
+          return inbox?.messages.splice(0) ?? [];
         },
+        closeInbox: async () => {
+          const inbox = this.inboxes.get(activityId);
+          if (!inbox) return [];
+          inbox.sealed = true;
+          await Promise.allSettled([...inbox.pending]);
+          const incoming = inbox.messages.splice(0);
+          if (incoming.length) inbox.sealed = false;
+          return incoming;
+        },
+        acceptRoundMemory: callId => {acceptedFinalizer = callId;},
         ...(task.progress ? {progress: task.progress} : {}),
         saveProgress: async progress => {
           signal.throwIfAborted();
@@ -382,7 +411,7 @@ export class EnsembleRuntime<Id extends string> {
         catch {this.store.message(this.sessionId, ownerId, 'notice', '任务已完成，收尾整理未完成；原始账本保留。', {activityId});}
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status: 'completed'});
-          else await this.options.handoff?.({...identity, ...origin, source, summary, status: 'completed'});
+          else await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status: 'completed'});
         }
         catch {this.store.message(this.sessionId, ownerId, 'notice', '摘要交接未完成；可从角色账本读取。', {activityId});}
       }
@@ -413,7 +442,7 @@ export class EnsembleRuntime<Id extends string> {
         // 技术终止先交接本地摘要，不再等待出错模型做收尾压缩。
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status});
-          await this.options.handoff?.({...identity, ...origin, source, summary, status, error, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
+          await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status, error, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
         } catch {this.store.message(this.sessionId, ownerId, 'notice', '终态摘要交接未完成', {activityId});}
       } else {
         await this.options.handoff?.({...identity, ...origin, source, status, error,

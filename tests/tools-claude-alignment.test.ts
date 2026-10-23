@@ -47,10 +47,10 @@ test('工具规范对齐 Claude Code：全部采用 PascalCase 大驼峰命名�
   assert.equal(canonicalToolName('WebFetch'), 'WebFetch');
 
   // 验证小写和大驼峰调用均通过参数校验
-  assert.equal(validateToolCall({id: '1', name: 'Read', arguments: '{"path":"file.txt"}'}).valid, true);
-  assert.equal(validateToolCall({id: '2', name: 'read', arguments: '{"path":"file.txt"}'}).valid, true);
-  assert.equal(validateToolCall({id: '3', name: 'Write', arguments: '{"path":"file.txt","content":"hello"}'}).valid, true);
-  assert.equal(validateToolCall({id: '4', name: 'write', arguments: '{"path":"file.txt","content":"hello"}'}).valid, true);
+  assert.equal(validateToolCall({id: '1', name: 'Read', arguments: '{"file_path":"file.txt"}'}).valid, true);
+  assert.equal(validateToolCall({id: '2', name: 'read', arguments: '{"file_path":"file.txt"}'}).valid, true);
+  assert.equal(validateToolCall({id: '3', name: 'Write', arguments: '{"file_path":"file.txt","content":"hello"}'}).valid, true);
+  assert.equal(validateToolCall({id: '4', name: 'write', arguments: '{"file_path":"file.txt","content":"hello"}'}).valid, true);
   assert.equal(validateToolCall({id: '5', name: 'Shell', arguments: '{"command":"echo 1"}'}).valid, true);
   assert.equal(validateToolCall({id: '6', name: 'shell', arguments: '{"command":"echo 1"}'}).valid, true);
   assert.equal(validateToolCall({id: '7', name: 'WebFetch', arguments: '{"url":"https://example.com"}'}).valid, true);
@@ -136,7 +136,7 @@ test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
     const writeResult = await tools.execute({
       id: 'w-1',
       name: 'Write',
-      arguments: JSON.stringify({path: 'demo.txt', content: 'Initial Line 1\nLine 2'}),
+      arguments: JSON.stringify({file_path: 'demo.txt', content: 'Initial Line 1\nLine 2'}),
     }, context);
     assert.equal(writeResult.isError, false);
 
@@ -144,7 +144,7 @@ test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
     const readResult = await tools.execute({
       id: 'r-1',
       name: 'Read',
-      arguments: JSON.stringify({path: 'demo.txt'}),
+      arguments: JSON.stringify({file_path: 'demo.txt'}),
     }, context);
     assert.equal(readResult.isError, false);
     assert.match(readResult.text, /1: Initial Line 1/);
@@ -154,7 +154,7 @@ test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
     const editResult = await tools.execute({
       id: 'e-1',
       name: 'Edit',
-      arguments: JSON.stringify({path: 'demo.txt', old_text: 'Initial Line 1', new_text: 'Updated Line 1'}),
+      arguments: JSON.stringify({file_path: 'demo.txt', old_string: 'Initial Line 1', new_string: 'Updated Line 1'}),
     }, context);
     assert.equal(editResult.isError, false);
 
@@ -162,7 +162,7 @@ test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
     const readAfter = await tools.execute({
       id: 'r-2',
       name: 'Read',
-      arguments: JSON.stringify({path: 'demo.txt'}),
+      arguments: JSON.stringify({file_path: 'demo.txt'}),
     }, context);
     assert.match(readAfter.text, /1: Updated Line 1/);
 
@@ -267,6 +267,67 @@ test('toolTitle：有 description 时优先展示单步意图，无 description 
     }),
   };
   assert.equal(toolTitle(legacyCall), 'Write pelican.html');
+});
+
+test('Read 工具默认读取全文且参数完全可选（对齐 Claude Code）', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-read-defaults-'));
+  try {
+    const testFile = join(cwd, 'sample.txt');
+    const content = Array.from({length: 150}, (_, i) => `Line ${i + 1}: code block`).join('\n');
+    await writeFile(testFile, content);
+
+    const tools = new Tools(cwd);
+    const context = mockContext(cwd);
+
+    // 仅传 path，不传 offset 与 limit，必须默认一次性读完
+    const res = await tools.execute({
+      id: 'read-full',
+      name: 'Read',
+      arguments: JSON.stringify({file_path: 'sample.txt'}),
+    }, context);
+
+    assert.equal(res.isError, false);
+    assert.match(res.text, /^1: Line 1: code block/);
+    assert.match(res.text, /150: Line 150: code block$/);
+    assert.ok(!res.text.includes('(Remaining lines omitted)'));
+  } finally {
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+
+test('Grep 工具使用内置 ripgrep，默认返回匹配文件并支持 content 模式', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-grep-bundled-'));
+  try {
+    const file1 = join(cwd, 'skyline.js');
+    await writeFile(file1, 'function drawSkyline() {\n  var buildingCount = 12;\n  return buildingCount;\n}');
+    const file2 = join(cwd, 'palette.js');
+    await writeFile(file2, 'var THEMES = { NIGHT: "#000" };');
+
+    const tools = new Tools(cwd);
+    const context = mockContext(cwd);
+
+    // Default output_mode is files_with_matches (Claude Code default).
+    const files = await tools.execute({
+      id: 'grep-files',
+      name: 'Grep',
+      arguments: JSON.stringify({pattern: 'buildingCount'}),
+    }, context);
+    assert.equal(files.isError, false);
+    assert.match(files.text, /skyline\.js/);
+    assert.doesNotMatch(files.text, /palette\.js/);
+
+    const content = await tools.execute({
+      id: 'grep-content',
+      name: 'Grep',
+      arguments: JSON.stringify({pattern: 'buildingCount', output_mode: 'content'}),
+    }, context);
+    assert.equal(content.isError, false);
+    assert.match(content.text, /skyline\.js:2:.*var buildingCount = 12;/);
+    assert.match(content.text, /skyline\.js:3:.*return buildingCount;/);
+    assert.doesNotMatch(content.text, /palette\.js/);
+  } finally {
+    await rm(cwd, {recursive: true, force: true});
+  }
 });
 
 

@@ -43,10 +43,11 @@ Before exploring, reading, or modifying files in any subsystem directory (`src/<
    - Production source code files have strictly one designated writer at any time (typically Techne). Reviewers (Aletheia, Kalon) provide coordinates and visual QA, never competing write handles.
 6. **Persistent User Configuration in `~/.logox/`**:
    - Primary user storage is `~/.logox/`. Some components still load `~/.logox-ts/` for compatibility, with component-specific precedence; see [usage](docs/USAGE.md). Credentials and runtime data stay outside tracked source files.
-7. **Four-Pillar English Round Compaction**:
-   - Round summaries and compaction reports strictly use the 4-pillar punch list under 250 words (`Exports & Changes`, `Decisions & Boundaries`, `Verification`, `Missing/Next`).
+7. **Internal Round Memory and Independent Reports**:
+   - Every normally completed round submits hidden `_FinishRound` metadata. Only formal Director assignments produce task reports; direct human requests receive normal answers.
+   - Closed context uses compact five-field indexes with authoritative ledger ranges. Raw journals remain append-only; effective goals, constraints, evidence status and unresolved work survive instead of every original message.
 8. **Fractal Signpost Protocol (FSP) Enforcement**:
-   - All subsystems, tools, and test suites must maintain self-similar, FSP-compliant localized `AGENTS.md` signposts following the 6-section template.
+   - Subsystem and test signposts follow the six-section template. Tool folders inherit the nearest signpost; add a local one only for constraints not evident from code.
 
 ---
 
@@ -61,8 +62,9 @@ Before exploring, reading, or modifying files in any subsystem directory (`src/<
 | **Terminal UI (TUI)** | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink plane rendering, 180-200ms frame pacing, dual-harmonic breathing wave, active actor animation, anti-noise inline cards |
 | **Resources & Skills** | [`src/resources/AGENTS.md`](src/resources/AGENTS.md) | Hierarchical skills (`skills/<actor>/<domain>/*.md`), Path as Prompt, three-tier waterfall priority |
 | **Permissions & Sandbox** | [`src/permissions/AGENTS.md`](src/permissions/AGENTS.md) | Three-tier security matrix, scratchpad auto-approval, sensitive path protection, persistent rules |
-| **Context & Compaction** | [`src/context/AGENTS.md`](src/context/AGENTS.md) | Dual-watermark pruning, four-pillar English compaction, tool output disk archiving, token metering |
+| **Context & Compaction** | [`src/context/AGENTS.md`](src/context/AGENTS.md) | Dual-watermark pruning, hidden round memory and compact indexes, tool output disk archiving, token metering |
 | **Configuration & Storage** | [`src/config/AGENTS.md`](src/config/AGENTS.md) | Hierarchical config cascade, atomic `StateFile` locking, thinking protocol and level sets |
+| **Prompts & Assembly** | [`src/prompts/AGENTS.md`](src/prompts/AGENTS.md) | Static/dynamic prompt zones, charter, collaboration fragments, compaction/recovery sections, cache-stable order |
 | **Test Suite & Verification** | [`tests/AGENTS.md`](tests/AGENTS.md) | Domain test groups, fast verification commands (~1-3s), test sandbox isolation rules |
 
 ---

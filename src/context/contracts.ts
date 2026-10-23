@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import type {ModelMessage} from '../runtime/messages.js';
+import {roundMemorySchema, taskDeliverySchema} from './round-memory.js';
 
 import {roundSummarySchema as summarySchema, type RoundSummary} from '../runtime/contracts.js';
 export {summarySchema, type RoundSummary};
@@ -8,6 +9,9 @@ export type RoundStatus = z.infer<typeof terminalSchema>;
 export const roundSchema = z.strictObject({
   activityId: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive(),
   sourceHash: z.string(), status: terminalSchema, summary: summarySchema,
+  ordinal: z.number().int().positive().optional(), memory: roundMemorySchema.optional(),
+  sourceLines: z.strictObject({start: z.number().int().positive(), end: z.number().int().positive()}).optional(),
+  delivery: taskDeliverySchema.optional(),
 });
 export type RoundRecord = z.infer<typeof roundSchema>;
 export const contextStateSchema = z.strictObject({
@@ -24,23 +28,16 @@ export interface ModelCapacity {
   window: number;
   maxOutput?: number;
 }
-export const summaryInstruction = `
-# Task Delivery & Round Summary
-You must provide your final deliverable in the message text channel. Thinking is purely an internal scratchpad; internal thinking is never used as a deliverable. Conclude your turn with a structured summary in English:
-[Round Summary]
-Title: <Under 15 words: what was achieved>
-Report:
-- Exports & Changes: <touched file paths + exported functions/data signatures; do not dump raw code or SVG listings>
-- Decisions & Boundaries: <confirmed architectural choices, coordinate bounds, or hard constraints; do not recount thinking process or echo the prompt>
-- Verification: <exact command run and numerical metrics/test status, e.g. "npm test passes, 71k triangles (budget <=200k)">
-- Missing/Next: <concrete next step or blocker, or "None">
+import {ROUND_SUMMARY_CONTRACT as summaryInstruction} from '../prompts/charter.js';
+import {HISTORY_MEMO_INSTRUCTION} from '../prompts/compaction.js';
+export {summaryInstruction, HISTORY_MEMO_INSTRUCTION};
 
-CRITICAL RULES:
-- Under 250 words total. Strictly avoid narrative storytelling or echoing the user's prompt.
-- Use bullet points only; do not include full code snippets, SVG blocks, or math derivations.`;
+export function memoryFocusInstruction(contract?: string): string {
+  return contract?.trim() ? '\nRole memory focus (guidance under the round memory contract):\n' + contract.trim() : '';
+}
 
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
-  messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded);
+  messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly);
   const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
   const match = /(?:【轮次摘要】|\[Round Summary\])\s*(?:标题|Title)[：:]\s*([^\n]+)\s*(?:报告|Report)[：:]\s*([\s\S]+)$/i.exec(final);
   const parsed = match
@@ -62,5 +59,5 @@ export function summarizeRound(messages: readonly ModelMessage[], status: RoundS
 
 /** 供 Agent 的 requestBase 与历史归并共用角色契约。 */
 export function roleSummaryInstruction(contract?: string): string {
-  return summaryInstruction + (contract?.trim() ? "\n角色摘要保留重点：\n" + contract.trim() : "");
+  return summaryInstruction + memoryFocusInstruction(contract);
 }

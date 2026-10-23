@@ -140,6 +140,7 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   try {
     const prefPaths = [
       join(cwd, '.logox', 'state', 'model-preferences.json'),
+      join(home, '.logox', 'model-preferences.json'),
       join(home, '.logox-ts', 'model-preferences.json'),
     ];
     let previous: z.infer<typeof preferenceSchema> | undefined;

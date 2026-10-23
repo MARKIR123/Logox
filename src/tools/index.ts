@@ -10,6 +10,7 @@ import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import {Snapshots, bytesOrMissing} from './snapshots.js';
 
 import {pathArg, toolAliases, canonicalToolName, type ToolResult, type CanonicalToolName} from './types.js';
+import {filePathOf} from './aliases.js';
 import {readSchema, executeRead} from './ReadTool/ReadTool.js';
 import {READ_DESCRIPTION} from './ReadTool/prompt.js';
 import {writeSchema, executeWrite} from './WriteTool/WriteTool.js';
@@ -40,6 +41,8 @@ import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './Can
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './CancelActorTool/prompt.js';
 import {updateTaskProgressSchema, type UpdateTaskProgressArgs} from './UpdateTaskProgressTool/UpdateTaskProgressTool.js';
 import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from './UpdateTaskProgressTool/prompt.js';
+import {finishRoundSchema} from './_FinishRoundTool/_FinishRoundTool.js';
+import {FINISH_ROUND_DESCRIPTION} from './_FinishRoundTool/prompt.js';
 
 export {
   pathArg,
@@ -96,6 +99,7 @@ export const schemas = {
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
   UpdateTaskProgress: updateTaskProgressSchema,
+  _FinishRound: finishRoundSchema,
 } as const;
 
 export type ToolName = keyof typeof schemas;
@@ -116,10 +120,11 @@ export const descriptions: Record<ToolName, string> = {
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
   UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
+  _FinishRound: FINISH_ROUND_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
-  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'AskUserQuestion', 'WebFetch'] as const
+  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'AskUserQuestion', 'WebFetch', '_FinishRound'] as const
 ).map(name => ({
   name,
   description: descriptions[name],
@@ -315,10 +320,11 @@ export class Tools {
         return executeWebFetch(args, context.signal, {cwd: this.cwd, sessionId: context.sessionId, callId: call.id});
       }
 
-      const originalPath = 'path' in parsed ? resolve(this.cwd, (parsed as {path: string}).path) : this.cwd;
+      const targetPath = filePathOf(parsed);
+      const originalPath = targetPath ? resolve(this.cwd, targetPath) : this.cwd;
       const path = await resolvedPath(originalPath);
       const root = await realpath(this.cwd);
-      if ([path, ...('path' in parsed ? [resolve(this.cwd, (parsed as {path: string}).path)] : [])].some(c => c.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy'))) {
+      if ([path, ...(targetPath ? [resolve(this.cwd, targetPath)] : [])].some(c => c.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy'))) {
         throw new Error('Project conventions forbid reading or modifying legacy materials');
       }
       const preparedVersion = ['Write', 'Edit'].includes(name) ? await fileVersion(path) : undefined;
@@ -359,7 +365,7 @@ export class Tools {
         ...(name === 'Shell' ? {command: schemas.Shell.parse(parsed).command} : {}),
       };
       const guard = this.permissionGuard(context), permissionArgs = JSON.parse(JSON.stringify(parsed)) as Record<string, z.infer<ReturnType<typeof z.json>>>;
-      this.report(context, name + ' · ' + ('path' in parsed ? (parsed as {path: string}).path : name === 'Shell' ? schemas.Shell.parse(parsed).command : 'url' in parsed ? (parsed as {url: string}).url : ''));
+      this.report(context, name + ' · ' + (targetPath ?? (name === 'Shell' ? schemas.Shell.parse(parsed).command : 'url' in parsed ? (parsed as {url: string}).url : '')));
       let policy: string;
       do {
         if (!await guard.authorize(target, permissionArgs, context)) {

@@ -1,7 +1,6 @@
-import {cp, rm, stat} from 'node:fs/promises';
+import {cp, rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {relative, isAbsolute, join} from 'node:path';
-import {homedir} from 'node:os';
+import {relative, isAbsolute} from 'node:path';
 
 // tsc 不复制 Markdown；内置角色正文随构建产物发布。
 const output = new URL('../dist/src/actors/profiles/', import.meta.url);
@@ -19,20 +18,3 @@ await cp(new URL('../src/tools/bin/', import.meta.url), binOutput, {recursive: t
 const skillsOutput = new URL('../dist/src/resources/builtin-skills/', import.meta.url);
 await rm(skillsOutput, {recursive: true, force: true});
 await cp(new URL('../src/resources/builtin-skills/', import.meta.url), skillsOutput, {recursive: true});
-
-// 同步到用户配置目录 ~/.logox-ts/skills，保证随身可用
-try {
-  const userSkillsDir = join(homedir(), '.logox-ts', 'skills');
-  await cp(new URL('../src/resources/builtin-skills/', import.meta.url), userSkillsDir, {recursive: true});
-} catch {}
-
-// 同步到用户配置目录 ~/.logox-ts/actors，保证始终一致
-try {
-  const userActorsDir = join(homedir(), '.logox-ts', 'actors');
-  const info = await stat(userActorsDir);
-  if (info.isDirectory()) {
-    for (const actor of ['logox', 'techne', 'kalon', 'aletheia']) {
-      await cp(new URL(`../src/actors/profiles/${actor}/`, import.meta.url), join(userActorsDir, actor), {recursive: true});
-    }
-  }
-} catch {}

@@ -30,12 +30,14 @@ import {inputKind} from './runtime/provenance.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools} from './tools/tools.js';
+import {finishRoundTool} from './tools/_FinishRoundTool/_FinishRoundTool.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
 import {StatusbarPreferences} from './config/statusbar-preferences.js';
 import {stageStatus} from './application-status.js';
 import {EnvironmentState, environmentVersion} from './context/environment.js';
+import {PENDING_HANDOFF_HEADER, REQUEST_ENVIRONMENT_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
 import {applyTheme} from './tui/cards.js';
 
 export interface ApplicationOptions {
@@ -44,6 +46,7 @@ export interface ApplicationOptions {
   resume?: boolean;
   config?: Config;
   provider?: Provider;
+  fetcher?: typeof fetch;
   authPath?: string;
   env?: NodeJS.ProcessEnv;
   resourceOptions?: ResourceOptions;
@@ -135,14 +138,15 @@ export async function createSessionApplication(options: SessionApplicationOption
     authorize: (call, context) => tools.authorizeExtension(call, context, 'read'),
     modelResolver: (actorId: string) => {
       const identity = {sessionId: session, ownerId: actorId};
-      const sel = taskModels.selection(identity);
-      const th = taskModels.thinking(identity);
-      return {
-        provider: sel.provider,
-        model: sel.model,
-        effort: th.effort,
-        levels: th.levels,
-      };
+      const configured = (actorId === 'logox' ? undefined : actors.modelStorage.get(actorId) ?? actors.find(actorId)?.defaultModel) ?? registry.selection();
+      try {
+        const sel = taskModels.selection(identity);
+        const th = taskModels.thinking(identity);
+        return {provider: sel.provider, model: sel.model, effort: th.effort, levels: th.levels};
+      } catch {
+        // Display remains available before model selection or when a provider is unavailable.
+        return configured.model.trim() ? {provider: configured.provider, model: configured.model} : undefined;
+      }
     },
     modelPool,
   });
@@ -202,24 +206,23 @@ export async function createSessionApplication(options: SessionApplicationOption
     await configureMeter(context.ownerId);
     const role = actorServices.definition(context);
     const base = await agentRequestBase(cwd, context.ownerId, [...actorServices.tools(context.ownerId), ...extensions.mcp.definitions()],
-      resources, {prompt: role.prompt, visibility: actorServices.skills(context)}, false, scratchpad);
+      resources, {prompt: role.prompt, compression: role.compression, visibility: actorServices.skills(context)}, true, scratchpad);
     const model = taskModels.selection(context), thinking = taskModels.thinking(context);
     const policy = actorServices.skills(context);
-    const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join('；') || '无';
+    const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
     const effective = environment.update(context.ownerId, {model: model.provider + '/' + model.model,
-      effort: thinking.levels.length > 1 ? thinking.effort : '不支持', permission: permissions.mode + ' · ' +
+      effort: thinking.levels.length > 1 ? thinking.effort : 'unsupported', permission: permissions.mode + ' · ' +
         permissionModes[permissions.mode].description +
-        '\n显式规则（运行时仍逐次裁决）：' + permissionRules,
+        '\nExplicit rules (still adjudicated per call): ' + permissionRules,
       directory: cwd, tools: base.tools.map(tool => tool.name).sort(), skills: resources.skillsFor(policy).map(skill => skill.name + ' · ' + skill.description).sort(),
       rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort()});
-    if (effective.changes) notice('执行环境已更新：\n' + effective.changes, 'environment_change', context.ownerId, context.activityId);
-    const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:')
-      ? '\n本任务同一故障已补救两次，本轮只说明原因、已有进展和下一步，不执行工具或重新派工。工具能力未移除。' : '';
-    if (restriction) base.tools = [];
+    if (effective.changes) notice('Execution environment updated:\n' + effective.changes, 'environment_change', context.ownerId, context.activityId);
+    const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
+    if (restriction) base.tools = [finishRoundTool];
     const pending = directorReports.get(context.activityId);
     if (pending) await actorServices.flush();
-    return {...base, system: base.system + '\n当前执行环境（以本次请求为准）：\n' + effective.text +
-      restriction + (pending ? '\n待处理角色交接（用户新指示优先）：\n' + pending : '')};
+    return {...base, system: base.system + '\n' + REQUEST_ENVIRONMENT_HEADER + '\n' + effective.text +
+      (restriction ? '\n' + restriction : '') + (pending ? '\n' + PENDING_HANDOFF_HEADER + '\n' + pending : '')};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),
@@ -272,7 +275,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     selectionDone = (async () => {
       try {
         const selection = next.selection();
-        const globalPref = new StateFile(join(homedir(), '.logox', 'model-preferences.json'), preferenceSchema);
+        const globalPref = new StateFile(join(homeDir, '.logox', 'model-preferences.json'), preferenceSchema);
         await globalPref.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort}).catch(() => {});
         await preferences.save({version: 1, provider: selection.provider, model: selection.model, effort: next.thinking().effort});
         registry.adopt(next); settings = registry.selection();
@@ -595,6 +598,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         ...(savedModel ? {taskModel: {initial: savedModel.initial, actual: savedModel.actual, inherited: savedModel.inherited,
           switched: savedModel.switched, phase: savedModel.phase}} : {})});
     }
+    if (entry.message?.role === 'assistant' && entry.message.memoryOnly) continue;
     if (entry.message?.role === 'assistant' && (entry.message.reasoning || entry.step)) {
       store.message(session, entry.ownerId, 'assistant', entry.message.reasoning ?? '', {...origin, kind: 'thinking', ...(entry.step ? {step: entry.step} : {})});
     }
@@ -895,7 +899,7 @@ export async function createSessionApplication(options: SessionApplicationOption
             const role = actors.find(source);
             const identity = {sessionId: session, ownerId: source, activityId};
             const base = await agentRequestBase(cwd, source, actorServices.tools(source), resources,
-              role ? {prompt: role.prompt, visibility: {actorId: source, skills: role.skills}} : undefined, false, scratchpad);
+              role ? {prompt: role.prompt, compression: role.compression, visibility: {actorId: source, skills: role.skills}} : undefined, true, scratchpad);
             await contexts.prepare(identity, contexts.requestBase(identity, base), controller.signal, true);
             controller.signal.throwIfAborted();
             store.activities.update(session, activityId, {status: 'completed', stage: 'Compacted'});

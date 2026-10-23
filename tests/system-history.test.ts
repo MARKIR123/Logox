@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {Journal} from '../src/store/journal.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {SystemHistory} from '../src/store/system-history.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import type {ModelRequest} from '../src/runtime/messages.js';
@@ -61,7 +61,7 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
     await waitForSnapshot(app.store, snapshot => ['completed', 'failed', 'waiting_input'].includes(snapshot.activities.at(-1)?.status ?? ''));
     assert.equal(app.store.getSnapshot().activities.at(-1)?.status, 'completed', JSON.stringify(app.store.getSnapshot().activities));
     await new Promise<void>(resolve => setImmediate(resolve));
-    assert.match(seen[0]!.system, /实际任务模型：.+\/final/);
+    assert.match(seen[0]!.system, /Task model: .+\/final/);
     assert.ok(seen[0]!.messages.every(message => !/未知命令|当前模型：|Unknown command|Current model:/.test(message.text)));
     await app.submit('/model next'); await app.submit('/model latest');
     await app.submit('/permissions mode creative');
@@ -69,8 +69,8 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
     await app.submit('合成失败');
     await waitForSnapshot(app.store, snapshot => snapshot.activities.at(-1)?.status === 'failed');
     await new Promise<void>(resolve => setImmediate(resolve));
-    assert.match(seen[1]!.system, /实际任务模型：.+\/latest/);
-    assert.match(seen[1]!.system, /权限与行动边界：creative/);
+    assert.match(seen[1]!.system, /Task model: .+\/latest/);
+    assert.match(seen[1]!.system, /Permission and action boundary: creative/);
     assert.match(seen[1]!.system, /deny write private.txt/);
     const changes = (await app.journal.systemEvents(app.sessionId)).filter(event => event.kind === 'environment_change');
     assert.equal(changes.length, 1);

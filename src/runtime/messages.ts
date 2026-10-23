@@ -9,6 +9,7 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
   z.object({role: z.literal('assistant'), text: z.string(), reasoning: z.string().optional(),
     contextExcluded: z.literal(true).optional(),
     toolsExcluded: z.literal(true).optional(),
+    memoryOnly: z.literal(true).optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),
     images: z.array(imageBlockSchema).optional()}),

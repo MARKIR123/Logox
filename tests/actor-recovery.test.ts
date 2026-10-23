@@ -13,7 +13,7 @@ import {Resources} from '../src/resources/manager.js';
 import {loadConfig} from '../src/config/config.js';
 import {Journal} from '../src/store/journal.js';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import type {ModelRequest, ModelTurn} from '../src/runtime/messages.js';
 
 const call = (tasks: {ownerId: string; prompt: string}[]) => ({id: 'dispatch', name: 'dispatch_role', arguments: JSON.stringify({tasks})});
@@ -228,7 +228,7 @@ test('超时优先交原Actor续做，Director自身超时仍保留续做目标�
     if (context.ownerId === 'techne') {
       if (++actorRuns === 1) {
         original = context.activityId;
-        await context.record({role: 'assistant', text: '', toolCalls: [{id: 'written', name: 'write', arguments: '{"path":"result"}'}]});
+        await context.record({role: 'assistant', text: '', toolCalls: [{id: 'written', name: 'write', arguments: '{"file_path":"result"}'}]});
         await context.record({role: 'tool', callId: 'written', name: 'write', text: '文件已写入', isError: false});
         throw providerTimeout();
       }
@@ -407,8 +407,8 @@ test('正式应用超时续做保留真实文件写入与中断输出，补救�
       const messages = request.messages.filter(message => !message.text.startsWith('【角色直接对话索引】'));
       const input = messages.findLast(message => message.role === 'user')?.text ?? '';
       const last = messages.at(-1);
-      if (!request.tools.length) {
-        assert.match(request.system, /本任务同一故障已补救两次/);
+      if (request.tools.length === 1 && request.tools[0]?.name === '_FinishRound') {
+        assert.match(request.system, /This task has been remedied twice/);
         assert.ok(!request.system.includes('当前可用工具：无'));
         limited = true; return complete('本任务补救已达上限');
       }
@@ -429,7 +429,7 @@ test('正式应用超时续做保留真实文件写入与中断输出，补救�
         if (last?.role === 'tool') {delta({kind: 'text', text: '中断的报告'}); throw providerTimeout();}
         writes++;
         return {message: {role: 'assistant', text: '', toolCalls: [{id: 'write-once', name: 'write',
-          arguments: JSON.stringify({path: 'result.txt', content: 'done'})}]}, stop: 'tools'};
+          arguments: JSON.stringify({file_path: 'result.txt', content: 'done'})}]}, stop: 'tools'};
       }
       if (input.includes('仅子角色：重复超时')) {delta({kind: 'reasoning', text: '故障前思考'}); throw providerTimeout();}
       return complete('Logox 已接收结果');

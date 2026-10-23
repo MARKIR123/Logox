@@ -201,6 +201,8 @@ interface RowBuilder {
     id: string;
     kind: string;
     title: string;
+    titleSegments?: readonly SceneSegment[] | undefined;
+    summary?: string | undefined;
     bodyLines: readonly string[];
     status?: string;
     open: boolean;
@@ -403,7 +405,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const isDream = opts.kind === '入梦';
     const firstRow = rows.length;
     const bright = opts.open || hoveredFoldId === opts.id;
-    const simple = opts.kind === '思考' || opts.kind === 'Thinking' || opts.kind === '工具调用';
+    const simple = opts.kind === '思考' || opts.kind === 'Thinking' || opts.kind === '工具调用' || opts.kind === 'Tool';
     const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : opts.open && simple ? palette.toolExpanded : pf.bg;
     const frame = insetFrame(pf, cardBg);
     const action: SceneAction = {kind: 'toggle_fold', foldId: opts.id};
@@ -418,18 +420,27 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const labelColor = opts.toneColor ?? (isDream ? palette.dreamText : bright ? highlightColor : palette.muted);
     const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
     if (simple) {
-      const thinking = opts.kind !== '工具调用';
+      const thinking = opts.kind !== '工具调用' && opts.kind !== 'Tool';
       const terminal = opts.step && ['completed', 'failed', 'cancelled'].includes(opts.step.state);
       const title = thinking ? terminal ? 'Thought for' : 'Thinking...' : opts.title;
       const status = thinking ? (opts.step ? thinkingDuration(opts.step, Date.now()) : '') : opts.step ? stepStatus(opts.step, Date.now()) : opts.status ?? '';
       const icon = thinking && opts.step ? stepIcon(opts.step, Date.now(), false) : '▮';
       const fault = opts.step?.disposition === 'denied' ? 'Denied' : opts.step?.disposition === 'error' || opts.step?.state === 'failed' ? 'Error' : '';
+      const isTool = !thinking;
+      const statusText = isTool && status ? status.trim() : status;
+      const statusSep = status ? thinking ? terminal ? ' ' : ' · ' : ' · ' : '';
+      const isHovered = hoveredFoldId === opts.id;
+      const titlePieces: SceneSegment[] = opts.titleSegments && opts.titleSegments.length > 0
+        ? opts.titleSegments.map(s => (isHovered && (!s.color || s.color === palette.muted) ? {...s, color: highlightColor} : s))
+        : [{text: title, color: titleColor, selectionKey: opts.id + ':title', selectionOffset: 0}];
+
       pushFramedLine(opts.id, opts.railColor, [
         {text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0},
-        {text: title, color: titleColor, selectionKey: opts.id + ':title', selectionOffset: 0},
-        {text: status ? thinking ? terminal ? ' ' : ' · ' : '  ' : ''},
-        {text: status, color: palette.muted, selectionKey: opts.id + ':status', selectionOffset: 0},
-        ...(thinking ? [{text: ' · ' + (opts.tokens ?? 0) + ' Tokens' + (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? '等待中') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
+        ...titlePieces,
+        {text: statusSep},
+        {text: statusText, color: palette.muted, selectionKey: opts.id + ':status', selectionOffset: 0},
+        ...(thinking ? [{text: ((opts.tokens ?? 0) > 0 ? ' · ' + opts.tokens + ' Tokens' : '') +
+          (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? '等待中') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
         ...(fault ? [{text: '  ' + fault, color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
       ], frame, action);
       if (opts.step) for (let index = firstRow; index < rows.length; index++) {
@@ -441,7 +452,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       opts.title, opts.status ?? '', frame, opts.railColor, action,
       isDream ? palette.dreamMuted : statusColor(opts.status ?? '', highlightColor), titleColor, false);
     if (opts.open) {
-      opts.bodyLines.forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === '工具调用' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
+      opts.bodyLines.forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === '工具调用' || opts.kind === 'Tool' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
       opts.renderBody?.(frame);
     }
     if (isDream) {
@@ -450,7 +461,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     for (let index = firstRow; index < rows.length; index++) {
       const row = rows[index]!;
       const startCol = opts.open || isDream ? baseGutterCols + pf.leftCols : row.gutterCols;
-      const titleCells = row.selectionCells?.filter(cell => cell.key === opts.id + ':title' || cell.key === opts.id + ':icon') ?? [];
+      const titleCells = row.selectionCells?.filter(cell => cell.key.startsWith(opts.id + ':title') || cell.key === opts.id + ':icon') ?? [];
       const endCol = opts.open || isDream ? width - pf.rightCols : simple ? baseGutterCols + Math.max(startCol - baseGutterCols, ...titleCells.map(cell => cell.column + cell.width)) : row.gutterCols + stringWidth(row.text.trimEnd());
       rows[index] = {...row, hits: [...row.hits ?? [], {startCol, endCol, action}],
         ...(!opts.open ? {hover: {foldId: opts.id, startCol, endCol}} : {})};

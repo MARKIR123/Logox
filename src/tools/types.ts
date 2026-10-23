@@ -60,6 +60,8 @@ export const toolAliases = {
   update_task_progress: 'UpdateTaskProgress',
   updatetaskprogress: 'UpdateTaskProgress',
   UpdateTaskProgress: 'UpdateTaskProgress',
+  _FinishRound: '_FinishRound',
+  _finishround: '_FinishRound',
 } as const;
 
 export type CanonicalToolName = (typeof toolAliases)[keyof typeof toolAliases];

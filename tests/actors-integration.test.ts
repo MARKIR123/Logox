@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {builtinActors} from '../src/actors/builtins.js';
 import {serializeActor} from '../src/actors/definitions.js';

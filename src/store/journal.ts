@@ -2,12 +2,14 @@ import {appendFile, mkdir, readFile} from 'node:fs/promises';
 import {createHash, randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {z} from 'zod';
-import {modelMessageSchema} from '../runtime/messages.js';
+import {modelMessageSchema, type ModelMessage} from '../runtime/messages.js';
 import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnapshot} from '../runtime/contracts.js';
 import {inputKindSchema} from '../runtime/provenance.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
+import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
+import {isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
 const entrySchema = z.strictObject({
@@ -39,6 +41,7 @@ export interface HistoryStore {
   load(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]>;
   append(entry: HistoryEntry): Promise<void>;
   finish?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary>;
+  finishRecord?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null): Promise<RoundRecord>;
   checkpoint?(sessionId: string, task: TaskCheckpoint): Promise<void>;
   progress?(sessionId: string, ownerId: string, activityId: string): Promise<TaskProgressSnapshot | undefined>;
   activeTasks?(sessionId: string): Promise<TaskCheckpoint[]>;
@@ -62,6 +65,12 @@ export class Journal implements HistoryStore {
       else ranges.push({start: index, end: index});
     }
     return this.path(sessionId, ownerId) + '（原始行 ' + ranges.map(range => range.start === range.end ? String(range.start + 1) : (range.start + 1) + '–' + (range.end + 1)).join('、') + '；只读取这些有效行）';
+  }
+  sourceLines(sessionId: string, ownerId: string, start: number, end: number): {start: number; end: number} {
+    const indices = this.lineMaps.get(this.path(sessionId, ownerId));
+    const first = indices?.[start] ?? start, last = indices?.[end - 1] ?? end - 1;
+    if (start < 0 || end <= start || first > last) throw new Error('Invalid round source range.');
+    return {start: first + 1, end: last + 1};
   }
   async inspect(sessionId: string, ownerId: string): Promise<{entries: readonly HistoryEntry[]; issue?: string}> {
     const text = await this.read(this.path(sessionId, ownerId));
@@ -250,13 +259,39 @@ export class Journal implements HistoryStore {
       entries[record.start]?.activityId === record.activityId && digest(entries.slice(record.start, record.end)) === record.sourceHash);
   }
   async finish(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary> {
+    return (await this.finishRecord(sessionId, ownerId, activityId, status)).summary;
+  }
+  async finishRecord(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null): Promise<RoundRecord> {
     const entries = await this.load(sessionId, ownerId);
-    const start = entries.findLastIndex(entry => entry.activityId === activityId && entry.role === 'user');
-    if (start < 0) throw new Error('轮次输入没有落账');
-    const messages = entries.slice(start).map(entry => entry.message ?? {role: entry.role === 'tool' ? 'user' as const : entry.role, text: entry.text});
-    const summary = summarizeRound(messages, status);
+    const start = entries.findIndex(entry => entry.activityId === activityId && entry.role === 'user');
+    if (start < 0) throw new Error('Round input was not recorded.');
+    const last = entries.findLastIndex(entry => entry.activityId === activityId);
+    const end = last + 1;
+    const messages: ModelMessage[] = entries.slice(start, end).map(entry => entry.message ?? {role: entry.role === 'tool' ? 'user' as const : entry.role, text: entry.text});
+    const legacy = summarizeRound(messages, status);
+    const accepted = status === 'completed' ? extractRoundMemory(messages, finalizerCallId) : undefined;
+    const modernClosure = finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
+      (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
+    const memory: RoundMemory = accepted ?? {
+      title: legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? 'Execution cancelled' : 'Execution failed',
+      verification: null,
+      carryForward: [legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'],
+      source: modernClosure ? 'runtime' : 'legacy',
+    };
+    const final = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && message.text.trim())?.text ?? '';
+    const summary: RoundSummary = accepted ? {title: legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
+    const raw = await this.loadRaw(sessionId, ownerId);
+    const activities = [...new Set(raw.filter(entry => entry.role === 'user' && entry.activityId).map(entry => entry.activityId!))];
+    const ordinal = activities.indexOf(activityId) + 1;
+    const sourceLines = this.sourceLines(sessionId, ownerId, start, end);
+    const delivery = ownerId !== 'logox' && entries[start]?.inputKind === 'director' && final.trim()
+      ? {title: summary.title, text: final} : undefined;
+    const record: RoundRecord = {activityId, start, end, sourceHash: digest(entries.slice(start, end)), status, summary,
+      ordinal, memory, sourceLines, ...(delivery ? {delivery} : {})};
+    roundSchema.parse(record);
     const records = (await this.rounds(sessionId, ownerId, entries)).filter(record => record.activityId !== activityId);
-    records.push({activityId, start, end: entries.length, sourceHash: digest(entries.slice(start)), status, summary});
+    records.push(record);
+    records.sort((a, b) => a.start - b.start);
     await atomicWrite(await this.statePath(sessionId, ownerId, 'rounds'), Buffer.from(JSON.stringify(records)));
     try {
       const isDirector = ownerId === 'logox';
@@ -269,7 +304,7 @@ export class Journal implements HistoryStore {
         : join(treeDir, `${ownerId}.rounds.json`);
       await atomicWrite(roundsFile, Buffer.from(JSON.stringify(records, null, 2)));
     } catch {}
-    return summary;
+    return record;
   }
   async loadContext(sessionId: string, ownerId: string, entries: readonly HistoryEntry[]): Promise<ContextState | undefined> {
     const raw = await this.read(await this.statePath(sessionId, ownerId, 'context'));

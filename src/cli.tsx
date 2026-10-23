@@ -14,8 +14,15 @@ async function main(): Promise<void> {
     demo: {type: 'boolean'}, help: {type: 'boolean'}, session: {type: 'string'}, resume: {type: 'boolean'},
     model: {type: 'string'}, provider: {type: 'string'}, 'base-url': {type: 'string'}, 'check-config': {type: 'boolean'},
     'check-provider': {type: 'boolean'}, 'list-providers': {type: 'boolean'}, 'list-models': {type: 'boolean'}, 'auth-file': {type: 'string'},
+    'install-profiles': {type: 'boolean'},
   }});
 
+  if (values['install-profiles']) {
+    const {seedActorProfiles} = await import('./actors/profiles.js');
+    const installed = await seedActorProfiles();
+    process.stdout.write((installed.length ? 'Installed actor profiles: ' + installed.join(', ') : 'Actor profiles are already installed.') + '\n');
+    return;
+  }
   if (values.help) {
     process.stdout.write('LOGOX TS\n  npm run build && npm start     真实模型与工具，全屏舞台\n  npm run demo                   独立演示\n  --model <名称>                 选择模型\n  --provider <名称>              选择接口预设或自定义 provider\n  --base-url <HTTP(S)地址>       覆盖模型接口地址\n  --session <id>                 指定会话（存在时恢复）\n  --resume                       恢复上次会话\n  --check-config                 检查配置，不显示密钥\n  --auth-file <路径>             只读 pi API key 认证文件\n  --list-providers               列出提供商\n  --list-models                  查询当前提供商模型\n  --check-provider               请求真实模型并检查完整回复\n');
     return;
@@ -52,7 +59,7 @@ async function main(): Promise<void> {
   const registerInterrupt = (handler: () => void) => {interrupts.add(handler); return () => {interrupts.delete(handler);};};
   const instance = renderTerminal(demo ? <App store={demo.store} sessionId={values.session ?? 'demo'} demoScene scenario={demo.scenario}
     onSubmit={demo.submit} onDraft={demo.noteDraft} onCancel={demo.cancel} onClose={demo.close} registerInterrupt={registerInterrupt}/> : <ApplicationStage application={application!} registerInterrupt={registerInterrupt}/>, {
-    alternateScreen: true, incrementalRendering: true, maxFps: 30, exitOnCtrlC: false,
+    alternateScreen: true, incrementalRendering: true, maxFps: 60, exitOnCtrlC: false,
   });
   const stop = () => {void runtime.close().finally(() => instance.unmount());};
   const interrupt = () => {for (const handler of interrupts) handler();};

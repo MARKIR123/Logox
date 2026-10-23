@@ -26,7 +26,7 @@ test('Actor 失败轮即时收尾不等待模型压缩，下次请求补折叠�
       await journal.append({version: 1, ...identity, activityId: 'next', role: 'user', text: '新任务'});
       const request = (await contexts.prepare(identity, base, signal)).request;
       assert.equal(request.messages.some(message => message.text.startsWith('旧工作流程')), ownerId === 'logox');
-      if (ownerId === 'techne') assert.match(request.messages[1]!.text, /轮次摘要/);
+      if (ownerId === 'techne') assert.match(request.messages[0]!.text, /^1 \| .* \| Failed \| .* \| 1:2$/);
       assert.equal(request.messages.at(-1)?.text, '新任务');
     }
   } finally {await rm(directory, {recursive: true, force: true});}

@@ -1,7 +1,7 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: Hierarchical configuration cascade, TOML schema validation, `modelSettings()` resolving thinking protocols and level sets, atomic `StateFile<T>` persistence (`~/.logox-ts/model-preferences.json`), and model variant grouping.
+- **Owns**: Hierarchical configuration cascade, TOML schema validation, `modelSettings()` resolving thinking protocols and level sets, atomic `StateFile<T>` persistence (`~/.logox/model-preferences.json`, legacy `.logox-ts` fallback), and model variant grouping.
 - **Does not own**: Low-level HTTP transport or network model fetching (owned by `src/providers/`).
 
 ## 2. Start Here (Task Router)
@@ -18,6 +18,7 @@
   - Configuration cascades in order of increasing specificity:
     `~/.logox/config.toml` -> `~/.logox-ts/config.toml` -> `<ancestors>/.logox/config.toml` -> `<cwd>/.logox/config.toml` -> Environment (`LOGOX__*`) -> CLI flags.
   - Higher tiers override lower tiers cleanly without leaking obsolete subfields across providers.
+  - Model preference priority is project state, canonical user home, then legacy user home. Injected `resourceOptions.home` must reach both loading and saving; isolated tests never write the process user's preferences.
 - **StateFile Atomic Safety**:
   - State files use `.tmp` random-UUID writes followed by atomic replace, wrapped inside `withFileLock()`.
   - Corrupted state files MUST throw to trigger diagnostic notices; never silently swallow corruption with empty defaults.
@@ -39,7 +40,11 @@ cli.tsx / application.ts (calls loadConfig())
   - `tests/config.test.ts`: TOML parsing, environment overrides, cascade order.
   - `tests/model-preferences-usage.test.ts`: Model preferences, thinking effort tiers, and usage ledgers.
   - `tests/state-file-lock.test.ts`: Atomic write concurrency and corrupted file diagnostics.
+  - `tests/fresh-directory-models.test.ts`: Fresh-project tabs, global selection precedence and injected-home write isolation.
 - **Fast Run Command**:
   ```bash
-  node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js
+  node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js dist/tests/fresh-directory-models.test.js
   ```
+
+## 6. Known Gaps
+- Isolated configuration tests do not validate live provider availability or recover an unknown previous user selection.

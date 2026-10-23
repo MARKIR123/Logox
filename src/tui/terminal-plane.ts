@@ -5,7 +5,7 @@ import {palette} from './cards.js';
 import {decorateRow, presentedSegments} from './row-presentation.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from './viewport.js';
 
-export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean}
+export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null}
 export interface PlaneMetrics {readonly renderTime: number; readonly scrolled: number; readonly paintedRows: number}
 const reset = '\x1b[0m';
 function rgb(color: string | undefined, background = false): string {
@@ -41,14 +41,14 @@ function clipEncoded(text: string, width: number): string {
   return result;
 }
 const encoded = new WeakMap<Row, {width: number; text: string}>();
-export function encodeRow(raw: Row, index: number, selection: SelectionRange | null, width = Infinity): string {
+export function encodeRow(raw: Row, index: number, selection: SelectionRange | null, width = Infinity, isHovered = false): string {
   const bounds = rowSelectionBounds(raw, index, selection);
-  if (!bounds) {const known = encoded.get(raw); if (known?.width === width) return known.text;}
+  if (!bounds && !isHovered) {const known = encoded.get(raw); if (known?.width === width) return known.text;}
   const row = raw as SceneRow;
   const rail = row.gutterCols > 0 ? styled({text: '▎ ', color: row.railColor}) : '';
-  const body = presentedSegments(row, index, selection).map(segment => styled(segment, palette.fg, row.bg)).join('');
+  const body = presentedSegments(row, index, selection, isHovered).map(segment => styled(segment, palette.fg, row.bg)).join('');
   const result = clipEncoded(rail + body + reset, width);
-  if (!bounds) encoded.set(raw, {width, text: result});
+  if (!bounds && !isHovered) encoded.set(raw, {width, text: result});
   return result;
 }
 
@@ -72,7 +72,12 @@ export class TerminalPlane {
   get time(): number {return this.clock;}
   present(frame: PlaneFrame): void {
     if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height)) this.erase();
+    const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId;
     this.frame = frame;
+    if (hoverChanged && this.active && !this.closed && !this.outputHeld) {
+      this.flush();
+      return;
+    }
     if (this.timer || this.queued || !this.active || this.closed || this.outputHeld) return;
     const wait = 16 - (performance.now() - this.lastPaint);
     if (wait <= 0) {
@@ -122,7 +127,13 @@ export class TerminalPlane {
     const began = performance.now();
     this.clock = Date.now();
     this.displayedRows = frame.rows.map(row => decorateRow(row, this.clock, frame.motion !== false));
-    const lines = Array.from({length: frame.height}, (_, index) => this.displayedRows[index] ? encodeRow(this.displayedRows[index]!, index, frame.selection, frame.width) : '');
+    const hoveredFoldId = frame.hoveredFoldId;
+    const lines = Array.from({length: frame.height}, (_, index) => {
+      const row = this.displayedRows[index];
+      if (!row) return '';
+      const isHovered = Boolean(hoveredFoldId && (row as SceneRow).hover?.foldId === hoveredFoldId);
+      return encodeRow(row, index, frame.selection, frame.width, isHovered);
+    });
     const previous = this.previous;
     let shifted = [...this.previousLines], scrolled = 0;
     const delta = previous ? frame.start - previous.start : 0;

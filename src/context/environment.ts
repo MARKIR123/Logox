@@ -5,17 +5,17 @@ export interface ExecutionEnvironment {
   tools: readonly string[]; skills: readonly string[]; rules: string; services: readonly string[];
 }
 const labels: Record<keyof ExecutionEnvironment, string> = {
-  model: '实际任务模型', effort: '思考档位', permission: '权限与行动边界', directory: '工作目录',
-  tools: '当前可用工具', skills: '角色可用技能', rules: '当前规范版本', services: '服务连接状态',
+  model: 'Task model', effort: 'Thinking effort', permission: 'Permission and action boundary', directory: 'Working directory',
+  tools: 'Available tools', skills: 'Role skills', rules: 'Rules version', services: 'Service connections',
 };
-/** 当前状态每次入请求；界面变更按角色去重，不保存重复的模型消息。 */
+/** Current state enters every request; UI changes are deduplicated per role. */
 export class EnvironmentState {
   private readonly states = new Map<string, ExecutionEnvironment>();
   update(ownerId: string, next: ExecutionEnvironment): {text: string; changes: string} {
     const previous = this.states.get(ownerId);
     const keys = Object.keys(labels) as Array<keyof ExecutionEnvironment>;
-    const show = (key: keyof ExecutionEnvironment) => labels[key] + '：' +
-      (Array.isArray(next[key]) ? (next[key] as readonly string[]).join('、') || '无' : next[key]);
+    const show = (key: keyof ExecutionEnvironment) => labels[key] + ': ' +
+      (Array.isArray(next[key]) ? (next[key] as readonly string[]).join(', ') || 'none' : next[key]);
     const changed = previous ? keys.filter(key => JSON.stringify(previous[key]) !== JSON.stringify(next[key])) : [];
     this.states.set(ownerId, structuredClone(next));
     return {text: keys.map(show).join('\n'), changes: changed.map(show).join('\n')};
