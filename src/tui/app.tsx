@@ -163,6 +163,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const closingRef = useRef(false);
   const [completion, setCompletion] = useState({query: '', selected: 0, dismissed: false});
   const exitDeadline = useRef(0);
+  const statusSelectionRef = useRef<{startX: number; currentX: number; active: boolean} | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flash = (text: string, duration = 1800) => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -707,6 +708,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           }
           return;
         }
+        clearSelection();
+        statusSelectionRef.current = {startX: event.x, currentX: event.x, active: true};
+        return;
       }
       // Composer input click focuses input
       if (event.y >= inputY && event.y < inputY + inputHeight) {
@@ -741,8 +745,29 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       }
       return;
     }
-    if (event.action === 'drag') {dragAt(event.x, event.y); return;}
+    if (event.action === 'drag') {
+      if (statusSelectionRef.current?.active) {
+        statusSelectionRef.current.currentX = event.x;
+        return;
+      }
+      dragAt(event.x, event.y);
+      return;
+    }
     if (event.action === 'release') {
+      if (statusSelectionRef.current?.active) {
+        const {startX, currentX} = statusSelectionRef.current;
+        statusSelectionRef.current = null;
+        if (Math.abs(startX - currentX) > 0) {
+          const rawText = footerStatusParts.length > 0 ? footerStatusParts.map(p => p.text).join(' · ') : footerStatusText;
+          const copied = extractStatusBarSlice(rawText, startX, currentX);
+          if (copied) {
+            stdout?.write(osc52Clipboard(copied));
+            exitDeadline.current = 0;
+            flash('已复制状态栏内容');
+          }
+        }
+        return;
+      }
       const pressed = gesture.current;
       if (!pressed) return;
       dragAt(event.x, event.y); stopEdgeScroll();
