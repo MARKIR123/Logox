@@ -42,6 +42,8 @@ import {stageStatus} from './application-status.js';
 import {EnvironmentState, environmentVersion} from './context/environment.js';
 import {PENDING_HANDOFF_HEADER, REQUEST_ENVIRONMENT_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
 import {applyTheme} from './tui/cards.js';
+import {createCommandTabsFor, saveConfigToggles, type ApplicationCommandContext} from './application-commands.js';
+import type {ThemePresetName, CursorStyleName} from './config/theme-presets.js';
 
 export interface ApplicationOptions {
   cwd: string;
@@ -313,6 +315,9 @@ export async function createSessionApplication(options: SessionApplicationOption
       });
   };
   let pageOwner = 'logox';
+  let currentThemeName: ThemePresetName = 'Logox Dark';
+  let currentCursorName: CursorStyleName = 'Block █';
+  let activeCommandPage = '';
   const contextLines = (): string[] => {
     const identity = {sessionId: session, ownerId: pageOwner};
     const usage = contexts.status(identity), spent = contexts.meter(identity).spent;
@@ -449,7 +454,81 @@ export async function createSessionApplication(options: SessionApplicationOption
     {id: 'commands', title: 'Commands', lines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + ': ' + item.description), '', '@<role> <prompt>: Talk directly to actor; /actors model <role>: Set default model',
       'Ctrl+G: Roles pane · Tab: Autocomplete / Approvals / Card focus', 'Ctrl+C: Copy / press twice to exit · Esc: Back / Interrupt · Actor card: Stop task · Ctrl+D: Exit']},
   ];
-  const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') surfaces.updatePage(pageTabs());});
+
+  const buildAppCommandContext = (): ApplicationCommandContext => ({
+    session,
+    pageOwner,
+    currentTheme: currentThemeName,
+    currentCursor: currentCursorName,
+    motion: statusbar.getSnapshot().motion,
+    permissions: {
+      mode: permissions.mode,
+      description: permissionModes[permissions.mode].description,
+      ...(permissionModes[permissions.mode].color ? {color: permissionModes[permissions.mode].color} : {}),
+      lines: tools.permissionGuard({sessionId: session}).lines(),
+      readonly_concurrency: config.permissions.readonly_concurrency,
+      approvalTokens: sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0),
+    },
+    statusbarModules: statusbar.getSnapshot().modules,
+    statusLines: [
+      'Session: ' + session + ' · Role: ' + pageOwner,
+      '─────────────────────────────────────────────────────────────',
+      'Provider: ' + (status(pageOwner).model?.provider ?? 'None'),
+      'Model: ' + (status(pageOwner).model?.model || 'None selected'),
+      'Thinking effort: ' + status(pageOwner).effort,
+      'Permission mode: ' + permissions.mode,
+      'Execution state: ' + status(pageOwner).state,
+      'Active tasks: ' + store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length,
+      '',
+      '── Context & Tokens ──────────────────────────────────────────',
+      ...contextLines(),
+      '',
+      '── Resources & Environment ───────────────────────────────────',
+      'Resource origins:',
+      ...resources.snapshot().guidelines.map(item => '  • ' + item.path),
+      'Skills: ' + resources.snapshot().skills.length + ' · Template commands: ' + resources.snapshot().commands.length,
+      ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
+      ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
+    ],
+    configLines: [
+      'Effective Configuration',
+      '─────────────────────────────────────────────────────────────',
+      'Provider: ' + settings.provider,
+      'Model: ' + (settings.model || 'None selected'),
+      'Thinking effort: ' + registry.thinking().effort,
+      'Base URL: ' + settings.baseUrl,
+      '',
+      '── Execution Limits ──────────────────────────────────────────',
+      'Temperature: ' + config.provider.temperature,
+      'Max tokens: ' + config.provider.max_tokens,
+      'Request timeout: ' + config.provider.timeout + 's',
+      'Max loop iterations: ' + (config.kernel.max_iterations > 0 ? config.kernel.max_iterations : 'Unlimited (Claude Code mode)'),
+      'Max connection retries: ' + config.kernel.max_retries,
+      '',
+      '── Instructions ─────────────────────────────────────────────',
+      'Switch via /model or /provider; use /config to customize themes and preferences.',
+    ],
+    usageLines: [
+      'Session: ' + session + ' · Role: ' + pageOwner,
+      '─────────────────────────────────────────────────────────────',
+      'Total across session roles: ' + sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)',
+      '',
+      '── Breakdown ────────────────────────────────────────────────',
+      ...usageLines(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
+    ],
+    providersLines: providersTabLines(),
+    actorsLines: actorServices.management.tab().lines,
+    commandsLines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + ': ' + item.description)],
+  });
+
+  const refreshCurrentPage = () => {
+    if (surfaces.getSnapshot()?.kind !== 'page') return;
+    const spec = activeCommandPage ? createCommandTabsFor(activeCommandPage, buildAppCommandContext()) : null;
+    if (spec) surfaces.updatePage(spec.tabs);
+    else surfaces.updatePage(pageTabs());
+  };
+
+  const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();});
   const openModels = () => {
     requireIdle();
     const groupedMap = new Map<string, GroupedModel>();
@@ -785,11 +864,25 @@ export async function createSessionApplication(options: SessionApplicationOption
         notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/commands', '/actors', '/ensemble', '/providers'].includes(text)) {
-        if (text === '/providers') requireIdle();
-        const initialTab = text === '/usage' ? 'usage' : ['/help', '/commands'].includes(text) ? 'commands' : text === '/ensemble' ? 'actors' : text === '/providers' ? 'providers' : text.slice(1);
-        pageOwner = source; surfaces.openPage('LOGOX', pageTabs(), initialTab, {
+      if (['/help', '/status', '/config', '/usage', '/permissions', '/statusbar', '/commands', '/actors', '/ensemble', '/providers', '/provider'].includes(text)) {
+        if (text === '/providers' || text === '/provider') requireIdle();
+        pageOwner = source;
+        activeCommandPage = text;
+        const spec = createCommandTabsFor(text, buildAppCommandContext());
+        const tabs = spec ? spec.tabs : pageTabs();
+        const initialTab = spec ? spec.initialTab : text.slice(1);
+        const title = spec ? spec.title : 'LOGOX';
+
+        surfaces.openPage(title, tabs, initialTab, {
           onSaveToggles: async (tabId, items) => {
+            if (tabId === 'config') {
+              return saveConfigToggles(items, {
+                saveMotion: async enabled => statusbar.saveMotion(enabled),
+                stdout: process.stdout,
+                onThemeChange: theme => { currentThemeName = theme as ThemePresetName; },
+                onCursorChange: cursor => { currentCursorName = cursor as CursorStyleName; },
+              });
+            }
             if (tabId === 'animations') {
               await statusbar.saveMotion(items[0]?.enabled ?? true);
               return {message: 'Animation settings saved.'};
@@ -803,51 +896,52 @@ export async function createSessionApplication(options: SessionApplicationOption
               const modes = ['default', 'auto', 'creative'] as const;
               const nextMode = modes[(modes.indexOf(permissions.mode) + 1) % modes.length]!;
               await permissions.setMode(nextMode);
+              refreshCurrentPage();
               return {message: 'Permission mode switched to: ' + nextMode};
             }
             if (tabId === 'providers') {
               const names = registry.names();
               if (action === 'next_provider' && names.length > 0) {
                 viewingProviderIndex = (viewingProviderIndex + 1) % names.length;
-                surfaces.updatePage(pageTabs());
+                refreshCurrentPage();
                 return {};
               }
               if (action === 'prev_provider' && names.length > 0) {
                 viewingProviderIndex = (viewingProviderIndex - 1 + names.length) % names.length;
-                surfaces.updatePage(pageTabs());
+                refreshCurrentPage();
                 return {};
               }
               const current = names[viewingProviderIndex];
               if (!current) return {};
               if (action === 'test') {
                 providerStatuses.set(current, 'Testing connection...');
-                surfaces.updatePage(pageTabs());
+                refreshCurrentPage();
                 const start = Date.now();
                 try {
                   const candidate = registry.candidate(current);
                   await candidate.check(commands.signal);
                   const elapsed = Date.now() - start;
                   providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
-                  surfaces.updatePage(pageTabs());
+                  refreshCurrentPage();
                   return {message: "Provider '" + current + "' connected (" + elapsed + "ms)"};
                 } catch (error) {
                   providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
-                  surfaces.updatePage(pageTabs());
+                  refreshCurrentPage();
                   return {message: "Provider '" + current + "' connection failed"};
                 }
               }
               if (action === 'refresh') {
                 providerStatuses.set(current, 'Refreshing models...');
-                surfaces.updatePage(pageTabs());
+                refreshCurrentPage();
                 try {
                   const pool = await modelPool.syncProvider(current, commands.signal);
                   const count = pool.filter(m => m.provider === current).length;
                   providerStatuses.set(current, '● Connected (' + count + ' models synced)');
-                  surfaces.updatePage(pageTabs());
+                  refreshCurrentPage();
                   return {message: "Refreshed " + count + " models from '" + current + "'"};
                 } catch (error) {
                   providerStatuses.set(current, '○ Sync failed');
-                  surfaces.updatePage(pageTabs());
+                  refreshCurrentPage();
                   return {message: "Failed to refresh models from '" + current + "'"};
                 }
               }
@@ -856,7 +950,7 @@ export async function createSessionApplication(options: SessionApplicationOption
                 if (viewingProviderIndex >= registry.names().length) {
                   viewingProviderIndex = Math.max(0, registry.names().length - 1);
                 }
-                surfaces.updatePage(pageTabs());
+                refreshCurrentPage();
                 return {message: "Logged out provider '" + current + "'"};
               }
             }
