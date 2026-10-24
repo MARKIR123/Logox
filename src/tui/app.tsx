@@ -269,9 +269,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     getInteractionUI(request)?.describe(interactionState(request, response)).editing;
   const activeDraft = editingCustom ? customDraft : freeAnswer && response ? response.editor : draft;
   const editableComposer = focus === 'input' || Boolean(freeAnswer) || editingCustom;
-  const promptGlyph = editingCustom ? '补充偏好 › ' : freeAnswer ? '答 › ' : '❯ ';
+  const promptGlyph = editingCustom ? '补充偏好 › ' : freeAnswer ? '答 › ' : '';
   const promptWidth = stringWidth(promptGlyph);
-  const inputColumns = Math.max(1, width - promptWidth - 1);
+  const inputColumns = Math.max(1, width - promptWidth - (promptWidth > 0 ? 1 : 0));
   const inputLayout = layoutInput(activeDraft, inputColumns);
   const inputMaxHeight = Math.max(1, Math.min(5, screenRows - footerHeight - hairlineHeight - 1));
   const inputHeight = editableComposer ? Math.min(inputMaxHeight, inputLayout.lines.length) : 1;
@@ -279,7 +279,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const inputKey = currentView + ':' + (editingCustom ? 'custom' : freeAnswer ? request?.requestId : 'main');
   const inputView = inputViewport(inputLayout, inputHeight, inputStarts.current.get(inputKey) ?? 0);
   inputStarts.current.set(inputKey, inputView.start);
-  const placeholder = currentView === 'logox' ? stage ? '输入任务，或用 @角色 派发…' : '@kalon 看一下首页配色…' : '给 ' + (roles[currentView]?.name ?? currentView) + ' 的补充…';
+  const placeholder = currentView === 'logox' ? '' : '给 ' + (roles[currentView]?.name ?? currentView) + ' 的补充…';
   const choiceSummary = demoScene && inlineRequest
     ? request?.kind === 'permission' ? '许可：' + (scene.permissionChoice === 'allow' ? '仅本次允许' : '拒绝（默认）') + ' · Enter 确认'
       : '选择：' + (scene.choice === 'minimal' ? '克制的文字作品集' : scene.choice === 'editorial' ? '温暖的编辑部' : '自由回答') + ' · Enter 确认'
@@ -714,7 +714,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   useEffect(() => {
     if (!stdin) return;
-    stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h');
+    stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2 q');
     const originalRead = stdin.read.bind(stdin);
     let carry = '';
     stdin.read = ((size?: number) => {
@@ -736,7 +736,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     return () => {
       if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
       stdin.read = originalRead;
-      stdout?.write('\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
+      stdout?.write('\x1b[0 q\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
     };
   }, [stdin, stdout]);
 
@@ -1036,8 +1036,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     <Box height={inputHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {editableComposer ? inputView.lines.map((line, index) => <Box key={index} height={1} flexShrink={0}>
         <Text wrap="truncate">
-          <Text color={palette.user}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>
-          <Text color={activeDraft.text ? palette.fg : palette.muted}>{activeDraft.text ? line.text : clipLine(placeholder, inputColumns)}</Text>
+          {promptWidth > 0 && <Text color={palette.user}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
+          <Text color={activeDraft.text ? palette.fg : palette.muted}>{activeDraft.text ? line.text : (placeholder ? clipLine(placeholder, inputColumns) : '')}</Text>
         </Text>
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
