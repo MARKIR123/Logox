@@ -677,10 +677,36 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         setCompletion({query, selected: menuStart + event.y - menuY, dismissed: false});
         return;
       }
-      // Footer "Esc 返回 Logox" click
-      if (event.y >= screenRows - footerHeight && currentView !== 'logox') {
-        switchView('logox');
-        return;
+      // Footer click
+      if (event.y >= screenRows - footerHeight) {
+        if (currentView !== 'logox') {
+          switchView('logox');
+          return;
+        }
+        const clickedPill = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
+        if (clickedPill) {
+          const now = Date.now();
+          if (now - lastClickRef.current.time < 350 && lastClickRef.current.key === 'pill:' + clickedPill.ownerId) {
+            const targetIndex = findLatestActorRowIndex(messageRows, clickedPill.ownerId);
+            if (targetIndex >= 0) {
+              const targetRow = messageRows[targetIndex]!;
+              setAnchor({
+                messageId: targetRow.messageId,
+                line: targetRow.line,
+                screenOffset: 0,
+                ...(targetRow.sourceStart !== undefined ? {sourceOffset: targetRow.sourceStart} : {}),
+              });
+              const highlightId = (targetRow as SceneRow).action?.foldId ?? targetRow.messageId;
+              setHoveredFoldId(highlightId);
+              hoveredFoldIdRef.current = highlightId;
+              presentReading();
+            }
+            lastClickRef.current = {time: 0, key: ''};
+          } else {
+            lastClickRef.current = {time: now, key: 'pill:' + clickedPill.ownerId};
+          }
+          return;
+        }
       }
       // Composer input click focuses input
       if (event.y >= inputY && event.y < inputY + inputHeight) {
