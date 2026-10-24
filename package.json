@@ -1,13 +1,30 @@
 {
-  "name": "logox",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@kurios/logox",
+  "version": "0.1.0",
   "type": "module",
+  "description": "LOGOX terminal UI programming assistant and subagent ensemble",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MARKIR123/Logox.git"
+  },
+  "homepage": "https://github.com/MARKIR123/Logox#readme",
+  "bugs": {
+    "url": "https://github.com/MARKIR123/Logox/issues"
+  },
   "bin": {
     "logox": "./dist/src/cli.js",
     "logox-ts": "./dist/src/cli.js"
   },
-  "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/src",
+    "scripts/install-actor-profiles.mjs",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@playwright/mcp": "0.0.83",
     "@types/diff": "^7.0.2",
@@ -30,6 +47,7 @@
     "typescript": "7.0.2"
   },
   "scripts": {
+    "prepack": "npm run build",
     "postinstall": "node scripts/install-actor-profiles.mjs",
     "browser:install": "playwright-mcp install-browser chromium",
     "check": "npm run check:docs && tsc --noEmit",
