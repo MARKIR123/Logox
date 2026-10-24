@@ -388,76 +388,6 @@ export async function createSessionApplication(options: SessionApplicationOption
     return lines;
   };
 
-  const pageTabs = (): readonly CommandTab[] => [
-    {id: 'status', title: 'Status', lines: [
-      'Session: ' + session + ' · Role: ' + pageOwner,
-      '─────────────────────────────────────────────────────────────',
-      'Provider: ' + (status(pageOwner).model?.provider ?? 'None'),
-      'Model: ' + (status(pageOwner).model?.model || 'None selected'),
-      'Thinking effort: ' + status(pageOwner).effort,
-      'Permission mode: ' + permissions.mode,
-      'Execution state: ' + status(pageOwner).state,
-      'Active tasks: ' + store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length,
-      '',
-      '── Context & Tokens ──────────────────────────────────────────',
-      ...contextLines(),
-      '',
-      '── Resources & Environment ───────────────────────────────────',
-      'Resource origins:',
-      ...resources.snapshot().guidelines.map(item => '  • ' + item.path),
-      'Skills: ' + resources.snapshot().skills.length + ' · Template commands: ' + resources.snapshot().commands.length,
-      ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
-      ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
-    ]},
-    {id: 'config', title: 'Config', lines: [
-      'Effective Configuration',
-      '─────────────────────────────────────────────────────────────',
-      'Provider: ' + settings.provider,
-      'Model: ' + (settings.model || 'None selected'),
-      'Thinking effort: ' + registry.thinking().effort,
-      'Base URL: ' + settings.baseUrl,
-      '',
-      '── Execution Limits ──────────────────────────────────────────',
-      'Temperature: ' + config.provider.temperature,
-      'Max tokens: ' + config.provider.max_tokens,
-      'Request timeout: ' + config.provider.timeout + 's',
-      'Max loop iterations: ' + (config.kernel.max_iterations > 0 ? config.kernel.max_iterations : 'Unlimited (Claude Code mode)'),
-      'Max connection retries: ' + config.kernel.max_retries,
-      '',
-      '── Instructions ─────────────────────────────────────────────',
-      'Switch via /model or /provider; edit config.toml and restart to change other settings.',
-    ]},
-    {id: 'providers', title: 'Providers', lines: providersTabLines()},
-    {id: 'usage', title: 'Usage', lines: [
-      'Session: ' + session + ' · Role: ' + pageOwner,
-      '─────────────────────────────────────────────────────────────',
-      'Total across session roles: ' + sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)',
-      '',
-      '── Breakdown ────────────────────────────────────────────────',
-      ...usageLines(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
-    ]},
-    {id: 'statusbar', title: 'Statusbar', lines: ['Space Toggle · [ / ] Reorder · Enter Save · Esc Discard'], toggles: statusbar.getSnapshot().modules},
-    {id: 'animations', title: 'Animations', lines: ['Space Toggle · Enter Save · Esc Discard', 'When disabled, static state and elapsed time remain displayed.'], toggles: [{id: 'motion', label: 'Activity spinners and Actor pulse animations', enabled: statusbar.getSnapshot().motion}]},
-    {id: 'permissions', title: 'Permissions', color: permissionModes[permissions.mode].color,
-      lines: [
-        'Current mode: ' + permissions.mode + ' · ' + permissionModes[permissions.mode].description + ' (press Space or m to toggle mode)',
-        '─────────────────────────────────────────────────────────────',
-        ...tools.permissionGuard({sessionId: session}).lines(),
-        'Readonly concurrency: ' + config.permissions.readonly_concurrency,
-        'Cumulative approval tokens: ' + sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens',
-        '',
-        '── Active Rules ─────────────────────────────────────────────',
-        ...permissions.snapshot().map(rule => '  • ' + rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern),
-        '',
-        '── Guidance ─────────────────────────────────────────────────',
-        'Press Space or m in this tab to cycle through default / auto / creative modes.',
-        'Paths support *, **, ?; shell matches static token prefixes.',
-      ]},
-    actorServices.management.tab(),
-    {id: 'commands', title: 'Commands', lines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + ': ' + item.description), '', '@<role> <prompt>: Talk directly to actor; /actors model <role>: Set default model',
-      'Ctrl+G: Roles pane · Tab: Autocomplete / Approvals / Card focus', 'Ctrl+C: Copy / press twice to exit · Esc: Back / Interrupt · Actor card: Stop task · Ctrl+D: Exit']},
-  ];
-
   const buildAppCommandContext = (): ApplicationCommandContext => ({
     session,
     pageOwner,
@@ -536,10 +466,9 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
 
   const refreshCurrentPage = () => {
-    if (surfaces.getSnapshot()?.kind !== 'page') return;
-    const spec = activeCommandPage ? createCommandTabsFor(activeCommandPage, buildAppCommandContext()) : null;
+    if (surfaces.getSnapshot()?.kind !== 'page' || !activeCommandPage) return;
+    const spec = createCommandTabsFor(activeCommandPage, buildAppCommandContext());
     if (spec) surfaces.updatePage(spec.tabs);
-    else surfaces.updatePage(pageTabs());
   };
 
   const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();});
@@ -893,16 +822,13 @@ export async function createSessionApplication(options: SessionApplicationOption
         notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/statusbar', '/commands', '/actors', '/ensemble', '/providers'].includes(text)) {
+      const pageSpec = createCommandTabsFor(text, buildAppCommandContext());
+      if (pageSpec) {
         if (text === '/providers') requireIdle();
         pageOwner = source;
         activeCommandPage = text;
-        const spec = createCommandTabsFor(text, buildAppCommandContext());
-        const tabs = spec ? spec.tabs : pageTabs();
-        const initialTab = spec ? spec.initialTab : text.slice(1);
-        const title = spec ? spec.title : 'LOGOX';
 
-        surfaces.openPage(title, tabs, initialTab, {
+        surfaces.openPage(pageSpec.title, pageSpec.tabs, pageSpec.initialTab, {
           onSaveToggles: async (tabId, items) => {
             if (tabId === 'config') {
               const res = await saveConfigToggles(items, {
@@ -917,10 +843,6 @@ export async function createSessionApplication(options: SessionApplicationOption
                 cursor: currentCursorName,
               }).catch(() => {});
               return res;
-            }
-            if (tabId === 'animations') {
-              await statusbar.saveMotion(items[0]?.enabled ?? true);
-              return {message: 'Animation settings saved.'};
             }
             if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
             await statusbar.save(items);

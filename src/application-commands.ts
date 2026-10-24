@@ -30,7 +30,7 @@ export function createCommandTabsFor(
 ): {title: string; tabs: readonly CommandTab[]; initialTab: string} | null {
   const normalized = command.trim().toLowerCase();
 
-  if (normalized === '/config') {
+  if (normalized === '/config' || normalized === '/animations') {
     const toggles: CommandToggle[] = [
       {
         id: 'theme',
