@@ -13,10 +13,14 @@
 | Color themes, actor palettes, or statusbar styles | `cards.tsx:palette` | `themeSchema` in `src/config/config.ts` |
 | Full-screen tabbed modal pages (`/status`, `/config`, etc.) | `tabbed-page.tsx` | `application.ts:pageTabs()` |
 | Tool-specific cards or question interaction | `tools/ui-registry.ts` | Each tool's `UI.ts`; shared `tool-ui.ts` |
-| Queue/Steer shortcuts, selected targets or queue badge | `app.tsx` and `input-delivery.ts` | `tui/application.tsx`, public submit delivery contract and `application-sessions.ts` forwarding |
+| Queue/Steer shortcuts and silent queueing | `app.tsx` and `application.tsx` | Public submit delivery contract and `application-sessions.ts` forwarding |
+| Active Actor pills, double-click locator, or status bar copy | `actor-pills.tsx` | `app.tsx:onMouseEvent` |
 
 ## 3. Hard Boundaries
-- **Input Intent**: Enter queues later work; Ctrl+T steers an exact live activity. Resolve selected fold/message ownership, not a latest-task fallback. Without explicit selection, only a unique live task in the current window may be used. Stale targets and rejected acceptance retain drafts; no Queue/Steer action calls Cancel. The footer reserves queue/action space even with status modules or command menus.
+- **Input Intent**: Enter queues later work; Ctrl+T steers an exact live activity. Silent queueing operates without persistent footer text clutter. Stale targets and rejected acceptance retain drafts; no Queue/Steer action calls Cancel.
+- **Clean Composer & Block Cursor**: The composer input line is kept clean without leading arrow glyphs (`❯ `) or empty-state placeholder text; DECSCUSR `\x1b[2 q` activates a steady block cursor, restored to `\x1b[0 q` on exit.
+- **Status Bar Selection & OSC 52 Copy**: Mouse dragging on the status bar row (`y >= screenRows - footerHeight`) selects status text and copies it to the system clipboard via OSC 52, leaving timeline selection unaffected.
+- **Active Actor Pills & Viewport Locator**: Running subagents render in a right-docked horizontal queue in activation order (earlier pushed left, newest docked right; completed actors exit cleanly and remaining shift right). Each pill displays the actor's exclusive 8-frame micro-animation (`thinkingAnimation`) and theme color without title clutter. Width budgeting prioritizes actor pills, compressing left-side status metrics first. Double-clicking (< 350ms) an actor pill jumps the timeline viewport directly to that actor's latest card.
 - **Activity Labels**: Optional current labels appear only on live Actor cards; terminal cards use the report/task title. Historical step-stage snapshots never create headings in message bodies, including empty completed Thinking.
 - **Static Card Surfaces**: Card background colors and column widths MUST remain strictly static during animation. `decorateRow()` mutates only 1-column animated glyphs and text luster colors without mutating full-card background TrueColor or triggering ConPTY repaints.
 - **Inline Intervention Anti-Fragmentation**: Injected messages (`inputKind: "collaboration_interrupt"`) must render inline inside the active working card with Director accent, never opening separate queued cards.
