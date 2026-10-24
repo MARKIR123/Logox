@@ -58,7 +58,7 @@ export function createCommandTabsFor(
       tabs: [{
         id: 'config',
         title: 'Settings',
-        lines: ['Space or ←→ change choice · Enter save · Esc discard'],
+        lines: context.configLines ?? [],
         toggles,
       }],
       initialTab: 'config',
@@ -76,8 +76,6 @@ export function createCommandTabsFor(
           `Current mode: ${context.permissions.mode} · ${context.permissions.description} (press Space or m to toggle mode)`,
           '─────────────────────────────────────────────────────────────',
           ...context.permissions.lines,
-          `Readonly concurrency: ${context.permissions.readonly_concurrency}`,
-          `Cumulative approval tokens: ${context.permissions.approvalTokens} tokens`,
         ],
       }],
       initialTab: 'permissions',
@@ -121,7 +119,7 @@ export function createCommandTabsFor(
     };
   }
 
-  if (normalized === '/providers' || normalized === '/provider') {
+  if (normalized === '/providers') {
     return {
       title: 'Providers',
       tabs: [{

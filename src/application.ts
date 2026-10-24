@@ -480,7 +480,18 @@ export async function createSessionApplication(options: SessionApplicationOption
       mode: permissions.mode,
       description: permissionModes[permissions.mode].description,
       ...(permissionModes[permissions.mode].color ? {color: permissionModes[permissions.mode].color} : {}),
-      lines: tools.permissionGuard({sessionId: session}).lines(),
+      lines: [
+        ...tools.permissionGuard({sessionId: session}).lines(),
+        'Readonly concurrency: ' + config.permissions.readonly_concurrency,
+        'Cumulative approval tokens: ' + sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens',
+        '',
+        '── Active Rules ─────────────────────────────────────────────',
+        ...permissions.snapshot().map(rule => '  • ' + rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern),
+        '',
+        '── Guidance ─────────────────────────────────────────────────',
+        'Press Space or m in this tab to cycle through default / auto / creative modes.',
+        'Paths support *, **, ?; shell matches static token prefixes.',
+      ],
       readonly_concurrency: config.permissions.readonly_concurrency,
       approvalTokens: sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0),
     },
@@ -879,8 +890,8 @@ export async function createSessionApplication(options: SessionApplicationOption
         notice('Current model: ' + resolved.provider + '/' + resolved.model);
         return;
       }
-      if (['/help', '/status', '/config', '/usage', '/permissions', '/statusbar', '/commands', '/actors', '/ensemble', '/providers', '/provider'].includes(text)) {
-        if (text === '/providers' || text === '/provider') requireIdle();
+      if (['/help', '/status', '/config', '/usage', '/permissions', '/statusbar', '/commands', '/actors', '/ensemble', '/providers'].includes(text)) {
+        if (text === '/providers') requireIdle();
         pageOwner = source;
         activeCommandPage = text;
         const spec = createCommandTabsFor(text, buildAppCommandContext());

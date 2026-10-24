@@ -29,7 +29,11 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   const items = tab?.toggles ? choices[tab.id] ?? tab.toggles : undefined;
   const selected = Math.min(Math.max(0, (items?.length ?? 1) - 1), focused[tab?.id ?? ''] ?? 0);
   const toggleHeight = Math.max(1, contentHeight - 1);
-  const start = Math.max(0, Math.min(selected - Math.floor(toggleHeight / 2), (items?.length ?? 0) - toggleHeight));
+  const hasLinesWithItems = Boolean(items && lines.length > 0);
+  const visibleToggleCount = hasLinesWithItems
+    ? Math.min(items!.length, Math.max(1, contentHeight - 4))
+    : toggleHeight;
+  const start = Math.max(0, Math.min(selected - Math.floor(visibleToggleCount / 2), (items?.length ?? 0) - visibleToggleCount));
 
   const toggle = (at: number) => {
     if (tab && items && !saving) {
@@ -193,10 +197,42 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       <Box height={contentHeight} flexShrink={0} overflow="hidden" flexDirection="column">
         {items ? (
           <>
-            <ToggleList items={items} selected={selected} start={start} count={toggleHeight} width={columns} disabled={saving}/>
+            <ToggleList items={items} selected={selected} start={start} count={visibleToggleCount} width={columns} disabled={saving}/>
             <Text color={error ? palette.error : palette.muted} wrap="truncate">
               {clipLine(error || (tab?.id === 'statusbar' ? 'Order determines priority on narrow screens' : 'Space or ←→ cycles choices · Enter saves'), columns)}
             </Text>
+            {hasLinesWithItems && (
+              <Box flexDirection="column" marginTop={1} overflow="hidden">
+                {lines.slice(0, Math.max(0, contentHeight - visibleToggleCount - 2)).map((line, i) => {
+                  if (!line || !line.trim()) {
+                    return <Box key={i} height={1} flexShrink={0}><Text> </Text></Box>;
+                  }
+                  if (line.startsWith('──') || line.startsWith('---')) {
+                    return (
+                      <Box key={i} height={1} flexShrink={0}>
+                        <Text color="#555555" wrap="truncate">{clipLine(line, columns)}</Text>
+                      </Box>
+                    );
+                  }
+                  const colonIndex = line.indexOf(': ');
+                  if (colonIndex > 0 && colonIndex < 35 && !line.startsWith('http') && !line.startsWith('  • ')) {
+                    const label = line.slice(0, colonIndex + 1);
+                    const value = line.slice(colonIndex + 1).trimStart();
+                    return (
+                      <Box key={i} height={1} flexShrink={0}>
+                        <Text color="#888888">{label} </Text>
+                        <Text color={palette.fg} bold wrap="truncate">{clipLine(value, Math.max(1, columns - stringWidth(label) - 1))}</Text>
+                      </Box>
+                    );
+                  }
+                  return (
+                    <Box key={i} height={1} flexShrink={0}>
+                      <Text color={palette.fg} wrap="truncate">{clipLine(line, columns)}</Text>
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
           </>
         ) : (
           lines.slice(offset, offset + contentHeight).map((line, i) => {
