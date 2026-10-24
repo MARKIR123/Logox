@@ -13,6 +13,7 @@ import type {StageStatus} from '../runtime/stage-status.js';
 import type {SubmitDelivery} from '../application.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {statusbarText, statusbarParts} from './statusbar.js';
+import {computeActivePills, calculatePillsWidth, ActorPills, findLatestActorRowIndex, extractStatusBarSlice, type ActivePillItem} from './actor-pills.js';
 import {MouseContext, type MouseSubscriber} from './mouse.js';
 import {LoginDialog} from './login.js';
 import {useContentHeight} from './metrics.js';
@@ -297,8 +298,32 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const menuItems = suggestions.slice(menuStart, menuStart + menuHeight);
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
+  const activeOwners = useMemo(() => {
+    const running = snapshot.activities.filter(a => a.sessionId === sessionId && a.status === 'running' && a.ownerId && a.ownerId !== 'logox');
+    return new Set(running.map(a => a.ownerId));
+  }, [snapshot.activities, sessionId]);
+
+  const activationOrderRef = useRef<string[]>([]);
+  useEffect(() => {
+    const current = activationOrderRef.current.filter(id => activeOwners.has(id));
+    for (const id of activeOwners) {
+      if (!current.includes(id)) current.push(id);
+    }
+    activationOrderRef.current = current;
+  }, [activeOwners]);
+
+  const activePills = useMemo(() => computeActivePills(
+    snapshot.activities,
+    sessionId,
+    roles,
+    plane?.time ?? Date.now(),
+    width,
+    activationOrderRef.current
+  ), [snapshot.activities, sessionId, roles, plane?.time, width]);
+
+  const pillsWidth = calculatePillsWidth(activePills);
   const footerStatus = getStatus && !notice ? getStatus(currentView) : undefined;
-  const footerStatusWidth = width;
+  const footerStatusWidth = Math.max(0, width - pillsWidth - (pillsWidth > 0 ? 1 : 0));
   const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules) : [];
   const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join(' · ') : clipLine(statusLeft, footerStatusWidth);
 
@@ -1036,14 +1061,14 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
-    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0}>
+    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="row" justifyContent="space-between">
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
         ? footerStatusParts.map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
         : footerStatusText}</Text>
-      {demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width && <>
+      {activePills.length > 0 ? <ActorPills pills={activePills}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
         <Text color={palette.muted}>{renderedFooterKeys}</Text>
-      </>}
+      </> : null}
     </Box>}
     </>}
   </Box>;
