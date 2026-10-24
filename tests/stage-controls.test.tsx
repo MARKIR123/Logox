@@ -151,7 +151,7 @@ test('status modules and the queue badge share one line across actor views and n
     assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();
     assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
-    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /Q0/, 'A compact queue count must not displace the configured context module');
+    assert.doesNotMatch(ui.output.lines.at(-1)?.trim() ?? '', /Q0/, 'Noisy Q0 badge is removed from footer');
     assert.ok(!ui.output.lines.at(-2)?.match(/(?:上下文|Context) 25%/), 'Status does not wrap to a second line');
   } finally {await ui.cleanup(); await rm(dir, {recursive: true, force: true});}
 });

@@ -117,9 +117,9 @@ test('Only unchanged shipped browser skills are refreshed during seeding', async
     const replacement = '---\nname: browser-screenshot\ndescription: Playwright browser verification\n---\nUse the local Playwright MCP session.\n';
     const target = join(user, 'public', 'browser-screenshot.md');
     await writeFile(join(builtin, 'public', 'browser-screenshot.md'), replacement);
-    await writeFile(target, original.replaceAll('\n', '\r\n'));
+    await writeFile(target, original.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'));
     await ensureUserSkillsSeeded(user, builtin);
-    assert.equal(await readFile(target, 'utf8'), replacement);
+    assert.equal((await readFile(target, 'utf8')).replace(/\r\n/g, '\n'), replacement.replace(/\r\n/g, '\n'));
     await writeFile(target, original + '\nUser-specific workflow.\n');
     await ensureUserSkillsSeeded(user, builtin);
     assert.equal(await readFile(target, 'utf8'), original + '\nUser-specific workflow.\n');
