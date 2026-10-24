@@ -11,12 +11,14 @@
 | Discrete glyph frames or thinking animation loops | `row-presentation.ts:stepIcon()` | Actor `config.yaml:thinkingAnimation` |
 | Card folding, mouse hover, or message row generation | `stage.ts:buildStageRows()` | `scene.ts:createBuilder()` |
 | Color themes, actor palettes, or statusbar styles | `cards.tsx:palette` | `themeSchema` in `src/config/config.ts` |
-| Full-screen tabbed modal pages (`/status`, `/config`, etc.) | `tabbed-page.tsx` | `application.ts:pageTabs()` |
+| Full-screen command panels (`/config`, `/permissions`, `/status`, etc.) | `tabbed-page.tsx` and `toggle-list.tsx` | `application-commands.ts` |
+| Theme presets and cursor styles | `theme-presets.ts` | `cards.tsx:applyTheme` |
 | Tool-specific cards or question interaction | `tools/ui-registry.ts` | Each tool's `UI.ts`; shared `tool-ui.ts` |
 | Queue/Steer shortcuts and silent queueing | `app.tsx` and `application.tsx` | Public submit delivery contract and `application-sessions.ts` forwarding |
 | Active Actor pills, double-click locator, or status bar copy | `actor-pills.tsx` | `app.tsx:onMouseEvent` |
 
 ## 3. Hard Boundaries
+- **Decoupled Command Panels & Claude Code UX**: Slash commands open dedicated, single-purpose surfaces (`/config` for Settings with Theme/Cursor/Animations, `/permissions` for mode & rules, `/status` for metrics & usage, `/statusbar` for modules). When a panel has only 1 tab, the top tab bar row is hidden to maximize vertical space. Focused items render with a theme-color pointer (`❯ `) and pure white text (`#ffffff`), while unfocused items render in muted gray (`#8a95a0`).
 - **Input Intent**: Enter queues later work; Ctrl+T steers an exact live activity. Silent queueing operates without persistent footer text clutter. Stale targets and rejected acceptance retain drafts; no Queue/Steer action calls Cancel.
 - **Clean Composer & Block Cursor**: The composer input line is kept clean without leading arrow glyphs (`❯ `) or empty-state placeholder text; DECSCUSR `\x1b[2 q` activates a steady block cursor, restored to `\x1b[0 q` on exit.
 - **Status Bar Selection & OSC 52 Copy**: Mouse dragging on the status bar row (`y >= screenRows - footerHeight`) selects status text and copies it to the system clipboard via OSC 52, leaving timeline selection unaffected.
