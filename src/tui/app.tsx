@@ -13,7 +13,6 @@ import type {StageStatus} from '../runtime/stage-status.js';
 import type {SubmitDelivery} from '../application.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {statusbarText, statusbarParts} from './statusbar.js';
-import {inputDeliveryHint} from './input-delivery.js';
 import {MouseContext, type MouseSubscriber} from './mouse.js';
 import {LoginDialog} from './login.js';
 import {useContentHeight} from './metrics.js';
@@ -299,12 +298,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
   const footerStatus = getStatus && !notice ? getStatus(currentView) : undefined;
-  const statusReserve = footerStatus ? Math.min(Math.floor(width / 2), stringWidth(statusbarText(footerStatus, width, layout?.modules))) : 0;
-  const hintWidth = Math.max(0, width - statusReserve - (statusReserve ? 2 : 0));
-  const deliveryHint = !demoScene && !notice ? inputDeliveryHint(hintWidth, getQueuedCount?.(currentView) ?? 0,
-    steerTarget ? (roles[steerTarget.ownerId]?.name ?? steerTarget.ownerId) + ' ' + steerTarget.activityId.slice(0, 8) : undefined,
-    menuHeight ? menuKeys : undefined) : '';
-  const footerStatusWidth = deliveryHint ? Math.max(0, width - stringWidth(deliveryHint) - 2) : width;
+  const footerStatusWidth = width;
   const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules) : [];
   const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join(' · ') : clipLine(statusLeft, footerStatusWidth);
 
@@ -1046,10 +1040,6 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
         ? footerStatusParts.map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
         : footerStatusText}</Text>
-      {deliveryHint && <>
-        <Text>{' '.repeat(Math.max(0, width - stringWidth(footerStatusText) - stringWidth(deliveryHint)))}</Text>
-        <Text color={palette.muted}>{deliveryHint}</Text>
-      </>}
       {demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width && <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
         <Text color={palette.muted}>{renderedFooterKeys}</Text>

@@ -42,12 +42,13 @@ async function fixture(options: Partial<AppProps> = {}) {
   };
 }
 
-test('production footer exposes Queue, selected-task Steer and an authoritative pending count', {timeout: 10000}, async () => {
+test('production footer omits noisy Queue text while maintaining queue and steer semantics', {timeout: 10000}, async () => {
   const store = new RuntimeStore(); const thinking = addDirector(store, 'director-a'); addDirector(store, 'director-b');
   const submissions: {text: string; source?: string | undefined; delivery?: SubmitDelivery | undefined}[] = [], cancelled: string[] = [];
   const f = await fixture({store, getQueuedCount: () => 2, onSubmit: async (text, source, delivery) => {submissions.push({text, source, delivery});}, onCancel: id => {cancelled.push(id);}});
   try {
-    assert.match(f.output.lines.join('\n'), /Queued 2/); assert.match(f.output.lines.join('\n'), /Enter Queue/);
+    assert.equal(f.output.lines.join('\n').includes('Enter Queue'), false, 'Footer must not render Enter Queue hint');
+    assert.equal(f.output.lines.join('\n').includes('Queued 2'), false, 'Footer must not render Queued hint');
     await f.key('later work'); await f.key('\r');
     assert.deepEqual(submissions[0], {text: 'later work', source: 'logox', delivery: {mode: 'queue'}});
     await f.select(thinking); await f.key('current correction'); await f.key('\x14');
@@ -109,16 +110,18 @@ test('later human task rows carry a Queued label until execution actually starts
   assert.doesNotMatch(text(), /Queued/);
 });
 
-test('pending count remains visible with status modules, command menus and narrow terminal widths', {timeout: 10000}, async () => {
+test('footer remains clean without noisy queue counters across menu navigation and narrow widths', {timeout: 10000}, async () => {
   let queued = 2;
   const f = await fixture({getQueuedCount: () => queued});
   try {
-    await f.key('/'); assert.match(f.output.lines.join('\n'), /Queued 2/);
+    await f.key('/');
+    assert.doesNotMatch(f.output.lines.join('\n'), /Queued 2/);
+    assert.doesNotMatch(f.output.lines.join('\n'), /Enter Queue/);
     await act(async () => {f.output.resize(26, 12);}); await f.flush();
-    assert.match(f.output.lines.join('\n'), /Queued 2/);
+    assert.doesNotMatch(f.output.lines.join('\n'), /Queued 2/);
     queued = 1; await act(async () => {f.store.message('s', 'logox', 'notice', 'Queue changed.');}); await f.flush();
-    assert.match(f.output.lines.join('\n'), /Queued 1/); assert.doesNotMatch(f.output.lines.join('\n'), /Queued 2/);
+    assert.doesNotMatch(f.output.lines.join('\n'), /Queued 1/);
     queued = 0; await act(async () => {f.store.message('s', 'logox', 'notice', 'Queue empty.');}); await f.flush();
-    assert.match(f.output.lines.join('\n'), /Queued 0/);
+    assert.doesNotMatch(f.output.lines.join('\n'), /Queued 0/);
   } finally {await f.close();}
 });
