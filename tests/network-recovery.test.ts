@@ -105,10 +105,10 @@ test('Actor 请求重试与 Director 接管共用预算，不叠加第三次自�
     else {send(res, {content: '同一故障已补救两次，需要检查网络'}, 'stop'); res.end('data: [DONE]\n\n');}
   });
   try {
-    await f.app.submit('@techne 合成角色任务');
+    await f.app.ensemble.dispatch('techne', 'Synthetic formal assignment', 'logox', {inputKind: 'director'}).done;
     await waitForSnapshot(f.app.store, s => s.activities.some(a => a.ownerId === 'logox' && a.status === 'completed'), 15000);
     assert.equal(f.requests.length, 4, 'Actor 三次请求后只允许 Director 说明，不继续派工');
-    assert.match(JSON.stringify(f.requests[3]), /同一故障.*两次/);
+    assert.match(JSON.stringify(f.requests[3]), /exhausted its recovery budget/);
     assert.equal(f.requests[3]?.tools.length, 1);
     assert.match(JSON.stringify(f.requests[3]?.tools), /_FinishRound/);
   } finally {await f.close();}

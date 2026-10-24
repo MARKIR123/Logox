@@ -1,3 +1,3 @@
 import {createToolUI} from '../../tui/tool-ui.js';
 
-export const UI = createToolUI();
+export const UI = createToolUI(['label']);

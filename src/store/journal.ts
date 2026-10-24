@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {modelMessageSchema, type ModelMessage} from '../runtime/messages.js';
 import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnapshot} from '../runtime/contracts.js';
 import {inputKindSchema} from '../runtime/provenance.js';
+import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
@@ -16,7 +17,7 @@ const entrySchema = z.strictObject({
   version: z.literal(1), sessionId: z.string(), ownerId: z.string(),
   role: z.enum(['user', 'assistant', 'tool']), text: z.string(),
   time: z.number().optional(), message: modelMessageSchema.optional(), activityId: z.string().optional(), source: z.string().optional(),
-  inputKind: inputKindSchema.optional(), step: stepSchema.optional(),
+  inputKind: inputKindSchema.optional(), step: stepSchema.optional(), deliveryIds: z.array(z.string()).optional(),
 }).refine(entry => !entry.message || entry.message.role === entry.role && entry.message.text === entry.text, '历史正文或角色不一致');
 export type HistoryEntry = z.infer<typeof entrySchema>;
 const branchSchema = z.strictObject({version: z.literal(1), id: z.string().regex(/^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$/), sessionId: z.string(),
@@ -25,6 +26,7 @@ const taskSchema = z.strictObject({activityId: z.string(), ownerId: z.string(), 
   status: z.enum(['queued', 'running', 'waiting_input', 'paused', 'completed', 'failed', 'cancelled']), time: z.number(),
   ...taskOriginSchema.shape,
   progress: taskProgressSchema.optional(),
+  handoff: deliverySchema.optional(),
   error: z.string().max(2048).optional()});
 export const collaborationSchema = z.strictObject({
   id: z.string().uuid(), sessionId: z.string(), activityId: z.string(), requester: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
@@ -45,6 +47,8 @@ export interface HistoryStore {
   checkpoint?(sessionId: string, task: TaskCheckpoint): Promise<void>;
   progress?(sessionId: string, ownerId: string, activityId: string): Promise<TaskProgressSnapshot | undefined>;
   activeTasks?(sessionId: string): Promise<TaskCheckpoint[]>;
+  loadDeliveries?(sessionId: string): Promise<readonly Delivery[]>;
+  saveDeliveries?(sessionId: string, deliveries: readonly Delivery[]): Promise<void>;
 }
 export class Journal implements HistoryStore {
   private readonly lineMaps = new Map<string, number[]>();
@@ -141,6 +145,9 @@ export class Journal implements HistoryStore {
       retained.push({owner, rounds, context});
     }
     const collaborations = activities ? (await this.collaborations(sessionId)).filter(record => !activities.includes(record.activityId) && !record.messages.some(message => activities.includes(message.activityId)) && !record.relatedActivities?.some(activity => activities.includes(activity))) : [];
+    const deliveries = activities ? (await this.loadDeliveries(sessionId)).filter(item =>
+      ![item.sourceActivityId, item.rootActivityId, item.targetActivityId, item.recipientActivityId].some(activity => activity && activities.includes(activity))) : [];
+    await atomicWrite(this.path(sessionId, '$deliveries') + '.' + id + '.queue.json', Buffer.from(JSON.stringify(deliveries)));
     await atomicWrite(this.path(sessionId, '$collaboration') + '.' + id + '.records.json', Buffer.from(JSON.stringify(collaborations)));
     // 候选侧文件先落盘；最终一次替换才改变所有角色的有效分支。
     for (const {owner, rounds, context} of retained) {
@@ -165,19 +172,25 @@ export class Journal implements HistoryStore {
     const operation = this.checkpointTail.then(async () => {
       const tasks = await this.tasks(sessionId), parsed = taskSchema.parse(task);
       const existing = tasks.find(item => item.activityId === task.activityId);
-      const next = existing ? tasks.map(item => item.activityId === task.activityId ? {...parsed, time: existing.time} : item)
+      const next = existing ? tasks.map(item => item.activityId === task.activityId
+        ? {...parsed, ...(parsed.handoff ?? existing.handoff ? {handoff: parsed.handoff ?? existing.handoff} : {}), time: existing.time} : item)
         : [...tasks, {...parsed, time: Math.max(parsed.time, ...tasks.map(item => item.time + 1))}];
       await atomicWrite(this.path(sessionId, '$session') + '.tasks.json', Buffer.from(JSON.stringify(next)));
       try {
         const treeDir = join(this.directory, sessionId);
         await mkdir(treeDir, {recursive: true});
         await atomicWrite(join(treeDir, 'tasks.json'), Buffer.from(JSON.stringify(next, null, 2)));
-        const readme = `# Session: ${sessionId}\n\n- **Director Log**: \`director.jsonl\` (Logox main conversation)\n- **Tasks Ledger**: \`tasks.json\` (All dispatched subagent tasks)\n- **System Events**: \`events.json\` (Environment updates and notices)\n- **Subagents**: \`subagents/<actor>.jsonl\` (Techne, Kalon, Aletheia)\n`;
+        const readme = `# Session: ${sessionId}\n\n- **Director Log**: \`director.jsonl\` (Logox main conversation)\n- **Tasks Ledger**: \`tasks.json\` (All dispatched subagent tasks)\n- **System Events**: \`events.json\` (Environment updates and notices)\n- **Delivery Queue**: \`deliveries.json\` (Pending messages and consumption receipts)\n- **Subagents**: \`subagents/<actor>.jsonl\` (Techne, Kalon, Aletheia)\n`;
         await atomicWrite(join(treeDir, 'README.md'), Buffer.from(readme));
       } catch {}
     });
     this.checkpointTail = operation.catch(() => {});
     return operation;
+  }
+  async stageHandoff(sessionId: string, activityId: string, handoff: Delivery): Promise<void> {
+    if (handoff.sessionId !== sessionId || handoff.sourceActivityId !== activityId) throw new Error('Handoff producer identity does not match.');
+    const task = (await this.activeTasks(sessionId)).find(item => item.activityId === activityId);
+    if (task) await this.checkpoint(sessionId, {...task, handoff});
   }
   async flush(): Promise<void> {await Promise.all([this.checkpointTail, this.systemTail]);}
   appendSystem(event: SystemEvent): Promise<void> {
@@ -216,6 +229,23 @@ export class Journal implements HistoryStore {
   }
   async progress(sessionId: string, ownerId: string, activityId: string): Promise<TaskProgressSnapshot | undefined> {
     return (await this.activeTasks(sessionId)).find(task => task.ownerId === ownerId && task.activityId === activityId)?.progress;
+  }
+  async loadDeliveries(sessionId: string): Promise<readonly Delivery[]> {
+    const raw = await this.read(await this.statePath(sessionId, '$deliveries', 'queue'));
+    const records = raw === undefined ? [] : z.array(deliverySchema).parse(JSON.parse(raw));
+    if (records.some(item => item.sessionId !== sessionId)) throw new Error('Delivery queue session identity does not match.');
+    const excluded = new Set((await this.branch(sessionId)).excludedTasks);
+    return records.filter(item => ![item.sourceActivityId, item.rootActivityId, item.targetActivityId, item.recipientActivityId].some(activity => activity && excluded.has(activity)));
+  }
+  async saveDeliveries(sessionId: string, deliveries: readonly Delivery[]): Promise<void> {
+    const parsed = z.array(deliverySchema).parse(deliveries);
+    if (parsed.some(item => item.sessionId !== sessionId)) throw new Error('Delivery queue session identity does not match.');
+    await atomicWrite(await this.statePath(sessionId, '$deliveries', 'queue'), Buffer.from(JSON.stringify(parsed)));
+    try {
+      const treeDir = join(this.directory, sessionId);
+      await mkdir(treeDir, {recursive: true});
+      await atomicWrite(join(treeDir, 'deliveries.json'), Buffer.from(JSON.stringify(parsed, null, 2)));
+    } catch {}
   }
   async collaborations(sessionId: string): Promise<CollaborationRecord[]> {
     const raw = await this.read(await this.statePath(sessionId, '$collaboration', 'records'));

@@ -17,7 +17,7 @@ Aletheia's core reconnaissance charter. When auditing codebases, investigating d
 ## 3. Step-by-Step Procedure
 1. Map topological relationships and cross-module boundaries (`skills/aletheia/inspection/repo-audit.md`).
 2. Search and trace execution call paths without making hasty assumptions.
-3. If investigating UI regressions or visual anomalies, capture deterministic evidence with `browser-shot` (`skills/aletheia/inspection/visual-qa.md`).
+3. If investigating UI regressions or visual anomalies, inspect real browser interactions and screenshots through Playwright MCP (`skills/aletheia/inspection/visual-qa.md`).
 4. Deliver structured, actionable findings to the Director and ensemble.
 
 ## 4. Verification & Done Criteria

@@ -1,11 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
-import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot} from '../runtime/contracts.js';
+import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot, type TaskOriginData} from '../runtime/contracts.js';
 import {repairToolResults, type ModelMessage} from '../runtime/messages.js';
 import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
 import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
 import type {HistoryEntry, HistoryStore, TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
+import {DeliveryQueue} from './delivery-queue.js';
+import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
 
@@ -17,15 +19,9 @@ export const cast = immutable({
 });
 export type ActorId = keyof typeof cast;
 export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel';
-export interface TaskOrigin {
-  inputKind?: InputKind;
-  authorization?: readonly string[];
-  parentActivityId?: string;
-  rootActivityId?: string;
-  batchId?: string;
-  resumeTaskId?: string;
+export interface TaskOrigin extends Omit<TaskOriginData, 'authorization' | 'stopReason'> {
+  authorization?: readonly string[] | undefined;
   priority?: boolean;
-  recovery?: {key: string; attempt: number; exhausted?: boolean; actorTask?: {ownerId: string; activityId: string}};
 }
 export interface TaskResult<Id extends string = string> extends TaskOrigin {
   sessionId: string; ownerId: Id; activityId: string; source: string;
@@ -37,7 +33,10 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly source?: string;
   startTool?(): void;
   wait?(reason: string): () => void;
-  drainInbox?(): readonly ModelMessage[];
+  drainInbox?(): readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
+  humanInputs?(): readonly string[];
+  hasPendingInbox?(): boolean;
+  inboundRecovery?(): TaskOrigin['recovery'];
   closeInbox?(): Promise<readonly ModelMessage[]>;
   acceptRoundMemory?(callId: string | null): void;
   readonly sessionId: string;
@@ -55,8 +54,10 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
 export type ActorExecutor<Id extends string = ActorId> = (prompt: string, context: ActorContext<Id>) => Promise<void>;
 export interface EnsembleOptions<Id extends string = ActorId> {
   concurrency?: 'serial' | 'actor';
+  deliveries?: DeliveryQueue;
   settled?(activityId: string, status: RoundStatus): Promise<void>;
   member?(ownerId: string): {name: string; title: string} | undefined;
+  taskStart?(context: ActorContext<Id>): Promise<void>;
   taskEnd?(context: ActorContext<Id>, summary: RoundSummary, status: RoundStatus): Promise<void>;
   directAnchor?(result: {sessionId: string; ownerId: Id; activityId: string; status: RoundStatus}): Promise<void>;
   handoff?(result: TaskResult<Id>): Promise<void>;
@@ -75,10 +76,13 @@ export class EnsembleRuntime<Id extends string> {
   private readonly pausedBatches = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly pendingWrites = new Set<Promise<void>>();
-  private readonly inboxes = new Map<string, {messages: ModelMessage[]; pending: Set<Promise<void>>; sealed: boolean}>();
+  readonly deliveries: DeliveryQueue;
+  private readonly inboxes = new Map<string, {pending: Set<Promise<void>>; sealed: boolean}>();
   private closed = false;
   constructor(readonly sessionId: string, readonly store: RuntimeStore, private readonly history: HistoryStore,
-    private readonly execute: ActorExecutor<NoInfer<Id>>, private readonly options: EnsembleOptions<Id> = {}) {}
+    private readonly execute: ActorExecutor<NoInfer<Id>>, private readonly options: EnsembleOptions<Id> = {}) {
+    this.deliveries = options.deliveries ?? new DeliveryQueue(sessionId, history);
+  }
 
   dispatchBatch(tasks: readonly Task<Id>[]): readonly TaskHandle[] {
     const grouped = new Map<Id, string[]>();
@@ -111,8 +115,7 @@ export class EnsembleRuntime<Id extends string> {
     task.ready = this.trackWrite((async () => {
       const progress = origin.resumeTaskId
         ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId)
-        : (origin.parentActivityId ? await this.history.progress?.(this.sessionId, ownerId, origin.parentActivityId) : undefined)
-          ?? (ownerId === 'logox' && this.history.activeTasks ? (await this.history.activeTasks(this.sessionId)).findLast((t: TaskCheckpoint) => t.ownerId === 'logox' && t.progress)?.progress : undefined);
+        : undefined;
       if (progress) {
         task.progress = progress;
         this.store.activities.update(this.sessionId, activityId, {progress});
@@ -121,54 +124,47 @@ export class EnsembleRuntime<Id extends string> {
     })());
     void task.ready.catch(() => {});
     this.tasks.set(activityId, task);
-    if (origin.priority) this.queue.unshift(task); else this.queue.push(task);
+    const priority = (item: QueuedTask<Id>) => item.origin.inputKind === 'human' ? 0 : item.origin.priority ? 1 : item.origin.coordinationWake ? 3 : 2;
+    const nextIndex = this.queue.findIndex(item => priority(item) > priority(task));
+    if (nextIndex >= 0) this.queue.splice(nextIndex, 0, task); else this.queue.push(task);
     queueMicrotask(() => this.pump());
     return {activityId, done, cancel: () => {this.cancel(activityId);}};
   }
   isBusy(): boolean {return [...this.controllers.keys()].some(id => this.store.activities.get(this.sessionId, id)?.status !== 'paused') || this.pendingWrites.size > 0;}
-
-  getActiveTask(ownerId: string): QueuedTask<Id> | undefined {
-    return [...this.tasks.values()].find(task =>
-      task.ownerId === ownerId && this.store.activities.get(this.sessionId, task.activityId)?.status === 'running'
-    );
+  queuedInputs(ownerId?: string) {
+    return this.queue.filter(task => task.origin.inputKind === 'human' && (!ownerId || task.ownerId === ownerId))
+      .map(task => ({activityId: task.activityId, ownerId: task.ownerId, text: task.prompt}));
   }
 
-  async injectTaskMessage(targetOwnerId: string, message: string, source = 'logox', summary?: string, mode: 'interrupt' | 'queue' = 'queue'): Promise<boolean> {
+  getActiveTask(ownerId: string): QueuedTask<Id> | undefined {
+    return [...this.tasks.values()].find(task => task.ownerId === ownerId &&
+      ['running', 'waiting_input'].includes(this.store.activities.get(this.sessionId, task.activityId)?.status ?? ''));
+  }
+  canReceiveMessage(ownerId: string): boolean {
+    const active = this.getActiveTask(ownerId);
+    const inbox = active && this.inboxes.get(active.activityId);
+    return !!active && !!inbox && !inbox.sealed && !active.controller.signal.aborted;
+  }
+
+  async injectTaskMessage(targetOwnerId: string, message: string, source = 'logox', summary?: string, mode: 'interrupt' | 'queue' = 'queue',
+    delivery: {activityId?: string; inputKind?: InputKind; kind?: DeliveryKind} = {}): Promise<boolean> {
     const active = this.getActiveTask(targetOwnerId);
     const inbox = active && this.inboxes.get(active.activityId);
-    if (!active || !inbox || inbox.sealed || active.controller.signal.aborted) return false;
-    // 1. If interrupt mode, kill active process tree for this activity so blocked tools abort immediately
-    if (mode === 'interrupt') {
-      killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
-    }
-    // 2. Format message
-    const label = summary ? `[Message from ${source} · ${summary}]` : `[Message from ${source}]`;
-    const fullText = `${label}\n${message}`;
-    const modelMsg: ModelMessage = {
-      role: 'user',
-      text: fullText,
-    };
-    // 3. Inject into runtime store so TUI renders it live in the active card
-    this.store.message(this.sessionId, targetOwnerId as Id, 'user', fullText, {
-      activityId: active.activityId,
-      source,
-      inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
-    });
-    // Terminal closure seals admission and waits for every already admitted append.
+    if (!active || !inbox || inbox.sealed || active.controller.signal.aborted ||
+      delivery.activityId && delivery.activityId !== active.activityId) return false;
+    const human = delivery.inputKind === 'human';
+    const kind = human ? 'human_steer' : delivery.kind ?? 'collaboration';
+    const input = human ? 'human' : mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration';
+    const fullText = human ? message : `[Message from ${source}${summary ? ' · ' + summary : ''}]\n${message}`;
     const write = this.trackWrite((async () => {
-      await this.history.append({
-        version: 1,
-        sessionId: this.sessionId,
-        activityId: active.activityId,
-        ownerId: targetOwnerId,
-        source,
-        inputKind: mode === 'interrupt' ? 'collaboration_interrupt' : 'collaboration',
-        role: 'user',
-        text: fullText,
-        message: modelMsg,
-        time: Date.now(),
+      await this.deliveries.enqueue({ownerId: targetOwnerId, targetActivityId: active.activityId,
+        source, kind, inputKind: input, text: fullText});
+      this.store.message(this.sessionId, targetOwnerId as Id, 'user', fullText, {
+        activityId: active.activityId, source, inputKind: input,
       });
-      inbox.messages.push(modelMsg);
+      if (mode === 'interrupt' && !human && !active.controller.signal.aborted) {
+        killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
+      }
     })());
     inbox.pending.add(write);
     try {await write;} finally {inbox.pending.delete(write);}
@@ -258,7 +254,11 @@ export class EnsembleRuntime<Id extends string> {
     const {parentActivityId, rootActivityId, batchId, resumeTaskId} = origin;
     return {...(parentActivityId ? {parentActivityId} : {}), ...(rootActivityId ? {rootActivityId} : {}), ...(batchId ? {batchId} : {}),
       ...(resumeTaskId ? {resumeTaskId} : {}),
+      ...(origin.grantExecution ? {grantExecution: true} : {}),
+      ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
+      ...(origin.coordinationWake ? {coordinationWake: true} : {}),
       ...(origin.recovery ? {recovery: {key: origin.recovery.key, attempt: origin.recovery.attempt,
+        ...(origin.recovery.actorTask ? {actorTask: origin.recovery.actorTask} : {}),
         ...(origin.recovery.exhausted !== undefined ? {exhausted: origin.recovery.exhausted} : {})}} : {}),
       ...(origin.inputKind ? {inputKind: origin.inputKind} : {}), ...(origin.authorization ? {authorization: [...origin.authorization]} : {})};
   }
@@ -334,6 +334,7 @@ export class EnsembleRuntime<Id extends string> {
     let recorded = false;
     let context: ActorContext<Id> | undefined;
     const settle = async (status: RoundStatus) => {
+      await this.deliveries.settle(activityId, status);
       if (!this.options.settled) return;
       try {await this.options.settled(activityId, status);}
       catch {this.store.message(this.sessionId, ownerId, 'notice', '协作收尾检查点保存失败', {activityId});}
@@ -347,7 +348,7 @@ export class EnsembleRuntime<Id extends string> {
         if (!signal.aborted) update('running', '继续处理');
       }
     };
-    this.inboxes.set(activityId, {messages: [], pending: new Set(), sealed: false});
+    this.inboxes.set(activityId, {pending: new Set(), sealed: false});
     try {
       signal.throwIfAborted();
       update('running', '已登场');
@@ -359,18 +360,28 @@ export class EnsembleRuntime<Id extends string> {
       }
       await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}});
       signal.throwIfAborted();
+      const authorization = [...origin.authorization ?? [], ...entries.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
+        ...(origin.inputKind === 'human' ? [prompt] : [])].slice(-8);
+      const drain = async () => {
+        const inbox = this.inboxes.get(activityId);
+        if (inbox) await Promise.all([...inbox.pending]);
+        signal.throwIfAborted();
+        const received = await this.deliveries.drain(ownerId, activityId);
+        authorization.push(...received.humanInputs);
+        if (authorization.length > 8) authorization.splice(0, authorization.length - 8);
+        return received.messages;
+      };
       context = {
         ...identity, ...origin, source, history: entries, signal,
-        drainInbox: () => {
-          const inbox = this.inboxes.get(activityId);
-          return inbox?.messages.splice(0) ?? [];
-        },
+        drainInbox: drain,
+        humanInputs: () => authorization,
+        hasPendingInbox: () => this.deliveries.pending(ownerId, activityId).some(item => !item.deferredUntilHuman),
+        inboundRecovery: () => this.deliveries.recoveryFor(activityId, origin.rootActivityId ?? activityId, origin.recovery),
         closeInbox: async () => {
           const inbox = this.inboxes.get(activityId);
           if (!inbox) return [];
           inbox.sealed = true;
-          await Promise.allSettled([...inbox.pending]);
-          const incoming = inbox.messages.splice(0);
+          const incoming = await drain();
           if (incoming.length) inbox.sealed = false;
           return incoming;
         },
@@ -379,14 +390,13 @@ export class EnsembleRuntime<Id extends string> {
         saveProgress: async progress => {
           signal.throwIfAborted();
           const status = this.store.activities.get(this.sessionId, activityId)?.status;
-          if (!status || ['completed', 'failed', 'cancelled', 'queued', 'paused'].includes(status)) throw new Error('活动未在执行，不能更新阶段');
+          if (!status || ['completed', 'failed', 'cancelled', 'queued', 'paused'].includes(status)) throw new Error('Activity is not executing; cannot update its progress label');
           await this.history.checkpoint?.(this.sessionId, {activityId, ownerId, prompt, source, ...this.identityOrigin(origin),
             ...(task.stopReason ? {stopReason: task.stopReason} : {}), status, time: Date.now(), progress});
           task.progress = progress;
           signal.throwIfAborted();
         },
-        authorization: [...origin.authorization ?? [], ...entries.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
-          ...(origin.inputKind === 'human' ? [prompt] : [])].slice(-8),
+        authorization,
         record: async (message, step) => {
           await this.history.append({version: 1, ...identity, role: message.role, text: message.text, message, ...(step ? {step} : {})});
           recorded = true;
@@ -400,6 +410,8 @@ export class EnsembleRuntime<Id extends string> {
           return result.status === 'answered' && result.response.kind === 'permission' && result.response.decision === 'allow_once';
         },
       };
+      await this.options.taskStart?.(context);
+      signal.throwIfAborted();
       await this.execute(prompt, context);
       signal.throwIfAborted();
       if (output.length && !recorded) await this.history.append({version: 1, ...identity, role: 'assistant', text: output.join('\n')});

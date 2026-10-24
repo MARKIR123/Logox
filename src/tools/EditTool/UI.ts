@@ -10,25 +10,27 @@ export const UI: ToolUI = {
   render(context: ToolRenderContext) {
     const {builder, message, frame, open, accent} = context;
     const call = context.call ?? messageToolCall(message);
-    const [, ...bodyLines] = message.text.split('\n');
-    const bodyText = bodyLines.join('\n');
-    const isCompleted = message.step?.state === 'completed';
-    const title = call
+    const bodyText = message.text.startsWith('Edit\n') ? message.text.slice('Edit\n'.length) : message.text;
+    const fault = message.step?.disposition || message.step?.state === 'failed' || message.step?.state === 'cancelled';
+    const isCompleted = message.step?.state === 'completed' && !fault && context.result?.isError !== true;
+    const label = call
       ? formatToolCardTitle(call, bodyText, isCompleted, message.step?.title)
       : (message.step?.title ?? 'Edit');
+    const reason = bodyText.trim().split('\n')[0] ?? '';
+    const title = fault && reason ? label + ' · ' + reason : label;
 
     builder.pushOrdinaryCard({
       id: message.id,
       ownerId: message.ownerId,
       kind: 'Tool',
       title,
-      bodyLines: [],
+      bodyLines: isCompleted && call ? [] : bodyText.split('\n'),
       ...(message.step ? {step: message.step} : {}),
       open,
       railColor: accent,
       ...(frame ? {parentFrame: frame} : {}),
       renderBody: (inner) => {
-        if (call) renderEditDiff(builder, message.id, accent, call, inner);
+        if (isCompleted && call) renderEditDiff(builder, message.id, accent, call, inner);
       },
     });
   },

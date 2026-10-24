@@ -41,6 +41,13 @@ for await (const line of createInterface({input: process.stdin})) {
     const args = message.params.arguments;
     if (args.mode === 'wait') continue;
     if (args.mode === 'bad') {process.stdout.write('bad-json\n'); continue;}
+    if (['image', 'large-image', 'bad-image'].includes(mode)) {
+      const image = {type: 'image', mimeType: 'image/png',
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='};
+      if (mode === 'bad-image') delete image.data;
+      respond({content: [{type: 'text', text: mode === 'large-image' ? 'x'.repeat(1_100_000) : 'Screenshot captured'}, image]});
+      continue;
+    }
     respond({content: [{type: 'text', text: 'echo:' + args.value}], isError: args.mode === 'error'});
   }
 }

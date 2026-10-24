@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {createHash, randomUUID} from 'node:crypto';
-import type {ModelRequest, ModelTurn} from '../runtime/messages.js';
+import type {ModelMessage, ModelRequest, ModelTurn} from '../runtime/messages.js';
 import type {ModelCapacity} from './contracts.js';
 
 export function digest(value: unknown): string {return createHash('sha256').update(JSON.stringify(value)).digest('hex');}
@@ -9,14 +9,14 @@ export function estimateText(text: string): number {
   for (const char of text) tokens += char.codePointAt(0)! > 0x7f ? 1 : 0.25;
   return Math.ceil(tokens);
 }
+function estimateMessage(message: ModelMessage): number {
+  const images = 'images' in message ? message.images : undefined;
+  const textOnly = images?.length ? {...message, images: undefined} : message;
+  return estimateText(JSON.stringify(textOnly)) + (images?.length ?? 0) * 1200 + 8;
+}
 export function estimateRequest(request: ModelRequest): number {
   return estimateText(request.system) + estimateText(JSON.stringify(request.tools)) + 16 +
-    request.messages.reduce((sum, message) => {
-      const hasImages = 'images' in message && !!message.images?.length;
-      const imageTokens = hasImages ? (message.images?.length ?? 0) * 1200 : 0;
-      const textOnly = hasImages ? {...message, images: undefined} : message;
-      return sum + estimateText(JSON.stringify(textOnly)) + imageTokens + 8;
-    }, 0);
+    request.messages.reduce((sum, message) => sum + estimateMessage(message), 0);
 }
 export interface BudgetPolicy {
   reserve_tokens: number; low_watermark_ratio: number;
@@ -54,7 +54,7 @@ export class TokenMeter {
     if (anchor?.identity === model.identity && request.messages.length >= anchor.prefix.messages.length &&
       digest({system: request.system, tools: request.tools, messages: request.messages.slice(0, anchor.prefix.messages.length)}) === digest(anchor.prefix)) {
       return anchor.tokens + request.messages.slice(anchor.prefix.messages.length)
-        .reduce((sum, message) => sum + estimateText(JSON.stringify(message)) + 8, 0);
+        .reduce((sum, message) => sum + estimateMessage(message), 0);
     }
     return estimateRequest(request);
   }

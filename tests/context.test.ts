@@ -13,6 +13,7 @@ import {AuthStorage} from '../src/providers/auth.js';
 import type {ModelMessage, ModelRequest, Provider} from '../src/runtime/messages.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 
+// Chinese fixtures cover legacy round-summary parsing and multilingual token estimation.
 const identity = {sessionId: 's', ownerId: 'logox'};
 const signal = new AbortController().signal;
 const base = {system: '只处理用户任务', tools: []};
@@ -33,13 +34,13 @@ function assertPairs(messages: readonly ModelMessage[]) {
   const pending = new Set<string>();
   for (const value of messages) {
     if (value.role === 'assistant') for (const call of value.toolCalls ?? []) pending.add(call.id);
-    if (value.role === 'tool') {assert.ok(pending.delete(value.callId), '不存在孤立工具结果');}
+    if (value.role === 'tool') {assert.ok(pending.delete(value.callId), 'No orphaned tool result');}
   }
-  assert.equal(pending.size, 0, '每个调用都有对应结果');
+  assert.equal(pending.size, 0, 'Every tool call has a matching result');
 }
 const final = (name: string): ModelMessage => ({role: 'assistant', text: name.repeat(1000) + '\n【轮次摘要】\n标题：完成' + name + '\n报告：保留' + name + '的结果，未做额外验证。'});
 
-test('常规压缩保留两轮已结束对话、当前输入和跨轮最近两条工具，部分批次仍配对', async () => {
+test('compaction retains recent rounds, current input and paired recent tools across batches', async () => {
   const f = await fixture();
   try {
     for (let round = 0; round < 4; round++) {
@@ -61,11 +62,11 @@ test('常规压缩保留两轮已结束对话、当前输入和跨轮最近两�
     assert.ok(!result.request.messages.some(message => message.text.startsWith('R0'.repeat(1000))));
     assert.deepEqual(result.request.messages.filter(message => message.role === 'tool').map(message => message.callId), ['call-1', 'call-2']);
     assertPairs(result.request.messages);
-    assert.deepEqual(await f.journal.load('s', 'logox'), raw, '整理不改原记录');
+    assert.deepEqual(await f.journal.load('s', 'logox'), raw, 'Compaction never rewrites raw records');
   } finally {await f.cleanup();}
 });
 
-test('保留完整旧轮为零时仍保护当前任务，摘要携带真实行号而不复制整个流程', async () => {
+test('zero retained closed rounds still protect current work and include real ledger coordinates', async () => {
   const f = await fixture({keep_recent_rounds: 0, keep_recent_tools: 0});
   try {
     await f.append('old', {role: 'user', text: '旧目标'});
@@ -81,7 +82,7 @@ test('保留完整旧轮为零时仍保护当前任务，摘要携带真实行�
   } finally {await f.cleanup();}
 });
 
-test('工具参数及结果落盘后才替换；重启复用有效视图，缺失归档和分支变化回落原文', async () => {
+test('tool archives commit before projection and restart falls back safely on missing or changed sources', async () => {
   const f = await fixture({keep_recent_tools: 0});
   try {
     await f.append('old', {role: 'user', text: '保存证据'});
@@ -110,7 +111,7 @@ test('工具参数及结果落盘后才替换；重启复用有效视图，缺�
   } finally {await f.cleanup();}
 });
 
-test('归档或视图写入失败保留原文，不把未保存的压缩视图用于请求', async () => {
+test('archive and checkpoint failures retain raw history instead of using uncommitted projections', async () => {
   for (const failure of ['archive', 'checkpoint']) {
     const f = await fixture({keep_recent_tools: 0, keep_recent_rounds: 0});
     try {
@@ -131,7 +132,7 @@ test('归档或视图写入失败保留原文，不把未保存的压缩视图�
   }
 });
 
-test('小窗口裁剪预留和输出额度；无法容纳当前目标时阻止请求', async () => {
+test('small windows clamp reserves and output allowance and reject oversized current work', async () => {
   const model = {identity: 'small', window: 256, maxOutput: 500};
   const f = await fixture({}, model);
   try {
@@ -144,13 +145,13 @@ test('小窗口裁剪预留和输出额度；无法容纳当前目标时阻止�
   } finally {await f.cleanup();}
 });
 
-test('用量锚点只复用于同模型/规则/工具与投影前缀；零用量和失败响应不能校准', () => {
+test('usage anchors require the same model, rules, tools and prefix and reject invalid usage', () => {
   const meter = new TokenMeter(), request: ModelRequest = {...base, messages: [{role: 'user', text: 'goal'}]};
   const turn = {message: {role: 'assistant' as const, text: 'answer'}, stop: 'complete' as const, usage: {input: 1234, output: 10, cacheRead: 400}};
   meter.observe(request, turn, capacity);
   const next = {...request, messages: [...request.messages, turn.message]};
   assert.equal(meter.estimate(next, capacity), 1244);
-  assert.equal(meter.spent.input, 1234, '缓存输入已经包含在总输入中');
+  assert.equal(meter.spent.input, 1234, 'Cached input is already included in total input');
   assert.equal(meter.estimate({...next, system: 'new rules'}, capacity), estimateRequest({...next, system: 'new rules'}));
   assert.equal(meter.estimate(next, {...capacity, identity: 'other'}), estimateRequest(next));
   assert.equal(meter.estimate({...next, tools: [{name: 'new', description: '', parameters: {}}]}, capacity), estimateRequest({...next, tools: [{name: 'new', description: '', parameters: {}}]}));
@@ -160,7 +161,97 @@ test('用量锚点只复用于同模型/规则/工具与投影前缀；零用量
   assert.equal(meter.estimate(next, capacity), estimateRequest(next));
 });
 
-test('历史摘要仍超水位时有界分段汇总，禁用工具和 thinking，当前任务不进入备忘录', async () => {
+test('incremental image estimates exclude base64 just like full request estimates', () => {
+  const request: ModelRequest = {system: '', tools: [], messages: [{role: 'user', text: 'Inspect the screenshot'}]};
+  const turn = {message: {role: 'assistant' as const, text: '', toolCalls: [{id: 'image', name: 'Read', arguments: '{"file_path":"desktop.png"}'}]}, stop: 'tools' as const};
+  const prefix = {...request, messages: [...request.messages, turn.message]};
+  const meter = new TokenMeter();
+  meter.observe(request, {...turn, usage: {input: estimateRequest(prefix) - 10, output: 10}}, capacity);
+  for (const size of [4, 1_354_000]) {
+    const next: ModelRequest = {...prefix, messages: [...prefix.messages, {role: 'tool', name: 'Read', callId: 'image', text: 'Desktop screenshot', isError: false,
+      images: [{data: 'A'.repeat(size), mimeType: 'image/png'}]}]};
+    assert.equal(meter.estimate(next, capacity), estimateRequest(next));
+    assert.ok(meter.estimate(next, capacity) < 2000);
+  }
+});
+
+test('a screenshot does not trigger premature compaction with a calibrated usage anchor', async () => {
+  const f = await fixture({}, {identity: 'image-model', window: 1_000_000});
+  try {
+    await f.append('current', {role: 'user', text: 'Inspect the screenshot'});
+    const first = await f.contexts.prepare(identity, base, signal);
+    const turn = {message: {role: 'assistant' as const, text: '', toolCalls: [{id: 'image', name: 'Read', arguments: '{}'}]}, stop: 'tools' as const,
+      usage: {input: 25_000, output: 100}};
+    f.contexts.observe(identity, first.request, turn, first.model);
+    await f.append('current', turn.message);
+    await f.append('current', {role: 'tool', name: 'Read', callId: 'image', text: 'Screenshot', isError: false,
+      images: [{data: 'A'.repeat(4_000_000), mimeType: 'image/png'}]});
+    const result = await f.contexts.prepare(identity, base, signal);
+    assert.equal(result.compacted, false);
+    assert.ok(f.contexts.status(identity)!.input < 27_000);
+    assert.equal(f.reports.length, 0);
+    assert.equal(await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox')), undefined);
+  } finally {await f.cleanup();}
+});
+
+test('gpt-6.1-sol retains a 350k working context within its 1M built-in window', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-sol-capacity-'));
+  try {
+    const config = await loadConfig(directory, {provider: {name: 'openai', model: 'gpt-6.1-sol'}}, {}, directory, directory);
+    const model = new ProviderRegistry(config, {}, undefined, new AuthStorage(join(directory, 'auth.json'))).capacity();
+    const f = await fixture({}, model);
+    try {
+      await f.append('current', {role: 'user', text: 'x'.repeat(1_400_000)});
+      const result = await f.contexts.prepare(identity, base, signal);
+      assert.equal(result.compacted, false);
+      assert.equal(f.contexts.status(identity)!.window, 1_000_000);
+      assert.equal(f.contexts.status(identity)!.high, 967_232);
+      assert.ok(f.contexts.status(identity)!.input > 350_000);
+      assert.ok(result.request.maxTokens! > 0);
+    } finally {await f.cleanup();}
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('compaction notices distinguish automatic thresholds, forced cleanup and no-op outcomes in English', async () => {
+  for (const force of [false, true]) {
+    const f = await fixture({keep_recent_rounds: 0}, {identity: 'notice-model', window: 4096});
+    try {
+      await f.append('old', {role: 'user', text: 'Old evidence '.repeat(2000)});
+      await f.append('old', final('DONE'));
+      await f.journal.finish('s', 'logox', 'old', 'completed');
+      await f.append('current', {role: 'user', text: 'Continue'});
+      assert.equal((await f.contexts.prepare(identity, base, signal, force)).compacted, true);
+      const notice = f.reports.find(text => text.startsWith('[Context] Compacted'))!;
+      assert.match(notice, /high watermark 3072; window 4096/);
+      assert.match(notice, force ? /history cleanup/ : /automatic/);
+      assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
+      f.reports.length = 0;
+      await f.contexts.prepare(identity, base, signal, true);
+      assert.ok(f.reports.every(text => text.startsWith('[Context]') && !/\p{Script=Han}/u.test(text)));
+    } finally {await f.cleanup();}
+  }
+  const f = await fixture();
+  try {
+    await f.append('current', {role: 'user', text: 'Continue'});
+    await f.contexts.prepare(identity, base, signal, true);
+    assert.match(f.reports.at(-1)!, /\[Context\].*No reducible/);
+  } finally {await f.cleanup();}
+});
+
+test('compaction persistence failures retain the view and report English diagnostics', async () => {
+  const f = await fixture({keep_recent_rounds: 0});
+  try {
+    await f.append('old', {role: 'user', text: 'Inspect evidence'});
+    await f.append('old', final('DONE'));
+    await f.journal.finish('s', 'logox', 'old', 'completed');
+    f.journal.saveContext = async () => {throw new Error('disk full');};
+    await assert.rejects(f.contexts.prepare(identity, base, signal, true), /disk full/);
+    assert.match(f.reports.at(-1)!, /\[Context\].*retaining.*disk full/);
+    assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
+  } finally {await f.cleanup();}
+});
+
+test('oversized closed history uses bounded summarization without tools, thinking or current work', async () => {
   const requests: ModelRequest[] = [];
   const model = {identity: 'memo-model', window: 4096, maxOutput: 512};
   const f = await fixture({keep_recent_rounds: 0}, model, {async respond(request) {
@@ -179,6 +270,8 @@ test('历史摘要仍超水位时有界分段汇总，禁用工具和 thinking�
     await f.append('current', {role: 'user', text: 'CURRENT_ONLY'});
     const result = await f.contexts.prepare(identity, base, signal);
     assert.ok(requests.length > 1 && requests.length <= 16);
+    assert.ok(f.reports.some(text => text.startsWith('[Context] Summarizing')));
+    assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
     assert.match(result.request.messages[0]!.text, /Historical working overview/);
     assert.equal(result.request.messages.at(-1)?.text, 'CURRENT_ONLY');
     const state = await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox'));
@@ -186,7 +279,7 @@ test('历史摘要仍超水位时有界分段汇总，禁用工具和 thinking�
   } finally {await f.cleanup();}
 });
 
-test('无收益汇总和取消不替换历史，也不会继续发送超预算任务请求', async () => {
+test('ineffective or cancelled summaries preserve history and prevent over-budget requests', async () => {
   for (const cancelled of [false, true]) {
     const controller = new AbortController();
     const f = await fixture({}, {identity: 'tiny', window: 4096}, {async respond(request) {
@@ -208,7 +301,7 @@ test('无收益汇总和取消不替换历史，也不会继续发送超预算�
   }
 });
 
-test('长任务只整理已闭合过程，当前目标及最新工具批次仍完整配对', async () => {
+test('long-running compaction preserves the current goal and latest paired tool batch', async () => {
   const f = await fixture({}, {identity: 'long-task', window: 4096});
   try {
     await f.append('current', {role: 'user', text: 'CURRENT_GOAL'});
@@ -218,13 +311,13 @@ test('长任务只整理已闭合过程，当前目标及最新工具批次仍�
     await f.append('current', {role: 'tool', callId: 'second', name: 'read', text: '第二处证据', isError: false});
     const result = await f.contexts.prepare(identity, base, signal);
     assert.equal(result.request.messages[0]?.text, 'CURRENT_GOAL');
-    assert.match(result.request.messages[1]!.text, /当前任务进展/);
+    assert.match(result.request.messages[1]!.text, /Current task progress/);
     assert.equal(result.request.messages.at(-1)?.text, '第二处证据');
     assertPairs(result.request.messages);
   } finally {await f.cleanup();}
 });
 
-test('随轮摘要按真实终态保存，缺少模型摘要时本地兜底不触发额外请求', async () => {
+test('round summaries retain the real outcome and local fallback makes no model request', async () => {
   assert.equal(summarizeRound([final('verified')], 'completed').source, 'model');
   const cancelled = summarizeRound([final('verified')], 'cancelled');
   assert.equal(cancelled.source, 'local'); assert.match(cancelled.report, /已中断/);
@@ -238,7 +331,7 @@ test('随轮摘要按真实终态保存，缺少模型摘要时本地兜底不�
   } finally {await f.cleanup();}
 });
 
-test('模型能力来自显式配置或目录元数据，切换不能继承前一个模型窗口', async () => {
+test('model capacity honors explicit configuration and live metadata without leaking across switches', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-capacity-'));
   try {
     const config = await loadConfig(cwd, {provider: {name: 'local', model: 'first', context_window: 8192}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}}, {}, cwd, cwd);
@@ -252,7 +345,7 @@ test('模型能力来自显式配置或目录元数据，切换不能继承前�
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
-test('正式应用自动整理与 /compact 复用同一策略；重建后继续使用摘要，不重放模型和工具', async () => {
+test('application auto-compaction and manual compaction share policy and restore without replay', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-context-app-'));
   const requests: ModelRequest[] = [];
   const provider: Provider = {async respond(request) {
@@ -268,10 +361,10 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
     const before = await app.journal.load('context-app', 'logox');
     await app.submit('/compact');
     assert.deepEqual(await app.journal.load('context-app', 'logox'), before);
-    assert.equal(requests.length, 3, '常规 /compact 不另发摘要请求');
+    assert.equal(requests.length, 3, 'Ordinary compaction makes no extra summary request');
     await app.close();
     app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
-    assert.equal(requests.length, 3, '恢复不执行模型');
+    assert.equal(requests.length, 3, 'Restore makes no model request');
     await app.ensemble.dispatch('logox', '继续').done;
     assert.ok(requests[3]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
     assert.equal(requests[3]!.messages.at(-1)?.text, '继续');
@@ -279,7 +372,7 @@ test('正式应用自动整理与 /compact 复用同一策略；重建后继续�
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 
-test('旧任务进展被备忘录覆盖后清理重叠范围，重启保留备忘录且不重复汇总', async () => {
+test('memo compaction clears overlapping working ranges and restores without repeated summarization', async () => {
   let summaries = 0;
   const f = await fixture({}, {identity: 'progress-memo', window: 4096}, {async respond() {
     summaries++;

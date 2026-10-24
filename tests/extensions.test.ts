@@ -55,6 +55,90 @@ test('MCP 惰性连接、分页目录、完整 schema 校验和唯一审批，�
   } finally {await mcp.close(); await mcp.close();
     const pid = (await f.events())[0]?.pid; assert.ok(pid); assert.throws(() => process.kill(pid, 0)); await f.cleanup();}
 });
+test('MCP preserves image blocks alongside text', async () => {
+  const f = await fixture('image');
+  const mcp = new Mcp(f.cwd, {fixture: f.config}, async () => true);
+  try {
+    const result = await mcp.execute(invoke({value: 1}), context());
+    assert.equal(result.isError, false, result.text);
+    assert.match(result.text, /Screenshot captured/);
+    assert.equal(result.images?.length, 1);
+    assert.equal(result.images[0]!.mimeType, 'image/png');
+    assert.equal(Buffer.from(result.images[0]!.data, 'base64').subarray(1, 4).toString(), 'PNG');
+    assert.doesNotMatch(result.text, /iVBOR/);
+  } finally {await mcp.close(); await f.cleanup();}
+});
+
+test('MCP accepts screenshot responses over one MiB without discarding the image', async () => {
+  const f = await fixture('large-image');
+  const mcp = new Mcp(f.cwd, {fixture: f.config}, async () => true);
+  try {
+    const result = await mcp.execute(invoke({value: 1}), context());
+    assert.equal(result.isError, false, result.text);
+    assert.equal(result.images?.length, 1);
+    assert.ok(result.text.length < 65_000);
+  } finally {await mcp.close(); await f.cleanup();}
+});
+
+test('MCP rejects malformed image blocks instead of reporting successful visual evidence', async () => {
+  const f = await fixture('bad-image');
+  const mcp = new Mcp(f.cwd, {fixture: f.config}, async () => true);
+  try {assert.equal((await mcp.execute(invoke({value: 1}), context())).isError, true);}
+  finally {await mcp.close(); await f.cleanup();}
+});
+
+test('MCP images reach the next model request through the application', async () => {
+  const f = await fixture('image');
+  const config = await loadConfig(f.cwd, {provider: {model: 'test', context_window: 131072},
+    mcp: {playwright: false, servers: {fixture: f.config}}}, {}, f.cwd, f.cwd);
+  const extensions = new ProjectExtensions(f.cwd, config, {home: f.cwd, boundary: f.cwd}, async () => true);
+  let turns = 0;
+  const app = await createApplication({cwd: f.cwd, config, extensions, resourceOptions: {home: f.cwd, boundary: f.cwd},
+    authPath: join(f.cwd, 'auth.json'), provider: {async respond(request) {
+      if (++turns === 1) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [invoke({value: 1})]}};
+      const result = request.messages.find(message => message.role === 'tool' && message.callId === 'c');
+      assert.ok(result?.role === 'tool');
+      assert.equal(result.isError, false, result.text);
+      assert.equal(result.images?.length, 1);
+      assert.equal(result.images[0]!.mimeType, 'image/png');
+      assert.equal(Buffer.from(result.images[0]!.data, 'base64').subarray(1, 4).toString(), 'PNG');
+      return {stop: 'tools', message: {role: 'assistant', text: 'Screenshot received.', toolCalls: [{
+        id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Screenshot verified', verification: 'Image received', carry_forward: []}),
+      }]}};
+    }}});
+  try {
+    const handle = app.ensemble.dispatch('logox', 'Inspect the screenshot.');
+    await handle.done;
+    assert.equal(turns, 2);
+    assert.equal(app.store.getSnapshot().activities.find(item => item.activityId === handle.activityId)?.status, 'completed');
+  } finally {await app.close(); await extensions.close(); await f.cleanup();}
+});
+
+test('Playwright is a lazy local default and can be disabled or explicitly overridden', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-browser-config-'));
+  try {
+    for (const [mcp, expected] of [[{}, true], [{playwright: false}, false],
+      [{servers: {playwright: {command: process.execPath, args: ['custom-browser.mjs'], enabled: false}}}, true]] as const) {
+      const config = await loadConfig(cwd, {mcp}, {}, cwd, cwd);
+      const extensions = new ProjectExtensions(cwd, config, {home: cwd, boundary: cwd});
+      try {
+        const server = extensions.mcp.servers.playwright;
+        assert.equal(!!server, expected);
+        if ('servers' in mcp) {
+          assert.equal(server?.enabled, false);
+          assert.deepEqual(server?.args, ['custom-browser.mjs']);
+        } else if (expected) {
+          assert.equal(server?.command, process.execPath);
+          assert.ok(server?.args[0]?.endsWith('cli.js'));
+          assert.ok(server?.args.includes('--isolated'));
+          assert.ok(server?.args.includes('--headless'));
+          assert.equal(extensions.mcp.status().find(item => item.name === 'playwright')?.state, 'stopped');
+        }
+      } finally {await extensions.close();}
+    }
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
 test('MCP 同 $id 按工具和服务隔离，目录刷新释放旧校验并应用新约束及本地 $ref', async () => {
   for (const mode of ['schema-id-07', 'schema-id-2020']) {
     const first = await fixture(mode), second = await fixture('schema-id-other');

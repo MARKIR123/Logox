@@ -4,10 +4,12 @@ import {inputKindSchema, type InputKind} from './provenance.js';
 
 const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
-  resumeTaskId: id.optional(),
+  resumeTaskId: id.optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
   stopReason: z.enum(['user', 'shutdown', 'interrupted', 'director_cancel']).optional(),
-  recovery: z.strictObject({key: id, attempt: z.number().int().nonnegative(), exhausted: z.boolean().optional()}).optional()});
+  recovery: z.strictObject({key: id, attempt: z.number().int().nonnegative(), exhausted: z.boolean().optional(),
+    actorTask: z.strictObject({ownerId: id, activityId: id}).optional()}).optional()});
+export type TaskOriginData = z.infer<typeof taskOriginSchema>;
 export const roundSummarySchema = z.strictObject({
   title: z.string().trim().min(1).max(120),
   report: z.string().trim().min(1).max(2000),
@@ -25,7 +27,7 @@ const taskStageSchema = stepStageSchema.extend({status: z.enum(['pending', 'in_p
     if (stage.status === 'completed' && !stage.result) ctx.addIssue({code: 'custom', message: '完成阶段必须报告实际成果'});
     if (stage.status === 'skipped' && !stage.reason) ctx.addIssue({code: 'custom', message: '取消阶段必须说明原因'});
   });
-export const taskProgressSchema = z.strictObject({planned: z.boolean(), revision: z.number().int().nonnegative(),
+const legacyTaskProgressSchema = z.strictObject({planned: z.boolean(), revision: z.number().int().nonnegative(),
   stages: z.array(taskStageSchema).max(32), activeStageId: id.optional(),
   revisions: z.array(z.strictObject({revision: z.number().int().positive(), time: z.number(), stages: z.array(taskStageSchema).max(32),
     activeStageId: id.optional()}))})
@@ -35,7 +37,20 @@ export const taskProgressSchema = z.strictObject({planned: z.boolean(), revision
     if (active.length > 1 || active[0]?.id !== progress.activeStageId) ctx.addIssue({code: 'custom', message: '一次只能推进一个当前阶段'});
     if (!progress.planned && progress.stages.length > 0) ctx.addIssue({code: 'custom', message: '未登记计划不能包含阶段'});
   });
+export const activityProgressSchema = z.strictObject({
+  label: z.string().trim().min(1).max(160).regex(/^[^\r\n]+$/, 'Use a single-line activity label'),
+  detail: z.string().trim().min(1).max(1000).optional(),
+});
+export type ActivityProgress = z.infer<typeof activityProgressSchema>;
+// Legacy milestones remain readable as historical data, never rewritten on load.
+export const taskProgressSchema = z.union([activityProgressSchema, legacyTaskProgressSchema]);
 export type TaskProgressSnapshot = z.infer<typeof taskProgressSchema>;
+export function currentTaskProgress(progress: TaskProgressSnapshot | undefined): ActivityProgress | undefined {
+  if (!progress) return undefined;
+  if ('label' in progress) return progress;
+  const stage = progress.stages.find(stage => stage.id === progress.activeStageId);
+  return stage ? {label: stage.activeForm, detail: stage.purpose} : undefined;
+}
 export const taskModelSchema = z.strictObject({
   initial: z.strictObject({provider: id, model: id}), actual: z.strictObject({provider: id, model: id}),
   inherited: z.boolean(), switched: z.boolean(), phase: z.enum(['started', 'confirming', 'ready', 'completed', 'failed', 'cancelled']),

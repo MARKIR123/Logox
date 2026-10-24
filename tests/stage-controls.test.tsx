@@ -138,7 +138,7 @@ test('页签保存失败保留草案与原配置，保存期间不能取消或�
   release(); await saving; assert.equal(surfaces.getSnapshot(), null);
 });
 
-test('正式状态栏保持单行，布局变化立即生效，角色窗口展示各自状态', {timeout: 7000}, async () => {
+test('status modules and the queue badge share one line across actor views and narrow layouts', {timeout: 7000}, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'logox-statusbar-ui-')), prefs = new StatusbarPreferences(join(dir, 'statusbar.json'));
   const store = new RuntimeStore();
   const ui = mount(store, {statusbar: prefs, getStatus: ownerId => ({ownerId, name: ownerId, model: {provider: 'demo', model: ownerId + '-model'},
@@ -151,7 +151,8 @@ test('正式状态栏保持单行，布局变化立即生效，角色窗口展�
     assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();
     assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
-    assert.ok(!ui.output.lines.at(-2)?.match(/(?:上下文|Context) 25%/), '状态不换成第二行');
+    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /Q0/, 'A compact queue count must not displace the configured context module');
+    assert.ok(!ui.output.lines.at(-2)?.match(/(?:上下文|Context) 25%/), 'Status does not wrap to a second line');
   } finally {await ui.cleanup(); await rm(dir, {recursive: true, force: true});}
 });
 

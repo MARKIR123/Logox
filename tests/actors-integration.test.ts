@@ -13,14 +13,14 @@ import {waitForSnapshot} from './runtime-fixture.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
 import {buildStageRows} from '../src/tui/stage.js';
 
-test('Actor 自动压缩通知保留任务身份，跟随原卡收起展开，重启后仍归原卡', async () => {
+test('Actor compaction notices retain activity ownership, folding and restart identity', async () => {
   let calls = 0;
   const f = await fixture(async () => {calls++; return complete('已完成调查');});
   try {
     await direct(f.app, '整理资料');
     const activity = f.app.store.getSnapshot().activities.find(item => item.ownerId === 'scout')!;
-    const notices = f.app.store.getSnapshot().messages.filter(message => message.ownerId === 'scout' && message.role === 'system' && message.text.startsWith('扬弃：'));
-    assert.ok(notices.length > 0, '实际任务收尾应发布压缩结果');
+    const notices = f.app.store.getSnapshot().messages.filter(message => message.ownerId === 'scout' && message.role === 'system' && message.text.startsWith('[Context] Compacted'));
+    assert.ok(notices.length > 0, 'Task closure publishes its compaction outcome');
     assert.ok(notices.every(message => message.activityId === activity.activityId));
     const rows = (app: typeof f.app, open: boolean) => buildStageRows(app.store.getSnapshot(), 'actors', 'logox', 119, {[activity.activityId]: open}, null);
     assert.ok(!rows(f.app, false).some(row => row.messageId === notices[0]!.id));
@@ -28,13 +28,14 @@ test('Actor 自动压缩通知保留任务身份，跟随原卡收起展开，�
     await f.app.close();
     const restored = await createApplication(f.options);
     try {
-      assert.equal(calls, 1, '恢复不重放任务或压缩');
+      assert.equal(calls, 1, 'Restore replays neither work nor compaction');
       assert.ok(!rows(restored, false).some(row => row.messageId === notices[0]!.id));
       assert.ok(rows(restored, true).some(row => row.messageId === notices[0]!.id));
     } finally {await restored.close();}
   } finally {await f.cleanup();}
 });
 
+// Chinese fixtures retain compatibility coverage for legacy summaries and custom role text.
 const complete = (title: string, report = '验证通过'): ModelTurn => ({stop: 'complete',
   message: {role: 'assistant', text: '原始工作细节\n【轮次摘要】\n标题：' + title + '\n报告：' + report}});
 const call = (name: string, args: unknown): ModelTurn => ({stop: 'tools', message: {role: 'assistant', text: '',
@@ -61,36 +62,36 @@ async function direct(app: Awaited<ReturnType<typeof createApplication>>, text: 
   await app.submit('@scout ' + text);
   await waitForSnapshot(app.store, snapshot => snapshot.activities.length > count && snapshot.activities.at(-1)?.status === 'completed');
 }
-test('正式动态角色：0旧轮收尾、原账本保留、主上下文只留锚点、重启与回退覆盖已删除角色', async () => {
+test('dynamic actors compact closed rounds while preserving ledgers, anchors and rewind behavior', async () => {
   const requests: ModelRequest[] = [];
   const f = await fixture(async request => {requests.push(request); return complete('找到边界', '证据位于 sample.ts:2');});
   try {
     await f.app.submit('/actors');
     const page = f.app.surfaces.getSnapshot();
     assert.ok(page?.kind === 'page' && page.tabs.some(tab => tab.id === 'actors' && tab.lines.join('\n').includes('自定义侦察者')));
-    assert.ok(page.tabs.some(tab => tab.id === 'actors' && tab.lines.join('\n').includes('20000')), '展示继承项目后的生效预算');
+    assert.ok(page.tabs.some(tab => tab.id === 'actors' && tab.lines.join('\n').includes('20000')), 'Display the effective inherited context budget');
     f.app.surfaces.cancel();
     await direct(f.app, '第一次调查');
     const first = f.app.store.getSnapshot().activities.at(-1)!;
     assert.equal(first.summary?.title, '找到边界');
-    assert.equal(f.app.ensemble.isBusy(), false, '终态发布前完成收尾');
+    assert.equal(f.app.ensemble.isBusy(), false, 'Finish cleanup before publishing the terminal status');
     const entries = await f.app.journal.load('actors', 'scout');
     assert.ok(entries.some(entry => entry.text.includes('原始工作细节')));
     const state = await f.app.journal.loadContext('actors', 'scout', entries);
     assert.deepEqual(state?.folded, [0]);
-    assert.equal((await f.app.journal.load('actors', 'logox')).length, 0, '直接提示不改写主对话旧轮');
+    assert.equal((await f.app.journal.load('actors', 'logox')).length, 0, 'Direct actor inputs do not rewrite Director history');
     const main = await f.app.contexts.prepare({sessionId: 'actors', ownerId: 'logox'}, {system: '检查索引', tools: []}, new AbortController().signal);
     assert.ok(main.request.messages.some(entry => entry.text.includes(first.activityId)));
     assert.ok(main.request.messages.every(entry => !entry.text.includes('sample.ts:2') && !entry.text.includes('原始工作细节')));
     await direct(f.app, '第二次调查');
     assert.ok(requests[1]!.messages.some(message => message.text.includes('找到边界')));
     assert.ok(requests[1]!.messages.every(message => !message.text.includes('原始工作细节')));
-    assert.ok(!requests[0]!.system.includes('配色技能'), '未分配技能不进入Actor索引');
+    assert.ok(!requests[0]!.system.includes('配色技能'), 'Unassigned skills do not enter the actor index');
     await f.app.close();
     await rm(join(f.cwd, '.logox', 'actors', 'scout.md'));
     const restored = await createApplication(f.options);
     try {
-      assert.equal(requests.length, 2, '恢复没有模型重放');
+      assert.equal(requests.length, 2, 'Restore does not replay model calls');
       assert.equal(restored.store.activities.get('actors', first.activityId)?.summary?.title, '找到边界');
       await restored.submit('/rewind');
       const picker = restored.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker');
@@ -100,7 +101,7 @@ test('正式动态角色：0旧轮收尾、原账本保留、主上下文只留�
     } finally {await restored.close();}
   } finally {await f.cleanup();}
 });
-test('正式任务模型不可用先确认，卡片保留转用身份；确认后预算与摘要使用实际模型', async () => {
+test('unavailable task models require confirmation and preserve the actual replacement identity', async () => {
   let calls = 0;
   const f = await fixture(async () => {
     if (++calls === 1) throw new ProviderError('模型不存在', false, 'model_missing');
@@ -110,7 +111,7 @@ test('正式任务模型不可用先确认，卡片保留转用身份；确认�
     await f.app.submit('@scout 调查');
     await waitForSnapshot(f.app.store, state => state.interactions.some(item => item.status === 'pending'));
     const question = f.app.store.interactions.list().find(item => item.status === 'pending')!;
-    assert.equal(calls, 1, '确认前没有替代请求');
+    assert.equal(calls, 1, 'No replacement request before confirmation');
     assert.equal(f.app.store.activities.get('actors', question.activityId)?.taskModel?.phase, 'confirming');
     f.app.store.interactions.respond(answerEnvelope(question, {kind: 'question', answers: {task_model: {type: 'option', optionId: 'switch'}}}));
     await waitForSnapshot(f.app.store, state => state.activities.at(-1)?.status === 'completed');
@@ -120,7 +121,7 @@ test('正式任务模型不可用先确认，卡片保留转用身份；确认�
     assert.equal(f.app.contexts.status({sessionId: 'actors', ownerId: 'scout'})?.window, 131072);
   } finally {await f.cleanup();}
 });
-test('任务借阅只改变本次技能索引，后续任务不继承', async () => {
+test('borrowed skills affect only the current task index', async () => {
   let calls = 0;
   const f = await fixture(async request => {
     calls++;
@@ -132,7 +133,7 @@ test('任务借阅只改变本次技能索引，后续任务不继承', async ()
   try {await direct(f.app, '借阅技能'); await direct(f.app, '新的任务'); assert.equal(calls, 3);}
   finally {await f.cleanup();}
 });
-test('塑造角色走精确正文审批，拒绝不落盘、不加入目录', async () => {
+test('actor creation requires exact-content approval and rejection writes nothing', async () => {
   const content = serializeActor({...builtinActors[2]!, id: 'builder'});
   let calls = 0;
   const f = await fixture(async request => ++calls === 1 ? call('craft_actor', {content}) : (() => {

@@ -85,10 +85,10 @@ export class McpClient {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (data: string) => {
       buffer += data;
-      if (Buffer.byteLength(buffer) > 1024 * 1024) {void this.fail(new Error('MCP 消息超过 1 MiB')); return;}
       let newline;
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (Buffer.byteLength(line) > 16 * 1024 * 1024) {void this.fail(new Error('MCP response exceeds 16 MiB')); return;}
         if (!line.trim()) continue;
         try {
           const message = messageSchema.parse(JSON.parse(line));
@@ -104,6 +104,7 @@ export class McpClient {
           }
         } catch {void this.fail(new Error('MCP 返回坏消息')); return;}
       }
+      if (Buffer.byteLength(buffer) > 16 * 1024 * 1024) void this.fail(new Error('MCP response exceeds 16 MiB'));
     });
     child.stderr.resume(); // 消耗但不回显，避免服务日志泄漏凭据。
     child.stdin.on('error', () => {void this.fail(new Error('MCP stdin 关闭'));});

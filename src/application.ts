@@ -12,6 +12,7 @@ import {z} from 'zod';
 import {DynamicEnsemble} from './actors/ensemble.js';
 import {ActorCatalog} from './actors/catalog.js';
 import {ActorServices} from './actors/services.js';
+import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
@@ -27,6 +28,8 @@ import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
+import {submitDeliverySchema, type SubmitDelivery} from './runtime/delivery.js';
+export type {SubmitDelivery} from './runtime/delivery.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools} from './tools/tools.js';
@@ -76,6 +79,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const modelCandidates = new Map<string, readonly string[]>();
   const commands = new AbortController();
   const store = new RuntimeStore(), journal = new Journal(join(state, 'sessions'));
+  const deliveries = new DeliveryQueue(session, journal);
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
   const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
@@ -119,10 +123,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
   });
   void ensureProjectBulletin(cwd);
-  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config,
+  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries,
+    notice: text => notice(text, 'task_notice', 'logox'),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     getActiveTask: (owner) => ensemble.getActiveTask(owner),
+    canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
     injectMessage: (target, msg, src, sum, mode) => ensemble.injectTaskMessage(target, msg, src, sum, mode),
     interrupt: (target, message, source, summary) => ensemble.interruptTask(target, message, source, summary),
     cancelTool: (actorId, toolId, reason) => ensemble.cancelTool(actorId, toolId, reason),
@@ -220,9 +226,10 @@ export async function createSessionApplication(options: SessionApplicationOption
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     if (restriction) base.tools = [finishRoundTool];
     const pending = directorReports.get(context.activityId);
-    if (pending) await actorServices.flush();
+    await actorServices.flush();
+    const facts = actorServices.facts(context);
     return {...base, system: base.system + '\n' + REQUEST_ENVIRONMENT_HEADER + '\n' + effective.text +
-      (restriction ? '\n' + restriction : '') + (pending ? '\n' + PENDING_HANDOFF_HEADER + '\n' + pending : '')};
+      (restriction ? '\n' + restriction : '') + (pending ? '\n' + PENDING_HANDOFF_HEADER + '\n' + pending : '') + (facts ? '\n' + facts : '')};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),
@@ -246,8 +253,18 @@ export async function createSessionApplication(options: SessionApplicationOption
       return actorServices.execute(call, context);
     }),
   })), {
-    concurrency: 'actor',
+    concurrency: 'actor', deliveries,
     member: owner => actors.find(owner),
+    taskStart: async context => {
+      if (context.inputKind !== 'human') return;
+      await actorServices.grantExecution(context);
+      context.signal.throwIfAborted();
+      if (context.ownerId === 'logox') {
+        const pending = actorServices.resumeDirector(context.activityId);
+        if (pending) directorReports.set(context.activityId, pending);
+        await actorServices.flush();
+      }
+    },
     taskEnd: async context => {await contexts.taskEnd(context, await requestBase(context), context.signal);},
     handoff: result => closed ? Promise.resolve() : actorServices.handoff(result),
     directAnchor: async result => {
@@ -587,6 +604,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           : checkpoint ? checkpoint.status === 'completed' ? '恢复的完成' : checkpoint.status === 'failed' ? '恢复的失败' : '已中断' : '历史记录',
         detail: checkpoint?.error ? '失败原因：' + checkpoint.error + '\n' + (round?.summary.report ?? '')
           : round?.summary.report ?? (checkpoint ? '恢复任务检查点；工具不会重放' : '历史记录未保存终态；工具不会重放'),
+        inputKind: inputKind(checkpoint ?? entry),
         ...(round ? {summary: round.summary} : {}),
         ...(checkpoint?.stopReason ? {stopReason: checkpoint.stopReason} : {}),
         ...(checkpoint?.rootActivityId ? {rootActivityId: checkpoint.rootActivityId} : {}),
@@ -611,6 +629,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.prompt.slice(0, 80),
       status: task.status, stage: task.status === 'cancelled' ? '已中断' : '恢复的任务',
       detail: task.error ? '失败原因：' + task.error : '恢复检查点，不自动执行',
+      inputKind: inputKind(task),
+      ...(task.parentActivityId ? {parentActivityId: task.parentActivityId} : {}), ...(task.batchId ? {batchId: task.batchId} : {}),
       ...(task.progress ? {progress: task.progress} : {}), ...(task.recovery ? {recovery: task.recovery} : {}),
       ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}),
       ...(task.rootActivityId ? {rootActivityId: task.rootActivityId} : {})});
@@ -634,16 +654,15 @@ export async function createSessionApplication(options: SessionApplicationOption
     const previous = /^(?:继续|接着|续做)/u.test(prompt) && latest &&
       actorServices.recovery.hasExecution(latest.rootActivityId ?? latest.activityId) ? latest : undefined;
     const rootActivityId = previous?.rootActivityId ?? previous?.activityId;
-    if (rootActivityId) await actorServices.recovery.grantExecution(rootActivityId);
-    const task = ensemble.dispatch(owner, prompt, source, {inputKind: 'human', ...(rootActivityId ? {rootActivityId} : {}),
+    const task = ensemble.dispatch(owner, prompt, source, {inputKind: 'human', ...(rootActivityId ? {rootActivityId, grantExecution: true} : {}),
       ...(previous?.ownerId === owner && previous.progress ? {resumeTaskId: previous.activityId} : {})});
-    const pending = owner === 'logox' ? actorServices.resumeDirector(task.activityId) : '';
-    if (pending) directorReports.set(task.activityId, pending);
     return task;
   };
   return {
     sessionId: session, store, ensemble, journal, tools, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar, status, isBusy: busy,
     systemNotice: notice,
+    getInputQueue: (ownerId?: string) => ({queued: ensemble.queuedInputs(ownerId), steering: deliveries.snapshot().filter(item =>
+      item.kind === 'human_steer' && item.status === 'pending' && (!ownerId || item.ownerId === ownerId))}),
     getStatusSnapshot: () => store.getSnapshot().revision + ':' + statusbar.getSnapshot().revision,
     subscribeStatus(listener: () => void) {const stopStore = store.subscribe(listener), stopPreferences = statusbar.subscribe(listener); return () => {stopStore(); stopPreferences();};},
     async recordError(error: unknown, owner = 'logox') {
@@ -676,7 +695,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
       } finally {stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopSurfaceErrors(); stopLoginErrors();}
     },
-    async submit(raw: string, source = 'logox'): Promise<void> {
+    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();
       if (!text || closed) return;
       if (permissionTask) throw new Error('Permissions are saving, please wait...');
@@ -686,6 +705,19 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (surfaces.getSnapshot()) throw new Error('Please close the current command pane first');
       if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
       commandOwner = source;
+      const delivery = submitDeliverySchema.parse(inputDelivery);
+      if (delivery.mode === 'steer') {
+        if (/^[@/]/.test(text)) throw new Error('Steering cannot execute commands or actor-routing syntax. Use Queue instead.');
+        const target = store.activities.get(session, delivery.activityId);
+        if (!target || !['running', 'waiting_input'].includes(target.status)) throw new Error('The steering target is no longer active. The draft was not queued.');
+        if (target.ownerId !== source) throw new Error('The steering target does not match the selected Actor window.');
+        await beginTask();
+        if (!await ensemble.injectTaskMessage(target.ownerId, text, 'direct', undefined, 'queue',
+          {activityId: delivery.activityId, inputKind: 'human', kind: 'human_steer'})) {
+          throw new Error('The steering target is no longer available. The draft was not queued.');
+        }
+        return;
+      }
       if (/^\/(new|resume|clear|rewind)(?:\s|$)/.test(text) && await options.sessionCommand(text)) return;
       if (text === '/login' || text.startsWith('/login ')) {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');

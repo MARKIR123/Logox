@@ -185,13 +185,13 @@ test('SendMessage: injects into active task without opening a new card, and drai
 
     // 4. Verify message was received in techneContext's inbox!
     assert.ok(typeof techneContext.drainInbox === 'function');
-    const drained = techneContext.drainInbox();
+    const drained = await techneContext.drainInbox();
     assert.equal(drained.length, 1);
     assert.match(drained[0].text, /口径确认，你的判定是对的/);
     assert.match(drained[0].text, /确认口径/);
 
     // After draining, inbox is empty
-    assert.equal(techneContext.drainInbox().length, 0);
+    assert.equal((await techneContext.drainInbox()).length, 0);
 
     // Complete techne task
     completeTaskResolve();
@@ -215,11 +215,8 @@ test('UpdateTaskProgressTool: registered in tools/index, aliases update_task_pro
   assert.ok(schemas.UpdateTaskProgress, 'schemas.UpdateTaskProgress must be exported');
   assert.equal(descriptions.UpdateTaskProgress, UPDATE_TASK_PROGRESS_DESCRIPTION);
 
-  // Validate schema accepting stages and update
-  const valid = schemas.UpdateTaskProgress.safeParse({
-    stages: [{id: 's1', title: 'T1', purpose: 'P1', activeForm: 'A1'}],
-    update: {id: 's1', status: 'in_progress'},
-  });
+  const valid = schemas.UpdateTaskProgress.safeParse({label: 'Comparing screenshots', detail: 'Desktop and mobile.'});
   assert.equal(valid.success, true);
+  assert.equal(schemas.UpdateTaskProgress.safeParse({stages: [{title: 'Verify'}]}).success, false);
 });
 

@@ -1,5 +1,7 @@
 import {lstat, open, readdir, realpath, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {previousBrowserSkills} from './skill-defaults.js';
 import {homedir} from 'node:os';
 import {basename, dirname, join, resolve, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -53,7 +55,7 @@ async function collectSkillFiles(dir: string): Promise<string[]> {
   } catch {}
   return files;
 }
-export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkillsDir: string): Promise<void> {
+export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkillsDir: string, seedMissing = true): Promise<void> {
   try {
     if (!existsSync(builtinSkillsDir)) return;
     const files = await collectSkillFiles(builtinSkillsDir);
@@ -61,9 +63,15 @@ export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkill
       const rel = relative(builtinSkillsDir, file);
       const target = join(userSkillsDir, rel);
       if (!existsSync(target)) {
+        if (!seedMissing) continue;
         await mkdir(dirname(target), {recursive: true});
-        const content = await readFile(file);
-        await writeFile(target, content);
+        try {await writeFile(target, await readFile(file), {flag: 'wx'});}
+        catch (error) {if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;}
+      } else {
+        const previous = previousBrowserSkills[rel.replaceAll('\\', '/')];
+        if (!previous || (await lstat(target)).isSymbolicLink()) continue;
+        const current = (await readFile(target, 'utf8')).replaceAll('\r\n', '\n');
+        if (createHash('sha256').update(current).digest('hex') === previous) await writeFile(target, await readFile(file));
       }
     }
   } catch {}
@@ -276,6 +284,7 @@ export class Resources {
     const userSkillsDir = join(home, '.logox', 'skills');
     if (allowBuiltin) {
       await ensureUserSkillsSeeded(userSkillsDir, builtinSkillsDir);
+      await ensureUserSkillsSeeded(join(home, '.logox-ts', 'skills'), builtinSkillsDir, false);
     }
     const skillRoots = [...new Set([
       ...(allowBuiltin ? [builtinSkillsDir] : []),

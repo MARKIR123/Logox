@@ -4,7 +4,6 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {buildStageRows} from '../src/tui/stage.js';
 import {palette} from '../src/tui/cards.js';
-import {cast} from '../src/actors/ensemble.js';
 import {decorateRow} from '../src/tui/row-presentation.js';
 import {actionAt} from '../src/tui/scene.js';
 import {contentPoint, selectionRange} from '../src/tui/selection.js';
@@ -12,6 +11,7 @@ import {extractSelection} from '../src/tui/viewport.js';
 import {TaskProgress} from '../src/runtime/task-progress.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 
+// CJK fixtures exercise wrapping, selection and historical stage snapshots.
 const skeleton = {id: 'skeleton', title: '铺好可运行骨架', purpose: '形成打开即运行的动画', activeForm: '正在铺好动画骨架'};
 const riding = {id: 'riding', title: '理顺骑行动作', purpose: '核对车轮与地面的节奏', activeForm: '正在核对骑行动作'};
 function fixture() {
@@ -30,29 +30,21 @@ function fixture() {
   return {store, steps, first, second, tool, now: () => now};
 }
 
-test('Actor 自然动作标题，阶段只有顶格主题色粗体标题，动作同级缩进两列且单请求计时', () => {
+test('Actor labels stay on the card while legacy stage snapshots create no body headings', () => {
   const f = fixture();
   for (const view of ['logox', 'techne']) {
     const rows = buildStageRows(f.store.getSnapshot(), 's', view, 99, {a: true}, null);
     assert.match(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/);
     assert.ok(!rows.some(row => /\d\/\d/.test(row.text)));
-    const firstHeading = rows.findIndex(row => row.messageId === f.first + '-stage');
-    const heading = rows[firstHeading]!;
-    assert.equal(rows[firstHeading - 1]!.tone, 'spacer');
-    assert.equal(heading.text, skeleton.title);
-    assert.ok(heading.segments!.filter(part => part.text === skeleton.title).every(part => part.bold && part.color === cast.techne!.color));
-    assert.equal(heading.hover, undefined, '阶段无单独折叠或悬停卡片');
-    assert.equal(rows.find(row => row.messageId === f.first)!.gutterCols, heading.gutterCols + 2);
-    assert.equal(rows.find(row => row.messageId === f.tool)!.gutterCols, heading.gutterCols + 2);
+    assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
     assert.match(rows.find(row => row.messageId === f.first)!.text, /Thought for 1s/);
     assert.match(rows.find(row => row.messageId === f.tool)!.text, /write[\s(]pelican\.html/i);
-    assert.ok(rows.find(row => row.messageId === f.second + '-stage'));
-    assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 2);
-    assert.ok(!rows.some(row => row.text.includes('核对传动比例')), '每条思考独立默认收起');
+    assert.ok(!rows.some(row => row.text.includes('核对传动比例')));
+    assert.equal(f.steps.get(f.first).stage?.id, skeleton.id, 'Historical step snapshots remain unchanged');
   }
 });
 
-test('展开某次 Thinking 不吞掉其它动作；灰底命中和标题复制保持，恢复原因只在其详情', () => {
+test('expanding one Thinking preserves sibling actions, selection and local recovery notes', () => {
   const f = fixture();
   f.store.updateMessage(f.first, {step: {...f.steps.get(f.first), note: '输出已满，缩小当前步骤后接续。'}});
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
@@ -63,16 +55,16 @@ test('展开某次 Thinking 不吞掉其它动作；灰底命中和标题复制�
   assert.equal(body.bg, palette.toolExpanded);
   assert.equal(actionAt(body, 80)?.foldId, f.first);
   const tool = rows.find(row => row.messageId === f.tool)!;
-  assert.notEqual(tool.bg, palette.toolExpanded, '同级工具不归到展开思考的灰底内');
+  assert.notEqual(tool.bg, palette.toolExpanded, 'Sibling tools do not inherit an expanded reasoning background');
   assert.equal(actionAt(tool, 80)?.foldId, 'a');
-  const index = rows.findIndex(row => row.messageId === f.first + '-stage'), heading = rows[index]!;
+  const index = rows.findIndex(row => row.messageId === f.first), heading = rows[index]!;
   const selection = {anchor: contentPoint(rows, index, heading.gutterCols), focus: contentPoint(rows, index, heading.gutterCols + 16)};
   const copied = extractSelection(rows, selectionRange(rows, selection));
   const narrow = buildStageRows(f.store.getSnapshot(), 's', 'logox', 24, {a: true, [f.first]: true}, null);
   assert.equal(extractSelection(narrow, selectionRange(narrow, selection)), copied);
 });
 
-test('Denied 和 Error 使用运行时分类，红方块红粗体后缀，正常工具无异常后缀', () => {
+test('runtime dispositions control Denied and Error styling without marking successful tools', () => {
   const f = fixture();
   for (const disposition of ['denied', 'error'] as const) {
     const id = f.steps.tool({id: disposition, name: 'read', arguments: '{"file_path":"README.md"}'});
@@ -91,7 +83,7 @@ test('Denied 和 Error 使用运行时分类，红方块红粗体后缀，正常
   assert.notDeepEqual(decorateRow(running, f.now()).segments, decorateRow(running, f.now() + 320).segments);
 });
 
-test('恢复时只显示自然状态，完成标题回到摘要，旧无阶段记录不伪造阶段', () => {
+test('recovery uses runtime status and terminal titles use reports without inventing legacy stages', () => {
   const f = fixture();
   for (const stage of ['接续中', '调整中']) {
     f.store.activities.update('s', 'a', {stage});
@@ -110,14 +102,14 @@ test('恢复时只显示自然状态，完成标题回到摘要，旧无阶段�
   assert.ok(rows.some(row => /▮\s*read/i.test(row.text)));
 });
 
-test('没有思考文本的纠偏请求仍显示并复制独立说明，原始消息与其它选区不受影响', () => {
+test('empty reasoning can show a separate recovery note without changing original text or selections', () => {
   const f = fixture(), id = f.steps.thinking(); f.steps.finish(id, 'completed');
   const note = '本次只有思考，缩小当前步骤并先交付可核对成果。';
   f.store.updateMessage(id, {step: {...f.steps.get(id), note}});
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [id]: true}, null);
   const index = rows.findIndex(row => row.messageId === id + '-note'), row = rows[index]!;
   assert.equal(row.text, note); assert.equal(row.color, palette.muted);
-  assert.equal(f.store.getSnapshot().messages.find(message => message.id === id)!.text, '', '恢复说明不拼入模型原文');
+  assert.equal(f.store.getSnapshot().messages.find(message => message.id === id)!.text, '', 'Recovery notes do not alter original model text');
   const selection = {anchor: contentPoint(rows, index, row.gutterCols), focus: contentPoint(rows, index, row.gutterCols + 30)};
   const copied = extractSelection(rows, selectionRange(rows, selection));
   f.store.appendMessage(f.second, '继续核对');
@@ -126,30 +118,47 @@ test('没有思考文本的纠偏请求仍显示并复制独立说明，原始�
   assert.ok(copied.length > 0);
 });
 
-test('实际阶段更新保存 Actor 自然标题与不可改写步骤快照，恢复后保留当前阶段', async () => {
-  const store = new RuntimeStore();
-  store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'techne', kind: 'actor', title: '动画任务', status: 'running', stage: '处理中', detail: ''});
-  store.message('s', 'techne', 'user', '制作动画', {activityId: 'a', inputKind: 'director'});
-  const context: ActorContext = {sessionId: 's', activityId: 'a', ownerId: 'techne', signal: new AbortController().signal, history: [],
-    say() {}, report() {}, async record() {}, async ask() {return {status: 'cancelled', reason: 'test'};}, async permission() {return true;}};
-  const progress = new TaskProgress(store, context), steps = new Steps(store, context, () => 100, () => progress.current());
-  const initial = steps.thinking(); steps.finish(initial, 'completed');
-  await progress.update({stages: [skeleton, riding], update: {id: skeleton.id, status: 'in_progress'}});
-  const build = steps.thinking(); steps.finish(build, 'completed');
-  await progress.update({update: {id: skeleton.id, status: 'completed', result: '文件已生成'}});
-  await progress.update({update: {id: riding.id, status: 'in_progress'}});
-  const resumed = new TaskProgress(store, {...context, progress: progress.snapshot()});
-  const resumedSteps = new Steps(store, context, () => 200, () => resumed.current());
-  const final = resumedSteps.thinking();
-  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {a: true}, null);
-  assert.match(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/);
-  assert.equal(rows.find(row => row.messageId === initial + '-stage')!.text, '梳理目标与制定阶段');
-  assert.equal(rows.find(row => row.messageId === build + '-stage')!.text, skeleton.title);
-  assert.equal(rows.find(row => row.messageId === final + '-stage')!.text, riding.title);
-  assert.equal(steps.get(initial).stage!.id, 'planning');
+test('live label changes affect only the actor card and disappear on every terminal outcome', async () => {
+  for (const status of ['completed', 'failed', 'cancelled'] as const) {
+    const store = new RuntimeStore();
+    store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'techne', kind: 'actor', title: 'Animation task', status: 'running', stage: 'Working', detail: ''});
+    store.message('s', 'techne', 'user', 'Create an animation', {activityId: 'a', inputKind: 'director'});
+    const context: ActorContext = {sessionId: 's', activityId: 'a', ownerId: 'techne', signal: new AbortController().signal, history: [],
+      say() {}, report() {}, async record() {}, async ask() {return {status: 'cancelled', reason: 'test'};}, async permission() {return true;}};
+    const progress = new TaskProgress(store, context), steps = new Steps(store, context, () => 100);
+    const initial = steps.thinking(); steps.finish(initial, 'completed');
+    await progress.update({label: 'Building animation'});
+    await progress.update({label: 'Comparing screenshots'});
+    steps.thinking();
+    for (const view of ['logox', 'techne']) {
+      const rows = buildStageRows(store.getSnapshot(), 's', view, 99, {a: true}, null);
+      assert.match(rows.find(row => row.messageId === 'a')!.text, /Comparing screenshots/);
+      assert.ok(!rows.some(row => row.messageId.endsWith('-stage')));
+      assert.ok(!rows.some(row => row.messageId === initial));
+      assert.equal(steps.get(initial).stage, undefined);
+    }
+    steps.close(status);
+    store.activities.update('s', 'a', {status, summary: {title: 'Report delivered', report: 'Verification remains separate.', source: 'model'}});
+    const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {}, null);
+    assert.ok(!rows.some(row => row.text.includes('Comparing screenshots')));
+    assert.deepEqual(store.activities.get('s', 'a')?.progress, {label: 'Comparing screenshots'}, 'History is not rewritten as accepted/completed');
+  }
 });
 
-test('历史失败请求不借用后续活动详情，最终失败原因只归最后一次失败 Thinking', () => {
+test('legacy progress and empty completed Thinking never leave a heading before a Director reply', () => {
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'logox', kind: 'director', title: 'Logox', status: 'completed', stage: 'Done', detail: '',
+    progress: {planned: true, revision: 1, activeStageId: riding.id, stages: [{...riding, status: 'in_progress'}], revisions: []}});
+  const steps = new Steps(store, {sessionId: 's', activityId: 'a', ownerId: 'logox'}, () => 100, () => riding);
+  const empty = steps.thinking(); steps.finish(empty, 'completed');
+  store.message('s', 'logox', 'assistant', 'A normal conversational reply.', {activityId: 'a'});
+  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {}, null);
+  assert.ok(rows.some(row => row.text.includes('A normal conversational reply.')));
+  assert.ok(!rows.some(row => row.messageId.endsWith('-stage') || row.text.includes(riding.title)));
+  assert.equal(steps.get(empty).stage?.id, riding.id);
+});
+
+test('historical failed requests do not borrow later details; only the final failure owns the error', () => {
   const f = fixture(); f.steps.finish(f.first, 'failed');
   f.store.activities.update('s', 'a', {detail: '第 4 次往返'});
   let rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
@@ -161,7 +170,7 @@ test('历史失败请求不借用后续活动详情，最终失败原因只归�
   assert.equal(rows.find(row => row.messageId === f.second + '-error')!.text, '最终请求连接中断');
 });
 
-test('Actor 续做沿同角色任务链显示完整原目标，不把职能和“继续”当作任务目标', () => {
+test('actor resume follows same-owner links to the complete original goal', () => {
   const store = new RuntimeStore(), goal = '创建独立的鹈鹕骑车 SVG 动画。\n' + '保持车轮、踏板与地面运动同步，并保留细节。'.repeat(12);
   store.activities.create({sessionId: 's', activityId: 'original', ownerId: 'techne', kind: 'actor', title: '精工 · 构建匠人', status: 'failed', stage: '失败', detail: '输出耗尽'});
   store.message('s', 'techne', 'user', goal, {activityId: 'original', inputKind: 'director'});
@@ -173,11 +182,11 @@ test('Actor 续做沿同角色任务链显示完整原目标，不把职能和�
     const rows = buildStageRows(store.getSnapshot(), 's', view, 40, {'resume-again': true}, null);
     const goalRows = rows.filter(row => row.messageId === 'resume-again-goal');
     assert.equal(goalRows.map((row, index) => row.text + (index < goalRows.length - 1 && !row.softWrap ? '\n' : '')).join(''), 'Goal: ' + goal);
-    assert.ok(goalRows.length > 2, '完整目标折行呈现，不截断');
+    assert.ok(goalRows.length > 2, 'The full goal wraps without truncation');
   }
 });
 
-test('Actor 目标链忽略其它角色、断链回落原消息，无消息与环形关系均安全回落', () => {
+test('actor goal lookup safely handles foreign owners, broken links, missing input and cycles', () => {
   const store = new RuntimeStore();
   store.activities.create({sessionId: 's', activityId: 'foreign', ownerId: 'kalon', kind: 'actor', title: 'Kalon职能', status: 'failed', stage: '失败', detail: ''});
   store.message('s', 'kalon', 'user', '其它角色的目标', {activityId: 'foreign'});

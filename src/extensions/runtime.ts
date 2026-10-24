@@ -5,6 +5,7 @@ import {Resources, type ResourceOptions} from '../resources/manager.js';
 import {Tools, type ToolResult} from '../tools/tools.js';
 import {Hooks} from './hooks.js';
 import {Mcp, type ExtensionApproval} from './mcp.js';
+import {playwrightServer} from './playwright.js';
 
 /** 项目级拥有者，可传给重建后的会话；仅最终项目关闭时 close。 */
 export class ProjectExtensions {
@@ -14,7 +15,9 @@ export class ProjectExtensions {
   constructor(cwd: string, config: Config, options: ResourceOptions = {}, approve?: ExtensionApproval,
     diagnose?: (text: string) => void) {
     this.resources = new Resources(cwd, options);
-    this.mcp = new Mcp(cwd, config.mcp.servers, approve);
+    const servers = {...config.mcp.servers};
+    if (config.mcp.playwright && !Object.hasOwn(servers, 'playwright')) servers.playwright = playwrightServer(cwd);
+    this.mcp = new Mcp(cwd, servers, approve);
     this.hooks = new Hooks(cwd, config.hooks, diagnose, options.home);
   }
   async initialize(): Promise<void> {await Promise.all([this.resources.reload(), this.hooks.initialize()]);}

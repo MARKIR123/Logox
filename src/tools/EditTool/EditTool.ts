@@ -47,19 +47,43 @@ export async function executeEdit(
   if (before.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB');
 
   const decoded = decode(before);
-  const newline = decoded.text.includes('\r\n') ? '\r\n' : '\n';
-  const old = args.old_string.replace(/\r?\n/g, newline);
-  const replacement = args.new_string.replace(/\r?\n/g, newline);
-  const count = decoded.text.split(old).length - 1;
+  const normalized = decoded.text.replace(/\r\n/g, '\n');
+  const old = args.old_string.replace(/\r\n/g, '\n');
   const replaceAll = args.replace_all ?? false;
+  let index = normalized.indexOf(old);
 
-  if (!count) throw new Error('No match found for old_string; please re-read file');
-  if (count > 1 && !replaceAll) throw new Error('Multiple matches found; provide more context or set replace_all: true');
+  if (index < 0) throw new Error('No match found for old_string; please re-read file');
+  if (!replaceAll && normalized.indexOf(old, index + 1) >= 0) {
+    throw new Error('Multiple matches found; provide more context or set replace_all: true');
+  }
 
-  const after = Buffer.from(
-    (decoded.bom ? '﻿' : '') +
-      (replaceAll ? decoded.text.split(old).join(replacement) : decoded.text.replace(old, () => replacement))
-  );
+  // Match logical lines, but map offsets back to the original text before writing.
+  const crlfs = decoded.text.matchAll(/\r\n/g);
+  let nextCrlf = crlfs.next(), skipped = 0;
+  const rawOffset = (offset: number): number => {
+    while (!nextCrlf.done && nextCrlf.value.index < offset + skipped) {
+      skipped++;
+      nextCrlf = crlfs.next();
+    }
+    return offset + skipped;
+  };
+  const parts: string[] = [];
+  let cursor = 0;
+  do {
+    const start = rawOffset(index), end = rawOffset(index + old.length);
+    let replacement = args.new_string;
+    if (replacement.includes('\n')) {
+      let lineEnd = decoded.text.indexOf('\n', start);
+      if (lineEnd < 0) lineEnd = decoded.text.lastIndexOf('\n', start - 1);
+      const newline = lineEnd > 0 && decoded.text[lineEnd - 1] === '\r' ? '\r\n' : '\n';
+      replacement = replacement.replace(/\r?\n/g, newline);
+    }
+    parts.push(decoded.text.slice(cursor, start), replacement);
+    cursor = end;
+    index = replaceAll ? normalized.indexOf(old, index + old.length) : -1;
+  } while (index >= 0);
+  parts.push(decoded.text.slice(cursor));
+  const after = Buffer.from((decoded.bom ? '﻿' : '') + parts.join(''));
 
   if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
 

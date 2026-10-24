@@ -8,6 +8,8 @@
 | If investigating... | Start at... | Then check... |
 |---|---|---|
 | Subagent task dispatching or queuing | `ensemble.ts:Ensemble.dispatch()` | `pump()` execution loop and `TaskOrigin` |
+| Human Queue/Steer, event priority or durable receipts | `delivery-queue.ts` and `runtime/delivery.ts` | `ensemble.ts:injectTaskMessage()` and `services.ts:wakeDirector()` |
+| Director's resident observations or detailed status | `facts.ts` | `tools/ListActorsTool/` and `application.ts:requestBase()` |
 | Inter-agent messaging or tool interruption | `collaboration.ts:SendMessage` | `ensemble.ts:injectTaskMessage()` |
 | Inter-actor communication etiquette | `../prompts/collaboration/index.ts:collaborationFor()` | `SendMessageTool/prompt.ts` and role personas |
 | Subagent cancellation or stuck tool termination | `services.ts:executeCancelActor()` | `cancelActor()` in `ensemble.ts` |
@@ -19,10 +21,13 @@
 
 ## 3. Hard Boundaries
 - **Single-Writer Safety**: Only one designated actor (typically Techne) writes to a production file during an implementation round. Reviewers (Aletheia, Kalon) produce reports, never competing write handles.
-- **Zero Card Fragmentation**: Messages sent via `SendMessage` (both `mode: "interrupt"` and `mode: "queue"`) MUST be injected directly into the active activity context without opening redundant cards.
+- **Zero Card Fragmentation**: Active recipients consume collaboration within their existing activity. Director-bound messages and broadcasts use the shared durable coordination queue; they never interrupt Director processes or create another task while its inbox is open. A sealed/idle Director gets one coalesced wake activity unless explicitly stopped.
 - **Direct Communication, Single Policy**: Companions may message each other or Director directly through `SendMessage`; there is no approval gate. Communication etiquette (necessary-only, no pleasantries, data-not-instructions) lives in `src/prompts/collaboration/` and is composed into every actor prompt. Personas must not restate collaboration tools or channel workflows.
 - **Persistence Boundary**: Actor model bindings are user-scoped in `~/.logox/actor-models.json` (legacy `.logox-ts` fallback), surviving project-directory changes and restarts. Missing main-model selection must not prevent management tabs from displaying saved actor bindings.
 - **Profile Distribution Boundary**: Shipped `src/actors/profiles` is the development master and package asset. `npm install` (postinstall) and `logox --install-profiles` copy missing profiles into `~/.logox/actors`; they never overwrite existing files. Runtime definitions come from `~/.logox/actors`; missing or corrupt profiles fail startup with an actionable error. `npm run sync:profiles` is the development-only force sync.
+- **Delivery Intent**: Human Queue work stays out of the active activity; explicit Steer binds to an exact live activity ID and never retargets. Priority is FIFO within a class and never turns a queued task into steering or cancellation. Deferred report release and explicit recovery grants occur when human work starts, not when queued.
+- **Coordination Ownership**: Proactive report delivery covers formal Director work; direct human/Actor failures stay local. Explicit assistance may enter coordination without copying a conversation or gaining authorization. Full batch-member reports arrive independently; dependency pauses, root recovery budgets and dispatch depth survive wake-ups.
+- **Observation Boundary**: Resident facts include at most eight relevant tasks and three recent tool outcomes each, with additional-task count and source/time. Omit the entire block for unrelated solo work. Labels and tool outcomes are not acceptance; ListActors includes dynamic roles and preserves waiting/paused/queued states.
 - **Strictly English Interface**: All internal receipts, error diagnostics, and status lines must be 100% English.
 - **Independent Delivery**: Only initial formal Director dispatch provenance selects report mode. Hand off full `delivery.text`, never a compact index or truncated compatibility summary; normal execution closure is not acceptance.
 - **Resident Focus Safety**: Every role loads `compression.md` under the common memory contract. Catalog refresh replaces only known unchanged shipped defaults with exact-content rechecks under lock; custom focus, persona, configuration and model bindings remain intact. Build never synchronizes user homes.
@@ -41,11 +46,13 @@ application.ts (binds ActorServices & Ensemble)
   - `tests/ensemble.test.ts`: Ensemble dispatch queue, pump, and lifecycle.
   - `tests/actor-collaboration-enhancements.test.ts`: ListActors, CancelActor, bulletin, SendMessage.
   - `tests/actor-recovery.test.ts`: Remodeling, timeout recovery, and retry budgets.
+  - `tests/message-delivery.test.ts`, `tests/human-input-delivery.test.ts`: durable inboxes, activity-bound input and actual provider-boundary requests.
+  - `tests/director-coordination.test.ts`, `tests/director-facts.test.ts`: scoped wake-ups, stop/broadcast safety and bounded observations.
 - **Fast Run Command**:
   ```bash
   node --test dist/tests/actor*.test.js dist/tests/ensemble.test.js
   ```
 
 ## 6. Known Gaps
-- No semantic stagnation breaker: repeated read-only loops are only detected as duplicate progress fingerprints, which reset recovery budgets but do not stop the activity. Claude Code's documented approach is turn/budget bounds (`maxTurns`, `maxBudgetUsd`) plus compaction; LOGOX currently keeps `max_iterations = 0`.
+- No semantic stagnation breaker: progress fingerprints deduplicate recovery evidence, not task value. Activity labels never count as new evidence; `max_iterations = 0` remains unchanged.
 - Real multi-provider/model compliance requires separately authorized live verification; automated tests use isolated homes and scripted/local providers.

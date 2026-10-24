@@ -1,17 +1,18 @@
 # Module: Tools & Execution Engine (`src/tools/`)
 
 ## 1. Scope
-- **Owns**: Canonical tool registry, Zod parameter schemas, tool aliases, bundled ripgrep resolution, process tree lifecycle management, `browser-shot` screenshot CLI, and file rollback snapshots (`/undo`).
+- **Owns**: Canonical tool registry, Zod parameter schemas, tool aliases, bundled ripgrep resolution, process tree lifecycle management, and file rollback snapshots (`/undo`). Browser interaction and screenshots use the local Playwright MCP server in `src/extensions/`.
 - **Does not own**: Permission evaluation engine (owned by `src/permissions/`).
 
 ## 2. Start Here (Task Router)
 | If investigating... | Start at... | Then check... |
 |---|---|---|
 | Tool dispatch, schemas, or execution | `index.ts:Tools.execute()` | `types.ts:canonicalToolMap` and `<ToolName>Tool/` |
+| Actor status details or Director-bound messages | `ListActorsTool/` and `SendMessageTool/` | `actors/facts.ts`, `actors/collaboration.ts` and `actors/services.ts` |
 | Model-facing parameter names or legacy aliases | `<ToolName>Tool/<ToolName>Tool.ts` | `aliases.ts:normalizeAliases()` |
 | Missing or broken ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `package.json` `@vscode/ripgrep` dependency |
 | Process tree termination or hanging CLI | `process.ts:runProcess()` | 1.5s forced cleanup timer and `taskkill /T /F` |
-| Visual preview inspection or screenshot CLI | `BrowserShot/cli.ts` | `BrowserShot/cdp.ts` and `ShellTool/prompt.ts` |
+| Browser interaction, screenshots, or offline setup | `../extensions/playwright.ts` | `../extensions/mcp.ts` image transport and `npm run browser:install` |
 | Atomic file undo and snapshot rollback | `snapshots.ts:Snapshots` | `/undo` command in `src/application.ts` |
 | Missing argument validation error formatting | `index.ts:validateToolCall()` | Specific tool Zod schema in `<ToolName>Tool.ts` |
 | Tool presentation, visibility or question actions | `ui-registry.ts` and sibling `UI.ts` | `ui-types.ts` and shared `tui/tool-ui.ts` |
@@ -26,8 +27,7 @@
 - **Tool-Owned Titles**: Each `UI.ts` names the most decision-relevant parameter first: `file_path` for Read/Write/Edit, `pattern` for Grep/Glob, task owner/goal for Actor, question header for AskUserQuestion, and channel for channel-scoped SendMessage. Titles must stay one line and never dump payload bodies.
 - **Prompt Ownership**: Tool-specific descriptions and repair prompts stay co-located in `src/tools/<Tool>/prompt.ts`. Cross-cutting rules (charter, collaboration, reporting, recovery, runtime state) live under `src/prompts/`; do not move tool descriptions into that tree.
 - **1.5s Process Cleanup Guarantee**: `runProcess()` enforces a 1.5-second safety timer after kill signals to destroy unclosed stdio streams and reject immediately, preventing orphaned child processes from deadlocking the session.
-- **Deadlock Guard**: `--virtual-time-budget=0` is strictly forbidden in Shell commands.
-- **Deterministic Capture**: The `browser-shot` CLI freezes the virtual clock *after* page load and advances by explicit 16.67ms increments. `--time` means animation time, not load wait.
+- **Browser Verification**: Playwright MCP owns browser state and screenshots. Keep actions and evidence in one page session; generic Shell execution does not inject browser shims or rewrite browser flags.
 - **Scratchpad Confinement**: All temporary calculation scripts and preview screenshots must be written inside session scratchpad.
 
 ## 4. Integration Points

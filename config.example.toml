@@ -65,7 +65,12 @@ readonly_concurrency = 4
 # cache_read = 0.5
 # cache_write = 3
 
-# MCP currently supports stdio subprocesses, not HTTP transport.
+# The bundled Playwright MCP server starts locally on first browser use.
+# Prepare Chromium while online with: npm run browser:install
+# [mcp]
+# playwright = false # Disable the built-in browser server.
+
+# Additional MCP servers use stdio subprocesses, not HTTP transport.
 # [mcp.servers.local]
 # command = "node"
 # args = ["/absolute/path/to/server.mjs"]

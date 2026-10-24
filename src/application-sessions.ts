@@ -15,7 +15,7 @@ import {StateFile, preferenceSchema} from './config/model-preferences.js';
 import {UsageLedger} from './context/usage.js';
 import {ProjectExtensions, observeTools} from './extensions/runtime.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
-import type {createSessionApplication, ApplicationOptions} from './application.js';
+import type {createSessionApplication, ApplicationOptions, SubmitDelivery} from './application.js';
 
 /** 项目服务保持稳定；会话运行时在候选加载成功后整体替换。 */
 export async function createManagedApplication(options: ApplicationOptions, createSession: typeof createSessionApplication) {
@@ -288,8 +288,9 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     getSessionSnapshot: () => snapshot,
     subscribeSession(listener: () => void) {listeners.add(listener); return () => {listeners.delete(listener);};},
     commandContext: () => current.commandContext(), noteDraft: () => current.noteDraft(),
+    getInputQueue: (ownerId?: string) => current.getInputQueue(ownerId),
     cancel: (activityId: string) => current.cancel(activityId),
-    async submit(raw: string, source = 'logox'): Promise<void> {
+    async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       // 只串行入口检查和调用开始，长任务仍由各模块的忙碌状态保护。
       // pending 的异步读取不能让后来 /new 抢在前一项设置保存之前。
       const previous = entry;
@@ -304,13 +305,13 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         if (text.startsWith('/permissions ') && await journal.pending(active.sessionId)) throw new Error('会话回退未完成，请先使用 /rewind 重试');
         if (text && !/^\/(new|resume|rewind|status|config|help|usage|permissions|commands|skills)(?:\s|$)/.test(text) && await journal.pending(active.sessionId)) throw new Error('会话回退未完成，请先使用 /rewind 重试');
         if (transition || active !== current || closed) throw new Error('会话正在切换或关闭，请等待完成');
-        operation = active.submit(raw, source);
+        operation = active.submit(raw, source, delivery);
       } catch (error) {await active.recordError(error, source); throw error;}
       finally {release();}
       try {
         await operation;
       } catch (error) {await active.recordError(error, source); throw error;}
-      if (text && !text.startsWith('/') && persistence.get(active)!.saved) {
+      if (delivery.mode === 'queue' && text && !text.startsWith('/') && persistence.get(active)!.saved) {
         // 首次登记已经在派发前完成；标题更新失败不能把已接受的任务变成一次提交失败。
         try {await manager.touch(active.sessionId, text);}
         catch (error) {await active.recordError(error, source);}

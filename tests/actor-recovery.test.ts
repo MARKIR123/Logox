@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {DynamicEnsemble, type ActorContext, type ActorExecutor} from '../src/actors/ensemble.js';
 import {ActorServices} from '../src/actors/services.js';
 import {ActorRecovery} from '../src/actors/recovery.js';
+import {DeliveryQueue} from '../src/actors/delivery-queue.js';
 import {ActorCatalog} from '../src/actors/catalog.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {createProvider, ProviderError, providerTimeout} from '../src/providers/http.js';
@@ -16,18 +17,25 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import type {ModelRequest, ModelTurn} from '../src/runtime/messages.js';
 
+// Chinese task and provider-error fixtures retain legacy diagnostics and continuation routing coverage.
 const call = (tasks: {ownerId: string; prompt: string}[]) => ({id: 'dispatch', name: 'dispatch_role', arguments: JSON.stringify({tasks})});
 async function fixture(execute: (prompt: string, context: ActorContext, services: ActorServices) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'logox-actor-recovery-'));
   const config = await loadConfig(directory, {}, {}, directory, directory);
   const catalog = new ActorCatalog(directory, {home: directory}); await catalog.load();
   const journal = new Journal(join(directory, 'journal')), store = new RuntimeStore();
+  const deliveries = new DeliveryQueue('s', journal);
   let services!: ActorServices;
-  const run: ActorExecutor<string> = async (prompt, context) => {services.definition(context); await execute(prompt, context, services);};
-  const ensemble = new DynamicEnsemble('s', store, journal, run, {member: owner => catalog.find(owner),
+  const run: ActorExecutor<string> = async (prompt, context) => {
+    services.definition(context);
+    const incoming = await context.drainInbox?.() ?? [];
+    await execute(context.coordinationWake && incoming.length ? incoming.map(message => message.text).join('\n') : prompt, context, services);
+  };
+  const ensemble = new DynamicEnsemble('s', store, journal, run, {deliveries, member: owner => catalog.find(owner),
     handoff: result => services.handoff(result), settled: (activity, status) => services.settled(activity, status)});
-  services = new ActorServices({sessionId: 's', catalog, config, journal, registry: new ProviderRegistry(config, {}),
+  services = new ActorServices({sessionId: 's', catalog, config, journal, deliveries, registry: new ProviderRegistry(config, {}),
     resources: new Resources(directory, {home: directory, boundary: directory}), requireIdle() {}, approve: async () => false,
+    getSnapshot: () => store.getSnapshot(), getActiveTask: owner => ensemble.getActiveTask(owner), canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     pauseBatch: id => ensemble.pauseBatch(id), resumeBatch: id => ensemble.resumeBatch(id), coordinationPath: join(directory, 'coordination.json')});
   await services.recover();
@@ -40,7 +48,7 @@ async function idle(ensemble: DynamicEnsemble): Promise<void> {
   while (ensemble.isBusy()) {if (Date.now() > deadline) throw new Error('调度未收敛'); await new Promise(resolve => setTimeout(resolve, 5));}
 }
 
-test('技术异常立即暂停同批后续，并优先接管；独立任务继续串行，不自等待', {timeout: 5000}, async () => {
+test('technical failures pause batch dependencies while explicit human work precedes recovery', {timeout: 5000}, async () => {
   const order: string[] = [];
   let enqueueIndependent!: () => void;
   const f = await fixture(async (prompt, context, services) => {
@@ -53,7 +61,7 @@ test('技术异常立即暂停同批后续，并优先接管；独立任务继�
     enqueueIndependent = () => {f.ensemble.dispatch('kalon', '独立', 'direct');};
     const first = f.ensemble.dispatch('logox', '开始', 'direct');
     await first.done; await idle(f.ensemble);
-    assert.deepEqual(order, ['派工', 'aletheia', 'logox', 'kalon']);
+    assert.deepEqual(order, ['派工', 'aletheia', 'kalon', 'logox']);
     const tasks = f.store.getSnapshot().activities;
     const failed = tasks.find(task => task.ownerId === 'aletheia')!, paused = tasks.find(task => task.ownerId === 'techne')!;
     assert.equal(paused.status, 'paused'); assert.equal(paused.batchId, failed.batchId);
@@ -62,7 +70,7 @@ test('技术异常立即暂停同批后续，并优先接管；独立任务继�
   } finally {await f.close();}
 });
 
-test('主循环停止不联动取消子任务，晚到结果只交接给下一次正式输入', {timeout: 5000}, async () => {
+test('stopping Director preserves child work and defers late results until new human input', {timeout: 5000}, async () => {
   const dispatched = barrier(), release = barrier(); let actorRuns = 0;
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') {
@@ -78,13 +86,15 @@ test('主循环停止不联动取消子任务，晚到结果只交接给下一�
     await parent.done; release.resolve(); await idle(f.ensemble);
     assert.equal(actorRuns, 1); assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 1);
     assert.equal(f.store.getSnapshot().activities.find(task => task.ownerId === 'techne')?.status, 'completed');
-    assert.match(f.services.resumeDirector('next-user-input'), /子任务完成/);
+    assert.ok(f.services.deliveries.pending('logox').some(item => item.text.includes('子任务完成')));
+    f.services.resumeDirector('next-user-input');
+    await f.services.deliveries.drain('logox', 'next-user-input');
     await f.services.settled('next-user-input', 'completed');
     assert.equal(f.services.resumeDirector(), '');
   } finally {release.resolve(); await f.close();}
 });
 
-test('卡片停止只取消目标工具并暂停后续，独立 Actor 仍完成；不自动补救用户停止', {timeout: 5000}, async () => {
+test('Actor stop cancels its work and pauses dependencies without cancelling independent Actors', {timeout: 5000}, async () => {
   const started = barrier(); let sideEffects = 0;
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') await services.execute(call([{ownerId: 'techne', prompt: '等待工具'}, {ownerId: 'aletheia', prompt: '依赖'}]), context);
@@ -105,11 +115,11 @@ test('卡片停止只取消目标工具并暂停后续，独立 Actor 仍完成�
     assert.equal(f.store.getSnapshot().activities.find(task => task.ownerId === 'aletheia')?.status, 'paused');
     assert.equal(f.store.getSnapshot().activities.find(task => task.ownerId === 'kalon')?.status, 'completed');
     assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 1);
-    assert.match(f.services.resumeDirector(), /不要自动重试/);
+    assert.ok(f.services.deliveries.pending('logox').some(item => item.deferredUntilHuman && item.text.includes('Do not automatically retry')));
   } finally {await f.close();}
 });
 
-test('直接 Actor 技术异常也交 Director，配置不可用维持用户选择', {timeout: 5000}, async () => {
+test('direct Actor failures and model selection stay local without automatic Director takeover', {timeout: 5000}, async () => {
   const f = await fixture(async (_prompt, context) => {
     if (context.ownerId === 'techne') throw new Error('工具异常');
     if (context.ownerId === 'kalon') throw new ProviderError('模型不存在', false, 'model_missing');
@@ -117,14 +127,14 @@ test('直接 Actor 技术异常也交 Director，配置不可用维持用户选�
   });
   try {
     await f.ensemble.dispatch('techne', '直接任务', 'direct').done; await idle(f.ensemble);
-    assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 1);
+    assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 0);
     await f.ensemble.dispatch('kalon', '配置问题', 'direct').done; await idle(f.ensemble);
-    assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 1);
-    assert.match(f.services.resumeDirector(), /模型不存在|任务/);
+    assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 0);
+    assert.equal(f.services.deliveries.pending('logox').length, 0);
   } finally {await f.close();}
 });
 
-test('同故障跨执行者仅两次补救，重启预算与停止门保留，回退清除无效根预算', async () => {
+test('recovery budgets and stop gates survive executor changes and restart while rewind removes invalid roots', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-recovery-budget-')), path = join(directory, 'state.json');
   try {
     const recovery = new ActorRecovery('s', path); await recovery.recover();
@@ -142,7 +152,7 @@ test('同故障跨执行者仅两次补救，重启预算与停止门保留，�
   } finally {await rm(directory, {recursive: true, force: true});}
 });
 
-test('Actor换执行者和Director接手共享两次预算，耗尽回合拒绝再派工并收束', {timeout: 5000}, async () => {
+test('Actor reassignment and Director takeover share recovery limits and reject exhausted dispatch', {timeout: 5000}, async () => {
   let actorRuns = 0, directorRuns = 0;
   const attempts: number[] = [];
   const f = await fixture(async (_prompt, context, services) => {
@@ -155,13 +165,13 @@ test('Actor换执行者和Director接手共享两次预算，耗尽回合拒绝�
     else throw new Error('相同工具故障');
   });
   try {
-    await f.ensemble.dispatch('techne', '直接任务', 'direct').done; await idle(f.ensemble);
+    await f.ensemble.dispatch('techne', 'formal recovery task', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
     assert.equal(actorRuns, 2); assert.equal(directorRuns, 3); assert.deepEqual(attempts, [1, 2, 2]);
     assert.equal(f.store.getSnapshot().activities.at(-1)?.status, 'completed');
   } finally {await f.close();}
 });
 
-test('用户新指示可恢复原暂停批次，不重新派发已经完成的工作', {timeout: 5000}, async () => {
+test('new human instructions resume paused batches without repeating completed work', {timeout: 5000}, async () => {
   let batchId = '', dependentRuns = 0;
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') await services.execute(call([{ownerId: 'techne', prompt: '故障'}, {ownerId: 'kalon', prompt: '依赖'}]), context);
@@ -185,7 +195,7 @@ test('用户新指示可恢复原暂停批次，不重新派发已经完成的�
   } finally {await f.close();}
 });
 
-test('模型流重置后优先交原Actor续做，Director断流保留原目标与预算', {timeout: 5000}, async () => {
+test('stream resets preserve the original Actor continuation target and shared Director budget', {timeout: 5000}, async () => {
   let original = '', actorRuns = 0, directorRuns = 0;
   const targets: Array<string | undefined> = [], reports: string[] = [];
   const disconnected = () => new ProviderError('模型流连接中断：连接被重置（ECONNRESET）', true, 'temporary',
@@ -202,7 +212,7 @@ test('模型流重置后优先交原Actor续做，Director断流保留原目标�
       assert.ok(context.history.some(entry => entry.message?.role === 'tool' && entry.message.callId === 'read-before-reset'));
       context.say('使用已有读取结果完成打磨'); return;
     }
-    if (prompt.startsWith('角色结果已返回。')) {context.say('打磨已完成'); return;}
+    if (prompt.includes('Actor results are available.')) {context.say('打磨已完成'); return;}
     targets.push(context.recovery?.actorTask?.activityId); reports.push(prompt);
     if (++directorRuns === 1) throw disconnected();
     assert.equal(context.recovery?.attempt, 2);
@@ -213,16 +223,16 @@ test('模型流重置后优先交原Actor续做，Director断流保留原目标�
     context.say('已安排原角色继续');
   });
   try {
-    await f.ensemble.dispatch('kalon', '打磨原文件', 'direct').done; await idle(f.ensemble);
-    assert.deepEqual(targets, [original, original], 'Actor断流和Director再断流都必须保留原续做目标');
-    assert.ok(reports.every(prompt => /优先指派原 Actor/.test(prompt) && /ECONNRESET/.test(prompt)));
+    await f.ensemble.dispatch('kalon', '打磨原文件', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
+    assert.deepEqual(targets, [original, original], 'Actor and Director interruptions must retain the original continuation target');
+    assert.ok(reports.every(prompt => /Prefer resuming the original Actor/.test(prompt) && /ECONNRESET/.test(prompt)));
     assert.equal(actorRuns, 2); assert.equal(directorRuns, 2);
     assert.equal((await f.journal.load('s', 'kalon')).filter(entry => entry.message?.role === 'tool').length, 1);
     assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'kalon').at(-1)?.status, 'completed');
   } finally {await f.close();}
 });
 
-test('超时优先交原Actor续做，Director自身超时仍保留续做目标及共享预算', {timeout: 5000}, async () => {
+test('timeouts preserve Actor continuation targets across Director failures', {timeout: 5000}, async () => {
   let directorRuns = 0, actorRuns = 0, original = '';
   const f = await fixture(async (prompt, context, services) => {
     if (context.ownerId === 'techne') {
@@ -236,9 +246,9 @@ test('超时优先交原Actor续做，Director自身超时仍保留续做目标�
       assert.ok(context.history.some(entry => entry.message?.role === 'tool' && entry.message.callId === 'written'));
       context.say('根据已有写入结果完成报告'); return;
     }
-    if (context.recovery && prompt.includes('优先指派原 Actor')) {
+    if (context.recovery && prompt.includes('Prefer resuming the original Actor')) {
       assert.equal(context.recovery.actorTask?.activityId, original);
-      assert.match(prompt, /优先指派原 Actor/);
+      assert.match(prompt, /Prefer resuming the original Actor/);
       if (++directorRuns === 1) throw providerTimeout();
       assert.equal(context.recovery.attempt, 2);
       const resumeCall = {id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
@@ -246,19 +256,19 @@ test('超时优先交原Actor续做，Director自身超时仍保留续做目标�
       ]})};
       const result = await services.execute(resumeCall, context);
       assert.equal(result.isError, false);
-      assert.equal((await services.execute(resumeCall, context)).isError, true, '同一失败活动不能重复排入续做队列');
+      assert.equal((await services.execute(resumeCall, context)).isError, true, 'A failed activity cannot be queued for continuation twice');
     }
     context.say('导演完成');
   });
   try {
-    await f.ensemble.dispatch('techne', '写文件并报告', 'direct').done; await idle(f.ensemble);
+    await f.ensemble.dispatch('techne', '写文件并报告', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
     assert.equal(actorRuns, 2); assert.equal(directorRuns, 2);
     assert.equal((await f.journal.load('s', 'techne')).filter(entry => entry.message?.role === 'tool').length, 1);
     assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)?.status, 'completed');
   } finally {await f.close();}
 });
 
-test('用户下一次输入接到待处理结果后可以续做原Actor，保留原根目标', {timeout: 5000}, async () => {
+test('new human work can consume deferred results and resume the original Actor root', {timeout: 5000}, async () => {
   let original = '', actorRuns = 0, childRoot = '';
   const results: Array<{text: string; isError: boolean}> = [];
   const f = await fixture(async (prompt, context, services) => {
@@ -273,16 +283,17 @@ test('用户下一次输入接到待处理结果后可以续做原Actor，保留
   });
   try {
     f.services.stopDirector('stopped');
-    await f.ensemble.dispatch('kalon', '原目标', 'direct').done; await idle(f.ensemble);
+    await f.ensemble.dispatch('kalon', '原目标', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
     const next = f.ensemble.dispatch('logox', '继续', 'direct');
-    assert.match(f.services.resumeDirector(next.activityId), /原目标/);
+    assert.ok(f.services.deliveries.pending('logox').some(item => item.text.includes('原目标')));
+    f.services.resumeDirector(next.activityId);
     await next.done; await idle(f.ensemble);
     assert.equal(results[0]?.isError, false, results[0]?.text);
-    assert.equal(actorRuns, 2); assert.equal(childRoot, original, '续做仍属于原目标');
+    assert.equal(actorRuns, 2); assert.equal(childRoot, original, 'Continuation retains the original root goal');
   } finally {await f.close();}
 });
 
-test('末位Actor失败后续做可以携带已结束的原批次，不恢复其它批次', {timeout: 5000}, async () => {
+test('continuation can reference its finished batch without resuming unrelated batches', {timeout: 5000}, async () => {
   let original = '', actorRuns = 0, batchId = '';
   const results: Array<{text: string; isError: boolean}> = [];
   const f = await fixture(async (prompt, context, services) => {
@@ -306,7 +317,7 @@ test('末位Actor失败后续做可以携带已结束的原批次，不恢复其
   } finally {await f.close();}
 });
 
-test('断点续做拒绝其它根目标及角色错配', {timeout: 5000}, async () => {
+test('continuation rejects unrelated roots and mismatched Actors', {timeout: 5000}, async () => {
   let original = '';
   const f = await fixture(async (prompt, context, services) => {
     if (context.ownerId === 'techne') {original = context.activityId; throw providerTimeout();}
@@ -330,7 +341,7 @@ test('断点续做拒绝其它根目标及角色错配', {timeout: 5000}, async 
   } finally {await f.close();}
 });
 
-test('Actor续做成功或转为不同故障后，不再把旧超时活动当作续做目标', {timeout: 5000}, async () => {
+test('successful continuation and distinct failures clear stale timeout targets', {timeout: 5000}, async () => {
   for (const nextFault of [undefined, new Error('另一种工具故障'),
     new ProviderError('模型服务暂时不可用', true, 'temporary', {status: 503})]) {
     let actorRuns = 0, directorRuns = 0;
@@ -346,17 +357,19 @@ test('Actor续做成功或转为不同故障后，不再把旧超时活动当作
           {ownerId: target.ownerId, resumeTask: target.activityId, prompt: '完成剩余部分'},
         ]})}, context);
         assert.equal(result.isError, false);
-      } else assert.equal(context.recovery?.actorTask, undefined, '不能再指派旧超时活动');
+      } else assert.equal(context.recovery?.actorTask, undefined, 'Do not reuse the stale timeout target');
       context.say('核对并收束');
     });
     try {
-      await f.ensemble.dispatch('techne', '原目标', 'direct').done; await idle(f.ensemble);
-      assert.equal(actorRuns, 2); assert.equal(directorRuns, 2);
+      await f.ensemble.dispatch('techne', '原目标', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
+      assert.equal(actorRuns, 2); assert.equal(directorRuns, 2, JSON.stringify({fault: nextFault?.message,
+        activities: f.store.activities.list().map(item => ({owner: item.ownerId, status: item.status, detail: item.detail})),
+        deliveries: f.services.deliveries.snapshot().map(item => ({kind: item.kind, status: item.status, deferred: item.deferredUntilHuman, recipient: item.recipientActivityId}))}));
     } finally {await f.close();}
   }
 });
 
-test('HTTP402额度不足在正式应用只失败一次，不触发Logox反复接管，保留API原因', {timeout: 5000}, async () => {
+test('application quota failures stop after one request and preserve provider diagnostics', {timeout: 5000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-quota-application-'));
   let requests = 0;
   const provider = createProvider({kind: 'openai_compat', baseUrl: 'https://example.invalid', model: 'fixture', key: '',
@@ -376,25 +389,25 @@ test('HTTP402额度不足在正式应用只失败一次，不触发Logox反复�
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 
-test('交接携带实际模型终止原因，不把之前可继续的工具失败当根因', {timeout: 5000}, async () => {
+test('handoff reports the actual model termination cause separately from recoverable tool failures', {timeout: 5000}, async () => {
   const f = await fixture(async (prompt, context) => {
     if (context.ownerId === 'techne') {
       await context.record({role: 'tool', callId: 'wc', name: 'shell', text: 'wc 命令不存在', isError: true});
       await context.record({role: 'tool', callId: 'read', name: 'read', text: '之后读取成功', isError: false});
       throw new ProviderError('模型流连接中断', true);
     }
-    assert.match(prompt, /终止原因（运行时）：模型流连接中断/);
-    assert.match(prompt, /此前工具报错不等于本次终止原因/);
+    assert.match(prompt, /Runtime termination cause: 模型流连接中断/);
+    assert.match(prompt, /Earlier tool failures are separate observations/);
     context.say('按模型连接故障处理');
   });
   try {
-    await f.ensemble.dispatch('techne', '原任务', 'direct').done; await idle(f.ensemble);
+    await f.ensemble.dispatch('techne', '原任务', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
     assert.equal(f.store.getSnapshot().activities.at(-1)?.status, 'completed');
     assert.equal(f.store.getSnapshot().activities.length, 2);
   } finally {await f.close();}
 });
 
-test('正式应用超时续做保留真实文件写入与中断输出，补救上限不伪造工具环境变化', {timeout: 10000}, async () => {
+test('application timeout continuation preserves real writes and interrupted output without changing tool availability', {timeout: 10000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-timeout-application-'));
   const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072},
     kernel: {max_retries: 0}, permissions: {mode: 'creative'}}, {}, cwd, cwd);
@@ -413,8 +426,8 @@ test('正式应用超时续做保留真实文件写入与中断输出，补救�
         limited = true; return complete('本任务补救已达上限');
       }
       if (last?.role === 'tool' && last.name === 'dispatch_role') return complete('等待原角色');
-      if (input.includes('优先指派原 Actor')) {
-        const match = /dispatch_role\((\{[^\n]+\})\)/.exec(input); assert.ok(match);
+      if (input.includes('Prefer resuming the original Actor')) {
+        const match = /Actor\((\{[^\n]+\})\)/.exec(input); assert.ok(match);
         return {message: {role: 'assistant', text: '', toolCalls: [{id: 'resume', name: 'dispatch_role', arguments: match[1]!}]}, stop: 'tools'};
       }
       if (input.includes('【原 Actor 任务断点续做】')) {
@@ -435,22 +448,22 @@ test('正式应用超时续做保留真实文件写入与中断输出，补救�
       return complete('Logox 已接收结果');
     }}});
   try {
-    await app.submit('@techne 仅子角色：写文件后报告'); await idle(app.ensemble);
+    await app.ensemble.dispatch('techne', '仅子角色：写文件后报告', 'logox', {inputKind: 'director', authorization: ['写文件后报告']}).done; await idle(app.ensemble);
     assert.equal(writes, 1); assert.equal(resumes, 1);
     assert.equal((await app.journal.load('s', 'techne')).filter(entry => entry.message?.role === 'tool' && entry.message.name === 'write').length, 1);
     assert.equal(app.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)?.status, 'completed');
     repeatFailure = true;
-    await app.submit('@techne 仅子角色：重复超时'); await idle(app.ensemble);
+    await app.ensemble.dispatch('techne', '仅子角色：重复超时', 'logox', {inputKind: 'director', authorization: ['重复超时']}).done; await idle(app.ensemble);
     assert.equal(limited, true, JSON.stringify(app.store.getSnapshot().activities.map(task => ({owner: task.ownerId, status: task.status, detail: task.detail}))));
-    assert.equal(resumes, 3, '第一次成功续做加本任务两次补救');
+    assert.equal(resumes, 3, 'One successful continuation plus two recovery attempts for this task');
     const events = await app.journal.systemEvents('s');
     assert.ok(events.every(event => event.kind !== 'environment_change' || !event.text.includes('当前可用工具：无')));
     await app.submit('继续新目标'); await idle(app.ensemble);
-    assert.ok(seen.at(-1)!.tools.some(tool => tool.name.toLowerCase() === 'write'), '新输入仍拥有正常工具能力');
+    assert.ok(seen.at(-1)!.tools.some(tool => tool.name.toLowerCase() === 'write'), 'New human work retains the normal tools');
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 
-test('已绑定Director但尚未消费的报告跨重启恢复，失败退回，完成只消费一次', async () => {
+test('assigned legacy reports recover across restart and failed recipients while successful work consumes once', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-assigned-reports-')), path = join(directory, 'state.json');
   try {
     const first = new ActorRecovery('s', path); await first.recover();
@@ -460,7 +473,7 @@ test('已绑定Director但尚未消费的报告跨重启恢复，失败退回，
     assert.equal(saved.pending.length, 0); assert.equal(saved.assigned[0].activityId, 'queued-director');
 
     const restarted = new ActorRecovery('s', path);
-    await restarted.recover(new Set(['actor-root'])); // 接收方的排队检查点可能尚未完成，原Actor结果仍有效。
+    await restarted.recover(new Set(['actor-root'])); // The recipient checkpoint may be incomplete; the original Actor report remains valid.
     assert.match(restarted.resume(), /已完成读取/);
     assert.match(restarted.resume('retry-director'), /已完成读取/);
     await restarted.settled('retry-director', 'failed');
@@ -478,7 +491,7 @@ test('已绑定Director但尚未消费的报告跨重启恢复，失败退回，
   } finally {await rm(directory, {recursive: true, force: true});}
 });
 
-test('空白协调恢复及空白resume不创建文件，旧版状态兼容assigned默认值', async () => {
+test('empty recovery creates no files and legacy state defaults assigned reports safely', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-empty-recovery-')), path = join(directory, 'state.json');
   try {
     const recovery = new ActorRecovery('s', path); await recovery.recover();

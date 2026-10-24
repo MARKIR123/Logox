@@ -39,11 +39,11 @@ A bad spec is obeyed silently and fails silently. Scan for these four before dis
 ## 4. Phase 3: Independent Verification (Visual & Functional)
 
 - **Aletheia**: Dispatched to verify the artifact independently.
-  - For frontend/visuals: Run `browser-shot <target>` followed by `Read` on the output PNG.
+  - For frontend/visuals: Use Playwright MCP to operate the assembled page and inspect screenshots from that same session.
   - For backend/logic: Run existing test suites or write isolated unit tests in scratchpad.
   - **Rule**: Aletheia ONLY reports findings and NEVER modifies the production file directly.
-- **Assert the execution path**: for screenshot verification, confirm the log shows the primary path (`sha256=...`). If it shows `fell back to legacy CLI`, timing and byte-stability claims are void — "it produced an image" is not a pass.
-- **Auto-wake on objective failure**: dispatch Aletheia on hard signals — frames byte-identical where motion is expected, fallback in the log, regression failure — without waiting for the Director to remember. Verification is a trigger, not a courtesy.
+- **Assert the execution path**: distinguish real browser actions and observed results from simulated DOM tests or initial-state screenshots.
+- **Auto-wake on objective failure**: dispatch Aletheia on hard signals such as a failed interaction, visible regression, or failing test. Verification is a trigger, not a courtesy.
 - **Self-verification does not count**: the builder never signs off its own component. Component-green is not product-green.
 
 ## 5. Phase 4: Final Handover & Knowledge Promotion

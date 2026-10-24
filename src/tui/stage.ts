@@ -1,4 +1,4 @@
-import type {Interaction, Message, RuntimeSnapshot} from '../runtime/contracts.js';
+import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot} from '../runtime/contracts.js';
 import {choiceStyle, ownerColor, palette, type QuestionDraft, type ActorStyles} from './cards.js';
 import {cast} from '../actors/ensemble.js';
 import {createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
@@ -13,13 +13,13 @@ import {stepElapsed} from '../runtime/steps.js';
 export interface StageControls {readonly stopping?: ReadonlySet<string>; readonly focusedStop?: string; readonly hoveredStop?: string}
 
 const statuses: Record<string, string> = {
-  queued: '排队中', running: '处理中', waiting_input: '待回答', completed: '已完成',
+  queued: 'Queued', running: '处理中', waiting_input: '待回答', completed: '已完成',
   failed: '失败', cancelled: '已取消', paused: '已暂停',
 };
 function activityTitle(activity: RuntimeSnapshot['activities'][number]): string {
   const reason = activity.status === 'failed' ? activity.detail.split('\n')[0]?.replace(/^失败原因：/, '').trim() : '';
-  const current = activity.progress?.stages.find(stage => stage.id === activity.progress?.activeStageId);
-  return reason || (['running', 'waiting_input', 'paused'].includes(activity.status) ? current?.activeForm : undefined) || activity.summary?.title || activity.title;
+  const current = currentTaskProgress(activity.progress);
+  return reason || (['running', 'waiting_input', 'paused'].includes(activity.status) ? current?.label : undefined) || activity.summary?.title || activity.title;
 }
 function activityStatus(activity: RuntimeSnapshot['activities'][number]): string {
   return activity.status === 'running' && ['接续中', '调整中'].includes(activity.stage)
@@ -72,17 +72,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const seen = new Set<string>();
   type Frame = Parameters<typeof insetFrame>[0];
   const open = (id: string) => stageFoldOpen(snapshot, id, folds);
-  const stageIds = new Map<string, string>();
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
-    const stage = message.step?.stage;
-    if (stage && activity?.progress?.planned && stageIds.get(activity.activityId) !== stage.id) {
-      stageIds.set(activity.activityId, stage.id);
-      const stageFrame = frame ?? {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth};
-      builder.pushBlank(ownerColor(message.ownerId, roles), stageFrame);
-      builder.pushFramedLine(message.id + '-stage', ownerColor(message.ownerId, roles),
-        [{text: stage.title, color: ownerColor(message.ownerId, roles), bold: true, selectionKey: message.id + ':stage', selectionOffset: 0}], stageFrame);
-    }
     const request = thinking.get(message.id);
     if (request) {
       const hasContent = Boolean(message.text.trim() || (request.tokens && request.tokens > 0) || request.step.note);
@@ -213,8 +204,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     if (message.role === 'user') {
       builder.pushBlank();
       const source = inputKind(message);
+      const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' || source === 'collaboration' ? message.source ?? message.ownerId : 'user',
-        source === 'director' ? '派工' : source === 'collaboration' ? '协作消息' : message.source);
+        queued ? 'Queued' : source === 'director' ? 'Assignment' : source === 'collaboration' ? 'Collaboration' : message.source);
       body(message);
     } else {
       if (!message.kind) {

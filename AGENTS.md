@@ -36,9 +36,9 @@ Before exploring, reading, or modifying files in any subsystem directory (`src/<
    - `max_iterations = 0` (unlimited natural while(true) loop). No 50-turn blocking popups; stops on task completion or user cancel (`Esc` / `Ctrl+C`).
 3. **Scratchpad Sandbox Isolation**:
    - All ephemeral test scripts, numerical calculations, and screenshots MUST be created in the session scratchpad directory (`tmpdir()/logox-scratchpad/<cwdHash>/<sessionId>/`), never in the project root.
-4. **Multimodal Vision & `browser-shot` Standard**:
-   - Multimodal vision is enabled by default. `Read` directly inspects images.
-   - For web/SVG/UI preview inspections: run the pre-injected CLI `browser-shot <target> [outputPng] [--time <ms>]` via `Shell`, followed by `Read`. Never write custom CDP scripts or start background debugging servers.
+4. **Multimodal Vision & Browser Verification**:
+   - Multimodal vision is enabled by default. `Read` inspects local images; MCP image blocks enter visual input directly.
+   - Use the local Playwright MCP server for web/SVG/UI verification. Keep interaction, state checks, and screenshots in the same page session; coordinate one browser operator across actors.
 5. **Single-Writer Safety**:
    - Production source code files have strictly one designated writer at any time (typically Techne). Reviewers (Aletheia, Kalon) provide coordinates and visual QA, never competing write handles.
 6. **Persistent User Configuration in `~/.logox/`**:
@@ -56,7 +56,7 @@ Before exploring, reading, or modifying files in any subsystem directory (`src/<
 | Subsystem | Signpost Path | Core Responsibility |
 |---|---|---|
 | **Actors & Ensemble** | [`src/actors/AGENTS.md`](src/actors/AGENTS.md) | Actor personas, ensemble lifecycle, actor model persistence, `SendMessage` (queue vs interrupt), `.logox/bulletin.md` |
-| **Tools & Execution** | [`src/tools/AGENTS.md`](src/tools/AGENTS.md) | PascalCase tools, process tree management, 1.5s forced cleanup, `browser-shot` CLI, `ListActors` & `CancelActor` |
+| **Tools & Execution** | [`src/tools/AGENTS.md`](src/tools/AGENTS.md) | PascalCase tools, process tree management, 1.5s forced cleanup, `ListActors` & `CancelActor`; browser interaction via Playwright MCP |
 | **Providers & Models** | [`src/providers/AGENTS.md`](src/providers/AGENTS.md) | Model pool, Undici transport, proxy auto-fallback, OpenAI dual-auth (API Key vs Responses API), 6-tier thinking |
 | **Runtime & Store** | [`src/runtime/AGENTS.md`](src/runtime/AGENTS.md) | While(true) engine, task progress tracking, dual-write session transcripts (`director.jsonl`, `tasks.json`) |
 | **Terminal UI (TUI)** | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink plane rendering, 180-200ms frame pacing, dual-harmonic breathing wave, active actor animation, anti-noise inline cards |

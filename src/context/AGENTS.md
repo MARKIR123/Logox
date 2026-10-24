@@ -14,6 +14,7 @@
 | Restart, rollback or physical references | `store/journal.ts` | source hashes, branch maps and `sourceLines()` |
 
 ## 3. Hard Boundaries
+- Token estimation excludes image base64 on both full-request and usage-anchored incremental paths; per-image allowance is approximate, not a vendor tokenizer. Compaction notices state the trigger and registered model window.
 - Compaction never rewrites or deletes raw journal lines. References use one-based inclusive physical ranges in the authoritative ledger, not the optional readable mirror.
 - `_FinishRound` pairs disappear together before repair, budgeting and serialization; retained business tools remain paired. In-memory and context-disabled requests follow the same rule.
 - A round is an activity, not every injected `user` message. Open work retains its goal, effective constraints, completed effects, blockers and next actions.

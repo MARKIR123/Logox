@@ -86,16 +86,14 @@ test('GlobTool diagnostics: 0 files matched returns two-part context and directo
   );
 });
 
-test('UpdateTaskProgress diagnostics: missing phase returns two-part context and roster prescription', () => {
+test('UpdateTaskProgress diagnostics: obsolete plan parameters point to the activity label contract', () => {
   const result = diagnoseToolError(
-    {id: '7', name: 'UpdateTaskProgress', arguments: JSON.stringify({update: {id: 'nonexistent', status: 'completed'}})},
-    {isError: true, text: 'Phase not found: "nonexistent". Available phases: "foundation" (Build)'}
+    {id: '7', name: 'UpdateTaskProgress', arguments: JSON.stringify({stages: [{title: 'Build'}]})},
+    {isError: true, text: 'Parameter validation failed: label: Required'}
   );
   assert.equal(result.isError, true);
-  assert.equal(
-    result.text,
-    'Phase not found: "nonexistent". Available phases: "foundation" (Build) Use an existing phase ID or title, or register a new phase via stages.'
-  );
+  assert.match(result.text, /short, single-line label and optional detail/);
+  assert.match(result.text, /omit stages, status, result, and reason/);
 });
 
 test('SendMessage diagnostics: unknown target returns two-part context and ListActors prescription', () => {

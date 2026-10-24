@@ -9,6 +9,7 @@
   },
   "description": "LOGOX 的 TypeScript 剧团式 subagent 项目",
   "dependencies": {
+    "@playwright/mcp": "0.0.83",
     "@types/diff": "^7.0.2",
     "@vscode/ripgrep": "1.18.0",
     "ajv": "8.18.0",
@@ -30,6 +31,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/install-actor-profiles.mjs",
+    "browser:install": "playwright-mcp install-browser chromium",
     "check": "npm run check:docs && tsc --noEmit",
     "start": "node dist/src/cli.js",
     "test": "npm run check:docs && npm run build && node --test dist/tests/*.test.js",

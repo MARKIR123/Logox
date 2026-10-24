@@ -10,8 +10,10 @@ import {Picker} from './picker.js';
 import {TabbedPage} from './tabbed-page.js';
 import type {LoginFlow} from '../providers/login.js';
 import type {StageStatus} from '../runtime/stage-status.js';
+import type {SubmitDelivery} from '../application.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {statusbarText, statusbarParts} from './statusbar.js';
+import {inputDeliveryHint} from './input-delivery.js';
 import {MouseContext, type MouseSubscriber} from './mouse.js';
 import {LoginDialog} from './login.js';
 import {useContentHeight} from './metrics.js';
@@ -81,7 +83,8 @@ export interface AppProps {
   demoScene?: boolean;
   stage?: boolean;
   scenario?: PortfolioActivities;
-  onSubmit(text: string, source?: string): Promise<void>;
+  onSubmit(text: string, source?: string, delivery?: SubmitDelivery): Promise<void>;
+  getQueuedCount?(ownerId: string): number;
   onCancel(activityId: string): void;
   onDraft?(): void;
   onClose(): Promise<void>;
@@ -91,7 +94,7 @@ const foldableDemoIds = ['main-thinking', 'main-tool', 'main-aletheia', 'main-al
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onCancel, onClose, onDraft}: AppProps) {
+export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
@@ -180,6 +183,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const switchView = (target: string) => {
     if (demoScene) setScene(prev => ({...prev, view: target as ActorId}));
     else setActiveWindow(target);
+    setSelectedActivityId('');
     setEditingCustom(false);
     clearSelection();
     setHoveredFoldId(null);
@@ -217,6 +221,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     return timelineRows(visibleMessages, width);
   }, [demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop]);
 
+  const foldIds = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
+  const foldActivityId = (id: string | undefined) => {
+    if (!id) return '';
+    const direct = activities.find(item => item.activityId === id);
+    if (direct) return direct.activityId;
+    return snapshot.messages.findLast(message => message.id === id || message.step?.groupId === id)?.activityId ?? '';
+  };
+  const liveWindowTasks = activities.filter(item => item.ownerId === currentView && ['running', 'waiting_input'].includes(item.status));
+  const selectedSteerTask = selectedActivityId ? activities.find(item => item.activityId === selectedActivityId)
+    : liveWindowTasks.length === 1 ? liveWindowTasks[0] : undefined;
+  const steerTarget = selectedSteerTask && ['running', 'waiting_input'].includes(selectedSteerTask.status) ? selectedSteerTask : undefined;
   const own = currentView !== 'logox';
   const statusLeft = notice
     ? notice
@@ -281,8 +296,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const menuHeight = Math.max(0, Math.min(5, suggestions.length, screenRows - inputHeight - hairlineHeight - footerHeight - 1));
   const menuStart = Math.max(0, Math.min(suggestionIndex - Math.floor(menuHeight / 2), suggestions.length - menuHeight));
   const menuItems = suggestions.slice(menuStart, menuStart + menuHeight);
-  const menuKeys = width < 45 ? '↑↓选择 · Tab补齐 · Esc关闭' : '↑↓ 选择 · Tab 补齐 · Enter 确认 · Esc 关闭';
+  const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
+  const footerStatus = getStatus && !notice ? getStatus(currentView) : undefined;
+  const statusReserve = footerStatus ? Math.min(Math.floor(width / 2), stringWidth(statusbarText(footerStatus, width, layout?.modules))) : 0;
+  const hintWidth = Math.max(0, width - statusReserve - (statusReserve ? 2 : 0));
+  const deliveryHint = !demoScene && !notice ? inputDeliveryHint(hintWidth, getQueuedCount?.(currentView) ?? 0,
+    steerTarget ? (roles[steerTarget.ownerId]?.name ?? steerTarget.ownerId) + ' ' + steerTarget.activityId.slice(0, 8) : undefined,
+    menuHeight ? menuKeys : undefined) : '';
+  const footerStatusWidth = deliveryHint ? Math.max(0, width - stringWidth(deliveryHint) - 2) : width;
+  const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules) : [];
+  const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join(' · ') : clipLine(statusLeft, footerStatusWidth);
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -440,14 +464,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
 
   const submitting = useRef(false);
-  const sendSceneInput = (text = draft.text) => {
+  const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'queue'}) => {
     if (!text.trim() || submitting.current) return;
     submitting.current = true;
     setNotice('');
-    void onSubmit(text, currentView).then(() => {
+    const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
+    const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
+    void onSubmit(payload, source, delivery).then(() => {
       setDrafts(prev => ({...prev, [currentView]: prev[currentView]?.text === text ? emptyDraft : prev[currentView] ?? emptyDraft}));
       if (!text.trim().startsWith('/')) setAnchor(null);
-    }, error => {if (!stage) flash(error instanceof Error ? error.message : String(error));}).finally(() => {submitting.current = false;});
+    }, error => {flash(error instanceof Error ? error.message : String(error));}).finally(() => {submitting.current = false;});
   };
 
   const complete = (suggestion: CommandSuggestion, execute: boolean) => {
@@ -471,6 +497,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const mouseListeners = useRef(new Set<(event: SgrMouseEvent) => void>());
   const subscribeMouse = useMemo<MouseSubscriber>(() => handler => {mouseListeners.current.add(handler); return () => {mouseListeners.current.delete(handler);};}, []);
   const clickTimeline = (act: SceneAction, clickedRow: SceneRow, event: SgrMouseEvent) => {
+    if (stage && act.foldId && act.kind !== 'stop_actor') {
+      const index = foldIds.indexOf(act.foldId);
+      if (index >= 0) setCardCursor(index);
+      setSelectedActivityId(foldActivityId(act.foldId));
+    }
     if (act.kind === 'stop_actor' && act.foldId) {stopActor(act.foldId); return;}
     const now = Date.now();
     if (stage && act.kind === 'select_answer' && act.requestId) {
@@ -758,6 +789,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (key.ctrl && input === 'd') { close(); return; }
     if (loginState) return;
     if (surface) return;
+    if (key.ctrl && input === 't') {
+      if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
+      if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.'); return;}
+      if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
+      sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId}); return;
+    }
     if (menuHeight && !key.ctrl && !key.meta && !key.shift) {
       if (key.upArrow || key.downArrow) {
         setCompletion({query, selected: (suggestionIndex + (key.upArrow ? suggestions.length - 1 : 1)) % suggestions.length, dismissed: false});
@@ -820,9 +857,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       setDetailOffset(0); return;
     }
     if (stage && key.ctrl && (input === 'n' || input === 'o')) {
-      const ids = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
-      if (input === 'n') setCardCursor(value => ids.length ? (value + 1) % ids.length : 0);
-      else {const id = ids[cardCursor % Math.max(1, ids.length)]; if (id) setScene(prev => ({...prev, folds: {...prev.folds, [id]: !stageFoldOpen(snapshot, id, prev.folds)}}));}
+      if (input === 'n') {
+        const index = foldIds.length ? (cardCursor + 1) % foldIds.length : 0;
+        setCardCursor(index); setSelectedActivityId(foldActivityId(foldIds[index]));
+      } else {const id = foldIds[cardCursor % Math.max(1, foldIds.length)]; if (id) setScene(prev => ({...prev, folds: {...prev.folds, [id]: !stageFoldOpen(snapshot, id, prev.folds)}}));}
       return;
     }
     if (key.ctrl && input === 'n') {
@@ -942,8 +980,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return;
       }
       if (stage && key.ctrl) {
-        const ids = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
-        const selected = activities.find(item => item.activityId === ids[cardCursor % Math.max(1, ids.length)]);
+        const selected = activities.find(item => item.activityId === foldActivityId(foldIds[cardCursor % Math.max(1, foldIds.length)]));
         if (selected && Object.hasOwn(roles, selected.ownerId) && selected.ownerId !== 'logox') switchView(selected.ownerId as ActorId);
         return;
       }
@@ -953,14 +990,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       }
       if (stage && focus === 'input') {sendSceneInput(); return;}
       if (focus === 'question') commitAnswer();
-      else if (draft.text.trim()) {
-        const raw = draft.text;
-        const payload = currentView !== 'logox' && !raw.startsWith('@') && !raw.startsWith('/')
-          ? `@${currentView} ${raw}`
-          : raw;
-        setDraft(() => emptyDraft); setNotice('');
-        void onSubmit(payload).catch(error => {if (!stage) flash(error instanceof Error ? error.message : String(error));});
-      }
+      else if (draft.text.trim()) sendSceneInput();
       return;
     }
     if (key.backspace) { edit(current => erase(current, true)); return; }
@@ -1014,9 +1044,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
     {footerHeight > 0 && <Box height={footerHeight} flexShrink={0}>
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
-        ? statusbarParts(getStatus(currentView), width, layout?.modules).map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
-        : clipLine(statusLeft, width)}</Text>
-      {!getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width && <>
+        ? footerStatusParts.map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
+        : footerStatusText}</Text>
+      {deliveryHint && <>
+        <Text>{' '.repeat(Math.max(0, width - stringWidth(footerStatusText) - stringWidth(deliveryHint)))}</Text>
+        <Text color={palette.muted}>{deliveryHint}</Text>
+      </>}
+      {demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width && <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
         <Text color={palette.muted}>{renderedFooterKeys}</Text>
       </>}

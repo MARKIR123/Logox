@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {ToolCall} from '../runtime/messages.js';
+import {canonicalToolName} from '../tools/types.js';
 import type {ToolResult} from '../tools/tools.js';
 
 export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools';
@@ -16,12 +17,12 @@ export class ExecutionRecoveryError extends Error {
 
 export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
-const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress',
+const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress', 'UpdateTaskProgress',
   'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
 
 /** 参数 JSON 的属性顺序和格式差异不算新进展，重复读取同一结果也不刷新预算。 */
 export function toolProgressFingerprint(call: ToolCall, result: ToolResult): string | undefined {
-  if (result.isError || coordinationTools.has(call.name)) return;
+  if (result.isError || coordinationTools.has(call.name) || coordinationTools.has(canonicalToolName(call.name) ?? call.name)) return;
   let argumentsValue: unknown;
   try {argumentsValue = JSON.parse(call.arguments);} catch {return;}
   return createHash('sha256').update(JSON.stringify([call.name, canonical(argumentsValue), result.text])).digest('hex');

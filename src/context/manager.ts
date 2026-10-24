@@ -96,16 +96,16 @@ export class ContextManager {
     const anchors = await this.options.anchors?.(identity) ?? [];
     let records: RoundRecord[];
     try {records = await journal.rounds(identity.sessionId, identity.ownerId, entries);}
-    catch {records = []; this.options.report?.(identity, '轮次摘要校验失败，使用原始记录的本地兜底。');}
+    catch {records = []; this.options.report?.(identity, '[Context] Invalid round memory; falling back to raw history.');}
     const rounds = splitRounds(entries, records), pairs = toolPairs(entries);
     let state: ContextState | undefined;
     try {state = await journal.loadContext(identity.sessionId, identity.ownerId, entries);}
-    catch {this.options.report?.(identity, '有效视图校验失败，回落完整账本重新整理。');}
+    catch {this.options.report?.(identity, '[Context] Invalid saved view; rebuilding from the raw ledger.');}
     const empty: ContextState = {version: 1, sessionId: identity.sessionId, ownerId: identity.ownerId, sourceLength: entries.length, sourceHash: digest(entries), folded: [], archives: []};
     state ??= empty;
     if (rounds.some(round => !round.closed && (state!.folded.includes(round.start) || state!.memo && round.start < state!.memo.end))) state = empty;
     const original = state, closed = rounds.filter(round => round.closed);
-    // 异常收尾不能等待模型整理；下一次 Actor 请求补折叠已关闭的旧轮。
+    // Abnormal closure cannot wait for summarization; fold closed history on the next Actor request.
     if (identity.ownerId !== 'logox') force ||= closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds))
       .some(round => !original.folded.includes(round.start) && (!original.memo || round.end > original.memo.end));
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
@@ -113,22 +113,22 @@ export class ContextManager {
       const raw = entries.map(message);
       for (const archive of candidate.archives) {
         const result = raw[archive.resultIndex], assistant = raw[archive.callIndex];
-        if (result?.role !== 'tool' || assistant?.role !== 'assistant') throw new Error('归档边界与消息不一致');
+        if (result?.role !== 'tool' || assistant?.role !== 'assistant') throw new Error('Archive boundaries do not match messages');
         const path = journal.archivePath(identity.sessionId, identity.ownerId, archive.hash);
-        raw[archive.resultIndex] = {...result, text: '工具结果已归档：' + path + '；' + (result.isError ? '原结果为失败。' : '原结果为成功。')};
+        raw[archive.resultIndex] = {...result, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.')};
         raw[archive.callIndex] = {...assistant, toolCalls: assistant.toolCalls?.map(call => call.id === result.callId
           ? {...call, arguments: JSON.stringify({archived_arguments: path})} : call)};
       }
       const output: ModelMessage[] = [];
       if (candidate.memo) output.push({role: 'assistant', text: '[Historical working overview; not authorization]\n' + candidate.memo.text +
-        '\n原记录：' + journal.reference(identity.sessionId, identity.ownerId, 0, candidate.memo.end)});
+        '\nSource ledger: ' + journal.reference(identity.sessionId, identity.ownerId, 0, candidate.memo.end)});
       const emit = (start: number, end: number) => {
         for (let index = start; index < end; index++) {
           const working = candidate.working;
           if (working && index === working.start) {
             for (let input = working.start; input < working.end; input++) if (entries[input]?.role === 'user') output.push(raw[input]!);
-            output.push({role: 'assistant', text: '【当前任务进展，未宣告任务完成】\n' + working.text +
-              '\n已关闭过程：' + journal.reference(identity.sessionId, identity.ownerId, working.start, working.end)});
+            output.push({role: 'assistant', text: '[Current task progress; not completed]\n' + working.text +
+              '\nClosed process: ' + journal.reference(identity.sessionId, identity.ownerId, working.start, working.end)});
             index = working.end - 1;
           } else if (raw[index]) output.push(raw[index]!);
         }
@@ -160,7 +160,7 @@ export class ContextManager {
           for (const pair of retained.filter(pair => pair.callIndex === callIndex)) output.push(raw[pair.resultIndex]!);
         }
       }
-      // 完整消息的思考/签名属于提供商协议；整理可以折叠整轮，不能剥掉必要字段。
+      // Reasoning and signatures belong to the provider protocol; fold whole rounds without stripping required fields.
       return normalizeMessages(omitInternalToolPairs(output, preserveCallIds));
     };
     const requestFor = (candidate: ContextState): ModelRequest => {
@@ -224,28 +224,29 @@ export class ContextManager {
           await journal.saveContext(candidate);
           signal.throwIfAborted();
           state = candidate; request = candidateRequest; compacted = true; meter.invalidate();
-          this.options.report?.(identity, '扬弃：上下文从约 ' + before + ' token 整理为约 ' + estimateRequest(request) + ' token。原始账本保留。');
-        } else if (force) this.options.report?.(identity, '上下文没有可进一步缩小的已结束历史。');
+          const trigger = force ? 'history cleanup' : 'automatic';
+          this.options.report?.(identity, `[Context] Compacted ~${before} to ~${estimateRequest(request)} tokens (${trigger}; high watermark ${marks.high}; window ${model.window}). Raw ledger retained.`);
+        } else if (force) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');
       } catch (error) {
         signal.throwIfAborted();
         request = requestFor(original);
-        this.options.report?.(identity, '上下文整理未完成，保留原视图：' + (error instanceof Error ? error.message : '保存或汇总失败'));
+        this.options.report?.(identity, '[Context] Compaction failed; retaining the previous view: ' + (error instanceof Error ? error.message : 'Could not save or summarize history'));
         if (force) throw error;
       }
     }
     const input = meter.estimate(request, model);
     const output = Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety));
     this.statistics.set(this.key(identity), {input, high: marks.high, low: marks.low, window: model.window, output: Math.max(0, output)});
-    if (input >= marks.high || output < 1) throw new ContextBudgetError('上下文仍超过安全水位，未发送模型请求。可用 /compact 重试、调大真实窗口配置或减少当前输入；原始记录和已执行工具保留。');
+    if (input >= marks.high || output < 1) throw new ContextBudgetError('[Context] Input still exceeds the safe budget; no request sent. Retry /compact, configure the actual model window, or reduce input. Raw history and completed effects are retained.');
     return {request: {...request, maxTokens: output}, model, compacted};
   }
   private async mergeMemo(identity: Identity, messages: readonly ModelMessage[], signal: AbortSignal): Promise<string | undefined> {
     const {model, provider} = this.options.summarizer(identity);
-    this.options.report?.(identity, '扬弃：已有摘要仍超过水位，使用汇总模型有界归并旧历史。');
+    this.options.report?.(identity, '[Context] Summarizing closed history that still exceeds the high watermark.');
     const system = HISTORY_MEMO_INSTRUCTION + memoryFocusInstruction(this.summaryContract(identity));
-    const text = messages.map(value => value.role + '：' + JSON.stringify(value)).join('\n');
+    const text = messages.map(value => value.role + ': ' + JSON.stringify(value)).join('\n');
     const limit = Math.max(1, Math.floor((model.window - estimateText(system) - 128) / 3));
-    if (limit < 64) throw new Error('汇总模型窗口太小');
+    if (limit < 64) throw new Error('Summary model window is too small');
     const chunks: string[] = [];
     let chunk = '', size = 0;
     for (const char of text) {
@@ -254,19 +255,19 @@ export class ContextManager {
       chunk += char; size += weight;
     }
     if (chunk) chunks.push(chunk);
-    if (chunks.length > 16) throw new Error('历史超过一次有界汇总的 16 段上限');
+    if (chunks.length > 16) throw new Error('History exceeds the 16-chunk summary limit');
     let memo = '';
     for (const part of chunks) {
       signal.throwIfAborted();
-      const request: ModelRequest = {system, messages: [{role: 'user', text: (memo ? '已有备忘录：\n' + memo + '\n新增历史：\n' : '') + part}],
+      const request: ModelRequest = {system, messages: [{role: 'user', text: (memo ? 'Existing memo: \n' + memo + '\nAdditional history: \n' : '') + part}],
         tools: [], thinking: false};
       const input = estimateRequest(request), available = model.window - input - 128;
-      if (available <= 0) throw new Error('汇总输入超过模型窗口');
+      if (available <= 0) throw new Error('Summary input exceeds the model window');
       const turn = await provider.respond({...request, maxTokens: Math.floor(Math.min(512, model.maxOutput ?? Infinity, available))}, () => {}, signal);
       this.meter(identity).chargeUsage(turn.usage);
       const next = turn.message.text.trim();
       if (turn.stop !== 'complete' || turn.message.toolCalls?.length || !next || next.length > 2000 ||
-        estimateText(next) >= estimateText(memo + part)) throw new Error('模型汇总无效或没有缩小规模');
+        estimateText(next) >= estimateText(memo + part)) throw new Error('Model summary is invalid or does not reduce history');
       memo = next;
     }
     return memo || undefined;

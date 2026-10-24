@@ -80,8 +80,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const concurrency = options.readonlyConcurrency ?? 4;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('只读并发必须为 1–8');
   return async (prompt, context) => {
+    if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
     const progress = new TaskProgress(options.store, context);
-    const steps = new Steps(options.store, context, Date.now, () => progress.current());
+    const steps = new Steps(options.store, context);
     const root = context.rootActivityId ?? context.activityId;
     let localRecovery = localRecoveries.get(context.sessionId);
     if (!localRecovery) {localRecovery = new ActorRecovery(context.sessionId); localRecoveries.set(context.sessionId, localRecovery);}
@@ -111,6 +112,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const incoming = await (closing && context.closeInbox ? context.closeInbox() : context.drainInbox?.()) ?? [];
         if (!incoming.length) return false;
         messages.push(...incoming);
+        const humanInputs = context.humanInputs?.();
+        if (humanInputs) userRequests.splice(0, userRequests.length, ...[...new Set(humanInputs)].slice(-8).map(text => ({role: 'user' as const, text})));
+        const inboundRecovery = context.inboundRecovery?.();
+        if (inboundRecovery) context = {...context, recovery: inboundRecovery};
         context.acceptRoundMemory?.(null);
         memoryRepair = false; finalText = ''; correctionCalls.clear();
         return true;
@@ -131,8 +136,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const foreignSignatures = new Set<string>();
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
-        if (options.requestBase) instruction = await options.requestBase(context);
         await drainInbox();
+        if (options.requestBase) instruction = await options.requestBase(context);
         if (!memoryRepair && options.iterations > 0 && iteration >= options.iterations) {
           const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
             id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
@@ -159,6 +164,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           // 工具字段与校验不变；省去每份 schema 重复的草案版本 URL。
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
         const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
+        if (await drainInbox()) continue requestLoop;
         if (taskModel && prepared && prepared.model.identity !== taskModel.model().identity) {
           throw new ProviderError('任务模型与上下文预算身份不一致；请将 ContextManager.model 接入 TaskModels.model');
         }
@@ -176,6 +182,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         let thinkingId = steps.thinking();
         let turn;
         for (let attempt = 0;; attempt++) {
+          if (attempt > 0 && await drainInbox()) {
+            steps.finish(thinkingId, 'completed'); steps.endGroup('completed');
+            continue requestLoop;
+          }
           try {
             turn = await (taskModel?.provider() ?? options.provider()).respond(request, delta => {
               emitted = true;
@@ -366,12 +376,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 ask: (input: Parameters<typeof context.ask>[0]) => waiting('等待回答', () => context.ask(input))};
               if (call.name === taskProgressTool.name || canonical === 'UpdateTaskProgress') {
                 toolContext.startTool();
-                const before = new Set(progress.snapshot().stages.filter(stage => stage.status === 'completed').map(stage => stage.id));
-                const result = await progress.update(JSON.parse(call.arguments));
-                if (!result.isError) for (const stage of progress.snapshot().stages) if (stage.status === 'completed' && !before.has(stage.id)) {
-                  await observeProgress('stage:' + stage.result);
-                }
-                return result;
+                return progress.update(JSON.parse(call.arguments));
               }
               const matchedExtra = options.extraTools?.find(tool =>
                 tool.name.toLowerCase() === call.name.toLowerCase() ||

@@ -203,6 +203,7 @@ interface RowBuilder {
     title: string;
     titleSegments?: readonly SceneSegment[] | undefined;
     summary?: string | undefined;
+    faultLabel?: string;
     bodyLines: readonly string[];
     status?: string;
     open: boolean;
@@ -441,7 +442,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         {text: statusText, color: palette.muted, selectionKey: opts.id + ':status', selectionOffset: 0},
         ...(thinking ? [{text: ((opts.tokens ?? 0) > 0 ? ' · ' + opts.tokens + ' Tokens' : '') +
           (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? '等待中') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
-        ...(fault ? [{text: '  ' + fault, color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
+        ...((opts.faultLabel ?? fault) ? [{text: '  ' + (opts.faultLabel ?? fault), color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
       ], frame, action);
       if (opts.step) for (let index = firstRow; index < rows.length; index++) {
         const row = rows[index]!;

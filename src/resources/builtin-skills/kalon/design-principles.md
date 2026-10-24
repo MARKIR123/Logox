@@ -20,7 +20,7 @@ This is Kalon's primary design charter. Whenever designing new user interfaces, 
 2. Establish the spacing grid (multiples of 4px / terminal character blocks).
 3. Select an aesthetic direction (Flat, Minimal, or Material) from `skills/kalon/styling/`.
 4. Select semantic and accessible contrast palettes from `skills/kalon/color/`.
-5. Verify visual clarity using deterministic headless capture (`browser-shot` via `skills/public/browser-screenshot.md`).
+5. Verify visual clarity and the relevant interactions through Playwright MCP (`skills/public/browser-screenshot.md`).
 
 ## 4. Verification & Done Criteria
 - Read produced renders using the multimodal `Read` tool.

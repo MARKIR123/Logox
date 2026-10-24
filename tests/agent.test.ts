@@ -172,7 +172,7 @@ test('精确编辑保留 UTF-8 BOM、CRLF 和字面替换符；撤销不覆盖�
   const f = await fixture(scripted([call('edit', {file_path: 'file.txt', old_string: 'old\nline', new_string: '$&\n新行'}), assistant()]));
   try {
     await writeFile(join(f.cwd, 'file.txt'), '\uFEFFold\r\nline\r\n');
-    const handle = f.app.ensemble.dispatch('techne', '编辑');
+    const handle = f.app.ensemble.dispatch('techne', '编辑', 'direct', {inputKind: 'human'});
     await waitForSnapshot(f.app.store, snapshot => snapshot.interactions.some(item => item.status === 'pending'));
     approve(f.app, 'allow_once'); await handle.done;
     assert.equal(await readFile(join(f.cwd, 'file.txt'), 'utf8'), '\uFEFF$&\r\n新行\r\n');
@@ -308,7 +308,7 @@ test('同一轮同一文件多次修改按倒序撤销；新建文件撤销后�
   const f = await fixture(scripted([call('write', {file_path: 'repeated.txt', content: 'one'}, 'c1'),
     call('write', {file_path: 'repeated.txt', content: 'two'}, 'c2'), assistant()]));
   try {
-    const handle = f.app.ensemble.dispatch('techne', '多次写');
+    const handle = f.app.ensemble.dispatch('techne', '多次写', 'direct', {inputKind: 'human'});
     for (let index = 0; index < 2; index++) {
       await waitForSnapshot(f.app.store, snapshot => snapshot.interactions.some(item => item.status === 'pending') && snapshot.interactions.length === index + 1);
       approve(f.app, 'allow_once');
@@ -407,7 +407,7 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     assert.ok(status?.kind === 'page');
     assert.match(status.tabs[0]!.lines.join('\n'), /deepseek[\s\S]*cloud-fixture/);
     f.app.surfaces.cancel();
-    const task = f.app.ensemble.dispatch('aletheia', 'wait');
+    const task = f.app.ensemble.dispatch('aletheia', 'wait', 'direct', {inputKind: 'human'});
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === '模型处理中'));
     await assert.rejects(f.app.submit('/model'), /(?:任务处理中|Tasks are running)/);
     await assert.rejects(f.app.submit('/provider'), /(?:任务处理中|Tasks are running)/);

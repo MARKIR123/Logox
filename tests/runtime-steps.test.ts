@@ -22,7 +22,7 @@ function barrier() {let resolve!: () => void; const promise = new Promise<void>(
 const complete = (text: string): ModelTurn => ({message: {role: 'assistant', text}, stop: 'complete'});
 const tool = (name: string, args: unknown): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id: name, name, arguments: JSON.stringify(args)}]}, stop: 'tools'});
 
-test('每个步骤独立计时，排队和嵌套等待不累计，终态冻结', () => {
+test('step clocks exclude queue and nested waiting time and freeze at terminal state', () => {
   const store = new RuntimeStore(); let now = 100;
   const steps = new Steps(store, {sessionId: 's', ownerId: 'logox', activityId: 'a'}, () => now);
   const thinking = steps.thinking(); now = 600;
@@ -45,7 +45,7 @@ test('每个步骤独立计时，排队和嵌套等待不累计，终态冻结',
   steps.close('cancelled'); assert.equal(steps.get(id).state, 'completed');
 });
 
-test('并发读取各自在返回时冻结，较慢工具不延长已完成工具耗时，落账仍保持模型顺序', {timeout: 5000}, async () => {
+test('concurrent reads freeze independently while journal results retain model order', {timeout: 5000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-step-parallel-')), store = new RuntimeStore(), release = barrier();
   const tools = new Tools(cwd), recorded: ModelMessage[] = [];
   tools.execute = async (call, context) => {context.startTool?.(); if (call.id === 'slow') await release.promise; return {text: call.id, isError: false};};
@@ -62,13 +62,13 @@ test('并发读取各自在返回时冻结，较慢工具不延长已完成工�
     const fast = store.getSnapshot().messages.find(message => message.step?.callId === 'fast')!.step!;
     assert.equal(store.getSnapshot().messages.find(message => message.step?.callId === 'slow')?.step?.state, 'running');
     await delay(60); assert.equal(stepElapsed(fast), fast.elapsedMs);
-    assert.equal(recorded.filter(message => message.role === 'tool').length, 0, '较早返回不打乱账本工具顺序');
+    assert.equal(recorded.filter(message => message.role === 'tool').length, 0, 'Early completion does not reorder journal tool results');
     release.resolve(); await running;
     assert.deepEqual(recorded.filter(message => message.role === 'tool').map(message => message.callId), ['slow', 'fast']);
   } finally {release.resolve(); await running; await rm(cwd, {recursive: true, force: true});}
 });
 
-test('真实 Agent 请求开始即显示 Thinking，工具审批期间已有卡片，执行后原卡保存耗时', {timeout: 7000}, async () => {
+test('Agent requests display Thinking immediately and tool cards preserve execution duration across approval', {timeout: 7000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-step-agent-')), entered = barrier(), release = barrier();
   let requests = 0;
   const provider: Provider = {async respond(_request, onDelta) {
@@ -98,17 +98,17 @@ test('真实 Agent 请求开始即显示 Thinking，工具审批期间已有卡�
     await waitForSnapshot(app.store, snapshot => snapshot.activities.some(activity => activity.status === 'completed'));
     unsubscribe();
     const after = app.store.getSnapshot().messages.find(message => message.id === before.id)!;
-    assert.ok(running.includes(before.id), '实际文件工具开始时更新原卡');
+    assert.ok(running.includes(before.id), 'Actual file execution updates the existing card');
     assert.equal(after.step?.state, 'completed'); assert.ok(startedAt !== undefined);
-    assert.ok(after.step.elapsedMs <= Date.now() - startedAt, '耗时不包含开始执行前的审批等待');
-    assert.equal(stepElapsed(after.step, Date.now() + 10000), after.step.elapsedMs, '终态耗时冻结，不随后续时间增长');
+    assert.ok(after.step.elapsedMs <= Date.now() - startedAt, 'Execution duration excludes approval waiting');
+    assert.equal(stepElapsed(after.step, Date.now() + 10000), after.step.elapsedMs, 'Terminal duration stays frozen');
     assert.equal(await readFile(join(cwd, 'result.txt'), 'utf8'), 'ok');
     const entries = await app.journal.load('s', 'logox');
     assert.equal(entries.find(entry => entry.role === 'tool')?.step?.elapsedMs, after.step.elapsedMs);
   } finally {release.resolve(); await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 
-test('Actor 派工和报告保留来源，审批只收到真人授权，旧账本回读不改写', {timeout: 15000}, async () => {
+test('Actor assignments and reports preserve provenance without granting authority or rewriting legacy history', {timeout: 15000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-report-provenance-'));
   const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   // Seed the actual application's journal path after creation, then restore it.
@@ -130,7 +130,7 @@ test('Actor 派工和报告保留来源，审批只收到真人授权，旧账�
     else if (turns === 3) result = tool('shell', {command: 'node -e "console.log(1)"'});
     else if (turns === 4) result = complete('【任务摘要】第一份记录已完成\n报告：第一份记录已写入。');
     else if (turns === 5) {
-      wrappedRelay = request.messages.some(message => message.role === 'user' && message.text.includes('Actor 报告') && message.text.includes('第一份记录'));
+      wrappedRelay = request.messages.some(message => message.role === 'user' && message.text.includes('Actor report') && message.text.includes('第一份记录'));
       result = tool('shell', {command: 'node -e "console.log(2)"'});
     } else {result = complete('两份记录已完成'); done.resolve();}
     if (result.message.text) onDelta({kind: 'text', text: result.message.text});
@@ -138,7 +138,7 @@ test('Actor 派工和报告保留来源，审批只收到真人授权，旧账�
   }};
   const app = await createApplication({cwd, config, provider, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd}});
   try {
-    assert.equal(await readFile(journalPath, 'utf8'), original, '恢复不改写旧消息');
+    assert.equal(await readFile(journalPath, 'utf8'), original, 'Restore does not rewrite old messages');
     await app.permissions.setMode('auto'); await app.submit('请写两份记录');
     const timeout = new AbortController();
     try {await Promise.race([done.promise, delay(20000, undefined, {signal: timeout.signal}).then(() => {throw new Error('交接未完成');})]);} finally {timeout.abort();}
@@ -150,13 +150,13 @@ test('Actor 派工和报告保留来源，审批只收到真人授权，旧账�
     const rows = buildStageRows(app.store.getSnapshot(), 's', 'logox', 79, {}, null);
     assert.ok(!rows.some(row => row.text.includes('旧角色报告') || row.text.includes('角色结果已返回')));
     assert.equal(inputKind({ownerId: 'logox', source: 'aletheia'}), 'actor');
-    assert.match(inputMessage('数据', {ownerId: 'techne', source: 'logox'}).text, /Director 派工/);
+    assert.match(inputMessage('数据', {ownerId: 'techne', source: 'logox'}).text, /Director assignment/);
     assert.equal(inputKind({ownerId: 'logox'}), 'unknown');
     assert.ok((await readFile(journalPath, 'utf8')).startsWith(original));
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
 
-test('真实多次模型往返各有独立 Thinking，工具同级可见，重启恢复每次请求身份', {timeout: 8000}, async () => {
+test('model requests retain independent Thinking identities and visible tool peers across restart', {timeout: 8000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-thinking-rounds-')), entered = barrier(), release = barrier();
   await writeFile(join(cwd, 'sample.txt'), 'fixture'); let requests = 0;
   const provider: Provider = {async respond(_request, delta) {
@@ -178,14 +178,14 @@ test('真实多次模型往返各有独立 Thinking，工具同级可见，重�
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
     const folded = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
     assert.equal(folded.filter(row => row.text.includes('Thinking...')).length, 1);
-    assert.ok(folded.some(row => /read.*sample\.txt/i.test(row.text)), '工具独立于 Thinking，可直接浏览');
+    assert.ok(folded.some(row => /read.*sample\.txt/i.test(row.text)), 'Tools remain independently readable beside Thinking');
     release.resolve();
     await waitForSnapshot(app.store, state => state.activities.some(activity => activity.status === 'completed'));
     snapshot = app.store.getSnapshot();
     const thinking = snapshot.messages.filter(message => message.kind === 'thinking');
     assert.equal(new Set(thinking.map(message => message.step?.groupId)).size, 4);
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
-    assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && !message.step?.groupId).length, 1, '正文之后的工具独立展示');
+    assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && !message.step?.groupId).length, 1, 'Tools following prose remain independently visible');
     const rows = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
     assert.equal(rows.filter(row => row.text.includes('Thought for')).length, 4);
     const entries = await app.journal.load('s', 'logox');
@@ -196,7 +196,7 @@ test('真实多次模型往返各有独立 Thinking，工具同级可见，重�
     try {
       assert.deepEqual(new Set(restored.store.getSnapshot().messages.filter(message => message.kind === 'thinking').map(message => message.step?.groupId)), new Set(thinking.map(message => message.step?.groupId)));
       assert.equal(buildStageRows(restored.store.getSnapshot(), 's', 'logox', 99, {}, null).filter(row => row.text.includes('Thought for')).length, 4);
-      assert.equal(requests, 4, '恢复不重放模型或工具');
+      assert.equal(requests, 4, 'Restore replays neither model requests nor tools');
     } finally {await restored.close();}
   } finally {release.resolve(); await app.close(); await rm(cwd, {recursive: true, force: true});}
 });

@@ -16,8 +16,10 @@ const remoteToolSchema = z.object({name: z.string().min(1).max(256), description
   inputSchema: z.record(z.string(), z.json())});
 type RemoteTool = z.infer<typeof remoteToolSchema> & {validator?: ValidateFunction};
 const listSchema = z.object({tools: z.array(remoteToolSchema).max(256), nextCursor: z.string().max(1024).optional()});
-const resultSchema = z.object({isError: z.boolean().optional(), content: z.array(z.object({type: z.string(), text: z.string().optional()})).max(256),
-  structuredContent: z.record(z.string(), z.json()).optional()});
+const imageSchema = z.object({data: z.string().min(1), mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])});
+const resultSchema = z.object({isError: z.boolean().optional(), content: z.array(z.object({
+  type: z.string(), text: z.string().optional(), data: z.string().optional(), mimeType: z.string().optional(),
+})).max(256), structuredContent: z.record(z.string(), z.json()).optional()});
 export interface ExtensionApprovalRequest {
   readonly source: 'mcp'; readonly server: string; readonly tool: string; readonly callId: string;
   readonly action?: 'list' | 'call';
@@ -38,7 +40,7 @@ export class Mcp {
     for (const [name, config] of Object.entries(servers)) if (config.enabled) this.clients.set(name, new McpClient(config, cwd));
   }
   definitions(): readonly ToolDefinition[] {
-    return this.clients.size ? [{name: 'mcp', description: 'MCP 元工具。先 list 查看目录，再 call 调用；目录是提示，调用按完整 schema 校验且须经审批。服务：' +
+    return this.clients.size ? [{name: 'mcp', description: 'Call MCP tools. First list a server, then call a listed tool with arguments matching its full schema. Calls require permission. Browser interactions and screenshots use the local playwright server; returned images are delivered directly to your visual input. Servers: ' +
       [...this.clients.keys()].join(', '), parameters: z.toJSONSchema(argsSchema)}] : [];
   }
   status() {return [...this.clients].map(([name, client]) => ({name, state: client.status()}));}
@@ -95,11 +97,14 @@ export class Mcp {
       if (!allowed) return {text: '用户拒绝了这次 MCP 调用。', isError: true, disposition: 'denied'};
       context.startTool?.();
       const result = resultSchema.parse(await client.request('tools/call', {name: args.tool, arguments: args.arguments}, context.signal));
-      const text = result.content.map(block => block.type === 'text' ? block.text ?? '' : '[' + block.type + ' 内容]').join('\n') +
+      const images = result.content.filter(block => block.type === 'image').map(block => imageSchema.parse(block));
+      const text = result.content.map(block => block.type === 'text' ? block.text ?? ''
+        : block.type === 'image' ? '[Image: ' + block.mimeType + ']' : '[' + block.type + ' content]').join('\n') +
         (result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '');
-      return {text: text.length > 64_000 ? text.slice(0, 64_000) + '\n（MCP 输出已截断）' : text, isError: result.isError ?? false};
+      return {text: text.length > 64_000 ? text.slice(0, 64_000) + '\n[MCP output truncated]' : text,
+        isError: result.isError ?? false, ...(images.length ? {images} : {})};
     } catch (error) {
-      return {text: error instanceof z.ZodError ? 'MCP 参数或响应格式无效' : error instanceof Error ? error.message : 'MCP 执行失败', isError: true};
+      return {text: error instanceof z.ZodError ? 'Invalid MCP parameters or response content' : error instanceof Error ? error.message : 'MCP execution failed', isError: true};
     }
   }
   async close(): Promise<void> {await Promise.all([...this.clients.values()].map(client => client.close())); this.catalogs.clear();}

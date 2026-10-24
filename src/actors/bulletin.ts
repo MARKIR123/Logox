@@ -1,4 +1,4 @@
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {appendFile, mkdir, writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {join, dirname} from 'node:path';
 
@@ -19,7 +19,7 @@ export async function ensureProjectBulletin(projectDir: string): Promise<string>
   try {
     await mkdir(dirname(bulletinPath), {recursive: true});
     if (!existsSync(bulletinPath)) {
-      await writeFile(bulletinPath, INITIAL_BULLETIN_TEMPLATE, {encoding: 'utf8', flag: 'wx'});
+      await writeFile(bulletinPath, INITIAL_BULLETIN_TEMPLATE, {encoding: 'utf8', flag: 'ax'});
     }
   } catch {}
   return bulletinPath;
@@ -37,8 +37,5 @@ export async function appendProjectBulletin(
   const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
   const entry = `\n\n## [${timestamp}] ${author} · ${topic}\n${content.trim()}\n`;
-  try {
-    const existing = await readFile(bulletinPath, 'utf8').catch(() => INITIAL_BULLETIN_TEMPLATE);
-    await writeFile(bulletinPath, existing + entry, 'utf8');
-  } catch {}
+  await appendFile(bulletinPath, entry, 'utf8');
 }

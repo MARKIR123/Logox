@@ -16,6 +16,7 @@ export interface CollaborationOptions {
   interrupt?: ((targetOwnerId: string, message: string, source: string, summary?: string) => boolean) | undefined;
   projectDir?: string | undefined;
   members?: (() => string[]) | undefined;
+  coordinate?(callId: string, message: string, summary: string | undefined, context: ActorContext): Promise<void>;
 }
 /** Direct inter-actor messaging; messages are data, never authority over the user or Director. */
 export class Collaboration {
@@ -39,18 +40,27 @@ export class Collaboration {
           throw new Error('Unknown or unavailable collaboration target: ' + to);
         }
 
+        if (!isBroadcast && to === 'logox' && context.ownerId !== 'logox' && this.options.coordinate) {
+          await this.options.coordinate(call.id, sendInput.message, sendInput.summary, context);
+          return {role: 'tool' as const, callId: call.id, name: call.name,
+            text: 'Assistance request admitted for Director coordination. No in-flight request or process was cancelled.', isError: false};
+        }
         if (isBroadcast) {
           const targets = (this.options.members?.() ?? ['techne', 'kalon', 'aletheia']).filter(id => id !== context.ownerId);
           for (const target of targets) {
+            if (target === 'logox' && this.options.coordinate) {
+              await this.options.coordinate(call.id + ':broadcast', sendInput.message, sendInput.summary, context);
+              continue;
+            }
             const active = this.options.getActiveTask?.(target);
-            if (active && this.options.injectMessage) {
+            const injected = active && this.options.injectMessage &&
               await this.options.injectMessage(target, sendInput.message, context.ownerId, sendInput.summary, sendInput.mode);
-            } else {
+            if (!injected) {
               this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {inputKind: 'collaboration'});
             }
           }
           if (this.options.projectDir) {
-            void appendProjectBulletin(this.options.projectDir, context.ownerId, sendInput.summary || 'Broadcast', sendInput.message);
+            await appendProjectBulletin(this.options.projectDir, context.ownerId, sendInput.summary || 'Broadcast', sendInput.message);
           }
           return {role: 'tool' as const, callId: call.id, name: call.name, text: `Broadcast message sent to: ${targets.join(', ')} and recorded in bulletin.md`, isError: false};
         }

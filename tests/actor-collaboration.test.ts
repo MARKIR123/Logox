@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ensemble, type ActorContext} from '../src/actors/ensemble.js';
 import {Collaboration} from '../src/actors/collaboration.js';
 import {Journal} from '../src/store/journal.js';
 import {RuntimeStore} from '../src/runtime/store.js';
+import {appendProjectBulletin} from '../src/actors/bulletin.js';
 
 async function fixture() {const directory = await mkdtemp(join(tmpdir(), 'logox-collaboration-')); return {directory, journal: new Journal(directory)};}
 const call = (name: string, args: unknown) => ({id: 'tool-' + name, name, arguments: JSON.stringify(args)});
@@ -16,7 +17,7 @@ const context = (overrides: Partial<ActorContext> = {}): ActorContext => ({
   async permission() {return true;}, ...overrides,
 });
 
-test('SendMessage 直接注入活跃任务、队列空闲角色并支持必要广播', async () => {
+test('SendMessage delivers active and idle messages and acknowledges broadcasts only after recording the bulletin', async () => {
   const f = await fixture();
   try {
     const enqueued: {owner: string; prompt: string}[] = [];
@@ -54,12 +55,36 @@ test('SendMessage 直接注入活跃任务、队列空闲角色并支持必要�
     const broadcast = await bridge.execute(call('SendMessage', {to: 'all', message: 'Interface frozen', summary: 'Freeze'}), context());
     assert.equal(broadcast.isError, false);
     assert.deepEqual(enqueued.slice(1).map(item => item.owner).sort(), ['aletheia', 'logox']);
-    await new Promise(resolve => setTimeout(resolve, 50));
     assert.match(await readFile(join(f.directory, '.logox', 'bulletin.md'), 'utf8'), /Interface frozen/);
 
     // Cancelling the sender activity releases pending queued deliveries.
     await bridge.settle('sender', 'cancelled');
     assert.ok(cancelled > 0);
+  } finally {await rm(f.directory, {recursive: true, force: true});}
+});
+
+test('broadcast receipts report bulletin persistence failure instead of claiming it was recorded', async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.directory, '.logox'), 'A file blocks the bulletin directory.');
+    const bridge = new Collaboration({sessionId: 's', journal: f.journal, projectDir: f.directory,
+      member: owner => owner === 'techne', members: () => ['techne'],
+      enqueue: () => {throw new Error('No other recipients in this fixture');}});
+    const result = await bridge.execute(call('SendMessage', {to: 'all', message: 'Must be saved before acknowledgment'}), context());
+    assert.equal(result.isError, true, 'An unsuccessful bulletin write must not produce a success receipt');
+    assert.doesNotMatch(result.text, /recorded in bulletin/);
+  } finally {await rm(f.directory, {recursive: true, force: true});}
+});
+
+for (const initialized of [false, true]) test(`concurrent bulletin appends preserve every entry on ${initialized ? 'an existing' : 'a new'} board`, async () => {
+  const f = await fixture();
+  try {
+    if (initialized) await appendProjectBulletin(f.directory, 'logox', 'Existing finding', 'Existing content must survive.');
+    const markers = Array.from({length: 16}, (_, index) => `unique-finding-${index}-end`);
+    await Promise.all(markers.map((marker, index) => appendProjectBulletin(f.directory, 'actor-' + index, 'Finding', marker)));
+    const text = await readFile(join(f.directory, '.logox', 'bulletin.md'), 'utf8');
+    for (const marker of markers) assert.equal(text.split(marker).length - 1, 1, 'Each completed append must persist exactly once: ' + marker);
+    if (initialized) assert.match(text, /Existing content must survive\./);
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
 

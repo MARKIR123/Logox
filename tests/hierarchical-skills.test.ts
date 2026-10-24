@@ -4,7 +4,7 @@ import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {Resources} from '../src/resources/manager.js';
+import {Resources, ensureUserSkillsSeeded} from '../src/resources/manager.js';
 
 test('Hierarchical Skills: loads built-in skills and assigns actor visibility by directory path', async () => {
   const root = await mkdtemp(join(tmpdir(), 'logox-skills-'));
@@ -105,6 +105,25 @@ test('Hierarchical Skills: project-level skill overrides built-in skill with sam
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('Only unchanged shipped browser skills are refreshed during seeding', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-skill-migration-'));
+  try {
+    const builtin = join(root, 'builtin'), user = join(root, 'home', 'skills');
+    await mkdir(join(builtin, 'public'), {recursive: true});
+    await mkdir(join(user, 'public'), {recursive: true});
+    const original = await readFile(new URL('../../tests/fixtures/browser-screenshot-v1.md', import.meta.url), 'utf8');
+    const replacement = '---\nname: browser-screenshot\ndescription: Playwright browser verification\n---\nUse the local Playwright MCP session.\n';
+    const target = join(user, 'public', 'browser-screenshot.md');
+    await writeFile(join(builtin, 'public', 'browser-screenshot.md'), replacement);
+    await writeFile(target, original.replaceAll('\n', '\r\n'));
+    await ensureUserSkillsSeeded(user, builtin);
+    assert.equal(await readFile(target, 'utf8'), replacement);
+    await writeFile(target, original + '\nUser-specific workflow.\n');
+    await ensureUserSkillsSeeded(user, builtin);
+    assert.equal(await readFile(target, 'utf8'), original + '\nUser-specific workflow.\n');
+  } finally {await rm(root, {recursive: true, force: true});}
 });
 
 test('Hierarchical Skills: non-destructively seeds builtin skills to ~/.logox/skills on first run', async () => {

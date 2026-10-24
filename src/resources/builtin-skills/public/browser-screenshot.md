@@ -1,42 +1,27 @@
 ---
 name: browser-screenshot
-description: Standard headless browser screenshot procedure using built-in browser-shot CLI
+description: Verify local web pages through one Playwright MCP session with real interaction and visible screenshots
 ---
 
-# Browser Screenshot Public SOP (标准无头截图操作手册)
+# Browser Verification
 
-Available to all actors via `Shell`. Pre-injected into the subshell `PATH`.
+## 1. Context & Purpose
+Use the local `playwright` MCP server for HTML, SVG, canvas, and browser UI verification. The installed server and prepared browser run without Internet access; page resources and model providers have independent network requirements.
 
-## Command
+## 2. Boundaries
+- Keep navigation, interaction, assertions, and screenshots in the same page session.
+- Coordinate one browser operator at a time across actors. Other actors request the evidence they need.
+- Use a local HTTP preview for local pages. Default filesystem restrictions remain enabled.
+- Save temporary screenshots in scratchpad. Omit a screenshot filename to use the server's isolated scratchpad output directory.
+- Ordinary screenshots capture the current state; they do not promise deterministic animation time or byte-identical images.
 
-```bash
-browser-shot <fileOrUrl> [out.png] [--time <ms>] [--size <w,h>] [--full] [--frames <a,b,c>] [--diff]
-```
+## 3. Procedure
+1. Call `mcp` with `server: "playwright", action: "list"` to discover available tools and parameters.
+2. Navigate to the page, then call `browser_snapshot` without a filename for inline accessibility content and current element references. Navigation and click responses may link to saved snapshots instead.
+3. Click, type, or press keys using the listed parameter schema and current element references. Call `browser_snapshot` again to observe the resulting state.
+4. Verify the expected visible state, then take a screenshot without reopening the page.
+5. Inspect the image returned by MCP directly. Use `Read` only if the result provides a saved image path instead of image content.
+6. Close the browser when verification finishes.
 
-## Semantics that decide correctness
-
-- **`--time` is animation time, not a load wait.** The virtual clock is frozen only after the page is ready (load + fonts + network idle), then advanced in exact 16.67ms steps. `--time 800` means 800ms into the animation, on every run.
-- **Identical arguments produce byte-identical PNGs.** Use this to prove a visual change: capture the same `--time` before and after an edit and compare hashes.
-- **`--frames a,b,c`** captures several moments in one call (1 frame = 16.6667ms, max 8). Use it to review motion instead of guessing from a single still.
-- **`--diff`** byte-compares consecutive frames and prints `static (byte-identical)` when nothing moved.
-- **`--full`** captures beyond the viewport. Deliberate use only — the image gets large.
-
-## Mandatory procedure
-
-1. Capture into scratchpad: `browser-shot <target> <scratchpad>/shot.png --time 800`
-2. **`Read` the produced PNG.** Running the command is not the same as having seen the result.
-3. Reviewing motion? Capture a sequence (`--frames 0,30,60 --diff`) and read every frame.
-
-## Reading the log — this part is not optional
-
-- `[browser-shot] time=800ms bytes=... sha256=...` → primary (deterministic CDP) path succeeded.
-- `[browser-shot] fell back to legacy CLI: ...` → **the run is NOT deterministic.** The legacy path has no virtual-time control. Any timing or byte-stability claim from a fallback run is unverified; report it as a fallback, never as a pass.
-
-A screenshot tool that "produced an image" has proven nothing about timing. Always check which path produced it.
-
-## Boundaries
-
-- Read-only rendering: no clicking, typing, or scrolling. If a state needs interaction, the page must expose a URL/query flag to reach it.
-- Max 8 frames per invocation.
-- Default output (no path given): system temp `logox-shots/`.
-- If output is captured inside a project, put it in the session scratchpad unless the user asked for a specific path.
+## 4. Verification & Done Criteria
+Report the action performed, observed state, screenshot evidence, and any unverified behavior. A rendered page or simulated DOM test alone does not prove real interaction. If browser prerequisites are missing, report the setup requirement rather than attempting an offline package download.

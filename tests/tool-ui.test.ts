@@ -118,12 +118,16 @@ test('distribution asset build preserves user profiles and skills', async () => 
     }
     await put(join(root, 'src', 'resources', 'builtin-skills', 'public', 'agent.md'), 'new bundled skill');
     await put(join(root, 'src', 'tools', 'bin', 'browser-shot.cmd'), 'fixture');
+    await put(join(root, 'dist', 'src', 'tools', 'bin', 'browser-shot.cmd'), 'retired CLI');
+    await put(join(root, 'dist', 'src', 'tools', 'BrowserShot', 'cli.js'), 'retired implementation');
     const home = join(root, 'home');
     const profile = join(home, '.logox-ts', 'actors', 'techne', 'compression.md');
     const skill = join(home, '.logox-ts', 'skills', 'public', 'agent.md');
     await put(profile, 'custom user focus'); await put(skill, 'custom user skill');
     const result = spawnSync(process.execPath, [script], {encoding: 'utf8', env: {...process.env, HOME: home, USERPROFILE: home}});
     assert.equal(result.status, 0, result.stderr);
+    await assert.rejects(readFile(join(root, 'dist', 'src', 'tools', 'bin', 'browser-shot.cmd')), {code: 'ENOENT'});
+    await assert.rejects(readFile(join(root, 'dist', 'src', 'tools', 'BrowserShot', 'cli.js')), {code: 'ENOENT'});
     assert.equal(await readFile(join(root, 'dist', 'src', 'actors', 'profiles', 'techne', 'compression.md'), 'utf8'), 'new bundled focus');
     assert.equal(await readFile(profile, 'utf8'), 'custom user focus');
     assert.equal(await readFile(skill, 'utf8'), 'custom user skill');
@@ -175,7 +179,7 @@ test('formatToolCardTitle handles slices, images, and diff summaries', () => {
     formatToolCardTitle({
       id: '4', name: 'Edit',
       arguments: JSON.stringify({file_path: 'src/app.ts', old_string: 'line1', new_string: 'line1\nline2\nline3'}),
-    }),
+    }, 'Updated src/app.ts', true),
     'Edit(src/app.ts) · Added 3 lines, removed 1 line'
   );
 
@@ -238,6 +242,33 @@ test('formatToolCardBody limits read to 20 lines, formats image metadata and dif
   assert.ok(editBody.some(line => line.startsWith('+') && line.includes('new code')));
   assert.ok(!editBody.some(line => line.includes('---')));
 });
+
+test('Edit titles do not claim applied changes before successful completion', async () => {
+  const call = {id: 'edit', name: 'Edit', arguments: JSON.stringify({file_path: 'style.css', old_string: 'old', new_string: 'new\nextra'})};
+  const {getToolUI} = await registry();
+  assert.equal(getToolUI('Edit').title(call), 'Edit(style.css)');
+  assert.equal(formatToolCardTitle(call, 'No match found', false), 'Edit(style.css)');
+});
+
+for (const state of ['queued', 'running', 'waiting', 'cancelled', 'failed', 'completed'] as const) {
+  const dispositions = state === 'completed' ? ['error', 'denied'] as const : [undefined];
+  for (const disposition of dispositions) test(`unapplied Edit card (${state}, ${disposition ?? 'no disposition'}) shows diagnostics instead of an applied diff`, () => {
+    const store = new RuntimeStore();
+    const reason = disposition === 'denied' ? 'Permission rejected' : 'No match found for old_string; please re-read file';
+    const id = store.message('s', 'techne', 'notice', 'Edit\n' + reason, {kind: 'tool', step: {
+      title: 'Edit style.css', state, elapsedMs: 100, ...(disposition ? {disposition} : {}),
+      call: {id: 'edit', name: 'Edit', arguments: JSON.stringify({file_path: 'style.css', old_string: 'PROPOSED_OLD', new_string: 'PROPOSED_NEW\nEXTRA_LINE'})},
+    }});
+    const rows = buildStageRows(store.getSnapshot(), 's', 'techne', 200, {[id]: true}, id);
+    const display = rows.map(row => row.text).join('\n');
+    assert.doesNotMatch(display, /Added|removed|Removed|PROPOSED_OLD|PROPOSED_NEW|EXTRA_LINE/);
+    assert.ok(display.includes(reason), display);
+    if (state === 'failed' || disposition) {
+      const collapsed = buildStageRows(store.getSnapshot(), 's', 'techne', 200, {}, null);
+      assert.ok(collapsed.some(row => row.text.includes(reason)), 'Failure reason should be visible without expanding the card');
+    }
+  });
+}
 
 test('expanded Edit card renders colored diff lines with line numbers and red/green background', () => {
   const store = new RuntimeStore();

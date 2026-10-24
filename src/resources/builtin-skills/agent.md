@@ -38,9 +38,9 @@ skills/
 │   │   └── paper-writing.md        # Structured technical & academic publication standards
 │   └── inspection/
 │       ├── repo-audit.md           # Deep codebase topology & technical debt radar
-│       └── visual-qa.md            # Deterministic browser-shot multimodal visual QA
+│       └── visual-qa.md            # Browser visual and interaction verification
 └── public/                         # Public cross-cutting utility SOPs
-    └── browser-screenshot.md       # Deterministic headless screenshotting without hangs
+    └── browser-screenshot.md       # Playwright MCP interaction and screenshot procedure
 ```
 
 ---

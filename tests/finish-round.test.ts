@@ -276,9 +276,13 @@ test('an independently pending accepted injection must finish before terminal cl
     assert.ok(index <= 2);
     return turn(index === 1 ? 'Initial answer' : 'Updated answer', [finish('finish-' + index)]);
   }, journal => {
+    const save = journal.saveDeliveries.bind(journal);
+    journal.saveDeliveries = async (session, records) => {
+      if (records.some(item => item.status === 'pending' && item.inputKind === 'collaboration')) {started(); await held;}
+      await save(session, records);
+    };
     const append = journal.append.bind(journal);
     journal.append = async entry => {
-      if (entry.inputKind === 'collaboration') {started(); await held;}
       await append(entry);
       if (entry.message?.role === 'tool' && entry.message.callId === 'finish-1') {
         injected = ensemble.injectTaskMessage('techne', 'New evidence must be processed');

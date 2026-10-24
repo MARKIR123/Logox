@@ -94,6 +94,17 @@ name = "local"
 
 `/actors` 查看定义；`/model <actor>` 设置角色默认模型，未指定时继承会话模型。在 Actor 窗口输入 `/model` 也设置该角色默认值。角色定义与技能覆盖见[角色模块](modules/actors.md)，单任务确认转用见[任务模型](modules/task-models.md)。
 
+## Queue, Steer and Director coordination
+
+- **Enter / Queue** submits later work. If the same Actor is busy, that work stays out of its active model request and waits for its own activity. Pending human task rows carry a `Queued` label; the footer shows the pending human-task count (all Actors in the main window, the current Actor in an independent window). Very narrow footers use `Q<count>` so configured status information can remain visible.
+- **Ctrl+T / Steer** supplements the selected live activity at its next model-request boundary. The footer names the target. Ctrl+N selects a task or a tool/thinking card belonging to that task; clicking a card also selects its owning activity. Without an explicit selection, a window with exactly one live activity uses that activity. Selection is bound to its activity ID: if it ends, the draft is retained rather than sent to another task.
+- Steer does not cancel a request or process, answer a pending question, or execute slash commands / actor-routing syntax. Use Queue for commands and separately addressed work. Existing Esc and Actor Stop controls still cancel explicitly.
+- Formal Director assignments deliver full reports through a durable priority queue. Failures and assistance requests precede ordinary reports; equal-priority messages remain FIFO. Relevant events enter a busy Director before its next request, or wake an idle Director. An explicit human stop is never undone by a notification.
+- Director receives a bounded facts snapshot only when relevant child work or coordination events exist. `ListActors` provides detail, including custom roles and recent tool outcomes. A completed command or self-reported label is not task acceptance.
+- Direct human/Actor conversations remain independent, including local failures. An explicit message requesting Director assistance can enter coordination without transferring the whole conversation or granting new authority.
+- Restart retains queue data and history but does not restart interrupted work or replay tools. Bound steering is not retargeted after restart; unfinished human task checkpoints remain visible as interrupted work. Failed coordination consumption may be redelivered with stable event IDs: this is not exactly-once execution. Rewind excludes removed delivery ancestry while retaining raw ledgers.
+- There is no periodic Director polling, read-count limit or automatic stagnation verdict.
+
 ## 会话、整理与回退
 
 普通启动恢复最近的正式会话。没有历史或执行 `/new` 时先打开临时空白，首次提交任务才登记；只打开设置不会产生空白聊天记录。会话恢复展示历史，不自动续跑工具或重新发请求。占用或损坏的会话会报告原因，不静默改选另一段历史。
@@ -136,6 +147,29 @@ name = "local"
 
 `.logox-ts` 中的兼容资源仍可能参与加载，避免放置冲突副本。格式、覆盖规则和生命周期见[资源与扩展](modules/resources-and-extensions.md)。
 
+## 浏览器验证与离线运行
+
+默认提供本地 `playwright` MCP 服务，按需启动；不使用 `npx` 临时下载，也不连接远程浏览器服务。首次在有网时执行：
+
+```bash
+npm run browser:install
+```
+
+服务依赖随 `npm ci` 安装，浏览器需提前准备并保留其用户缓存。之后浏览器本身可以离线运行，但网页的 CDN、远程字体和接口，以及云端模型仍有独立的网络需求。移动到另一台机器或更新 Playwright 版本后，需要重新准备匹配的浏览器。
+
+模型通过同一个 MCP 页面会话导航、观察、点击、输入和截图。导航或点击结果可能只提供快照文件链接；调用不带文件名的 `browser_snapshot` 可直接获取页面内容及当前元素引用。MCP 返回的图片直接进入视觉输入；仅返回图片文件路径时才需要 `Read`。默认截图产物写入隔离的临时工作目录。多角色应约定一位浏览器操作者，避免互相切换页面。普通截图不保证固定动画时刻或字节一致。
+
+本地页面建议通过本机 HTTP 预览访问；默认不开放无限制的 `file://` 和项目外文件访问。需要自定义浏览器时，可用 Playwright 官方的 `PLAYWRIGHT_MCP_EXECUTABLE_PATH` 环境变量，或在 `[mcp.servers.playwright]` 中显式覆盖服务配置。
+
+关闭内置浏览器：
+
+```toml
+[mcp]
+playwright = false
+```
+
+修改 MCP 配置后重启 Logox；`/reload` 不重启服务。浏览器调用仍遵守现有 MCP 权限检查。服务使用独立的临时浏览器上下文，不复用日常浏览器的登录资料。
+
 ## 常用命令
 
 输入 `/` 可打开命令候选，↑/↓ 选择，Tab 补齐。完整行为以命令界面与当前实现为准。
@@ -163,4 +197,4 @@ CLI 支持 `--help`、`--demo`、`--session <id>`、`--resume`、`--provider <na
 
 不要把认证和运行目录提交到公共仓库。项目会话可能包含源码、工具输出和任务内容；保管与分享前自行检查。
 
-`npm run build` 不只生成 `dist`：当前资源复制脚本还会同步内置技能到用户 `.logox-ts/skills/`，并在对应用户 Actor 目录已存在时同步内置角色档案，可能覆盖内置同名文件。定制内容应另存，自动化构建应隔离用户 home。首次资源加载还会将缺失的内置技能种入主目录，行为与构建同步不完全相同。
+`npm run build` 只生成 `dist` 并复制角色与技能分发资产，不改写用户 home。资源加载会补入缺失的内置技能，并刷新内容完全匹配已知旧版本的浏览器技能；用户修改过的文件保持不变，旧版自定义截图流程需自行更新。角色安装与迁移也只更新已知且未修改的分发默认内容。

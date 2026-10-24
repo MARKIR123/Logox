@@ -8,6 +8,8 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 
 角色卡收起时显示任务与状态，展开后可查看目标、报告、实际模型和执行过程。角色结束后更新原卡片，不追加一份重复报告。Thinking 与工具调用使用内联卡片，各自保留状态和耗时；失败、拒绝和取消会明确显示。
 
+MCP 调用沿用 `服务名.工具名(参数) · 结果摘要 · 耗时`，每次调用独立一行。参数最多预览三项，长内容和复杂结构紧凑显示，敏感字段遮蔽；展开可查看有长度限制的参数与结果。结果摘要来自实际返回内容和执行状态，不额外调用模型推断业务是否成功；`Done` 仅表示调用完成。窄屏优先保留结果与耗时。遮蔽只作用于展示，不改写原始账本。
+
 点击卡片可折叠或展开，双击角色卡进入其窗口。拖选优先于点击，不会因为选择文字而停止任务。运行任务的停止入口只作用于对应任务；停止 Logox 不连带取消所有 Actor。
 
 审批和提问显示在所属任务内。新请求会展开一次，之后可以手动折叠；稍后回答不会丢失请求，主输入仍可编辑。界面只提交回答，是否执行由运行时权限检查决定。
@@ -16,7 +18,8 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 
 | 操作 | 按键 |
 |---|---|
-| 发送输入或确认当前选项 | Enter |
+| Queue later work or confirm the focused option | Enter |
+| Steer the selected live task without cancelling it | Ctrl+T |
 | 换行 | Shift+Enter、Alt+Enter 或 Ctrl+J |
 | 命令候选选择；无候选时移动输入光标 | ↑ / ↓ |
 | 补齐命令；无候选时切换输入与问题焦点 | Tab |
@@ -30,6 +33,8 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 | 取消聚焦的请求 | Ctrl+X |
 | 复制选区 | Ctrl+C |
 | 无选区时退出 | 1.5 秒内连续按两次 Ctrl+C |
+
+Queue and Steer are separate operations. The footer shares one line between configured status modules and the pending human-task count/input action, using a compact `Q<count>` badge when necessary. Ctrl+N or a card click selects the owning activity, and the footer identifies the steering target. A stale explicit selection retains the draft instead of falling back to another activity. In a window with one live task and no explicit selection, Ctrl+T targets that task. Shift/Alt+Enter, question answers and Stop controls keep their existing behavior.
 
 复制不计入退出次数。输入框从一行增长到最多五行，超出后滚动输入视口；Home/End 移动到当前视觉行两端，Ctrl+Home/Ctrl+End 移动到草稿两端。
 

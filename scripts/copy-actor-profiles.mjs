@@ -9,10 +9,9 @@ if (!within || within.startsWith('..') || isAbsolute(within)) throw new Error('�
 await rm(output, {recursive: true, force: true});
 await cp(new URL('../src/actors/profiles/', import.meta.url), output, {recursive: true});
 
-// 复制 CLI 工具包 (browser-shot 等)
-const binOutput = new URL('../dist/src/tools/bin/', import.meta.url);
-await rm(binOutput, {recursive: true, force: true});
-await cp(new URL('../src/tools/bin/', import.meta.url), binOutput, {recursive: true});
+// Remove retired browser CLI artifacts from existing build trees.
+await rm(new URL('../dist/src/tools/bin/', import.meta.url), {recursive: true, force: true});
+await rm(new URL('../dist/src/tools/BrowserShot/', import.meta.url), {recursive: true, force: true});
 
 // 复制内置标准技能库 (builtin-skills)
 const skillsOutput = new URL('../dist/src/resources/builtin-skills/', import.meta.url);

@@ -35,6 +35,13 @@ import {
   canonicalToolName,
 } from '../tools/index.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
+import {DeliveryQueue} from './delivery-queue.js';
+import {directorFacts} from './facts.js';
+import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READY, DIRECTOR_FAILURE,
+  DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
+  DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice} from '../prompts/runtime/director.js';
+import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
+import {inputKind} from '../runtime/provenance.js';
 
 const tool = (name: string, description: string, schema: z.ZodType): ToolDefinition => ({name, description, parameters: z.toJSONSchema(schema)});
 const listActorsTool = tool('ListActors', LIST_ACTORS_DESCRIPTION, listActorsSchema);
@@ -50,8 +57,10 @@ const borrowTool = tool('BorrowSkill', BORROW_SKILL_DESCRIPTION, borrowSkillSche
 
 export interface ActorServicesOptions {
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
+  deliveries?: DeliveryQueue;
   enqueue(owner: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
   getActiveTask?(ownerId: string): { activityId: string } | undefined;
+  canReceiveMessage?(ownerId: string): boolean;
   injectMessage?(targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue'): Promise<boolean> | boolean;
   interrupt?(targetOwnerId: string, message: string, source: string, summary?: string): boolean;
   pauseBatch?(batchId: string): void;
@@ -67,28 +76,42 @@ export interface ActorServicesOptions {
   authorize?(call: ToolCall, context: ActorContext): Promise<boolean>;
   modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
   modelPool?: ModelPool;
+  notice?(text: string): void;
 }
 /** 角色配置、单次技能借阅与摘要交接；执行队列仍由 Ensemble 拥有。 */
 export class ActorServices {
   readonly management: ActorManagement;
   readonly collaboration: Collaboration;
   readonly recovery: ActorRecovery;
+  readonly deliveries: DeliveryQueue;
   private readonly definitions = new Map<string, ActorDefinition>();
   private readonly active = new Map<string, ActorDefinition>();
   private readonly borrowed = new Map<string, Set<string>>();
   private readonly depths = new Map<string, number>();
   private readonly origins = new Map<string, TaskOrigin>();
   private readonly stoppedActors = new Set<string>();
+  private readonly pendingHandoffs = new Map<string, Delivery>();
+  private wakeTask: TaskHandle | undefined;
+  private releaseTask: Promise<void> = Promise.resolve();
   private readonly continuedTasks = new Set<string>();
   private readonly resumableBatches = new Set<string>();
   private readonly dispatchSignatures = new Map<string, number>();
-  private readonly groups = new Map<string, {remaining: Set<string>; reports: string[]; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
+  private readonly groups = new Map<string, {remaining: Set<string>; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
+    this.deliveries = options.deliveries ?? new DeliveryQueue(options.sessionId, options.journal);
     this.management = new ActorManagement(options.catalog, options.registry, options.requireIdle, owner => this.policy(owner), options.modelResolver, options.modelPool);
     this.collaboration = new Collaboration({
       ...options,
       member: owner => !!options.catalog.find(owner),
       members: () => options.catalog.list().map(a => a.id),
+      coordinate: async (callId, message, summary, context) => {
+        const root = context.rootActivityId ?? context.activityId;
+        await this.deliveries.enqueue({id: 'help:' + context.activityId + ':' + callId, ownerId: 'logox', source: context.ownerId,
+          sourceActivityId: context.activityId, rootActivityId: root, kind: 'help', inputKind: 'collaboration',
+          text: (summary ? summary + '\n' : '') + message, origin: {rootActivityId: root, parentActivityId: context.activityId,
+            authorization: [...context.authorization ?? []], ...(context.recovery ? {recovery: context.recovery} : {})}});
+        this.wakeDirector();
+      },
       getActiveTask: options.getActiveTask ? (owner) => options.getActiveTask!(owner) : undefined,
       injectMessage: options.injectMessage ? (target, msg, src, sum, mode) => options.injectMessage!(target, msg, src, sum, mode) : undefined,
       interrupt: (target, message, source, summary) => {
@@ -100,6 +123,7 @@ export class ActorServices {
   }
   definition(context: ActorContext): ActorDefinition {
     this.origins.set(context.activityId, context);
+    if (context.dispatchDepth !== undefined) this.depths.set(context.activityId, context.dispatchDepth);
     let definition = this.definitions.get(context.activityId);
     if (!definition) {
       definition = this.options.catalog.find(context.ownerId);
@@ -107,6 +131,11 @@ export class ActorServices {
       this.definitions.set(context.activityId, definition); this.active.set(context.ownerId, definition);
     }
     return definition;
+  }
+  facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
+    const snapshot = this.options.getSnapshot?.();
+    const facts = snapshot && directorFacts(snapshot, context, this.deliveries.snapshot());
+    return facts ? DIRECTOR_FACTS_HEADER + '\n' + JSON.stringify(facts) : '';
   }
   policy(ownerId: string) {
     const role = this.active.get(ownerId) ?? this.options.catalog.find(ownerId);
@@ -168,7 +197,8 @@ export class ActorServices {
             if (previous.stopReason === 'user') throw new Error('该活动由用户主动停止，不能自动续做');
             if (previous.status !== 'failed') throw new Error('只能续做失败活动；该活动当前状态：' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
-            if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root)) {
+            if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) &&
+              !this.deliveries.snapshot().some(item => item.recipientActivityId === context.activityId && item.rootActivityId === root)) {
               throw new Error('续做目标未交接到当前任务，不能续做其它根目标');
             }
             if (resumed.has(task.resumeTask) || this.continuedTasks.has(task.resumeTask)) throw new Error('该失败活动已经安排续做，不能重复派发：' + task.resumeTask);
@@ -180,11 +210,16 @@ export class ActorServices {
         }
         if (roots.size > 1) throw new Error('一次派发不能混合不同根目标的续做，请分别安排');
         const rootActivityId = roots.values().next().value ?? context.rootActivityId ?? context.activityId;
+        const recovery = this.deliveries.recoveryFor(context.activityId, rootActivityId,
+          rootActivityId === (context.rootActivityId ?? context.activityId) ? context.recovery : undefined);
+        if (recovery?.exhausted) throw new Error('Recovery for the target task is exhausted; new human instructions are required.');
         const currentSigs = this.recovery.signaturesCount(rootActivityId);
         const lastSigs = this.dispatchSignatures.get(rootActivityId) ?? 0;
         const hasProgress = currentSigs > lastSigs;
         if (hasProgress) this.dispatchSignatures.set(rootActivityId, currentSigs);
-        const baseDepth = hasProgress ? 0 : (this.depths.get(context.activityId) ?? 0);
+        const receivedDepth = Math.max(0, ...this.deliveries.snapshot().filter(item => item.recipientActivityId === context.activityId && item.rootActivityId === rootActivityId)
+          .map(item => item.origin?.dispatchDepth ?? 0));
+        const baseDepth = hasProgress ? 0 : Math.max(this.depths.get(context.activityId) ?? 0, receivedDepth);
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('已达到三次无新进展的角色调度，请根据已有结果收束任务');
         }
@@ -207,9 +242,9 @@ export class ActorServices {
         }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
-          ...(context.recovery ? {recovery: context.recovery} : {})};
+          ...(recovery ? {recovery} : {})};
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
-        const group = {remaining: new Set<string>(), reports: [] as string[], depth: nextDepth, batchId: randomUUID(), origin, paused: false};
+        const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const handles = [...grouped].map(([owner, task]) => {
           const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
@@ -280,7 +315,17 @@ export class ActorServices {
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
     } catch (error) {return {text: error instanceof Error ? error.message : '角色操作失败', isError: true};}
   }
-  stopDirector(_activityId: string): void {this.recovery.stop();}
+  async grantExecution(context: ActorContext): Promise<void> {
+    if (context.inputKind !== 'human' || !context.grantExecution) return;
+    const root = context.rootActivityId ?? context.activityId;
+    await this.recovery.grantExecution(root);
+    context.signal.throwIfAborted();
+    await this.deliveries.grantRecovery(root, context.activityId);
+  }
+  stopDirector(_activityId: string): void {
+    this.recovery.stop();
+    this.wakeTask?.cancel();
+  }
   stopActor(activityId: string): void {
     this.stoppedActors.add(activityId);
     const group = this.groups.get(activityId);
@@ -289,80 +334,108 @@ export class ActorServices {
     if (batchId) this.options.pauseBatch?.(batchId);
   }
   resumeDirector(activityId?: string): string {
+    if (activityId) this.releaseTask = this.deliveries.releaseDeferred();
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
     if (activityId) for (const batch of batches) this.resumableBatches.add(batch);
     return [report, batches.length ? '此前依赖任务仍暂停。先根据用户新指示判断；需要续做时用 dispatch_role({resumeBatch: "批次ID"}) 恢复已有队列，不重复派发。批次：' + batches.join('、') : ''].filter(Boolean).join('\n');
   }
-  recover(validActivities?: ReadonlySet<string>): Promise<void> {return this.recovery.recover(validActivities);}
-  flush(): Promise<void> {return this.recovery.flush();}
+  async recover(validActivities?: ReadonlySet<string>): Promise<void> {
+    await this.recovery.recover(validActivities);
+    const tasks = await this.options.journal.activeTasks(this.options.sessionId);
+    await this.deliveries.recover(tasks);
+    for (const task of tasks) {
+      if (task.handoff && (!validActivities || !task.handoff.rootActivityId || validActivities.has(task.handoff.rootActivityId)) &&
+        !this.deliveries.snapshot().some(item => item.id === task.handoff!.id)) await this.deliveries.enqueue(task.handoff);
+    }
+  }
+  async flush(): Promise<void> {await this.releaseTask; await this.deliveries.flush(); await this.recovery.flush();}
+  private wakeDirector(): void {
+    if (this.recovery.stopped() || this.wakeTask) return;
+    if (this.options.canReceiveMessage?.('logox') ?? !!this.options.getActiveTask?.('logox')) return;
+    const pending = [...this.deliveries.pending('logox')].filter(item => !item.deferredUntilHuman)
+      .sort((a, b) => deliveryPriority[a.kind] - deliveryPriority[b.kind]);
+    const first = pending[0];
+    if (!first) return;
+    const handle = this.options.enqueue('logox', DIRECTOR_COORDINATION_WAKE, first.source,
+      {...first.origin, rootActivityId: first.rootActivityId ?? first.origin?.rootActivityId ?? first.sourceActivityId,
+        inputKind: 'actor', coordinationWake: true, priority: first.kind === 'failure' || first.kind === 'help'});
+    this.wakeTask = handle;
+    const admitted = new Set(pending.map(item => item.id));
+    void handle.done.then(() => {
+      if (this.wakeTask?.activityId !== handle.activityId) return;
+      this.wakeTask = undefined;
+      if (this.options.getSnapshot?.().activities.find(activity => activity.activityId === handle.activityId)?.status === 'completed' ||
+        this.deliveries.pending('logox').some(item => !item.deferredUntilHuman && !admitted.has(item.id))) {
+        try {this.wakeDirector();} catch {this.options.notice?.('Coordination wake-up failed; pending reports remain saved.');}
+      }
+    });
+  }
+  private closeHandoff(activityId: string): void {
+    this.groups.get(activityId)?.remaining.delete(activityId);
+    this.groups.delete(activityId); this.pendingHandoffs.delete(activityId);
+  }
+  private async admitHandoff(event: Delivery): Promise<void> {
+    const activityId = event.sourceActivityId!;
+    this.pendingHandoffs.set(activityId, event);
+    await this.options.journal.stageHandoff?.(this.options.sessionId, activityId, event);
+    await this.deliveries.enqueue(event);
+    this.closeHandoff(activityId);
+    if (!event.deferredUntilHuman) this.wakeDirector();
+  }
   async handoff(result: Omit<TaskResult, 'sessionId'> & {sessionId?: string}) {
+    const pending = this.pendingHandoffs.get(result.activityId);
+    if (pending) return this.admitHandoff(pending);
     const group = this.groups.get(result.activityId);
     const executionError = result.error instanceof ExecutionRecoveryError ? result.error : undefined;
     if (result.ownerId === 'logox' && (result.status === 'completed' || (!result.recovery && !executionError))) return;
     const origin = group?.origin ?? this.origins.get(result.activityId) ?? result;
+    if (result.ownerId !== 'logox' && !group && inputKind({...origin, ownerId: result.ownerId, source: result.source}) !== 'director') return;
+    const eventId = 'terminal:' + result.activityId + ':' + result.status;
+    if (this.deliveries.snapshot().some(item => item.id === eventId)) {this.closeHandoff(result.activityId); return;}
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
     const cause = executionError?.message ?? (result.error instanceof ProviderError ? result.error.message : undefined);
-    const failure = cause ? '\n终止原因（运行时）：' + cause + '。此前工具报错不等于本次终止原因，请分别判断。' : '';
+    const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' : '';
     const report = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
-    if (group) {
-      group.reports.push(report); group.remaining.delete(result.activityId); this.groups.delete(result.activityId);
-    }
-    if (result.stopReason === 'shutdown') return;
+    if (result.stopReason === 'shutdown') {this.closeHandoff(result.activityId); return;}
     const userStopped = result.stopReason === 'user' || this.stoppedActors.delete(result.activityId);
-    if (userStopped) {
-      if (group) group.paused = true;
-      const batchId = group?.batchId ?? origin.batchId;
-      if (batchId) this.options.pauseBatch?.(batchId);
-      this.recovery.defer(rootActivityId, '用户主动停止了此角色任务，不要自动重试、重派或接替。\n' + report);
-      return;
-    }
     const failed = result.status !== 'completed';
-    if (failed) {
+    if (failed || userStopped) {
       if (group) group.paused = true;
       const batchId = group?.batchId ?? origin.batchId;
       if (batchId) this.options.pauseBatch?.(batchId);
     }
-    if (this.recovery.stopped() || modelUnavailable(result.error)) {
-      this.recovery.defer(rootActivityId, report); return;
-    }
-    if (executionError?.disposition === 'stop' || (origin.recovery?.exhausted && !origin.recovery.key.startsWith('execution:'))) {
-      this.recovery.defer(rootActivityId, report); return;
-    }
-    if (!failed && (result.source === 'direct' || !group || group.remaining.size || group.paused)) return;
-    const recovery = failed ? executionError ? await this.recovery.directorClaim(rootActivityId, executionError.kind)
-      : await this.recovery.next(rootActivityId, result.error, origin.recovery) : origin.recovery;
-    if (executionError && !recovery) {this.recovery.defer(rootActivityId, report); return;}
+    const deferred = userStopped || this.recovery.stopped() || modelUnavailable(result.error) || executionError?.disposition === 'stop' ||
+      !!(origin.recovery?.exhausted && !origin.recovery.key.startsWith('execution:'));
+    const inheritedRecovery = origin.recovery ? {...origin.recovery} : undefined;
+    const recovery = deferred ? inheritedRecovery : failed ? executionError ? await this.recovery.directorClaim(rootActivityId, executionError.kind)
+      : await this.recovery.next(rootActivityId, result.error, origin.recovery) : inheritedRecovery;
+    const noClaim = !!executionError && !recovery;
     if (recovery) {
       const actorTask = !failed ? undefined : result.ownerId === 'logox' ? origin.recovery?.actorTask
         : isProviderInterruption(result.error) ? {ownerId: result.ownerId, activityId: result.activityId} : undefined;
       delete recovery.actorTask;
       if (actorTask) recovery.actorTask = actorTask;
     }
-    if (this.recovery.stopped()) {this.recovery.defer(rootActivityId, report); return;}
-    const instruction = executionError
-      ? executionError.kind === 'no_delivery'
-        ? 'Actor 已在原任务内纠偏，仍未交付当前步骤。根据已确认目标与已有成果，缩小当前阶段或调整分工；需要续做时用 resumeTask 指向原失败活动 ' + result.activityId + '，不能新建重复目标，不重放已完成工具。此次调整仍无交付则收束，向用户简短交代卡点。'
-        : 'Actor 的自动接续已达上限，已保留合法正文与工具结果。核对部分成果和剩余工作，按实际成果决定下一步；不完整工具整批未执行，不再自动接续相同截断，不提高输出额度或重放已完成副作用。'
-      : recovery?.exhausted
-      ? '同一故障已自动补救两次。只简短说明原因、已完成内容和需要用户决定的下一步；不要执行工具或重新派工。'
-      : failed && recovery?.actorTask ? '模型请求超时或连接中断，具体原因见运行时报告。优先指派原 Actor 从断点续做：dispatch_role(' +
-          JSON.stringify({tasks: [{ownerId: recovery.actorTask.ownerId, resumeTask: recovery.actorTask.activityId,
-            prompt: '从已保存进展继续原任务，只完成剩余部分。'}]}) +
-          ')。已有工具结果和中断输出保留，不重放已完成副作用，不绕过审批拒绝；不要重新调查整项任务或直接接替 Actor。'
-        : failed ? '角色任务异常终止，请立即核对已有结果并决定修复、续做、改派或自己接手；不要重放已完成副作用或绕过审批拒绝。'
-        : '角色结果已返回。核对后继续原任务，不能把失败当成完成。';
-    const batches = group?.paused && group.remaining.size ? '\n后续任务已暂停，批次：' + group.batchId + '。确认可继续时用 dispatch_role 的 resumeBatch 恢复，勿重复派发已有任务。' : '';
-    const handle = this.options.enqueue('logox', instruction + batches + '\n' + (failed ? report : group!.reports.join('\n\n')),
-      result.ownerId, {parentActivityId: result.activityId, rootActivityId, priority: failed, inputKind: 'actor',
-        authorization: origin.authorization ?? [], ...(recovery ? {recovery} : {})});
-    this.depths.set(handle.activityId, group?.depth ?? 0);
-    this.origins.set(handle.activityId, {rootActivityId, ...(recovery ? {recovery} : {})});
+    const instruction = userStopped ? DIRECTOR_USER_STOP
+      : executionError ? executionError.kind === 'no_delivery' ? DIRECTOR_EXECUTION_REVIEW : DIRECTOR_STREAM_REVIEW
+      : recovery?.exhausted ? DIRECTOR_RECOVERY_EXHAUSTED
+      : failed && recovery?.actorTask ? directorResumeAdvice(recovery.actorTask)
+      : failed ? DIRECTOR_FAILURE : DIRECTOR_RESULTS_READY;
+    const batches = group?.paused && [...group.remaining].some(id => id !== result.activityId) ? '\n' + DIRECTOR_PAUSED_BATCH + group.batchId + DIRECTOR_PAUSED_BATCH_RULE : '';
+    await this.admitHandoff(deliverySchema.parse({id: eventId, sessionId: this.options.sessionId, status: 'pending', time: Date.now(),
+      ownerId: 'logox', source: result.ownerId, sourceActivityId: result.activityId,
+      rootActivityId, kind: failed ? 'failure' : 'report', inputKind: 'actor', text: instruction + batches + '\n' + report,
+      deferredUntilHuman: !!(deferred || noClaim), origin: {parentActivityId: result.activityId, rootActivityId,
+        dispatchDepth: group?.depth ?? this.depths.get(result.activityId) ?? origin.dispatchDepth ?? 0,
+        authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}));
   }
   async settled(activityId: string, status: RoundStatus) {
     await this.recovery.settled(activityId, status);
     await this.collaboration.settle(activityId, status);
-    if (this.groups.has(activityId)) await this.handoff({ownerId: this.definitions.get(activityId)?.id ?? 'actor', activityId,
+    const pending = this.pendingHandoffs.get(activityId);
+    if (pending) await this.admitHandoff(pending);
+    else if (this.groups.has(activityId)) await this.handoff({ownerId: this.definitions.get(activityId)?.id ?? 'actor', activityId,
       source: 'logox', status, summary: {title: '任务未正常交接', report: '任务在排队或记录阶段结束，请核对状态。', source: 'local'},
       ...(status === 'cancelled' ? {stopReason: 'shutdown'} : {})});
     const definition = this.definitions.get(activityId);

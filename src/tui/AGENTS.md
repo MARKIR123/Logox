@@ -13,8 +13,11 @@
 | Color themes, actor palettes, or statusbar styles | `cards.tsx:palette` | `themeSchema` in `src/config/config.ts` |
 | Full-screen tabbed modal pages (`/status`, `/config`, etc.) | `tabbed-page.tsx` | `application.ts:pageTabs()` |
 | Tool-specific cards or question interaction | `tools/ui-registry.ts` | Each tool's `UI.ts`; shared `tool-ui.ts` |
+| Queue/Steer shortcuts, selected targets or queue badge | `app.tsx` and `input-delivery.ts` | `tui/application.tsx`, public submit delivery contract and `application-sessions.ts` forwarding |
 
 ## 3. Hard Boundaries
+- **Input Intent**: Enter queues later work; Ctrl+T steers an exact live activity. Resolve selected fold/message ownership, not a latest-task fallback. Without explicit selection, only a unique live task in the current window may be used. Stale targets and rejected acceptance retain drafts; no Queue/Steer action calls Cancel. The footer reserves queue/action space even with status modules or command menus.
+- **Activity Labels**: Optional current labels appear only on live Actor cards; terminal cards use the report/task title. Historical step-stage snapshots never create headings in message bodies, including empty completed Thinking.
 - **Static Card Surfaces**: Card background colors and column widths MUST remain strictly static during animation. `decorateRow()` mutates only 1-column animated glyphs and text luster colors without mutating full-card background TrueColor or triggering ConPTY repaints.
 - **Inline Intervention Anti-Fragmentation**: Injected messages (`inputKind: "collaboration_interrupt"`) must render inline inside the active working card with Director accent, never opening separate queued cards.
 

@@ -1,14 +1,6 @@
-import {dirname, join, delimiter} from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
 import type {ToolResult} from '../types.js';
 import {runProcess} from '../process.js';
-
-import {existsSync} from 'node:fs';
-
-const distBin = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
-const srcBin = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src', 'tools', 'bin');
-const toolsBinDir = existsSync(distBin) ? distBin : srcBin;
 
 export const shellSchema = z.preprocess(
   // Legacy callers used seconds; values <= 600 are treated as seconds and converted to milliseconds.
@@ -35,15 +27,7 @@ export async function executeShell(
   signal: AbortSignal = new AbortController().signal,
   metadata?: {activityId?: string; toolId?: string},
 ): Promise<ToolResult> {
-  let command = args.command;
-  // Guard against Chromium virtual-time-budget=0 deadlock
-  if (/--virtual-time-budget[=\s]+0\b/.test(command)) {
-    command = command.replace(/--virtual-time-budget[=\s]+0\b/g, '--virtual-time-budget=100');
-  }
-
-  const extraEnv: Record<string, string> = {
-    PATH: toolsBinDir + delimiter + (process.env.PATH || ''),
-  };
+  const command = args.command;
 
   const timeoutMs = args.timeout ?? DEFAULT_TIMEOUT_MS;
 
@@ -57,7 +41,7 @@ export async function executeShell(
     timeoutMs,
     64_000,
     undefined,
-    extraEnv,
+    undefined,
     metadata,
   );
 

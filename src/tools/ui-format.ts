@@ -146,8 +146,8 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
     const oldStr = typeof args.old_string === 'string' ? args.old_string : typeof args.old_text === 'string' ? args.old_text : '';
     const newStr = typeof args.new_string === 'string' ? args.new_string : typeof args.new_text === 'string' ? args.new_text : '';
 
-    const oldCount = oldStr ? oldStr.split('\n').length : 0;
-    const newCount = newStr ? newStr.split('\n').length : 0;
+    const oldCount = isCompleted && oldStr ? oldStr.split('\n').length : 0;
+    const newCount = isCompleted && newStr ? newStr.split('\n').length : 0;
 
     let diffPart = '';
     if (oldCount > 0 && newCount > 0) {
