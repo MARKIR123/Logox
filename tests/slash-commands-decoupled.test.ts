@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {createCommandTabsFor, type ApplicationCommandContext} from '../src/application-commands.js';
+import {createApplication} from '../src/application.js';
+import {loadConfig} from '../src/config/config.js';
 
 function mockContext(): ApplicationCommandContext {
   return {
@@ -70,3 +75,37 @@ test('createCommandTabsFor returns status and usage tabs for /status and /usage'
   const usageResult = createCommandTabsFor('/usage', mockContext())!;
   assert.equal(usageResult.initialTab, 'usage');
 });
+
+test('toggling permission mode updates dedicated single-tab surface without flashing monolithic tabs', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-perm-flash-'));
+  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 8192}}, {}, cwd, cwd);
+  const app = await createApplication({cwd, config, env: {}, sessionId: 'test', authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
+  try {
+    await app.submit('/permissions');
+    const page = app.surfaces.getSnapshot();
+    assert.ok(page?.kind === 'page');
+    assert.equal(page.tabs.length, 1);
+    assert.equal(page.tabs[0]!.id, 'permissions');
+
+    const updateCalls: number[] = [];
+    app.surfaces.subscribe(() => {
+      const current = app.surfaces.getSnapshot();
+      if (current?.kind === 'page') {
+        updateCalls.push(current.tabs.length);
+      }
+    });
+
+    await app.surfaces.triggerTabAction(page.id, 'permissions', 'toggle_mode');
+
+    // Every update to the page during toggle must preserve the single-tab (length 1), NEVER emitting 9 tabs
+    assert.ok(updateCalls.length > 0);
+    for (const count of updateCalls) {
+      assert.equal(count, 1, 'Tabs count during permission update must strictly remain 1');
+    }
+  } finally {
+    app.surfaces.cancel();
+    await app.close();
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+

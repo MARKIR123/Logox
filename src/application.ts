@@ -198,18 +198,6 @@ export async function createSessionApplication(options: SessionApplicationOption
       record => usage.record(session, ownerId, record), await usage.read(session, ownerId));
     meteredOwners.add(ownerId);
   }
-  const stopPermissions = tools.configurePermissions(session, {
-    reviewer: () => {const selected = registry.selection(); return {provider: options.provider ?? registry.provider(), model: JSON.stringify([selected.provider, selected.model])};},
-    charge: async (context, amount, model) => {await configureMeter(context.ownerId); contexts.meter(context).chargeUsage(amount, model, 'approval');},
-    changed: () => {if (surfaces.getSnapshot()?.kind === 'page') surfaces.updatePage(pageTabs());},
-  });
-  const stopPermissionPolicy = permissions.subscribe(() => {
-    for (const request of store.interactions.list()) if (request.status === 'pending' &&
-      (request.kind === 'permission' || request.kind === 'question' && request.title === '审批失败，操作已暂停')) {
-      store.interactions.cancel(request.requestId, '权限已变化，重新裁决待执行操作');
-    }
-    if (surfaces.getSnapshot()?.kind === 'page') surfaces.updatePage(pageTabs());
-  });
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1]) => {
     await configureMeter(context.ownerId);
     const role = actorServices.definition(context);
@@ -555,6 +543,21 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
 
   const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();});
+  const stopPermissions = tools.configurePermissions(session, {
+    reviewer: () => {const selected = registry.selection(); return {provider: options.provider ?? registry.provider(), model: JSON.stringify([selected.provider, selected.model])};},
+    charge: async (context, amount, model) => {await configureMeter(context.ownerId); contexts.meter(context).chargeUsage(amount, model, 'approval');},
+    changed: () => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();},
+  });
+  const stopPermissionPolicy = permissions.subscribe(() => {
+    for (const request of store.interactions.list()) if (request.status === 'pending' &&
+      (request.kind === 'permission' || request.kind === 'question' && request.title === '审批失败，操作已暂停')) {
+      store.interactions.cancel(request.requestId, '权限已变化，重新裁决待执行操作');
+    }
+    if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();
+  });
+  surfaces.subscribe(() => {
+    if (!surfaces.getSnapshot()) activeCommandPage = '';
+  });
   const openModels = () => {
     requireIdle();
     const groupedMap = new Map<string, GroupedModel>();
