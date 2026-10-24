@@ -43,7 +43,7 @@ import {EnvironmentState, environmentVersion} from './context/environment.js';
 import {PENDING_HANDOFF_HEADER, REQUEST_ENVIRONMENT_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
 import {applyTheme} from './tui/cards.js';
 import {createCommandTabsFor, saveConfigToggles, type ApplicationCommandContext} from './application-commands.js';
-import type {ThemePresetName, CursorStyleName} from './config/theme-presets.js';
+import {applyThemePreset, applyCursorStyle, type ThemePresetName, type CursorStyleName} from './config/theme-presets.js';
 
 export interface ApplicationOptions {
   cwd: string;
@@ -318,6 +318,21 @@ export async function createSessionApplication(options: SessionApplicationOption
   let currentThemeName: ThemePresetName = 'Logox Dark';
   let currentCursorName: CursorStyleName = 'Block █';
   let activeCommandPage = '';
+  const uiPref = new StateFile(join(homeDir, '.logox', 'ui-preferences.json'), z.object({
+    version: z.number().default(1),
+    theme: z.string().default('Logox Dark'),
+    cursor: z.string().default('Block █'),
+  }));
+  void uiPref.read().then((saved: {theme?: string; cursor?: string} | undefined) => {
+    if (saved?.theme) {
+      currentThemeName = saved.theme as ThemePresetName;
+      applyThemePreset(currentThemeName);
+    }
+    if (saved?.cursor) {
+      currentCursorName = saved.cursor as CursorStyleName;
+      applyCursorStyle(currentCursorName, process.stdout);
+    }
+  }).catch(() => {});
   const contextLines = (): string[] => {
     const identity = {sessionId: session, ownerId: pageOwner};
     const usage = contexts.status(identity), spent = contexts.meter(identity).spent;
@@ -876,12 +891,18 @@ export async function createSessionApplication(options: SessionApplicationOption
         surfaces.openPage(title, tabs, initialTab, {
           onSaveToggles: async (tabId, items) => {
             if (tabId === 'config') {
-              return saveConfigToggles(items, {
+              const res = await saveConfigToggles(items, {
                 saveMotion: async enabled => statusbar.saveMotion(enabled),
                 stdout: process.stdout,
                 onThemeChange: theme => { currentThemeName = theme as ThemePresetName; },
                 onCursorChange: cursor => { currentCursorName = cursor as CursorStyleName; },
               });
+              await uiPref.save({
+                version: 1,
+                theme: currentThemeName,
+                cursor: currentCursorName,
+              }).catch(() => {});
+              return res;
             }
             if (tabId === 'animations') {
               await statusbar.saveMotion(items[0]?.enabled ?? true);
