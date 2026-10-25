@@ -84,9 +84,12 @@ export class MemoryStore {
   async list(scope?: 'project' | 'user'): Promise<readonly MemoryRecord[]> {
     const scopes: ('project' | 'user')[] = scope ? [scope] : ['project', 'user'];
     const results: MemoryRecord[] = [];
+    const seenDirs = new Set<string>();
 
     for (const s of scopes) {
       const dir = this.dirFor(s);
+      if (seenDirs.has(dir)) continue;
+      seenDirs.add(dir);
       try {
         const files = await readdir(dir);
         for (const file of files) {
