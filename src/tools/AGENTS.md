@@ -16,6 +16,8 @@
 | Atomic file undo and snapshot rollback | `snapshots.ts:Snapshots` | `/undo` command in `src/application.ts` |
 | Stateless mechanical indexing & extraction | `AutomaTool/` | `prompt.ts:AUTOMA_ANIMATION_FRAMES` and `AutomaTool.ts` |
 | Dedicated tool model configuration & persistence | `tool-models.ts:ToolModelStorage` | `~/.logox/tool-models.json` and `/model automa` in `application.ts` |
+| Tiered tool taxonomy & role scoping | `metadata.ts:ToolMetadata` | `registry.ts:ToolRegistry` and `.logox/tools.json` |
+| Silent git state on-demand inspection | `protocol/_GitStatusTool/` | `metadata.ts` (`terminalVisibility: 'silent'`) |
 | Missing argument validation error formatting | `index.ts:validateToolCall()` | Specific tool Zod schema in `<ToolName>Tool.ts` |
 | Tool presentation, visibility or question actions | `ui-registry.ts` and sibling `UI.ts` | `ui-types.ts` and shared `tui/tool-ui.ts` |
 | Hidden terminal round metadata | `_FinishRoundTool/` | `kernel/agent.ts` and `context/round-memory.ts` |
@@ -24,6 +26,8 @@
 - **PascalCase Alignment**: Tools are strictly registered in PascalCase (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Shell`, `AskUserQuestion`, `WebFetch`, `Automa`, `Actor`, `ListActors`, `CancelActor`, `UpdateTaskProgress`). Aliases are normalized via `canonicalToolName()`.
 - **Automa Read-Only Confinement**: Automa executes as an ephemeral, stateless mechanical sub-agent using exclusively Read, Glob, Grep, WebFetch. It is strictly prohibited from Write, Edit, Shell, and Actor delegation. Calls append to `subagents/automa.jsonl` for auditability but accumulate zero conversational context across invocations. Automa is strictly a tool decoupled from `ActorCatalog`; its dedicated model is persisted via `ToolModelStorage` (`~/.logox/tool-models.json`) and configured via `/model automa [model|inherit]`, defaulting to session model inheritance.
 - **Claude Code Parameter Contract**: Model-facing schemas expose `file_path`, `old_string`, `new_string`, Grep `output_mode`/`glob`/`head_limit`, and Shell millisecond `timeout`. Never add `.default()` to a model-facing field: Zod 4 marks defaulted fields as `required` in `toJSONSchema`, which forces the model to send them. Legacy names (`path`, `old_text`, `new_text`, Grep `limit`) are accepted only through `normalizeAliases()` and are scheduled for removal.
+- **Tiered Tool Taxonomy & Dynamic Role Scoping**: Built-in and user tools belong to distinct tiers (`core`, `protocol`, `coordination`, `orchestration`, `extension`). Roles are adjudicated dynamically via `isToolAllowedForActor(meta.roles, actorId)` (`'all' | 'director' | 'actors' | readonly string[]`), allowing dynamic custom actors to automatically inherit appropriate tool permissions without hardcoded source changes.
+- **Dual Visibility Isolation**: Tool prompt visibility (`promptVisibility: 'always' | 'explicit' | 'hidden'`) determines model exposure, while terminal visibility (`terminalVisibility: 'card' | 'notice' | 'silent'`) controls TUI timeline rendering. Protocol tools such as `_FinishRound` and `_GitStatus` are strictly silent, producing 0 timeline rows while transparently streaming results into model context.
 - **Bundled ripgrep**: Grep must resolve the ripgrep binary from the `@vscode/ripgrep` dependency (or `LOGOX_RIPGREP_PATH`); never rely on the host PATH as the primary source. The JS traversal is a last-resort fallback only.
 - **Internal Tool Policy**: `_FinishRound` is an explicitly terminal, hidden, omit-pair tool, not a prefix-based permission exception. Its minimal receipt is recorded without another model request; it creates no visible tool step.
 - **Presentation Ownership**: Built-ins, including collaboration tools, own `UI.ts`; common hosts retain layout, focus and permission scheduling. Execution never imports the renderer registry. Unknown extension tools use a safe visible fallback. Add tool-local signposts only for non-obvious constraints.
@@ -45,10 +49,14 @@ kernel/agent.ts (receives tool calls from model)
 - **Targeted Test Suite**:
   - `tests/tool-parameter-alignment.test.ts`: Model-facing schemas, legacy aliases, Grep modes, Shell timeout, AskUserQuestion multiSelect, bundled ripgrep.
   - `tests/tools-claude-alignment.test.ts`: PascalCase alignment and execution for all tools.
+  - `tests/tools-metadata.test.ts`: Metadata contracts and dynamic role scoping resolver.
+  - `tests/tools-registry.test.ts`: ToolRegistry category grouping and user config overrides.
+  - `tests/git-status-tool.test.ts`: Silent _GitStatus execution and fallback.
+  - `tests/tiered-tools-integration.test.ts`: Integration across director, worker, dynamic actor, and TUI silent rendering.
   - `tests/subagent-efficiency-vision.test.ts`: Multimodal reading and process error tolerance.
 - **Fast Run Command**:
   ```bash
-  node --test dist/tests/tools-*.test.js dist/tests/tool-parameter-alignment.test.js dist/tests/tool-ui.test.js dist/tests/finish-round.test.js dist/tests/subagent-efficiency-vision.test.js
+  node --test dist/tests/tools-*.test.js dist/tests/git-status-tool.test.js dist/tests/tiered-tools-integration.test.js dist/tests/tool-parameter-alignment.test.js dist/tests/finish-round.test.js
   ```
 
 ## 6. Known Gaps
