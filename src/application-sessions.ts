@@ -45,7 +45,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     id: request.callId, name: 'mcp:' + request.server + ':' + request.tool, arguments: JSON.stringify(request.arguments),
   }, context, request.action === 'list' ? 'read' : 'unknown'));
   const extensions = options.extensions ?? new ProjectExtensions(cwd, config, options.resourceOptions, approveExtension, diagnose);
-  const tools = observeTools(new Tools(cwd, undefined, permissions), extensions.hooks);
+  const tools = observeTools(new Tools(cwd, undefined, permissions, {home}), extensions.hooks);
   let lease: SessionLease;
   let closed = false, transition: Promise<void> | undefined;
   let entry: Promise<void> = Promise.resolve();

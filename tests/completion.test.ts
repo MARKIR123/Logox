@@ -17,7 +17,7 @@ test('命令目录补全现有命令、参数及中文模型，保留光标后�
   assert.deepEqual(commandSuggestions(draft('/login '), context).map(item => item.label), ['deepseek']);
   assert.deepEqual(commandSuggestions(draft('/provider a'), context).map(item => item.label), ['antigravity']);
   assert.deepEqual(commandSuggestions(draft('/model 模'), context), []);
-  assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia']);
+  assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia', 'automa']);
   const actorCompletion = commandSuggestions(draft('/model a'), context).find(item => item.label === 'aletheia')!;
   assert.equal(actorCompletion.label, 'aletheia');
   assert.equal(actorCompletion.execute, true);

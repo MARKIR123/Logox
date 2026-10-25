@@ -71,10 +71,16 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
 
   if (command.name === 'model') {
     if (argIndex === 1) {
-      const actorList = (context.actors ?? ['logox', 'techne', 'kalon', 'aletheia']).map(a => ({
-        name: a,
-        description: 'Actor role',
-      }));
+      const actorList = [
+        ...(context.actors ?? ['logox', 'techne', 'kalon', 'aletheia']).map(a => ({
+          name: a,
+          description: 'Actor role',
+        })),
+        {
+          name: 'automa',
+          description: 'Stateless worker',
+        },
+      ];
       return actorList
         .filter(item => item.name.toLowerCase().startsWith(currentPrefix.toLowerCase()))
         .map(item => ({

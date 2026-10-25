@@ -1,6 +1,8 @@
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {realpath} from 'node:fs/promises';
+import {homedir} from 'node:os';
 import {z} from 'zod';
+import {ToolModelStorage, type ToolModel, type ToolModelMap} from './tool-models.js';
 import {PermissionEngine, shellWords, type PermissionTarget} from '../permissions/engine.js';
 import {PermissionGuard, type GuardOptions} from '../permissions/guard.js';
 import {shellImpact} from '../permissions/shell.js';
@@ -88,6 +90,9 @@ export {
   type UpdateTaskProgressArgs,
   UPDATE_TASK_PROGRESS_DESCRIPTION,
   UPDATE_TASK_PROGRESS_TOOL_NAME,
+  ToolModelStorage,
+  type ToolModel,
+  type ToolModelMap,
 };
 
 export const schemas = {
@@ -218,12 +223,19 @@ async function fileVersion(path: string): Promise<string> {
 
 export class Tools {
   readonly snapshots: Snapshots;
+  readonly modelStorage: ToolModelStorage;
   constructor(
     readonly cwd: string,
     private readonly report: (context: ActorContext, text: string) => void = () => {},
-    readonly permissions = new PermissionEngine(cwd)
+    readonly permissions = new PermissionEngine(cwd),
+    readonly options: {home?: string} = {}
   ) {
     this.snapshots = new Snapshots(join(cwd, '.logox', 'snapshots'));
+    const home = options.home ?? homedir();
+    this.modelStorage = new ToolModelStorage(
+      join(home, '.logox', 'tool-models.json'),
+      join(home, '.logox-ts', 'tool-models.json')
+    );
   }
 
   private readonly guards = new Map<string, PermissionGuard>();

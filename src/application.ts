@@ -16,7 +16,7 @@ import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
-import {groupModelsForProvider, resolveActualModel, type GroupedModel} from './config/model-grouping.js';
+import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from './config/model-grouping.js';
 import {UsageLedger, usageLines} from './context/usage.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase} from './kernel/agent.js';
@@ -199,7 +199,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     meteredOwners.add(ownerId);
   }
   tools.setAutomaRunner(async (args, context) => {
-    const configured = actors.modelStorage.get('automa') ?? registry.selection();
+    const configured = tools.modelStorage.get('automa') ?? registry.selection();
     const candidate = registry.candidate(configured.provider, configured.model);
     const journalPath = join(cwd, '.logox', 'state', 'subagents', 'automa.jsonl');
     return executeAutoma(args, context.signal, {
@@ -452,6 +452,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       'Model: ' + (settings.model || 'None selected'),
       'Thinking effort: ' + registry.thinking().effort,
       'Base URL: ' + settings.baseUrl,
+      'Automa worker: ' + (() => {
+        const automaModel = tools.modelStorage.get('automa');
+        return automaModel ? `${automaModel.provider}/${automaModel.model} (dedicated)` : `Inherits session model (${settings.provider}/${settings.model || 'none'})`;
+      })(),
       '',
       '── Execution Limits ──────────────────────────────────────────',
       'Temperature: ' + config.provider.temperature,
@@ -624,6 +628,75 @@ export async function createSessionApplication(options: SessionApplicationOption
         await saveSelection(registry.candidate(name));
         return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
       });
+  };
+  const openAutomaModel = async () => {
+    requireIdle();
+    const poolModels = modelPool.snapshot();
+    const choices = new Map<string, {provider: string; model: string} | undefined>([['inherit', undefined]]);
+    for (const item of poolModels) {
+      choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
+    }
+    const currentModel = tools.modelStorage.get('automa');
+    const initialItems: PickerItem[] = [
+      {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
+      ...poolModels.map(item => {
+        const choiceId = JSON.stringify({provider: item.provider, model: item.id});
+        const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
+        const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
+        const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
+        return {
+          id: choiceId,
+          label: item.provider + ' / ' + item.id,
+          description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
+          effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
+          effortLevels: levels.length > 0 ? levels : undefined,
+        };
+      }),
+    ];
+    await surfaces.openPicker({
+      title: 'Automa Model',
+      description: 'Select dedicated model for Automa worker; Esc to cancel',
+      current: currentModel ? JSON.stringify(currentModel) : 'inherit',
+      ...(poolModels.length > 0 ? {items: initialItems} : {}),
+    }, async signal => {
+      let models = poolModels;
+      let warning: string | undefined;
+      if (models.length === 0) {
+        const result = await registry.modelCatalog(signal);
+        warning = result.issues.join('; ');
+        models = result.models.map(m => ({
+          provider: m.provider,
+          id: m.id,
+          thinkingLevels: [...detectEffortLevels(m.id, m.provider)],
+        }));
+      }
+      for (const item of models) {
+        choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
+      }
+      const loadedItems: PickerItem[] = [
+        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
+        ...models.map(item => {
+          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
+          const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
+          const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
+          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
+          return {
+            id: choiceId,
+            label: item.provider + ' / ' + item.id,
+            description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
+            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
+            effortLevels: levels.length > 0 ? levels : undefined,
+          };
+        }),
+      ];
+      return {items: loadedItems, ...(warning ? {warning} : {})};
+    }, async choice => {
+      if (!choices.has(choice)) throw new Error('Invalid model selection');
+      requireIdle();
+      await tools.modelStorage.save('automa', choices.get(choice), commands.signal);
+      const chosen = choices.get(choice);
+      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model'};
+    });
   };
   // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
   const savedRounds = new Map<string, Awaited<ReturnType<Journal['rounds']>>[number]>();
@@ -805,6 +878,24 @@ export async function createSessionApplication(options: SessionApplicationOption
             return;
           }
           openModels();
+          return;
+        }
+
+        if (firstToken === 'automa') {
+          requireIdle();
+          const specificModel = rawArg.slice(firstToken.length).trim();
+          if (specificModel) {
+            if (specificModel.toLowerCase() === 'inherit') {
+              await tools.modelStorage.save('automa', undefined, commands.signal);
+              notice('Automa model set to inherit session model');
+              return;
+            }
+            const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
+            await tools.modelStorage.save('automa', {provider: resolved.provider, model: resolved.model}, commands.signal);
+            notice('Automa model set to: ' + resolved.provider + '/' + resolved.model);
+            return;
+          }
+          await openAutomaModel();
           return;
         }
 
