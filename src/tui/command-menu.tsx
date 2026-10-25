@@ -9,15 +9,29 @@ export function CommandMenu({items, selected, width}: {
 }) {
   return <Box height={items.length} flexShrink={0} flexDirection="column" overflow="hidden">
     {items.map((item, index) => {
-      const labelColumns = Math.max(1, item.kind === 'argument' ? width - 2
-        : Math.min(width - 2, 22, Math.max(16, Math.floor((width - 2) * 0.45))));
-      const label = clipLine(item.label, labelColumns);
-      const description = item.kind === 'argument' ? '' : clipLine(item.description, Math.max(0, width - labelColumns - 3));
-      const content = description ? label + ' '.repeat(Math.max(1, labelColumns - stringWidth(label) + 1)) + description : label;
-      return <Box key={item.label} height={1} flexShrink={0}>
-        <Text color={index === selected ? palette.accent : palette.muted} wrap="truncate">
-          {(index === selected ? '❯ ' : '  ') + content}
+      const isSelected = index === selected;
+      const labelWidth = stringWidth(item.label);
+      const labelColumnTarget = 18;
+      const paddingLength = Math.max(2, labelColumnTarget - labelWidth);
+      const prefixWidth = 2; // "❯ " or "  "
+      const maxDescWidth = Math.max(0, width - prefixWidth - labelWidth - paddingLength - 1);
+      const description = item.description ? clipLine(item.description, maxDescWidth) : '';
+
+      return <Box key={item.label} height={1} flexShrink={0} flexDirection="row">
+        <Text {...(isSelected ? {color: palette.accent} : {})}>
+          {isSelected ? '❯ ' : '  '}
         </Text>
+        <Text color={isSelected ? '#ffffff' : palette.fg}>
+          {item.label}
+        </Text>
+        {description ? (
+          <>
+            <Text>{' '.repeat(paddingLength)}</Text>
+            <Text color="#8a95a0" dimColor={!isSelected}>
+              {description}
+            </Text>
+          </>
+        ) : null}
       </Box>;
     })}
   </Box>;

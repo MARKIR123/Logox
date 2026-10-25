@@ -34,6 +34,7 @@ export interface CommandContext {
   readonly loginProviders: readonly string[];
   readonly models: readonly string[];
   readonly actors?: readonly string[];
+  readonly actorDetails?: readonly {id: string; name: string; title: string}[];
   readonly customCommands?: readonly {name: string; description: string}[];
 }
 export const emptyCommandContext: CommandContext = {providers: [], loginProviders: [], models: []};

@@ -801,6 +801,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const providerModels = modelCandidates.get(settings.provider) ?? knownPresets[settings.provider] ?? [];
       return {providers: registry.names(), loginProviders: registry.loginNames(), customCommands: resources.snapshot().commands,
         actors: actors.list().map(actor => actor.id),
+        actorDetails: actors.list().map(actor => ({id: actor.id, name: actor.name, title: actor.title})),
         models: [...new Set([settings.model, ...providerModels,
           ...[...modelCandidates].flatMap(([provider, models]) => models.map(model => provider + '/' + model))].filter(Boolean))]};
     },

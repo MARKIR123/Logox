@@ -12,11 +12,18 @@ export interface CommandSuggestion {
 }
 
 const actorDescriptions: Record<string, string> = {
-  logox: 'Director · 执导者',
-  techne: 'Technician · 精工构建',
-  kalon: 'Aesthetician · 雅正审美',
-  aletheia: 'Investigator · 澄明侦察',
+  logox: 'Director',
+  techne: 'Builder',
+  kalon: 'Polisher',
+  aletheia: 'Scout',
 };
+
+function resolveActorTitle(id: string, context: CommandContext): string {
+  const lower = id.toLowerCase();
+  if (lower === 'automa') return 'Stateless Worker';
+  const custom = context.actorDetails?.find(a => a.id.toLowerCase() === lower);
+  return actorDescriptions[lower] ?? custom?.title ?? 'Actor role';
+}
 
 export function commandSuggestions(draft: Draft, context: CommandContext): readonly CommandSuggestion[] {
   if (/[\r\n]/.test(draft.text)) return [];
@@ -34,7 +41,7 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
     return actorList
       .filter(id => id.toLowerCase().startsWith(prefix))
       .map(id => {
-        const desc = actorDescriptions[id.toLowerCase()] ?? 'Actor role';
+        const desc = resolveActorTitle(id, context);
         return {
           label: '@' + id,
           description: desc,
@@ -74,11 +81,11 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
       const actorList = [
         ...(context.actors ?? ['logox', 'techne', 'kalon', 'aletheia']).map(a => ({
           name: a,
-          description: 'Actor role',
+          description: resolveActorTitle(a, context),
         })),
         {
           name: 'automa',
-          description: 'Stateless worker',
+          description: 'Stateless Worker',
         },
       ];
       return actorList

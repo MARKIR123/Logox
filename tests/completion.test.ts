@@ -18,8 +18,15 @@ test('命令目录补全现有命令、参数及中文模型，保留光标后�
   assert.deepEqual(commandSuggestions(draft('/provider a'), context).map(item => item.label), ['antigravity']);
   assert.deepEqual(commandSuggestions(draft('/model 模'), context), []);
   assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia', 'automa']);
+  const modelItems = commandSuggestions(draft('/model '), context);
+  assert.equal(modelItems.find(item => item.label === 'aletheia')?.description, 'Scout');
+  assert.equal(modelItems.find(item => item.label === 'kalon')?.description, 'Polisher');
+  assert.equal(modelItems.find(item => item.label === 'techne')?.description, 'Builder');
+  assert.equal(modelItems.find(item => item.label === 'logox')?.description, 'Director');
+  assert.equal(modelItems.find(item => item.label === 'automa')?.description, 'Stateless Worker');
   const actorCompletion = commandSuggestions(draft('/model a'), context).find(item => item.label === 'aletheia')!;
   assert.equal(actorCompletion.label, 'aletheia');
+  assert.equal(actorCompletion.description, 'Scout');
   assert.equal(actorCompletion.execute, true);
   assert.deepEqual(applyCommandSuggestion(draft('/model a'), actorCompletion), draft('/model aletheia'));
   const middle = {text: '/proviDER antigravity', cursor: 4};
@@ -34,6 +41,10 @@ test('@ 触发剧团角色联想补全，支持前缀筛选与制表符补全', 
   const atAll = commandSuggestions(draft('@'), context);
   assert.deepEqual(atAll.map(item => item.label), ['@logox', '@techne', '@kalon', '@aletheia']);
   assert.equal(atAll[0]!.execute, false);
+  assert.equal(atAll.find(item => item.label === '@aletheia')?.description, 'Scout');
+  assert.equal(atAll.find(item => item.label === '@kalon')?.description, 'Polisher');
+  assert.equal(atAll.find(item => item.label === '@techne')?.description, 'Builder');
+  assert.equal(atAll.find(item => item.label === '@logox')?.description, 'Director');
 
   const atTechne = commandSuggestions(draft('@t'), context);
   assert.equal(atTechne.length, 1);
