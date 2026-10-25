@@ -77,3 +77,36 @@ test('ToolRegistry formats compact explicit prompt section grouped by category',
   assert.ok(promptSection.includes('Orchestration'));
   assert.ok(promptSection.includes('Actor'));
 });
+
+test('ToolRegistry formats tiered tools prompt aligned with user specification', () => {
+  const registry = new ToolRegistry();
+  const text = registry.formatTieredToolsPrompt('logox');
+
+  // 1. Starts with tools:
+  assert.ok(text.startsWith('tools:\n'));
+
+  // 2. Core tools are indented by 2 spaces directly under tools:
+  assert.ok(text.includes('  Read: '));
+  assert.ok(text.includes('  Grep: '));
+  assert.ok(text.includes('  Shell: '));
+
+  // 3. Subdirectory tools are categorized bullet points
+  assert.ok(text.includes('  - 流程规范工具 (Protocol):'));
+  assert.ok(text.includes('    - _FinishRound: '));
+  assert.ok(text.includes('    - _GitStatus: '));
+
+  assert.ok(text.includes('  - 团队协作工具 (Coordination):'));
+  assert.ok(text.includes('    - ListActors: '));
+
+  assert.ok(text.includes('  - 调度编排工具 (Orchestration):'));
+  assert.ok(text.includes('    - Actor: '));
+
+  // 4. For worker (techne), Orchestration tools are omitted
+  const workerText = registry.formatTieredToolsPrompt('techne');
+  assert.ok(workerText.includes('  Read: '));
+  assert.ok(workerText.includes('  - 流程规范工具 (Protocol):'));
+  assert.ok(workerText.includes('    - _FinishRound: '));
+  assert.ok(workerText.includes('    - _GitStatus: '));
+  assert.ok(!workerText.includes('Actor: '));
+  assert.ok(!workerText.includes('CancelActor: '));
+});

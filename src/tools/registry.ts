@@ -122,32 +122,58 @@ export class ToolRegistry {
     return result;
   }
 
-  formatExplicitPromptSection(actorId: string): string {
-    const categories: Record<string, {name: string; description: string}[]> = {};
+  formatTieredToolsPrompt(actorId: string): string {
+    const lines: string[] = ['tools:'];
 
-    for (const [name, meta] of this.metadata) {
+    // 1. First-class Core tools (at root)
+    for (const [name] of this.metadata) {
       const effective = this.getMetadata(name)!;
+      if (effective.category !== 'core') continue;
+      if (effective.promptVisibility === 'hidden') continue;
+      if (!isToolAllowedForActor(effective.roles, actorId)) continue;
+
+      const desc = effective.description || descriptions[effective.name as keyof typeof descriptions] || '';
+      lines.push(`  ${effective.name}: ${desc.split('\n')[0]}`);
+    }
+
+    // 2. Second-class Subdirectory tools
+    const categoryLabels: Record<string, string> = {
+      protocol: '流程规范工具 (Protocol): 轮次规范与环境状态检查',
+      coordination: '团队协作工具 (Coordination): 跨角色即时通信与协作',
+      orchestration: '调度编排工具 (Orchestration): Director 派工与任务控制',
+      extension: '扩展工具 (Extensions)',
+    };
+
+    const categorized: Record<string, {name: string; description: string}[]> = {};
+
+    for (const [name] of this.metadata) {
+      const effective = this.getMetadata(name)!;
+      if (effective.category === 'core') continue;
       if (effective.promptVisibility !== 'explicit') continue;
       if (!isToolAllowedForActor(effective.roles, actorId)) continue;
 
-      const catName = effective.category.charAt(0).toUpperCase() + effective.category.slice(1);
-      categories[catName] = categories[catName] || [];
-      categories[catName].push({
+      const catKey = effective.category;
+      categorized[catKey] = categorized[catKey] || [];
+      categorized[catKey].push({
         name: effective.name,
         description: effective.description || descriptions[effective.name as keyof typeof descriptions] || '',
       });
     }
 
-    const lines: string[] = [];
-    for (const [category, tools] of Object.entries(categories)) {
+    for (const [catKey, tools] of Object.entries(categorized)) {
       if (tools.length === 0) continue;
-      lines.push(`- ${category}:`);
+      const label = categoryLabels[catKey] || (catKey.charAt(0).toUpperCase() + catKey.slice(1));
+      lines.push(`  - ${label}:`);
       for (const t of tools) {
-        lines.push(`  - ${t.name}: ${t.description.split('\n')[0]}`);
+        lines.push(`    - ${t.name}: ${t.description.split('\n')[0]}`);
       }
     }
 
-    return lines.length > 0 ? `Categorized Process Tools:\n${lines.join('\n')}` : '';
+    return lines.join('\n');
+  }
+
+  formatExplicitPromptSection(actorId: string): string {
+    return this.formatTieredToolsPrompt(actorId);
   }
 
   async reloadUserConfigs(): Promise<void> {
