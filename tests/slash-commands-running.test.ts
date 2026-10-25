@@ -97,6 +97,14 @@ test('slash commands can be viewed, opened, and executed while tasks are activel
     // Finally complete the task
     finishTask?.();
     await taskPromise.catch(() => {});
+
+    // 10. Verify that none of the system notices, slash command panels, or errors entered model context journal
+    const entries = await app.journal.load(app.sessionId, 'logox');
+    assert.ok(!entries.some(e => (e as any).role === 'system'), 'Model journal must never contain system role messages');
+    assert.ok(!entries.some(e => e.text.includes('Permission mode switched to')), 'System notice must not leak to model context');
+    assert.ok(!entries.some(e => e.text.includes('Automa model set to')), 'Model setting notices must not leak to model context');
+    assert.ok(!entries.some(e => e.text.includes('Help & Commands')), 'Slash command UI text must not leak to model context');
+    assert.ok(!entries.some(e => e.text.includes('Tasks are running')), 'Error flashes must not leak to model context');
   } finally {
     await app.close();
     await rm(cwd, {recursive: true, force: true});
