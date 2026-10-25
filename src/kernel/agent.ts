@@ -8,6 +8,7 @@ import type {RuntimeStore} from '../runtime/store.js';
 import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
 import {Tools, toolDefinitions, validToolCall, validateToolCall, canonicalToolName, type ToolResult} from '../tools/tools.js';
+import {defaultToolRegistry} from '../tools/registry.js';
 import {diagnoseToolError} from '../tools/diagnostics.js';
 
 import type {ContextManager} from '../context/manager.js';
@@ -71,7 +72,12 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     includeSummary,
     scratchpadDir,
   });
-  return {system, tools: [...toolDefinitions, taskProgressTool, ...(role || ownerId === 'logox' ? extraTools : [])]};
+  const registryTools = defaultToolRegistry.getToolsForActor(ownerId);
+  const existingNames = new Set(registryTools.map(t => t.name.toLowerCase()));
+  const filteredExtra = (role || ownerId === 'logox' ? extraTools : []).filter(t => !existingNames.has(t.name.toLowerCase()));
+  const explicitSection = defaultToolRegistry.formatExplicitPromptSection(ownerId);
+  const enrichedSystem = explicitSection ? `${system}\n\n${explicitSection}` : system;
+  return {system: enrichedSystem, tools: [...registryTools, taskProgressTool, ...filteredExtra]};
 }
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const localRecoveries = new Map<string, ActorRecovery>();

@@ -1,5 +1,6 @@
 import type {ToolInteractionAdapter, ToolUI} from './ui-types.js';
 import {canonicalToolName} from './types.js';
+import {defaultToolRegistry} from './registry.js';
 import {createToolUI, messageToolCall} from '../tui/tool-ui.js';
 import type {Interaction, Message} from '../runtime/contracts.js';
 import {UI as Read} from './ReadTool/UI.js';
@@ -38,5 +39,7 @@ export function getInteractionUI(request: Interaction): ToolInteractionAdapter |
 }
 export function isVisibleToolMessage(message: Message): boolean {
   const call = messageToolCall(message);
-  return !call || getToolUI(call.name).visibility !== 'hidden';
+  if (!call) return true;
+  if (defaultToolRegistry.getTerminalVisibility(call.name) === 'silent') return false;
+  return getToolUI(call.name).visibility !== 'hidden';
 }

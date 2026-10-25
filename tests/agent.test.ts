@@ -409,8 +409,12 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     f.app.surfaces.cancel();
     const task = f.app.ensemble.dispatch('aletheia', 'wait', 'direct', {inputKind: 'human'});
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === '模型处理中'));
-    await assert.rejects(f.app.submit('/model'), /(?:任务处理中|Tasks are running)/);
-    await assert.rejects(f.app.submit('/provider'), /(?:任务处理中|Tasks are running)/);
+    await f.app.submit('/model');
+    assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker');
+    f.app.surfaces.cancel();
+    await f.app.submit('/provider');
+    assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker');
+    f.app.surfaces.cancel();
     await assert.rejects(f.app.submit('/model different'), /(?:任务处理中|Tasks are running)/);
     await assert.rejects(f.app.submit('/provider antigravity'), /(?:任务处理中|Tasks are running)/);
     finish!(); await task.done;
