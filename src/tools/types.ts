@@ -64,6 +64,12 @@ export const toolAliases = {
   Automa: 'Automa',
   _FinishRound: '_FinishRound',
   _finishround: '_FinishRound',
+  _GitStatus: '_GitStatus',
+  _git_status: '_GitStatus',
+  _gitstatus: '_GitStatus',
+  git_status: '_GitStatus',
+  gitstatus: '_GitStatus',
+  GitStatus: '_GitStatus',
 } as const;
 
 export type CanonicalToolName = (typeof toolAliases)[keyof typeof toolAliases];

@@ -47,6 +47,8 @@ import {finishRoundSchema} from './_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './_FinishRoundTool/prompt.js';
 import {automaSchema, executeAutoma, type AutomaArgs} from './AutomaTool/AutomaTool.js';
 import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './AutomaTool/prompt.js';
+import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
+import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
 
 export {
   pathArg,
@@ -59,6 +61,11 @@ export {
   type AutomaArgs,
   AUTOMA_DESCRIPTION,
   AUTOMA_TOOL_NAME,
+  gitStatusSchema,
+  executeGitStatus,
+  type GitStatusArgs,
+  GIT_STATUS_DESCRIPTION,
+  GIT_STATUS_TOOL_NAME,
   actorSchema,
   type ActorArgs,
   type TaskSpec,
@@ -113,6 +120,7 @@ export const schemas = {
   UpdateTaskProgress: updateTaskProgressSchema,
   Automa: automaSchema,
   _FinishRound: finishRoundSchema,
+  _GitStatus: gitStatusSchema,
 } as const;
 
 export type ToolName = keyof typeof schemas;
@@ -135,6 +143,7 @@ export const descriptions: Record<ToolName, string> = {
   UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
   Automa: AUTOMA_DESCRIPTION,
   _FinishRound: FINISH_ROUND_DESCRIPTION,
+  _GitStatus: GIT_STATUS_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
@@ -361,6 +370,12 @@ export class Tools {
           sessionId: context.sessionId,
           journalPath,
         });
+      }
+
+      if (name === '_GitStatus') {
+        const args = schemas._GitStatus.parse(parsed);
+        context.startTool?.();
+        return await executeGitStatus(args, this.cwd);
       }
 
       const targetPath = filePathOf(parsed);
