@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {automaSchema, executeAutoma, runAutomaReadOnlyTool, automaToolDefinitions} from '../src/tools/AutomaTool/AutomaTool.js';
-import {AUTOMA_ANIMATION_FRAMES, AUTOMA_THEME_COLOR} from '../src/tools/AutomaTool/prompt.js';
-import {UI} from '../src/tools/AutomaTool/UI.js';
+import {automaSchema, executeAutoma, runAutomaReadOnlyTool, automaToolDefinitions} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
+import {AUTOMA_ANIMATION_FRAMES, AUTOMA_THEME_COLOR} from '../src/tools/orchestration/AutomaTool/prompt.js';
+import {UI} from '../src/tools/orchestration/AutomaTool/UI.js';
 import {validateToolCall} from '../src/tools/index.js';
 import type {ModelMessage, ToolCall} from '../src/runtime/messages.js';
 

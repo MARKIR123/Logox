@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import type {ToolDefinition} from '../../runtime/messages.js';
+import type {ToolDefinition} from '../../../runtime/messages.js';
 import {FINISH_ROUND_DESCRIPTION} from './prompt.js';
 
 export const FINISH_ROUND_NAME = '_FinishRound';

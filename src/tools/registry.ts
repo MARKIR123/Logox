@@ -12,7 +12,7 @@ import {
   isToolAllowedForActor,
 } from './metadata.js';
 import {schemas, descriptions, canonicalToolName} from './index.js';
-import {sendMessageSchema, sendMessageTool} from './SendMessageTool/SendMessageTool.js';
+import {sendMessageSchema, sendMessageTool} from './coordination/SendMessageTool/SendMessageTool.js';
 
 const defaultMetadataList: readonly ToolMetadata[] = [
   // Core: First-class citizens, always present in top-level prompt

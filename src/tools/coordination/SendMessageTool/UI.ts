@@ -1,9 +1,9 @@
-import type {ToolCall} from '../../runtime/messages.js';
-import type {ToolRenderContext, ToolUI} from '../ui-types.js';
-import {messageToolCall} from '../../tui/tool-ui.js';
-import {palette, actorCardPalette} from '../../tui/cards.js';
-import {cast} from '../../actors/ensemble.js';
-import type {SceneSegment} from '../../tui/scene.js';
+import type {ToolCall} from '../../../runtime/messages.js';
+import type {ToolRenderContext, ToolUI} from '../../ui-types.js';
+import {messageToolCall} from '../../../tui/tool-ui.js';
+import {palette, actorCardPalette} from '../../../tui/cards.js';
+import {cast} from '../../../actors/ensemble.js';
+import type {SceneSegment} from '../../../tui/scene.js';
 
 function parseSendMessage(call: ToolCall, bodyText = '') {
   let args: Record<string, unknown> = {};

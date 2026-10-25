@@ -6,7 +6,7 @@ import {Journal, type HistoryEntry} from '../store/journal.js';
 import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
 import {formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
-import {isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
+import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 
 type Identity = {sessionId: string; ownerId: string; activityId?: string};
 interface Round {start: number; end: number; closed: boolean; record?: RoundRecord}

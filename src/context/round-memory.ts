@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import type {ModelMessage} from '../runtime/messages.js';
 import type {RoundStatus} from './contracts.js';
-import {finishRoundSchema, isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
+import {finishRoundSchema, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 
 export const roundMemorySchema = z.strictObject({
   title: z.string().min(1).max(120),

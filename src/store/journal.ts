@@ -10,7 +10,7 @@ import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
-import {isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
+import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
 const entrySchema = z.strictObject({

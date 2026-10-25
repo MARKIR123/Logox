@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import type {ToolResult} from '../types.js';
+import type {ToolResult} from '../../types.js';
 
 export const cancelActorSchema = z.strictObject({
   actor: z.string().min(1).describe('Target actor name: "techne", "kalon", or "aletheia"'),

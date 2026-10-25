@@ -1,17 +1,17 @@
 import {resolve} from 'node:path';
 import {appendFile, mkdir, realpath} from 'node:fs/promises';
 import {z} from 'zod';
-import type {ToolResult} from '../types.js';
-import type {ToolCall, ToolDefinition, ModelMessage} from '../../runtime/messages.js';
-import {canonicalToolName} from '../types.js';
-import {executeRead, readSchema} from '../ReadTool/ReadTool.js';
-import {READ_DESCRIPTION} from '../ReadTool/prompt.js';
-import {executeGlob, globSchema} from '../GlobTool/GlobTool.js';
-import {GLOB_DESCRIPTION} from '../GlobTool/prompt.js';
-import {executeGrep, grepSchema} from '../GrepTool/GrepTool.js';
-import {GREP_DESCRIPTION} from '../GrepTool/prompt.js';
-import {executeWebFetch, webFetchSchema} from '../WebFetchTool/WebFetchTool.js';
-import {WEB_FETCH_DESCRIPTION} from '../WebFetchTool/prompt.js';
+import type {ToolResult} from '../../types.js';
+import type {ToolCall, ToolDefinition, ModelMessage} from '../../../runtime/messages.js';
+import {canonicalToolName} from '../../types.js';
+import {executeRead, readSchema} from '../../ReadTool/ReadTool.js';
+import {READ_DESCRIPTION} from '../../ReadTool/prompt.js';
+import {executeGlob, globSchema} from '../../GlobTool/GlobTool.js';
+import {GLOB_DESCRIPTION} from '../../GlobTool/prompt.js';
+import {executeGrep, grepSchema} from '../../GrepTool/GrepTool.js';
+import {GREP_DESCRIPTION} from '../../GrepTool/prompt.js';
+import {executeWebFetch, webFetchSchema} from '../../WebFetchTool/WebFetchTool.js';
+import {WEB_FETCH_DESCRIPTION} from '../../WebFetchTool/prompt.js';
 
 export const automaArgs = z.strictObject({
   prompt: z.string().min(1).describe('The search, indexing, or data extraction task for Automa to perform'),

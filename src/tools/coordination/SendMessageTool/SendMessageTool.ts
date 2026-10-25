@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {SEND_MESSAGE_DESCRIPTION} from './prompt.js';
-import type {ToolDefinition} from '../../runtime/messages.js';
+import type {ToolDefinition} from '../../../runtime/messages.js';
 
 export const sendMessageSchema = z.strictObject({
   to: z.string().min(1).describe('Recipient actor, logox, or all'),

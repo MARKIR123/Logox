@@ -7,8 +7,8 @@ import {diagnoseWrite} from './WriteTool/diagnostic.js';
 import {diagnoseShell} from './ShellTool/diagnostic.js';
 import {diagnoseGrep} from './GrepTool/diagnostic.js';
 import {diagnoseGlob} from './GlobTool/diagnostic.js';
-import {diagnoseUpdateTaskProgress} from './UpdateTaskProgressTool/diagnostic.js';
-import {diagnoseSendMessage} from './SendMessageTool/diagnostic.js';
+import {diagnoseUpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/diagnostic.js';
+import {diagnoseSendMessage} from './coordination/SendMessageTool/diagnostic.js';
 
 export type DiagnosticFn = (args: Record<string, unknown>, rawError: string) => string | undefined;
 

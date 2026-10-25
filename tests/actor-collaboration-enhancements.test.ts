@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {executeListActors} from '../src/tools/ListActorsTool/ListActorsTool.js';
-import {executeCancelActor} from '../src/tools/CancelActorTool/CancelActorTool.js';
+import {executeListActors} from '../src/tools/coordination/ListActorsTool/ListActorsTool.js';
+import {executeCancelActor} from '../src/tools/orchestration/CancelActorTool/CancelActorTool.js';
 import {ensureProjectBulletin, appendProjectBulletin} from '../src/actors/bulletin.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 
@@ -205,7 +205,7 @@ test('SendMessage: injects into active task without opening a new card, and drai
 
 test('UpdateTaskProgressTool: registered in tools/index, aliases update_task_progress to UpdateTaskProgress', async () => {
   const {canonicalToolName, schemas, descriptions} = await import('../src/tools/index.js');
-  const {UPDATE_TASK_PROGRESS_TOOL_NAME, UPDATE_TASK_PROGRESS_DESCRIPTION} = await import('../src/tools/UpdateTaskProgressTool/prompt.js');
+  const {UPDATE_TASK_PROGRESS_TOOL_NAME, UPDATE_TASK_PROGRESS_DESCRIPTION} = await import('../src/tools/orchestration/UpdateTaskProgressTool/prompt.js');
 
   assert.equal(canonicalToolName('update_task_progress'), 'UpdateTaskProgress');
   assert.equal(canonicalToolName('UpdateTaskProgress'), 'UpdateTaskProgress');

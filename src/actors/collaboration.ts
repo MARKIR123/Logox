@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {sendMessageSchema, sendMessageTool} from '../tools/SendMessageTool/SendMessageTool.js';
+import {sendMessageSchema, sendMessageTool} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import type {ActorContext, TaskHandle, TaskOrigin} from './ensemble.js';
 import type {ToolCall, ToolDefinition, ModelMessage} from '../runtime/messages.js';
 import type {CollaborationRecord, Journal} from '../store/journal.js';

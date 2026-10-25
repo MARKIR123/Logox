@@ -1,11 +1,11 @@
-import type {Activity, Interaction, Message} from '../../runtime/contracts.js';
-import type {ThinkingRequest} from '../../tui/thinking-groups.js';
-import type {ActorStyles} from '../../tui/cards.js';
-import type {ToolFrame} from '../ui-types.js';
-import {ownerColor, palette} from '../../tui/cards.js';
-import {appendActorCard, type createBuilder} from '../../tui/scene.js';
-import {stepElapsed} from '../../runtime/steps.js';
-import {createToolUI} from '../../tui/tool-ui.js';
+import type {Activity, Interaction, Message} from '../../../runtime/contracts.js';
+import type {ThinkingRequest} from '../../../tui/thinking-groups.js';
+import type {ActorStyles} from '../../../tui/cards.js';
+import type {ToolFrame} from '../../ui-types.js';
+import {ownerColor, palette} from '../../../tui/cards.js';
+import {appendActorCard, type createBuilder} from '../../../tui/scene.js';
+import {stepElapsed} from '../../../runtime/steps.js';
+import {createToolUI} from '../../../tui/tool-ui.js';
 
 export interface ActorActivityContext {
   builder: ReturnType<typeof createBuilder>;

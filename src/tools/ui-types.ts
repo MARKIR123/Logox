@@ -4,7 +4,7 @@ import type {ToolCall} from '../runtime/messages.js';
 import type {ToolResult} from './types.js';
 import type {QuestionDraft} from '../tui/cards.js';
 import type {createBuilder, insetFrame} from '../tui/scene.js';
-import type {ActorActivityContext} from './ActorTool/UI.js';
+import type {ActorActivityContext} from './orchestration/ActorTool/UI.js';
 
 export type ToolFrame = Parameters<typeof insetFrame>[0];
 export interface ToolRenderContext {

@@ -33,7 +33,7 @@ export type {SubmitDelivery} from './runtime/delivery.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools, executeAutoma} from './tools/tools.js';
-import {finishRoundTool} from './tools/_FinishRoundTool/_FinishRoundTool.js';
+import {finishRoundTool} from './tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';

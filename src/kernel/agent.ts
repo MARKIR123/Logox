@@ -22,8 +22,8 @@ import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFinger
 import {composeBaseSystemPrompt, composeRuntimeSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
 import {maybePersistLargeOutput} from './scratchpad.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
-import {finishRoundTool, isFinishRound} from '../tools/_FinishRoundTool/_FinishRoundTool.js';
-import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/_FinishRoundTool/prompt.js';
+import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {TASK_REPORT_CONTRACT} from '../prompts/collaboration/index.js';
 
 export class UserCancelledError extends Error {

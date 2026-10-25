@@ -11,17 +11,17 @@ import {UI as Grep} from './GrepTool/UI.js';
 import {UI as Shell} from './ShellTool/UI.js';
 import {UI as AskUserQuestion} from './AskUserQuestionTool/UI.js';
 import {UI as WebFetch} from './WebFetchTool/UI.js';
-import {UI as Actor} from './ActorTool/UI.js';
-import {UI as CraftActor} from './CraftActorTool/UI.js';
-import {UI as ReadActor} from './ReadActorTool/UI.js';
-import {UI as BorrowSkill} from './BorrowSkillTool/UI.js';
-import {UI as ListActors} from './ListActorsTool/UI.js';
-import {UI as CancelActor} from './CancelActorTool/UI.js';
-import {UI as UpdateTaskProgress} from './UpdateTaskProgressTool/UI.js';
-import {UI as SendMessage} from './SendMessageTool/UI.js';
-import {UI as FinishRound} from './_FinishRoundTool/UI.js';
+import {UI as Actor} from './orchestration/ActorTool/UI.js';
+import {UI as CraftActor} from './orchestration/CraftActorTool/UI.js';
+import {UI as ReadActor} from './orchestration/ReadActorTool/UI.js';
+import {UI as BorrowSkill} from './coordination/BorrowSkillTool/UI.js';
+import {UI as ListActors} from './coordination/ListActorsTool/UI.js';
+import {UI as CancelActor} from './orchestration/CancelActorTool/UI.js';
+import {UI as UpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/UI.js';
+import {UI as SendMessage} from './coordination/SendMessageTool/UI.js';
+import {UI as FinishRound} from './protocol/_FinishRoundTool/UI.js';
 import {UI as GitStatus} from './protocol/_GitStatusTool/UI.js';
-import {UI as Automa} from './AutomaTool/UI.js';
+import {UI as Automa} from './orchestration/AutomaTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {

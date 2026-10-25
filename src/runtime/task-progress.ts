@@ -4,8 +4,8 @@ import type {ToolResult} from '../tools/tools.js';
 import {currentTaskProgress, immutable, taskProgressSchema, type ActivityProgress} from './contracts.js';
 import type {ToolDefinition} from './messages.js';
 import type {RuntimeStore} from './store.js';
-import {updateTaskProgressSchema} from '../tools/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
-import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from '../tools/UpdateTaskProgressTool/prompt.js';
+import {updateTaskProgressSchema} from '../tools/orchestration/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
+import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from '../tools/orchestration/UpdateTaskProgressTool/prompt.js';
 
 export const taskProgressTool: ToolDefinition = {
   name: UPDATE_TASK_PROGRESS_TOOL_NAME,

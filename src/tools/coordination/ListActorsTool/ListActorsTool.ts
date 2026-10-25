@@ -1,7 +1,7 @@
 import {z} from 'zod';
-import type {ToolResult} from '../types.js';
-import type {ActivityStatus, RuntimeSnapshot} from '../../runtime/contracts.js';
-import {toolFacts} from '../../actors/facts.js';
+import type {ToolResult} from '../../types.js';
+import type {ActivityStatus, RuntimeSnapshot} from '../../../runtime/contracts.js';
+import {toolFacts} from '../../../actors/facts.js';
 
 export const listActorsSchema = z.strictObject({});
 export type ListActorsArgs = z.infer<typeof listActorsSchema>;

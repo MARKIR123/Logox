@@ -4,7 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {executeListActors} from '../src/tools/ListActorsTool/ListActorsTool.js';
+import {executeListActors} from '../src/tools/coordination/ListActorsTool/ListActorsTool.js';
 import {ActorServices} from '../src/actors/services.js';
 import {ActorCatalog} from '../src/actors/catalog.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
