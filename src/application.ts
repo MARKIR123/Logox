@@ -32,7 +32,7 @@ import {submitDeliverySchema, type SubmitDelivery} from './runtime/delivery.js';
 export type {SubmitDelivery} from './runtime/delivery.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
-import {Tools} from './tools/tools.js';
+import {Tools, executeAutoma} from './tools/tools.js';
 import {finishRoundTool} from './tools/_FinishRoundTool/_FinishRoundTool.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
@@ -198,6 +198,17 @@ export async function createSessionApplication(options: SessionApplicationOption
       record => usage.record(session, ownerId, record), await usage.read(session, ownerId));
     meteredOwners.add(ownerId);
   }
+  tools.setAutomaRunner(async (args, context) => {
+    const configured = actors.modelStorage.get('automa') ?? registry.selection();
+    const candidate = registry.candidate(configured.provider, configured.model);
+    const journalPath = join(cwd, '.logox', 'state', 'subagents', 'automa.jsonl');
+    return executeAutoma(args, context.signal, {
+      cwd,
+      sessionId: session,
+      journalPath,
+      provider: candidate.provider(),
+    });
+  });
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1]) => {
     await configureMeter(context.ownerId);
     const role = actorServices.definition(context);

@@ -19,11 +19,12 @@ import {UI as CancelActor} from './CancelActorTool/UI.js';
 import {UI as UpdateTaskProgress} from './UpdateTaskProgressTool/UI.js';
 import {UI as SendMessage} from './SendMessageTool/UI.js';
 import {UI as FinishRound} from './_FinishRoundTool/UI.js';
+import {UI as Automa} from './AutomaTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
   Read, Write, Edit, Glob, Grep, Shell, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
-  BorrowSkill, ListActors, CancelActor, UpdateTaskProgress, SendMessage,
+  BorrowSkill, ListActors, CancelActor, UpdateTaskProgress, SendMessage, Automa,
   _FinishRound: FinishRound, mcp: Mcp,
 };
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));

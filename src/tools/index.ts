@@ -43,6 +43,8 @@ import {updateTaskProgressSchema, type UpdateTaskProgressArgs} from './UpdateTas
 import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from './UpdateTaskProgressTool/prompt.js';
 import {finishRoundSchema} from './_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './_FinishRoundTool/prompt.js';
+import {automaSchema, executeAutoma, type AutomaArgs} from './AutomaTool/AutomaTool.js';
+import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './AutomaTool/prompt.js';
 
 export {
   pathArg,
@@ -50,6 +52,11 @@ export {
   canonicalToolName,
   type ToolResult,
   type CanonicalToolName,
+  automaSchema,
+  executeAutoma,
+  type AutomaArgs,
+  AUTOMA_DESCRIPTION,
+  AUTOMA_TOOL_NAME,
   actorSchema,
   type ActorArgs,
   type TaskSpec,
@@ -99,6 +106,7 @@ export const schemas = {
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
   UpdateTaskProgress: updateTaskProgressSchema,
+  Automa: automaSchema,
   _FinishRound: finishRoundSchema,
 } as const;
 
@@ -120,11 +128,12 @@ export const descriptions: Record<ToolName, string> = {
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
   UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
+  Automa: AUTOMA_DESCRIPTION,
   _FinishRound: FINISH_ROUND_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
-  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'AskUserQuestion', 'WebFetch', '_FinishRound'] as const
+  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'AskUserQuestion', 'WebFetch', 'Automa', '_FinishRound'] as const
 ).map(name => ({
   name,
   description: descriptions[name],
@@ -219,6 +228,11 @@ export class Tools {
 
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
+  private automaRunner?: ((args: AutomaArgs, context: ActorContext) => Promise<ToolResult>) | undefined;
+
+  setAutomaRunner(runner: (args: AutomaArgs, context: ActorContext) => Promise<ToolResult>): void {
+    this.automaRunner = runner;
+  }
 
   configurePermissions(sessionId: string, options: GuardOptions): () => void {
     const previous = this.guards.get(sessionId);
@@ -318,6 +332,23 @@ export class Tools {
         }
         context.startTool?.();
         return executeWebFetch(args, context.signal, {cwd: this.cwd, sessionId: context.sessionId, callId: call.id});
+      }
+
+      if (name === 'Automa') {
+        const args = schemas.Automa.parse(parsed);
+        if (!await this.permissionGuard(context).authorize({tool: 'automa', paths: args.paths ?? [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
+          return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
+        }
+        context.startTool?.();
+        if (this.automaRunner) {
+          return await this.automaRunner(args, context);
+        }
+        const journalPath = join(this.cwd, '.logox', 'state', 'subagents', 'automa.jsonl');
+        return await executeAutoma(args, context.signal, {
+          cwd: this.cwd,
+          sessionId: context.sessionId,
+          journalPath,
+        });
       }
 
       const targetPath = filePathOf(parsed);

@@ -14,12 +14,14 @@
 | Process tree termination or hanging CLI | `process.ts:runProcess()` | 1.5s forced cleanup timer and `taskkill /T /F` |
 | Browser interaction, screenshots, or offline setup | `../extensions/playwright.ts` | `../extensions/mcp.ts` image transport and `npm run browser:install` |
 | Atomic file undo and snapshot rollback | `snapshots.ts:Snapshots` | `/undo` command in `src/application.ts` |
+| Stateless mechanical indexing & extraction | `AutomaTool/` | `prompt.ts:AUTOMA_ANIMATION_FRAMES` and `AutomaTool.ts` |
 | Missing argument validation error formatting | `index.ts:validateToolCall()` | Specific tool Zod schema in `<ToolName>Tool.ts` |
 | Tool presentation, visibility or question actions | `ui-registry.ts` and sibling `UI.ts` | `ui-types.ts` and shared `tui/tool-ui.ts` |
 | Hidden terminal round metadata | `_FinishRoundTool/` | `kernel/agent.ts` and `context/round-memory.ts` |
 
 ## 3. Hard Boundaries
-- **PascalCase Alignment**: Tools are strictly registered in PascalCase (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Shell`, `AskUserQuestion`, `WebFetch`, `Actor`, `ListActors`, `CancelActor`, `UpdateTaskProgress`). Aliases are normalized via `canonicalToolName()`.
+- **PascalCase Alignment**: Tools are strictly registered in PascalCase (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Shell`, `AskUserQuestion`, `WebFetch`, `Automa`, `Actor`, `ListActors`, `CancelActor`, `UpdateTaskProgress`). Aliases are normalized via `canonicalToolName()`.
+- **Automa Read-Only Confinement**: Automa executes as an ephemeral, stateless mechanical sub-agent using exclusively Read, Glob, Grep, WebFetch. It is strictly prohibited from Write, Edit, Shell, and Actor delegation. Calls append to `subagents/automa.jsonl` for auditability but accumulate zero conversational context across invocations.
 - **Claude Code Parameter Contract**: Model-facing schemas expose `file_path`, `old_string`, `new_string`, Grep `output_mode`/`glob`/`head_limit`, and Shell millisecond `timeout`. Never add `.default()` to a model-facing field: Zod 4 marks defaulted fields as `required` in `toJSONSchema`, which forces the model to send them. Legacy names (`path`, `old_text`, `new_text`, Grep `limit`) are accepted only through `normalizeAliases()` and are scheduled for removal.
 - **Bundled ripgrep**: Grep must resolve the ripgrep binary from the `@vscode/ripgrep` dependency (or `LOGOX_RIPGREP_PATH`); never rely on the host PATH as the primary source. The JS traversal is a last-resort fallback only.
 - **Internal Tool Policy**: `_FinishRound` is an explicitly terminal, hidden, omit-pair tool, not a prefix-based permission exception. Its minimal receipt is recorded without another model request; it creates no visible tool step.

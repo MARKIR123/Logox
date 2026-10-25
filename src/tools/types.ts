@@ -60,6 +60,8 @@ export const toolAliases = {
   update_task_progress: 'UpdateTaskProgress',
   updatetaskprogress: 'UpdateTaskProgress',
   UpdateTaskProgress: 'UpdateTaskProgress',
+  automa: 'Automa',
+  Automa: 'Automa',
   _FinishRound: '_FinishRound',
   _finishround: '_FinishRound',
 } as const;
