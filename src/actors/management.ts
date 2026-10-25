@@ -53,7 +53,6 @@ export class ActorManagement {
     try {return await readFile(path, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error;}
   }
   async saveDefaultModel(id: string, model: ActorModel | undefined, signal: AbortSignal): Promise<string> {
-    this.requireIdle();
     if (id === 'logox') throw new Error('Logox 使用当前会话模型，请通过 /model 设置');
     const actor = this.catalog.find(id); if (!actor) throw new Error('角色不存在');
     if (model) {
@@ -68,7 +67,6 @@ export class ActorManagement {
       }
     }
     const previous = await this.previous(id); signal.throwIfAborted();
-    this.requireIdle();
     await this.catalog.modelStorage.save(id, model, signal);
     const {defaultModel: _old, ...rest} = previous === undefined ? actor : parseActor(previous);
     const path = await this.catalog.writeProject(id, serializeActor({...rest, ...(model ? {defaultModel: model} : {})}), previous);

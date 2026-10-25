@@ -149,7 +149,7 @@ function railColorFor(who: string, roles: ActorStyles = cast): string {
 
 function whoLabel(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return '你';
-  if (who === 'system') return '系统';
+  if (who === 'system') return '';
   if (who === 'logox') return '◈ Logox';
   return ownerHeader(who, roles);
 }

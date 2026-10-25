@@ -138,6 +138,14 @@ test('页签保存失败保留草案与原配置，保存期间不能取消或�
   release(); await saving; assert.equal(surfaces.getSnapshot(), null);
 });
 
+test('系统提示不渲染独立“系统”标题行，保持纯净通知', () => {
+  const store = new RuntimeStore();
+  store.message('s', 'logox', 'system', 'Permission mode switched to: auto');
+  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {}, null);
+  assert.ok(rows.some(row => row.text === 'Permission mode switched to: auto'));
+  assert.ok(!rows.some(row => row.text === '系统'));
+});
+
 test('status modules and the queue badge share one line across actor views and narrow layouts', {timeout: 7000}, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'logox-statusbar-ui-')), prefs = new StatusbarPreferences(join(dir, 'statusbar.json'));
   const store = new RuntimeStore();

@@ -306,7 +306,6 @@ export async function createSessionApplication(options: SessionApplicationOption
     next.selectEffort(effort); await saveSelection(next);
   };
   const openThinking = () => {
-    requireIdle();
     const thinking = registry.thinking();
     void surfaces.openPicker({title: 'Thinking Effort', description: 'Available effort tiers for current model; auto uses provider default', current: thinking.effort},
       async () => ({items: thinking.levels.map(id => ({id, label: id}))}), async id => {
@@ -503,7 +502,6 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (!surfaces.getSnapshot()) activeCommandPage = '';
   });
   const openModels = () => {
-    requireIdle();
     const groupedMap = new Map<string, GroupedModel>();
     const currentBase = (() => {
       const match = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/.exec(settings.model);
@@ -621,16 +619,13 @@ export async function createSessionApplication(options: SessionApplicationOption
       });
   };
   const openProviders = () => {
-    requireIdle();
     void surfaces.openPicker({title: 'Select Provider', description: 'Switch default provider; run /model to inspect available models', current: settings.provider},
       async () => ({items: registry.names().map(name => ({id: name, label: name}))}), async name => {
-        requireIdle();
         await saveSelection(registry.candidate(name));
         return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
       });
   };
   const openAutomaModel = async () => {
-    requireIdle();
     const poolModels = modelPool.snapshot();
     const choices = new Map<string, {provider: string; model: string} | undefined>([['inherit', undefined]]);
     for (const item of poolModels) {
@@ -692,7 +687,6 @@ export async function createSessionApplication(options: SessionApplicationOption
       return {items: loadedItems, ...(warning ? {warning} : {})};
     }, async choice => {
       if (!choices.has(choice)) throw new Error('Invalid model selection');
-      requireIdle();
       await tools.modelStorage.save('automa', choices.get(choice), commands.signal);
       const chosen = choices.get(choice);
       return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model'};
@@ -824,7 +818,13 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (selecting) throw new Error('Model settings are saving, please try again shortly...');
       if (reloadTask) throw new Error('Resources are reloading, please wait...');
       if (compactTask) throw new Error('Context is compacting, please wait or cancel...');
-      if (surfaces.getSnapshot()) throw new Error('Please close the current command pane first');
+      if (surfaces.getSnapshot()) {
+        if (text.startsWith('/')) {
+          surfaces.close();
+        } else {
+          throw new Error('Please close the current command pane first');
+        }
+      }
       if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
       commandOwner = source;
       const delivery = submitDeliverySchema.parse(inputDelivery);
@@ -852,7 +852,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (text.startsWith('/permissions ')) {
-        if (!text.startsWith('/permissions mode ')) requireIdle();
         permissionTask = (async () => {
           const parts = text.slice(13).trim().split(/\s+/);
           if (parts[0] === 'mode') {if (parts.length !== 2) throw new Error('Usage: /permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
@@ -865,7 +864,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (text.startsWith('/actors model ')) {
-        requireIdle(); await actorServices.management.openDefaultModel(text.slice(14).trim(), surfaces); return;
+        await actorServices.management.openDefaultModel(text.slice(14).trim(), surfaces); return;
       }
       if (text.startsWith('/model ') || text === '/model') {
         const rawArg = text === '/model' ? '' : text.slice(7).trim();
@@ -874,7 +873,6 @@ export async function createSessionApplication(options: SessionApplicationOption
 
         if (text === '/model') {
           if (source !== 'logox' && actors.find(source)) {
-            requireIdle();
             await actorServices.management.openDefaultModel(source, surfaces);
             return;
           }
@@ -883,7 +881,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         }
 
         if (firstToken === 'automa') {
-          requireIdle();
           const specificModel = rawArg.slice(firstToken.length).trim();
           if (specificModel) {
             if (specificModel.toLowerCase() === 'inherit') {
@@ -901,7 +898,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         }
 
         if (targetActor) {
-          requireIdle();
           const specificModel = rawArg.slice(firstToken!.length).trim();
           if (specificModel) {
             const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
@@ -927,7 +923,6 @@ export async function createSessionApplication(options: SessionApplicationOption
       }
       const pageSpec = createCommandTabsFor(text, buildAppCommandContext());
       if (pageSpec) {
-        if (text === '/providers') requireIdle();
         pageOwner = source;
         activeCommandPage = text;
 

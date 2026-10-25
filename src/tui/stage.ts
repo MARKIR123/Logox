@@ -211,10 +211,11 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     } else {
       if (!message.kind) {
         builder.pushBlank();
-        const who = message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system'))
-          ? 'system'
-          : message.ownerId || (view === 'logox' ? 'logox' : view);
-        builder.pushTurnHeader(message.id + '-who', who);
+        const isSystem = message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system'));
+        if (!isSystem) {
+          const who = message.ownerId || (view === 'logox' ? 'logox' : view);
+          builder.pushTurnHeader(message.id + '-who', who);
+        }
       }
       body(message);
     }
