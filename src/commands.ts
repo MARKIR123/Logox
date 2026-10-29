@@ -8,12 +8,13 @@ export interface CommandDefinition {
 
 export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'help', usage: '/help', description: 'View available commands and keybindings', argument: 'none'},
-  {name: 'login', usage: '/login [provider]', description: 'Log in and save provider API key', argument: 'loginProvider'},
+  {name: 'login', usage: '/login [provider]', description: 'Log in, save provider API keys, and manage custom providers', argument: 'loginProvider'},
   {name: 'providers', usage: '/providers', description: 'Inspect connected providers, models, test latency, and refresh', argument: 'none'},
-  {name: 'provider', usage: '/provider', description: 'Alias for /providers', argument: 'provider'},
-  {name: 'model', usage: '/model [actor]', description: 'Open model picker (defaults to active window, or specify an actor)', argument: 'model'},
+  {name: 'model', usage: '/model [actor]', description: 'Open model picker grouped by provider (defaults to active window, or specify an actor)', argument: 'model'},
   {name: 'status', usage: '/status', description: 'View model, usage, permissions, and session status', argument: 'none'},
-  {name: 'config', usage: '/config', description: 'View current active configuration', argument: 'none'},
+  {name: 'statusbar', usage: '/statusbar', description: 'Customize statusbar modules, order, style, and colors', argument: 'none'},
+  {name: 'settings', usage: '/settings', description: 'Customize theme, cursor, animations, and statusbar', argument: 'none'},
+  {name: 'config', usage: '/config', description: 'Inspect effective model and execution configuration (read-only)', argument: 'none'},
   {name: 'cast', usage: '/cast task', description: 'Dispatch task across actor ensemble', argument: 'text'},
   {name: 'actors', usage: '/actors [model actor]', description: 'View actor responsibilities, compaction settings, and default models', argument: 'none'},
   {name: 'compact', usage: '/compact', description: 'Compact current role context while preserving ledgers', argument: 'none'},

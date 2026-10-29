@@ -1,10 +1,13 @@
 import type {CommandTab, CommandToggle, CommandResult} from './runtime/command-surface.js';
-import {applyThemePreset, applyCursorStyle, type ThemePresetName, type CursorStyleName} from './config/theme-presets.js';
+import {applyThemePreset, applyCursorStyle, type CursorStyleName} from './config/theme-presets.js';
+import type {StatusbarAppearance} from './config/statusbar-preferences.js';
+import type {StageStatus} from './runtime/stage-status.js';
 
 export interface ApplicationCommandContext {
   readonly session: string;
   readonly pageOwner: string;
-  readonly currentTheme: ThemePresetName;
+  readonly currentTheme: string;
+  readonly themeOptions: readonly string[];
   readonly currentCursor: CursorStyleName;
   readonly motion: boolean;
   readonly permissions: {
@@ -16,6 +19,8 @@ export interface ApplicationCommandContext {
     readonly approvalTokens: number;
   };
   readonly statusbarModules: readonly CommandToggle[];
+  readonly statusbarAppearance?: StatusbarAppearance;
+  readonly statusbarStatus?: StageStatus;
   readonly statusLines: readonly string[];
   readonly configLines?: readonly string[] | undefined;
   readonly usageLines: readonly string[];
@@ -29,14 +34,27 @@ export function createCommandTabsFor(
   context: ApplicationCommandContext
 ): {title: string; tabs: readonly CommandTab[]; initialTab: string} | null {
   const normalized = command.trim().toLowerCase();
+  const statusbarTab: CommandTab = {
+    id: 'statusbar', title: 'Statusbar', lines: [], toggles: context.statusbarModules,
+    statusbar: {appearance: context.statusbarAppearance ?? {style: 'pipes', colorScheme: 'theme'},
+      status: context.statusbarStatus ?? {ownerId: context.pageOwner, name: context.pageOwner, state: 'ready'}},
+  };
 
-  if (normalized === '/config' || normalized === '/animations') {
+  if (normalized === '/config') {
+    return {
+      title: 'Effective Configuration',
+      tabs: [{id: 'config', title: 'Config', lines: context.configLines ?? []}],
+      initialTab: 'config',
+    };
+  }
+
+  if (normalized === '/settings' || normalized === '/animations') {
     const toggles: CommandToggle[] = [
       {
         id: 'theme',
         label: 'Theme preset',
         value: context.currentTheme,
-        options: ['Logox Dark', 'Claude Warm', 'Nord Polar', 'Monokai Pro', 'Tokyo Night'],
+        options: [...context.themeOptions],
         enabled: true,
       },
       {
@@ -56,12 +74,12 @@ export function createCommandTabsFor(
     return {
       title: 'Settings',
       tabs: [{
-        id: 'config',
+        id: 'settings',
         title: 'Settings',
-        lines: context.configLines ?? [],
+        lines: [],
         toggles,
-      }],
-      initialTab: 'config',
+      }, statusbarTab],
+      initialTab: 'settings',
     };
   }
 
@@ -85,12 +103,7 @@ export function createCommandTabsFor(
   if (normalized === '/statusbar') {
     return {
       title: 'Statusbar Modules',
-      tabs: [{
-        id: 'statusbar',
-        title: 'Statusbar',
-        lines: ['Space toggle · [ / ] reorder · Enter save · Esc discard'],
-        toggles: context.statusbarModules,
-      }],
+      tabs: [statusbarTab],
       initialTab: 'statusbar',
     };
   }
@@ -169,7 +182,7 @@ export async function saveConfigToggles(
 ): Promise<CommandResult> {
   const themeItem = items.find(it => it.id === 'theme');
   if (themeItem?.value) {
-    applyThemePreset(themeItem.value as ThemePresetName);
+    applyThemePreset(themeItem.value);
     options.onThemeChange?.(themeItem.value);
   }
 
@@ -184,5 +197,5 @@ export async function saveConfigToggles(
     await options.saveMotion(motionItem.enabled);
   }
 
-  return {message: 'Settings saved.'};
+  return {message: 'Settings saved.', presentation: 'status'};
 }

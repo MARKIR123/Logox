@@ -54,3 +54,45 @@ test('Application /providers tab opens Providers page with actions support', asy
     await rm(cwd, {recursive: true, force: true});
   }
 });
+
+test('/provider is removed, including parameter forms; /providers remains the management page', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-provider-status-'));
+  try {
+    const config = await loadConfig(cwd, {provider: {name: 'openai', model: 'gpt-4o'}}, {}, cwd, cwd);
+    const mockProvider: Provider = {
+      async respond() {
+        return {message: {role: 'assistant', text: 'LOGOX_PROVIDER_READY'}, stop: 'complete'};
+      },
+    };
+    const app = await createApplication({
+      cwd,
+      config,
+      provider: mockProvider,
+      sessionId: 'test-provider-status-session',
+      authPath: join(cwd, 'auth.json'),
+      resourceOptions: {home: cwd, boundary: cwd},
+    });
+    try {
+      for (const command of ['/provider', '/provider deepseek', '/provider check', '/provider logout openai']) {
+        await assert.rejects(app.submit(command), /Unknown command/);
+        assert.equal(app.surfaces.getSnapshot(), null);
+      }
+      assert.equal(app.store.getSnapshot().activities.length, 0, 'Removed commands cannot invoke a model');
+      await app.submit('/help');
+      const help = app.surfaces.getSnapshot(); assert.ok(help?.kind === 'result');
+      const lines = help.text;
+      assert.doesNotMatch(lines, /\/provider(?=\s|$)/);
+      assert.match(lines, /\/providers\b/);
+      app.surfaces.cancel();
+      await app.submit('/providers');
+      const surface = app.surfaces.getSnapshot();
+      assert.equal(surface?.kind, 'page');
+      if (surface?.kind !== 'page') throw new Error('Providers page expected');
+      assert.equal(surface.initialTab, 'providers');
+    } finally {
+      await app.close();
+    }
+  } finally {
+    await rm(cwd, {recursive: true, force: true});
+  }
+});

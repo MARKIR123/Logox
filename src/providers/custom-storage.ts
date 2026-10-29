@@ -10,6 +10,9 @@ export const customProviderSchema = z.object({
   base_url: z.string().url(),
   kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
   default_model: z.string().optional(),
+  api: z.enum(['completions', 'responses']).optional(),
+  models: z.array(z.string().min(1)).optional(),
+  catalog: z.boolean().optional(),
 });
 export type CustomProviderRecord = z.infer<typeof customProviderSchema>;
 

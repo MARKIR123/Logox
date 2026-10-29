@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {immutable} from '../runtime/contracts.js';
-import type {CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem} from '../runtime/command-surface.js';
+import type {CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   readonly items?: readonly PickerItem[];
   readonly effort?: string;
@@ -8,9 +8,13 @@ export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title'
 };
 export interface PickerActions {readonly deleteLabel: string; onDelete(id: string): void | Promise<void>}
 export interface PageActions {
-  onSaveToggles(tabId: string, items: readonly CommandToggle[]): CommandResult | Promise<CommandResult>;
+  /** Multi-editor settings pages apply one tab without discarding drafts in the others. */
+  readonly closeOnSave?: boolean;
+  onSaveToggles(tabId: string, items: readonly CommandToggle[], appearance?: import('../config/statusbar-preferences.js').StatusbarAppearance): CommandResult | Promise<CommandResult>;
   onTabAction?(tabId: string, action: string): CommandResult | Promise<CommandResult>;
 }
+export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
+
 /** 拥有命令界面生命周期；回调与查询取消信号留在业务层。 */
 export class CommandSurfaces {
   private state: CommandSurface | null = null;
@@ -21,16 +25,31 @@ export class CommandSurfaces {
   private pageActions: PageActions | undefined;
   getSnapshot = (): CommandSurface | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
-  constructor(private readonly onDone: (result: CommandResult) => void) {}
+  constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
+    private readonly origin?: () => CommandOrigin) {}
+  private completion(state: CommandSurface, active: boolean): CommandCompletion {
+    return {surfaceId: state.id, active, ...(state.ownerId ? {ownerId: state.ownerId} : {}),
+      ...(state.sessionId ? {sessionId: state.sessionId} : {})};
+  }
   private publish(state: CommandSurface | null): void {this.state = immutable(state); for (const listener of this.listeners) listener();}
   private assertIdle(): void {if (this.state) throw new Error('Please close current command surface first');}
   openPage(title: string, tabs: readonly CommandTab[], initialTab: string, actions?: PageActions): void {
     this.assertIdle();
     if (!tabs.length || !tabs.some(tab => tab.id === initialTab)) throw new Error('Page missing valid tab');
     this.pageActions = actions;
-    this.publish({id: randomUUID(), kind: 'page', title, tabs, initialTab});
+    this.publish({id: randomUUID(), kind: 'page', title, tabs, initialTab, ...this.origin?.()});
   }
-  async saveToggles(surfaceId: string, tabId: string, items: readonly CommandToggle[]): Promise<void> {
+  /** Read-only output has no save callback or model execution semantics. */
+  openResult(title: string, text: string, origin = this.origin?.()): string {
+    this.assertIdle();
+    const id = randomUUID();
+    this.publish({id, kind: 'result', title, text, ...origin});
+    return id;
+  }
+  updateResult(surfaceId: string, text: string): void {
+    if (this.state?.kind === 'result' && this.state.id === surfaceId) this.publish({...this.state, text});
+  }
+  async saveToggles(surfaceId: string, tabId: string, items: readonly CommandToggle[], appearance?: import('../config/statusbar-preferences.js').StatusbarAppearance): Promise<void> {
     const state = this.state, actions = this.pageActions;
     if (state?.kind !== 'page' || state.id !== surfaceId || state.saving || !actions) return;
     const tab = state.tabs.find(tab => tab.id === tabId);
@@ -38,8 +57,15 @@ export class CommandSurfaces {
       items.some(item => !tab.toggles!.some(original => original.id === item.id))) return;
     this.publish({...state, saving: true, error: ''});
     try {
-      const result = await actions.onSaveToggles(tabId, immutable([...items]));
-      if (this.state?.id === surfaceId) {this.dismiss(); this.onDone(result);}
+      const result = await actions.onSaveToggles(tabId, immutable([...items]), appearance && immutable({...appearance}));
+      if (this.state?.id === surfaceId) {
+        if (actions.closeOnSave === false && this.state.kind === 'page') {
+          const current = this.state;
+          this.publish({...current, saving: false, error: '', tabs: current.tabs.map(item => item.id === tabId
+            ? {...item, toggles: [...items], ...(item.statusbar && appearance ? {statusbar: {...item.statusbar, appearance}} : {})} : item)});
+        } else this.dismiss();
+        this.onDone(result, this.completion(state, true));
+      }
     } catch (error) {
       if (this.state?.id === surfaceId) this.publish({...state, saving: false, error: error instanceof Error ? error.message : 'Save failed'});
     }
@@ -49,9 +75,10 @@ export class CommandSurfaces {
     if (state?.kind !== 'page' || state.id !== surfaceId || state.saving || !actions?.onTabAction) return;
     try {
       const result = await actions.onTabAction(tabId, action);
-      if (result?.message) this.onDone(result);
+      if (result?.message) this.onDone(result, this.completion(state, this.state?.id === surfaceId));
     } catch (error) {
       if (this.state?.id === surfaceId) this.publish({...state, error: error instanceof Error ? error.message : 'Operation failed'});
+      else this.onDone({message: error instanceof Error ? error.message : 'Operation failed', kind: 'command_error', presentation: 'timeline'}, this.completion(state, false));
     }
   }
   updatePage(tabs: readonly CommandTab[]): void {if (this.state?.kind === 'page') this.publish({...this.state, tabs});}
@@ -61,7 +88,7 @@ export class CommandSurfaces {
     const id = randomUUID(), controller = new AbortController();
     this.controller = controller; this.select = select; this.pickerActions = actions;
     const initialItems = spec.items ?? [];
-    this.publish({id, kind: 'picker', ...spec, items: initialItems, status: initialItems.length ? 'ready' : 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
+    this.publish({id, kind: 'picker', ...spec, ...this.origin?.(), items: initialItems, status: initialItems.length ? 'ready' : 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
     try {
       const result = await load(controller.signal);
       if (this.state?.id === id && this.state.kind === 'picker' && !controller.signal.aborted)
@@ -91,7 +118,7 @@ export class CommandSurfaces {
     this.publish({...state, status: 'saving', error: ''});
     try {
       const result = await select(itemId, effort);
-      if (this.state?.id === surfaceId) {this.dismiss(); this.onDone(result);}
+      if (this.state?.id === surfaceId) {this.dismiss(); this.onDone(result, this.completion(state, true));}
     } catch (error) {
       if (this.state?.id === surfaceId) this.publish({...state, error: error instanceof Error ? error.message : 'Operation failed'});
     }

@@ -1,7 +1,7 @@
 import {stat} from 'node:fs/promises';
 import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
-import {bytesOrMissing} from '../snapshots.js';
+import {bytesOrMissing, type Snapshots} from '../snapshots.js';
 import {normalizeAliases} from '../aliases.js';
 
 const readArgs = z.strictObject({
@@ -33,7 +33,7 @@ function decode(bytes: Buffer): {text: string; bom: boolean} {
   }
 }
 
-export async function executeRead(args: ReadArgs, canonicalPath: string): Promise<ToolResult> {
+export async function executeRead(args: ReadArgs, canonicalPath: string, snapshots?: Snapshots, ownerId?: string): Promise<ToolResult> {
   const size = await stat(canonicalPath).then(info => info.size).catch(error => {
     if (error.code === 'ENOENT') return 0;
     throw error;
@@ -43,6 +43,7 @@ export async function executeRead(args: ReadArgs, canonicalPath: string): Promis
   const bytes = await bytesOrMissing(canonicalPath);
   if (!bytes) throw new Error('File not found: ' + args.file_path);
   if (bytes.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
+  snapshots?.observe(canonicalPath, bytes, ownerId);
 
   const ext = canonicalPath.slice(canonicalPath.lastIndexOf('.')).toLowerCase();
   const mime = imageMimes[ext];
@@ -58,9 +59,13 @@ export async function executeRead(args: ReadArgs, canonicalPath: string): Promis
   const offset = args.offset ?? 1;
   const limit = args.limit ?? 2000;
   const lines = decode(bytes).text.split(/\r?\n/);
-  return {
-    text: lines.slice(offset - 1, offset - 1 + limit)
-      .map((line, index) => (offset + index) + ': ' + line.slice(0, 2000)).join('\n') +
-      (lines.length > offset - 1 + limit ? '\n(Remaining lines omitted)' : ''),
-    isError: false,
-  };}
+  const text = lines.slice(offset - 1, offset - 1 + limit)
+    .map((line, index) => (offset + index) + ': ' + line).join('\n') +
+    (lines.length > offset - 1 + limit ? '\n(Remaining lines omitted)' : '');
+  if (Buffer.byteLength(text, 'utf8') > 256 * 1024) {
+    throw new Error('Read output exceeds 256 KiB. Use offset and limit to select fewer lines, or a bounded extraction for a single oversized line.');
+  }
+  return {text, isError: false};
+}
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Read', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Read local file contents and inspect visual images'};

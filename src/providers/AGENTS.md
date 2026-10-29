@@ -12,11 +12,15 @@
 | ChatGPT OAuth login or token auto-refresh | `oauth.ts:refreshOpenAIToken()` | `auth.ts:AuthStorage` (`~/.logox-ts/auth.json`) |
 | Streaming SSE parsing or Responses API | `http.ts:createProvider()` | `responsesInput()` and event parsing loops |
 | Model capacity, context windows, or thinking protocols | `registry.ts:capacity()` | `model-capacities.ts` and `src/config/config.ts` |
+| Native disclosure or first-request OAuth capability | `capabilities.ts`, `registry.ts:provider()` | `disclosure/anthropic.ts`, `disclosure/openai.ts`, `Provider.resolveCapabilities()` |
 
 ## 3. Hard Boundaries
 - **OpenAI Dual-Auth Routing**:
   - API Key (`sk-...`): routed to standard OpenAI Chat Completions or Responses API.
   - ChatGPT Subscription OAuth (`chatgpt.tokens.use.direct` scope): **MUST be routed to OpenAI Responses API (`/v1/responses`)** with `store: false` and `stream: true`. Never downgrade to non-streaming.
+- **Capability Boundary**: Auto discovery uses exact official endpoint/model entries; unknown compatible endpoints remain ordinary tools. Explicit `tool_discovery` is a local compatibility assertion, not a probe. Resolve stored credentials before first request assembly; do not switch API-key auto Chat traffic to Responses just to gain discovery.
+- **Native Identity**: Anthropic uses actual tool_reference results and eager cache boundaries. Responses client search preserves original call_id and returns full currently legal function definitions; malformed, duplicate or incomplete search identities are protocol errors, not invented IDs. Truncated batches execute no tools.
+- **Usage**: Anthropic total input includes uncached, cache-read and cache-created tokens. OpenAI input_tokens already includes cached input. Fixtures establish encoding only, not remote cache hits.
 - **Zero Raw "fetch failed"**: Network errors MUST be formatted via `formatNetworkError()`, unwrapping cause chains (`ECONNREFUSED`, `TIMEOUT`, proxy port).
 - **Smart Local Proxy Probing**: If configured proxy port is refused, transport auto-probes local ports `[7898, 7890, 7897, 10808, 10809]` to heal port-drift automatically.
 
@@ -35,5 +39,9 @@ application.ts (binds ProviderRegistry & ModelPool)
   - `tests/model-preferences-usage.test.ts`: Model preferences, thinking effort tiers, and usage ledgers.
 - **Fast Run Command**:
   ```bash
-  node --test dist/tests/providers*.test.js dist/tests/provider-*.test.js dist/tests/model-preferences-usage.test.js
+  node --test dist/tests/providers*.test.js dist/tests/provider-*.test.js dist/tests/model-preferences-usage.test.js dist/tests/*tool-disclosure.test.js
   ```
+
+## 6. Known Gaps
+- Exact auto allowlists are intentionally conservative. Explicit native mode is required for unlisted compatible models/proxies; no runtime capability probe is sent.
+- No live model/cache acceptance is implied by fixture tests; those runs require separate authorization.

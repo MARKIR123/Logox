@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import {parseArgs} from 'node:util';
-import {renderTerminal} from './tui/terminal.js';
+import {renderTerminal} from './tui/terminal/terminal.js';
 import {createDemo} from './demo.js';
 import {createApplication} from './application.js';
 import {loadConfig} from './config/config.js';
 import {App} from './tui/app.js';
 import {ApplicationStage} from './tui/application.js';
 import {ProviderRegistry} from './providers/registry.js';
-import {applyTheme} from './tui/cards.js';
+import {applyTheme} from './tui/appearance/theme.js';
 
 async function main(): Promise<void> {
   const {values} = parseArgs({options: {

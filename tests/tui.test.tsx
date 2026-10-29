@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {renderToString} from 'ink';
 import stringWidth from 'string-width';
-import {ActivityCard, InteractionCard} from '../src/tui/cards.js';
-import {emptyDraft, erase, insert, move} from '../src/tui/editor.js';
-import {extractSelection, osc52Clipboard, parseSgrMouse, timelineRows, viewport} from '../src/tui/viewport.js';
+import {ActivityCard} from '../src/tui/timeline/activity-card.js';
+import {InteractionCard} from '../src/tui/interactions/interaction-card.js';
+import {emptyDraft, erase, insert, move} from '../src/tui/input/editor.js';
+import {extractSelection, timelineRows, viewport} from '../src/tui/timeline/viewport.js';
+import {osc52Clipboard} from '../src/tui/terminal/clipboard.js';
+import {parseSgrMouse} from '../src/tui/terminal/mouse.js';
 import type {Interaction, Message} from '../src/runtime/contracts.js';
 
 test('Actor 与入梦复用无边框纯色状态卡，无折叠箭头，中文窄屏布局不越界', () => {
@@ -25,7 +28,7 @@ test('权限卡显示真实参数、原因和默认拒绝；问题卡支持自�
   const output = renderToString(<InteractionCard request={permission}
     draft={{questionIndex: 0, selected: 1, text: '', error: ''}} focused/>, {columns: 60});
   assert.match(output, /src\/a\.ts/);
-  assert.match(output, /❯ 拒绝（默认）/);
+  assert.match(output, /❯ \[■\] 拒绝（默认）/);
   assert.match(output, /仅本次允许/);
   const question: Interaction = {kind: 'question', requestId: 'q', sessionId: 's', activityId: 'a', ownerId: 'kalon',
     title: '问题', questions: [{id: 'q', header: '方向', question: '你想做什么？'}], status: 'pending'};

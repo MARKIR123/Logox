@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PassThrough} from 'node:stream';
 import {act} from 'react';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
-import {TabbedPage} from '../src/tui/tabbed-page.js';
+import {TabbedPage} from '../src/tui/panels/tabbed-page.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 

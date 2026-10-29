@@ -12,7 +12,7 @@ import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js
 import {createProvider, ProviderError} from '../src/providers/http.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {runProcess} from '../src/tools/process.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 function assistant(text = '完成', stop: ModelTurn['stop'] = 'complete'): ModelTurn {
   return {message: {role: 'assistant', text}, stop};
@@ -77,8 +77,8 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     assert.equal(second.messages.at(-1)?.role, 'tool');
     assert.match(second.messages.at(-1)!.content, /(?:Updated|已修改)/);
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
-    assert.equal(entries[1]?.message?.role, 'assistant');
+    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
+    assert.equal(entries.find(entry => entry.role === 'assistant')?.message?.role, 'assistant');
     await f.app.close();
     const restored = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, sessionId: 'test', config: f.config, provider});
     try {
@@ -238,11 +238,12 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     round++;
     if (round === 1) return call('dispatch_role', {tasks: [{ownerId: 'aletheia', prompt: '查资料'}, {ownerId: 'techne', prompt: '构建'}]});
     if (round === 2) return assistant('角色已安排');
-    if (request.system.includes('You are Aletheia') || request.system.includes('你是 Aletheia')) {assert.equal(request.messages.length, 1); return assistant(actorReport);}
-    if (request.system.includes('You are Techne') || request.system.includes('你是 Techne')) {assert.equal(request.messages.length, 1); return assistant('构建结果');}
-    assert.match(request.messages.at(-1)!.text, /侦察结果/);
-    assert.ok(request.messages.at(-1)!.text.includes(actorReport), 'Director receives the full report, not a bounded round summary');
-    assert.match(request.messages.at(-1)!.text, /构建结果/);
+    if (request.system.includes('You are Aletheia') || request.system.includes('你是 Aletheia')) {assert.equal(request.messages.filter(message => message.role !== 'context').length, 1); return assistant(actorReport);}
+    if (request.system.includes('You are Techne') || request.system.includes('你是 Techne')) {assert.equal(request.messages.filter(message => message.role !== 'context').length, 1); return assistant('构建结果');}
+    const delivered = request.messages.findLast(message => message.role === 'user')!.text;
+    assert.match(delivered, /侦察结果/);
+    assert.ok(delivered.includes(actorReport), 'Director receives the full report, not a bounded round summary');
+    assert.match(delivered, /构建结果/);
     onDelta({kind: 'text', text: '汇总完成'});
     return assistant('汇总完成');
   }});
@@ -250,7 +251,7 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     await f.app.submit('处理任务');
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.length === 4 && snapshot.activities.every(a => a.status === 'completed'));
     assert.equal(round, 5);
-    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).map(entry => entry.role), ['user', 'assistant', 'tool']);
+    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant', 'tool']);
     const rows = buildStageRows(f.app.store.getSnapshot(), 'test', 'logox', 80, {}, null);
     assert.ok(rows.some(row => row.text.includes('侦察结果')), '完成卡片复用成果摘要标题');
     assert.ok(!rows.some(row => row.text.includes('保留项目内容')), '真实场景不含 portfolio 演示正文');
@@ -321,7 +322,7 @@ test('同一轮同一文件多次修改按倒序撤销；新建文件撤销后�
 });
 test('进程退出前留下的未配对调用恢复为失败结果，下一轮不会自动写文件', async () => {
   const provider = scripted([request => {
-    const messages = request.messages;
+    const messages = request.messages.filter(message => message.role !== 'context');
     assert.equal(messages.at(-2)?.role, 'tool');
     assert.match(messages.at(-2)!.text, /中断/);
     return assistant('恢复成功');
@@ -332,7 +333,7 @@ test('进程退出前留下的未配对调用恢复为失败结果，下一轮�
       message: {role: 'assistant', text: '', toolCalls: [{id: 'orphan', name: 'write', arguments: '{"file_path":"orphan.txt","content":"bad"}'}]}});
     await f.app.ensemble.dispatch('techne', '继续').done;
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant', 'tool']);
+    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant', 'tool']);
     await assert.rejects(readFile(join(f.cwd, 'orphan.txt')));
   } finally {await f.cleanup();}
 });
@@ -401,7 +402,7 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     const providers = f.app.surfaces.getSnapshot();
     assert.ok(providers?.kind === 'page');
     f.app.surfaces.cancel();
-    await f.app.submit('/provider deepseek cloud-fixture');
+    await f.app.submit('/providers deepseek cloud-fixture');
     await f.app.submit('/status');
     const status = f.app.surfaces.getSnapshot();
     assert.ok(status?.kind === 'page');
@@ -412,13 +413,13 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     await f.app.submit('/model');
     assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker');
     f.app.surfaces.cancel();
-    await f.app.submit('/provider');
-    assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker');
+    await f.app.submit('/providers');
+    assert.ok(f.app.surfaces.getSnapshot()?.kind === 'page');
     f.app.surfaces.cancel();
     await assert.rejects(f.app.submit('/model different'), /(?:任务处理中|Tasks are running)/);
-    await assert.rejects(f.app.submit('/provider antigravity'), /(?:任务处理中|Tasks are running)/);
+    await assert.rejects(f.app.submit('/providers antigravity'), /(?:任务处理中|Tasks are running)/);
     finish!(); await task.done;
-    await f.app.submit('/provider antigravity');
+    await f.app.submit('/providers antigravity');
     await f.app.submit('/model local-fixture');
     await f.app.submit('/status');
     const localStatus = f.app.surfaces.getSnapshot(); assert.ok(localStatus?.kind === 'page');

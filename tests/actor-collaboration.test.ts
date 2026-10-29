@@ -122,3 +122,30 @@ test('收尾复用保存摘要，整理失败保持完成，直接对话仅回�
     await ensemble.close();
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
+
+test('SendMessage to an already-completed peer records the message passively without waking them unless wake is true', async () => {
+  const f = await fixture();
+  try {
+    let enqueued = 0, passive = 0;
+    const bridge = new Collaboration({
+      sessionId: 's', journal: f.journal,
+      member: owner => ['logox', 'techne', 'kalon'].includes(owner),
+      deliverToCompletedPeer: (target, message) => {
+        if (target === 'kalon' && message.includes('browser free')) {passive++; return true;}
+        return false;
+      },
+      enqueue: () => {
+        enqueued++;
+        return {activityId: 'woken', done: Promise.resolve(), cancel: () => {}};
+      },
+    });
+    const passiveRes = await bridge.execute(call('SendMessage', {to: 'kalon', message: 'browser free'}), context({ownerId: 'techne'}));
+    assert.equal(passiveRes.isError, false);
+    assert.equal(passive, 1);
+    assert.equal(enqueued, 0, 'Completed peer should stay idle when wake is omitted');
+
+    const wakeRes = await bridge.execute(call('SendMessage', {to: 'kalon', message: 'browser free', wake: true}), context({ownerId: 'techne'}));
+    assert.equal(wakeRes.isError, false);
+    assert.equal(enqueued, 1, 'Explicit wake: true wakes the idle peer');
+  } finally {await rm(f.directory, {recursive: true, force: true});}
+});

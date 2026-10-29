@@ -14,7 +14,7 @@ test('_GitStatus meta and UI conform to silent protocol tool specs', () => {
   assert.equal(meta.name, '_GitStatus');
   assert.equal(meta.category, 'protocol');
   assert.equal(meta.roles, 'all');
-  assert.equal(meta.promptVisibility, 'explicit');
+  assert.equal(meta.loading ?? 'deferred', 'deferred');
   assert.equal(meta.terminalVisibility, 'silent');
   assert.equal(UI.visibility, 'hidden');
 });

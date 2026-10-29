@@ -5,7 +5,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {render} from 'ink';
 import {App} from '../src/tui/app.js';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 class Input extends PassThrough {
   isTTY = true;

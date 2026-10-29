@@ -13,7 +13,7 @@ export const shellSchema = z.preprocess(
   z.strictObject({
     command: z.string().min(1).describe('The command to execute'),
     description: z.string().optional().describe('Clear, concise description of what this command does in active voice (5-10 words)'),
-    timeout: z.number().int().min(1).max(600_000).optional().describe('Optional timeout in milliseconds (max 600000). Defaults to 120000.'),
+    timeout: z.number().int().min(1).max(600_000).optional().describe('Optional timeout. For legacy compatibility, positive values up to 600 are interpreted as seconds; values above 600 are milliseconds, up to 600000. Omission uses 120000 milliseconds.'),
   }),
 );
 
@@ -50,3 +50,5 @@ export async function executeShell(
     isError: result.code !== 0,
   };
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Shell', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Execute shell commands with timeout and permission controls'};

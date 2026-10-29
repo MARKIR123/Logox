@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {extractSelection, viewport} from '../src/tui/viewport.js';
-import {layoutMarkdown} from '../src/tui/markdown.js';
-import {palette} from '../src/tui/cards.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {extractSelection, viewport} from '../src/tui/timeline/viewport.js';
+import {layoutMarkdown} from '../src/tui/timeline/markdown.js';
+import {palette} from '../src/tui/appearance/theme.js';
 
 function displayedCopy(rows: readonly {text: string; softWrap: boolean}[]): string {
   return rows.map((row, index) => row.text + (index < rows.length - 1 && !row.softWrap ? '\n' : '')).join('');
@@ -195,7 +195,7 @@ test('长表格的单元格折行逐行可滚动，缩放锚点定位到同一�
   assert.ok(restored.sourceCells?.some(cell => cell.start <= anchor.sourceOffset && cell.end > anchor.sourceOffset));
 });
 
-test('执行者拥有导轨与悬停主题色，工具正常方块为灰色，角色标题仍使用主题色', () => {
+test('导轨跟随窗口的编排者：角色独立窗口用角色色，主窗口统一导演主题色，角色标题仍用角色色', () => {
   const store = new RuntimeStore();
   const techneColor = '#e5b567';
   const logoxColor = '#d97757';
@@ -227,11 +227,11 @@ test('执行者拥有导轨与悬停主题色，工具正常方块为灰色，�
   const thinkRows = techneRows.filter(r => r.messageId === techneThink);
   assert.equal(thinkRows[0]!.railColor, techneColor, 'Techne 思考卡的导轨颜色是 Techne 主题色');
 
-  // 2. 在主窗口 (view === 'logox') 下验证 Techne 卡片
+  // 2. 在主窗口 (view === 'logox') 下验证 Techne 卡片：导轨属于导演的编排面
   const logoxRows = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {[activityId]: true}, null, {}, customRoles);
   const actorCardHeader = logoxRows.find(r => r.messageId === activityId);
   assert.ok(actorCardHeader, '主窗口中 Techne 卡片存在');
-  assert.equal(actorCardHeader.railColor, techneColor, '主窗口中 Techne 角色卡的导轨颜色是 Techne 自身主题色');
+  assert.equal(actorCardHeader.railColor, palette.accent, '主窗口中角色卡的导轨使用导演主题色');
   const actorTitleSegment = actorCardHeader.segments?.find(s => s.text.includes('Techne'));
   assert.equal(actorTitleSegment?.color, techneColor, 'Techne 角色卡标题字色使用 Techne 自身主题色');
 });

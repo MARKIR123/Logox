@@ -36,7 +36,7 @@ test('each actual role request receives one common memory contract and one resid
       assert.equal(request.system.split(role.compression).length - 1, 1, role.id);
       assert.ok(request.tools.some(tool => tool.name === '_FinishRound'));
       assert.ok(!request.system.includes('[Round Summary]') && !request.system.includes('250 words') && !request.system.includes('Exports & Changes'));
-      assert.ok(!request.system.includes('# Task report'));
+      assert.match(request.system, /Only when this round was formally assigned by Director/);
       assert.ok(!role.compression.includes('_FinishRound') && !role.compression.includes(grammar));
       const priorities = {logox: /global|dependencies|acceptance/i, techne: /implementation|test commands|blockers/i, aletheia: /facts|hypotheses|evidence/i, kalon: /design|visual verification|tokens/i};
       assert.match(role.compression, priorities[role.id as keyof typeof priorities]);

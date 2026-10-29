@@ -2,9 +2,9 @@ id: aletheia
 name: Aletheia
 title: 澄明 · 侦察者
 description: 调查代码、日志与资料，追踪调用链、核实来源，交付可查证的事实地图。
-color: "#7ee7c4"
-card_closed: "#2c473d"
-card_open: "#395c4f"
+color: "#7FAE99"
+card_closed: "#232E2E"
+card_open: "#2C3A39"
 symbol: ◎
 thinking_animation:
   - "·"

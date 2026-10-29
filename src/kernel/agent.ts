@@ -5,10 +5,14 @@ import {Resources, type SkillVisibility} from '../resources/manager.js';
 import type {ActorExecutor} from '../actors/ensemble.js';
 import {builtinActors} from '../actors/builtins.js';
 import type {RuntimeStore} from '../runtime/store.js';
-import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
+import {normalizeMessages, type ModelMessage, type ModelRequest, type Provider, type ProviderCapabilities, type ToolCall, type ToolDefinition} from '../runtime/messages.js';
+import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
+import {buildToolExposure, extractDiscoveredToolNames, retainDiscoveryPairs, planToolCatalog, resolveExposureProtocol, resolveToolLoad} from '../tools/discovery.js';
+import {loadToolsSchema} from '../tools/protocol/LoadToolsTool/LoadToolsTool.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
 import {Tools, toolDefinitions, validToolCall, validateToolCall, canonicalToolName, type ToolResult} from '../tools/tools.js';
-import {defaultToolRegistry} from '../tools/registry.js';
+import {ToolRegistry} from '../tools/registry.js';
+import type {ToolRegistration, ResolvedTool} from '../tools/catalog.js';
 import {diagnoseToolError} from '../tools/diagnostics.js';
 
 import type {ContextManager} from '../context/manager.js';
@@ -19,12 +23,14 @@ import type {TaskModels} from '../actors/task-models.js';
 import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFingerprint, type ExecutionRecoveryKind} from './execution-recovery.js';
-import {composeBaseSystemPrompt, composeRuntimeSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
+import {storedMessage} from '../store/journal.js';
+import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
+import {composeBaseSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
 import {maybePersistLargeOutput} from './scratchpad.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
-import {TASK_REPORT_CONTRACT} from '../prompts/collaboration/index.js';
+import {extractNarration, stripNarration} from '../runtime/narration.js';
 
 export class UserCancelledError extends Error {
   readonly stopReason = 'user' as const;
@@ -34,50 +40,72 @@ export class UserCancelledError extends Error {
   }
 }
 
+export interface AgentAssembly {capabilities: ProviderCapabilities; history: readonly ModelMessage[]}
+export interface AgentRequestBase {
+  toolDiscovery?: NonNullable<ModelRequest['toolDiscovery']>;
+  system: string;
+  tools: readonly ToolDefinition[];
+  pool: readonly ResolvedTool[];
+  contextUpdates?: readonly RuntimeContextMessage[];
+}
 export interface AgentOptions {
   cwd: string;
   store: RuntimeStore;
   tools: Tools;
   provider(): Provider;
   taskModels?: TaskModels;
-  requestBase?(context: Parameters<ActorExecutor<string>>[1]): Promise<{system: string; tools: readonly ToolDefinition[]}>;
+  requestBase?(context: Parameters<ActorExecutor<string>>[1], assembly: AgentAssembly): Promise<Omit<AgentRequestBase, 'pool'> & {pool?: readonly ResolvedTool[]}>;
   iterations: number;
   retries: number;
   retryProvider?(context: Parameters<ActorExecutor<string>>[1], error: ProviderError): Promise<boolean>;
   recoverExecution?(context: Parameters<ActorExecutor<string>>[1], kind: ExecutionRecoveryKind): Promise<'retry' | 'handoff' | 'stop'>;
   executionProgress?(context: Parameters<ActorExecutor<string>>[1], fingerprint: string): Promise<boolean>;
+  contextUpdated?(context: Parameters<ActorExecutor<string>>[1], update: RuntimeContextMessage): void;
   executionNotice?(context: Parameters<ActorExecutor<string>>[1], text: string): void;
   readonlyConcurrency?: number;
   supportsVision?: boolean | (() => boolean);
   context?: ContextManager;
   resources?: Resources;
+  extraRegistrations?: readonly ToolRegistration[];
   extraTools?: readonly ToolDefinition[];
   /** 仅可信装配配置：这些扩展在执行器完整校验参数后自行调用 authorizeExtension。 */
   extraApprovalHandled?: readonly string[];
   executeExtra?(call: ToolCall, context: Parameters<ActorExecutor<string>>[1]): Promise<ToolResult>;
 }
-export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly ToolDefinition[] = [], resources?: Resources,
-  role?: {prompt: string; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string) {
+export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly (ToolDefinition | ToolRegistration)[] = [], resources?: Resources,
+  role?: {prompt: string; execution?: string | undefined; collaboration?: string | undefined; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string, environmentBaseline?: string,
+  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}): Promise<AgentRequestBase> {
+  const extras = extraTools.map(item => {
+    if ('metadata' in item) return item;
+    const metadata = registry.getMetadata(item.name);
+    if (!metadata) throw new Error('Extension metadata is required: ' + item.name);
+    return {metadata, definition: item};
+  });
+  const pool = registry.resolveForActor(ownerId, extras);
+  const protocol = resolveExposureProtocol(pool, assembly.capabilities.toolDiscovery);
+  const catalog = planToolCatalog(registry, pool, protocol, assembly.history);
   const effective = resources ?? new Resources(cwd);
   if (!resources) await effective.reload();
-  const rules = effective.prompt(role?.visibility);
+  const rules = effective.promptSections(role?.visibility);
   const builtin = builtinActors.find(actor => actor.id === ownerId);
   const {system} = composeBaseSystemPrompt({
     cwd,
     ownerId,
     builtinPrompt: builtin?.prompt,
     customPrompt: role?.prompt,
+    execution: role?.execution ?? builtin?.execution,
+    collaboration: role?.collaboration ?? builtin?.collaboration,
     memoryFocus: role?.compression,
-    rulesContext: rules.context,
+    guidelines: rules.guidelines,
+    skillsIndex: rules.skills,
+    toolsIndex: catalog.catalog,
     includeSummary,
     scratchpadDir,
+    environmentBaseline,
   });
-  const registryTools = defaultToolRegistry.getToolsForActor(ownerId);
-  const existingNames = new Set(registryTools.map(t => t.name.toLowerCase()));
-  const filteredExtra = (role || ownerId === 'logox' ? extraTools : []).filter(t => !existingNames.has(t.name.toLowerCase()));
-  const explicitSection = defaultToolRegistry.formatExplicitPromptSection(ownerId);
-  const enrichedSystem = explicitSection ? `${system}\n\n${explicitSection}` : system;
-  return {system: enrichedSystem, tools: [...registryTools, taskProgressTool, ...filteredExtra]};
+  const discoveryPairs = retainDiscoveryPairs(assembly.history, extractDiscoveredToolNames(assembly.history));
+  return {system, pool, tools: buildToolExposure(pool, extractDiscoveredToolNames(discoveryPairs), protocol),
+    contextUpdates: catalog.updates, ...(protocol !== 'none' ? {toolDiscovery: protocol} : {})};
 }
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const localRecoveries = new Map<string, ActorRecovery>();
@@ -97,14 +125,14 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
     let outcome: 'completed' | 'failed' | 'cancelled' = 'failed';
     try {
       const messages: ModelMessage[] = normalizeMessages(omitInternalToolPairs(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
-        : entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text})));
+        : storedMessage(entry))));
       messages.push(inputMessage(prompt, context));
       // 请求修复可能把未配对工具记录转换成 user；审批授权只取原始用户记录。
       const humanTexts = context.authorization ?? [...context.history.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
         ...(inputKind(context) === 'human' ? [prompt] : [])];
       const userRequests: ModelMessage[] = [...new Set(humanTexts)].slice(-8).map(text => ({role: 'user', text}));
       context = {...context, reviewMessages: () => [...userRequests, ...messages.filter(message => message.role === 'assistant')]};
-      let instruction = await (options.requestBase?.(context) ?? agentRequestBase(options.cwd, context.ownerId, options.extraTools, options.resources));
+      let instruction: Omit<AgentRequestBase, 'pool'> & {pool?: readonly ResolvedTool[]} = {system: '', tools: []};
       const persist = async (message: ModelMessage, step?: Step) => {await context.record(message, step); messages.push(message);};
       let iteration = 0;
       let recovery = '';
@@ -143,7 +171,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
         await drainInbox();
-        if (options.requestBase) instruction = await options.requestBase(context);
+        const activeProvider = taskModel?.provider() ?? options.provider();
+        const assembly: AgentAssembly = {capabilities: await activeProvider.resolveCapabilities?.(context.signal) ?? activeProvider.capabilities ?? FALLBACK_CAPABILITIES, history: messages};
+        instruction = options.requestBase ? await options.requestBase(context, assembly)
+          : await agentRequestBase(options.cwd, context.ownerId, options.extraRegistrations ?? options.extraTools, options.resources,
+            undefined, true, undefined, undefined, undefined, assembly);
         if (!memoryRepair && options.iterations > 0 && iteration >= options.iterations) {
           const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
             id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
@@ -155,18 +187,27 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           iteration = 0;
         }
-        const definitions = memoryRepair ? [finishRoundTool] : context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? instruction.tools :
-          [...instruction.tools.filter(tool => tool.name !== taskProgressTool.name && canonicalToolName(tool.name) !== 'UpdateTaskProgress'), taskProgressTool];
+        const definitions = memoryRepair ? [finishRoundTool] : instruction.tools;
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
-        const baseSystem = composeRuntimeSystemPrompt({
-          baseSystem: instruction.system,
-          supportsVision: visionEnabled,
-          progressInstruction: progress.instruction(),
-          recoveryInstruction: recovery,
-          deliveryInstruction: context.ownerId !== 'logox' && context.inputKind === 'director' ? TASK_REPORT_CONTRACT : '',
-          finalizationInstruction: memoryRepair ? finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT : '',
-        });
-        const base = {system: baseSystem,
+        const appendUpdate = async (value: RuntimeContextMessage) => {
+          const update = value.kind.startsWith('environment-') || value.kind === 'capability-change' ? value : {...value, data: {...value.data, activityId: context.activityId}};
+          const previous = messages.findLast(message => message.role === 'context' && message.kind === update.kind &&
+            message.data?.activityId === update.data?.activityId && (message.data?.slot ?? '') === (update.data?.slot ?? ''));
+          if (previous?.role !== 'context' || previous.text !== update.text || JSON.stringify(previous.data) !== JSON.stringify(update.data)) {
+            context.signal.throwIfAborted();
+            await persist(update);
+            options.contextUpdated?.(context, update);
+            return true;
+          }
+          return false;
+        };
+        for (const update of 'contextUpdates' in instruction ? instruction.contextUpdates ?? [] : []) await appendUpdate(update);
+        const activityState = progress.instruction();
+        if (activityState) await appendUpdate(createRuntimeContextMessage('task-state', activityState, {slot: 'activity-label'}));
+        if (recovery) await appendUpdate(createRuntimeContextMessage('recovery', recovery));
+        if (memoryRepair) await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
+        const base = {system: instruction.system,
+          ...(!memoryRepair && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
           // 工具字段与校验不变；省去每份 schema 重复的草案版本 URL。
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
         const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
@@ -175,7 +216,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           throw new ProviderError('任务模型与上下文预算身份不一致；请将 ContextManager.model 接入 TaskModels.model');
         }
         const initialProjection = prepared?.request ?? {...base, messages};
-        const projected = {...initialProjection, messages: normalizeMessages(omitInternalToolPairs(initialProjection.messages, correctionCalls))};
+        const projected = {...initialProjection, messages: normalizeMessages(omitInternalToolPairs(initialProjection.messages, correctionCalls))
+          .filter(message => message.role !== 'context' || message.kind !== 'finalizer' || memoryRepair && message.data?.activityId === context.activityId)};
         // 签名只属于生成它的模型；保留完整账本与工具配对，转用请求不回放旧签名思考。
         let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
@@ -188,10 +230,21 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         let thinkingId = steps.thinking();
         let turn;
         for (let attempt = 0;; attempt++) {
-          if (attempt > 0 && await drainInbox()) {
-            steps.finish(thinkingId, 'completed'); steps.endGroup('completed');
-            continue requestLoop;
+          if (attempt > 0) {
+            let changed = await drainInbox();
+            if (options.requestBase) {
+              const retryProvider = taskModel?.provider() ?? options.provider();
+              const refreshed = await options.requestBase(context, {capabilities: await retryProvider.resolveCapabilities?.(context.signal) ?? retryProvider.capabilities ?? FALLBACK_CAPABILITIES, history: messages});
+              changed ||= refreshed.system !== instruction.system || JSON.stringify(refreshed.tools) !== JSON.stringify(instruction.tools);
+              for (const update of refreshed.contextUpdates ?? []) changed = await appendUpdate(update) || changed;
+            }
+            if (changed) {
+              steps.finish(thinkingId, 'completed'); steps.endGroup('completed');
+              continue requestLoop;
+            }
           }
+          let streamedText = '';
+          let streamNarrationExtracted = false;
           try {
             turn = await (taskModel?.provider() ?? options.provider()).respond(request, delta => {
               emitted = true;
@@ -199,6 +252,18 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               if (metadataOnly && kind === 'text') return;
               if (kind === 'text' && steps.get(thinkingId).state === 'running') {
                 steps.finish(thinkingId, 'completed'); steps.endGroup('completed'); steps.phase('text');
+              }
+              if (kind === 'text') {
+                streamedText += delta.text;
+                if (!streamNarrationExtracted && (streamedText.includes('\n') || streamedText.length >= 40)) {
+                  const early = extractNarration(streamedText);
+                  if (early) {
+                    streamNarrationExtracted = true;
+                    options.store.activities.update(context.sessionId, context.activityId, {
+                      progress: {label: early.narration},
+                    });
+                  }
+                }
               }
               let id = kind === 'text' ? textId : thinkingId;
               if (!id) {
@@ -251,10 +316,21 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             if (await taskModel?.fallback(error)) {
               for (const message of messages) if (message.role === 'assistant' && message.signature) foreignSignatures.add(message.signature);
               options.context?.meter(context).invalidate();
-              recovery = '模型已转用。继续已有任务，已完成工具及其结果保留，不重复执行已完成操作。';
+              recovery = 'The task model changed. Continue from preserved results without replaying completed operations.';
               continue requestLoop;
             }
             throw error;
+          }
+        }
+        const extracted = extractNarration(turn.message.text);
+        if (extracted) {
+          turn = {...turn, message: {...turn.message, text: extracted.cleanText}};
+          void context.saveProgress?.({label: extracted.narration});
+          options.store.activities.update(context.sessionId, context.activityId, {
+            progress: {label: extracted.narration},
+          });
+          if (textId) {
+            options.store.updateMessage(textId, {text: extracted.cleanText});
           }
         }
         if (metadataOnly) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
@@ -274,6 +350,29 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (calls.some(call => isFinishRound(call.name)) || memoryRepair && calls.length) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {try {JSON.parse(call.arguments); return false;} catch {return true;}});
           const onlyFinalizer = calls.length === 1 && isFinishRound(calls[0]!.name);
+          if (onlyFinalizer && !truncated) {
+            try {
+              const rawArgs: unknown = JSON.parse(calls[0]!.arguments);
+              if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+                const obj = rawArgs as Record<string, unknown>;
+                let clamped = false;
+                if (typeof obj.title === 'string' && obj.title.trim().length > 120) {
+                  obj.title = obj.title.trim().slice(0, 120); clamped = true;
+                }
+                if (typeof obj.verification === 'string' && obj.verification.trim().length > 240) {
+                  obj.verification = obj.verification.trim().slice(0, 240); clamped = true;
+                }
+                if (Array.isArray(obj.carry_forward)) {
+                  const nextCarry = obj.carry_forward.slice(0, 8).map(item =>
+                    typeof item === 'string' && item.trim().length > 240 ? (clamped = true, item.trim().slice(0, 240)) : item
+                  );
+                  if (obj.carry_forward.length > 8) clamped = true;
+                  if (clamped) obj.carry_forward = nextCarry;
+                }
+                if (clamped) calls[0] = {...calls[0]!, arguments: JSON.stringify(obj)};
+              }
+            } catch {}
+          }
           const check = onlyFinalizer && !truncated ? validateToolCall(calls[0]!) : undefined;
           if (!metadataOnly && turn.message.text.trim()) finalText = turn.message.text;
           const allowed = base.tools.some(tool => isFinishRound(tool.name));
@@ -316,8 +415,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           });
           let schemaError: {callId: string; name: string; error: string} | undefined;
           if (!truncated) {
+            const current = options.requestBase ? await options.requestBase(context, {capabilities: assembly.capabilities, history: messages}) : instruction;
             for (const call of calls) {
               const canonical = canonicalToolName(call.name);
+              const eligible = current.pool?.some(item => item.definition.name.toLowerCase() === (canonical ?? call.name).toLowerCase()) ?? true;
+              const callableNow = current.tools.some(tool => tool.name.toLowerCase() === (canonical ?? call.name).toLowerCase());
+              if (!eligible || !callableNow) {
+                schemaError = {callId: call.id, name: call.name, error: 'Tool is no longer available for this actor: ' + call.name};
+                break;
+              }
               const toolMatch = base.tools.find(tool =>
                 tool.name.toLowerCase() === call.name.toLowerCase() ||
                 (canonical && canonicalToolName(tool.name) === canonical)
@@ -360,7 +466,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           if (prepared) options.context?.observe(context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
           const completed = new Set<string>();
           const failedTools: {name: string; error: string}[] = [];
-          const toolIds = new Map(calls.map(call => [call.id, steps.tool(call)]));
+          const toolIds = new Map(calls.map(call => [call.id, steps.tool(call,
+            instruction.pool?.find(item => item.definition.name === (canonicalToolName(call.name) ?? call.name))?.metadata.terminalVisibility)]));
           try {
             const execute = async (call: ToolCall): Promise<ToolResult> => {
               if (truncated) return {text: '此批工具未执行：响应未正常结束或参数不完整。请重新发出完整工具调用。', isError: true};
@@ -380,6 +487,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
                 permission: (input: Parameters<typeof context.permission>[0]) => waiting('等待许可', () => context.permission(input)),
                 ask: (input: Parameters<typeof context.ask>[0]) => waiting('等待回答', () => context.ask(input))};
+              if (canonical === 'LoadTools') {
+                const result = resolveToolLoad(loadToolsSchema.parse(JSON.parse(call.arguments)), instruction.pool ?? [], extractDiscoveredToolNames(messages));
+                return {text: JSON.stringify(result), isError: false, discoveredTools: [...result.loaded, ...result.alreadyLoaded]};
+              }
               if (call.name === taskProgressTool.name || canonical === 'UpdateTaskProgress') {
                 toolContext.startTool();
                 return progress.update(JSON.parse(call.arguments));
@@ -431,6 +542,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                   const toolMessage: ModelMessage = {
                     role: 'tool', callId: call.id, name: call.name,
                     text: persistedText, isError: result.isError,
+                    ...(result.discoveredTools ? {discoveredTools: result.discoveredTools} : {}),
                     ...(result.images ? {images: [...result.images]} : {}),
                   };
                   await persist(toolMessage, step);

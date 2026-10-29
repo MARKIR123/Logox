@@ -9,7 +9,7 @@ import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
-import {commandSuggestions} from '../src/tui/completion.js';
+import {commandSuggestions} from '../src/tui/commands/completion.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 
 async function fixture() {
@@ -92,14 +92,17 @@ test('正式任务、compact 共用资源；reload 更新提示与命令但保�
       await app.submit('/review 当前变更'); await waitForSnapshot(app.store, state => state.activities.some(item => item.status === 'completed'));
       while (app.ensemble.isBusy()) await new Promise<void>(resolve => setImmediate(resolve));
       assert.ok(requests[0]?.system.includes('规则第一版'));
-      assert.equal(requests[0]?.messages.at(-1)?.text, '审查 当前变更');
+      assert.equal(requests[0]?.messages.findLast(message => message.role === 'user')?.text, '审查 当前变更');
       const before = await app.journal.load(app.sessionId, 'logox');
       await f.put(join(f.cwd, 'AGENTS.md'), '规则第二版');
       await f.put(join(f.cwd, '.logox', 'config.toml'), '[broken');
       await app.submit('/reload');
+      const report = app.surfaces.getSnapshot(); assert.ok(report?.kind === 'result');
+      assert.match(report.text, /Configuration: validation failed/);
+      app.surfaces.cancel();
       assert.deepEqual(await app.journal.load(app.sessionId, 'logox'), before);
       assert.equal(app.contexts.status({sessionId: app.sessionId, ownerId: 'logox'}), undefined);
-      assert.ok(app.store.getSnapshot().messages.some(item => item.text.includes('配置：校验失败')));
+      assert.ok(app.store.getSnapshot().messages.some(item => item.text.includes('Configuration: validation failed')));
       const base = await agentRequestBase(f.cwd, 'logox', [], app.resources);
       assert.ok(base.system.includes('规则第二版')); assert.ok(!base.system.includes('规则第一版'));
       await app.submit('继续'); await waitForSnapshot(app.store, state => state.activities.filter(item => item.status === 'completed').length === 2);

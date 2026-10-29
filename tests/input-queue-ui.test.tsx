@@ -4,8 +4,8 @@ import {PassThrough} from 'node:stream';
 import {act} from 'react';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {App, type AppProps} from '../src/tui/app.js';
-import {renderTerminal} from '../src/tui/terminal.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {TerminalScreen} from './terminal-screen.js';
 import type {SubmitDelivery} from '../src/application.js';
 

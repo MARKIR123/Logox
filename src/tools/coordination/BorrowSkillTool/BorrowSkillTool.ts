@@ -5,3 +5,5 @@ export const borrowSkillSchema = z.strictObject({
 });
 
 export type BorrowSkillArgs = z.infer<typeof borrowSkillSchema>;
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'BorrowSkill', category: 'coordination', roles: 'actors', terminalVisibility: 'card', description: 'Borrow a specialized skill on demand'};

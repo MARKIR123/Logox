@@ -5,4 +5,4 @@ export const AUTOMA_DESCRIPTION =
 
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;
 
-export const AUTOMA_THEME_COLOR = '#8a95a0';
+export const AUTOMA_COLOR_TOKEN = 'automa' as const;

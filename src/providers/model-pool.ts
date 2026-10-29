@@ -38,6 +38,11 @@ export class ModelPool {
     this.models = [...models];
   }
 
+  /** Drop one provider's cached models, for example after its record was deleted. */
+  forget(provider: string): void {
+    this.models = this.models.filter(item => item.provider !== provider);
+  }
+
   snapshot(): readonly DiscoveredModel[] {
     if (!this.models.length) this.loadCacheSync();
     return this.models;

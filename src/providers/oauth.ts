@@ -6,6 +6,7 @@ import {randomBytes, createHash, randomUUID} from 'node:crypto';
 import {exec} from 'node:child_process';
 import type {OAuthToken} from './auth.js';
 import {formatNetworkError} from './error-format.js';
+import {palette} from '../config/theme-palette.js';
 
 export interface OAuthSession {
   authUrl: string;
@@ -117,8 +118,8 @@ export async function startOpenAiOAuth(
       }
       const clientId = parsedUrl.searchParams.get('client_id')?.trim() || DYNAMIC_CLIENT_ID;
       res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-      res.end(`<!DOCTYPE html><html><body style="font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:50px;background:#18181b;color:#f4f4f5;">
-        <h2 style="color:#7ee7c4;">Authorization Successful</h2>
+      res.end(`<!DOCTYPE html><html><body style="font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:50px;background:${palette.oauthBg};color:${palette.oauthFg};">
+        <h2 style="color:${palette.oauthSuccess};">Authorization Successful</h2>
         <p>You can close this browser window and return to LOGOX.</p>
       </body></html>`);
       closeServer();

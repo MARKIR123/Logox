@@ -25,7 +25,8 @@ test('fresh projects without a main model can open all tabs and retain user acto
       try {
         for (const command of ['/ensemble', '/status', '/providers', '/config', '/usage', '/permissions', '/commands']) {
           await app.submit(command);
-          const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page', command);
+          const page = app.surfaces.getSnapshot();
+          assert.equal(page?.kind, command === '/commands' ? 'result' : 'page', command);
           app.surfaces.cancel();
         }
         await app.submit('/ensemble');

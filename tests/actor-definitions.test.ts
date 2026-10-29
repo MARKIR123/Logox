@@ -83,7 +83,9 @@ test('模型只使用注入目录，取消 picker 不写，确认只保存角色
     assert.equal(state.kind, 'picker');
     await surfaces.choose(state.id, JSON.stringify({provider: 'b', model: 'same'}));
     assert.deepEqual(f.catalog.find('kalon')?.defaultModel, {provider: 'b', model: 'same'});
-    assert.equal(f.catalog.find('kalon')?.prompt, '用户修改的人设'); assert.equal(f.catalog.find('techne')?.defaultModel, undefined);
+    assert.match(f.catalog.find('kalon')!.prompt, /用户修改的人设/);
+    assert.ok(f.catalog.find('kalon')!.prompt.includes(builtinActors.find(actor => actor.id === 'kalon')!.prompt));
+    assert.equal(f.catalog.find('techne')?.defaultModel, undefined);
     await assert.rejects(management.saveDefaultModel('kalon', {provider: 'missing', model: 'same'}, new AbortController().signal));
     await management.saveDefaultModel('kalon', undefined, new AbortController().signal);
     assert.equal(f.catalog.find('kalon')?.defaultModel, undefined); assert.ok(calls >= 3);
@@ -167,7 +169,8 @@ test('parseActorProfile 严格校验字段、大小上限与提示词位置', ()
 });
 
 test('角色配置解耦：支持自定义 card_closed 与 card_open，未指定时自动推导；用户配置目录 theme 生效', async () => {
-  const {ownerSurface, palette, applyTheme} = await import('../src/tui/cards.js');
+  const {ownerSurface} = await import('../src/tui/appearance/actor-style.js');
+  const {palette, applyTheme} = await import('../src/tui/appearance/theme.js');
   const {loadConfig} = await import('../src/config/config.js');
 
   // 1. 测试从 Actor 文档解析 card_closed 与 card_open
@@ -255,7 +258,7 @@ dream_expanded = "#aabbcc"
     assert.equal(palette.dreamExpanded, '#aabbcc');
 
     // 恢复默认配置
-    applyTheme({user: '#5282b5', accent: '#d97757', dream_collapsed: '#c4cbd2', dream_expanded: '#dce2e8'});
+    applyTheme();
   } finally {
     await f.close();
   }

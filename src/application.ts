@@ -14,15 +14,18 @@ import {ActorCatalog} from './actors/catalog.js';
 import {ActorServices} from './actors/services.js';
 import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
-import {loadConfig, type Config} from './config/config.js';
+import {loadConfig, themeSchema, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from './config/model-grouping.js';
 import {UsageLedger, usageLines} from './context/usage.js';
 import {ContextManager} from './context/manager.js';
-import {createAgent, agentRequestBase} from './kernel/agent.js';
+import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
+import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
 import {getScratchpadDir, ensureScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
+import {runLoginWizard, type WizardProviderRow} from './providers/login-wizard.js';
+import {presets} from './config/config.js';
 import {ModelPool} from './providers/model-pool.js';
 import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
@@ -39,11 +42,16 @@ import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
 import {StatusbarPreferences} from './config/statusbar-preferences.js';
 import {stageStatus} from './application-status.js';
-import {EnvironmentState, environmentVersion} from './context/environment.js';
-import {PENDING_HANDOFF_HEADER, REQUEST_ENVIRONMENT_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
-import {applyTheme} from './tui/cards.js';
+import {EnvironmentState, environmentVersion, formatEnvironment} from './context/environment.js';
+import {createRuntimeContextMessage, type RuntimeContextMessage} from './runtime/context-updates.js';
+import {planToolCatalog} from './tools/discovery.js';
+import {ToolRegistry} from './tools/registry.js';
+import type {ToolRegistration} from './tools/catalog.js';
+import {storedMessage} from './store/journal.js';
+import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
+import {applyTheme, palette} from './tui/appearance/theme.js';
 import {createCommandTabsFor, saveConfigToggles, type ApplicationCommandContext} from './application-commands.js';
-import {applyThemePreset, applyCursorStyle, type ThemePresetName, type CursorStyleName} from './config/theme-presets.js';
+import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, listThemes, loadThemePresets, resolveTheme, type CursorStyleName} from './config/theme-presets.js';
 
 export interface ApplicationOptions {
   cwd: string;
@@ -84,10 +92,32 @@ export async function createSessionApplication(options: SessionApplicationOption
   const deliveries = new DeliveryQueue(session, journal);
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
-  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
+  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'),
+    options.statusbarPath ? undefined : join(options.resourceOptions?.home ?? homedir(), '.logox-ts', 'statusbar.json'));
   let commandOwner = 'logox';
-  const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = commandOwner, activityId?: string) => {
-    systems.emit(text, kind, owner, activityId); extensions.hooks.emit('notification', {session_id: session});
+  let loginOwner = 'logox';
+  const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = commandOwner, activityId?: string,
+    display: NonNullable<Parameters<SystemHistory['emit']>[5]> = {}) => {
+    const presentation = display.presentation ?? 'timeline';
+    systems.emit(text, kind, owner, activityId, true, {...display, presentation});
+    extensions.hooks.emit('notification', {session_id: session});
+  };
+  const receipt = (text: string, presentation: 'silent' | 'status' | 'panel', title?: string, owner = commandOwner) => {
+    notice(text, 'command_result', owner, undefined, {presentation, ...(title ? {title} : {})});
+    if (presentation === 'panel') surfaces.openResult(title ?? 'Command result', text, {sessionId: session, ownerId: owner});
+  };
+  const queryResult = async (owner: string, title: string, query: () => Promise<string | undefined>) => {
+    const id = surfaces.openResult(title, 'Loading...', {sessionId: session, ownerId: owner});
+    try {
+      const text = await query();
+      if (closed) return;
+      if (text === undefined) {if (surfaces.getSnapshot()?.id === id) surfaces.cancel(); return;}
+      notice(text, 'command_result', owner, undefined, {presentation: 'panel', title});
+      surfaces.updateResult(id, text);
+    } catch (error) {
+      if (surfaces.getSnapshot()?.id === id) surfaces.cancel();
+      throw error;
+    }
   };
   await systems.restore();
   try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : '状态栏配置无法读取，使用默认布局。', 'command_error');}
@@ -101,6 +131,9 @@ export async function createSessionApplication(options: SessionApplicationOption
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
   const homeDir = options.resourceOptions?.home ?? homedir();
+  const toolRegistry = new ToolRegistry(cwd, homeDir);
+  await toolRegistry.reloadUserConfigs();
+  tools.setRegistry(toolRegistry);
   const modelPool = new ModelPool(registry, join(homeDir, '.logox', 'models-store.json'));
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));
@@ -125,7 +158,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
   });
   void ensureProjectBulletin(cwd);
-  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries,
+  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
     notice: text => notice(text, 'task_notice', 'logox'),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
@@ -133,6 +166,9 @@ export async function createSessionApplication(options: SessionApplicationOption
     canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
     injectMessage: (target, msg, src, sum, mode) => ensemble.injectTaskMessage(target, msg, src, sum, mode),
     interrupt: (target, message, source, summary) => ensemble.interruptTask(target, message, source, summary),
+    recordPeerMessage: (target, activityId, text, source) => {
+      store.message(session, target, 'user', text, {activityId, source, inputKind: 'collaboration'});
+    },
     cancelTool: (actorId, toolId, reason) => ensemble.cancelTool(actorId, toolId, reason),
     cancelActor: (actorId, scope, toolId, reason) => ensemble.cancelActor(actorId, scope, toolId, reason),
     cancelActivity: (activityId, reason) => ensemble.cancel(activityId, 'director_cancel'),
@@ -168,26 +204,121 @@ export async function createSessionApplication(options: SessionApplicationOption
     report: (identity, text) => notice(text, 'task_notice', identity.ownerId, identity.activityId),
     beforeCompact: (identity, tokens) => extensions.hooks.emit('pre_compact', {session_id: identity.sessionId, owner_id: identity.ownerId, tokens}),
   });
-  const surfaces = new CommandSurfaces(result => {if (result.message) notice(result.message);});
+  const surfaces = new CommandSurfaces((result, completion) => {
+    if (result.message && !closed) notice(result.message, result.kind ?? 'command_result', completion.ownerId ?? commandOwner, undefined,
+      {presentation: result.kind === 'command_error' && !completion.active ? 'timeline' : result.presentation ?? 'status',
+        ...(result.title ? {title: result.title} : {})});
+  }, () => ({sessionId: session, ownerId: commandOwner}));
   let surfaceError = '';
   const stopSurfaceErrors = surfaces.subscribe(() => {
     const current = surfaces.getSnapshot();
-    const key = current?.error ? current.id + ':' + current.error : '';
-    if (current?.error && key !== surfaceError) notice(current.error, 'command_error');
+    const error = current && 'error' in current ? current.error : undefined;
+    const key = error ? current!.id + ':' + error : '';
+    const changed = Boolean(error && key !== surfaceError);
+    // Recording the event refreshes the page synchronously; latch before publishing.
     surfaceError = key;
+    if (error && changed) notice(error, 'command_error', current?.ownerId ?? commandOwner, undefined, {presentation: 'silent'});
   });
   const authentication = new LoginFlow(registry.auth, () => registry.loginNames(), async provider => {
+    const owner = loginOwner;
     try {await saveSelection(registry.candidate(provider));}
-    catch {notice('API key 已保存；模型偏好保存失败，当前模型保留。');}
+    catch {notice('API key saved; model preference was not updated. The current model is unchanged.', 'command_error', owner);}
     await modelPool.syncProvider(provider).catch(() => {});
-    notice('已保存 ' + provider + ' 的 API key，重启后自动读取。' + (settings.model ? '\n当前模型：' + settings.model : '\n使用 /models 查询，再用 /model 名称选择模型。'));
-  }, registry.customStorage, (input, init) => registry.fetcher(input, init));
+    receipt('API key saved for ' + provider + '.', 'status', undefined, owner);
+  }, registry.customStorage, (input, init) => registry.fetcher(input, init), async name => {
+    await registry.unregister(name);
+    modelPool.forget(name);
+    await modelPool.saveCache().catch(() => {});
+  });
+  /**
+   * Local provider form: project wizard questions into the private UI form channel.
+   * 提问不挂活动，因此只出现在底部停靠区，不进时间线也不进账本。
+   */
+  const loginWizard = async (source: string) => {
+    if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
+    return runLoginWizard({
+      ask: authentication.ask,
+      askBatch: authentication.askBatch,
+      catalog: () => Object.entries(presets).map(([name, definition]) => ({name, custom: false, saved: false,
+        baseUrl: definition.base_url, kind: definition.kind})),
+      discoverModels: async (record, key) => {
+        key ??= (await registry.candidate(record.name).settings(false)).key;
+        const url = record.base_url.replace(/\/$/, '') + '/models';
+        const headers: Record<string, string> = record.kind === 'anthropic'
+          ? {'anthropic-version': '2023-06-01', ...(key ? {'x-api-key': key} : {})}
+          : key ? {Authorization: 'Bearer ' + key} : {};
+        const response = await registry.fetcher(url, {headers, signal: AbortSignal.timeout(5000), redirect: 'error'});
+        if (!response.ok) throw new Error('Model discovery failed.');
+        const payload = z.object({data: z.array(z.object({id: z.string().min(1)}))}).parse(await response.json());
+        return payload.data.map(item => item.id);
+      },
+      notify: (text, level) => level === 'error' ? notice(text, 'command_error', source) : receipt(text, 'status', undefined, source),
+      rows: async () => {
+        const saved = await registry.auth.providers();
+        const openAiAccount = (await registry.auth.credential('openai'))?.type === 'oauth';
+        const custom = new Map((await registry.customStorage.list().catch(() => [])).map(record => [record.name, record]));
+        return registry.names().map((name): WizardProviderRow => {
+          const record = custom.get(name);
+          return {
+            name,
+            custom: record ? !record.catalog : !presets[name],
+            saved: saved.includes(name) || Boolean(record) || Boolean(config.providers[name]),
+            accountSignedIn: name === 'openai' && openAiAccount,
+            baseUrl: record?.base_url ?? config.providers[name]?.base_url ?? presets[name]?.base_url,
+            kind: record?.kind ?? config.providers[name]?.kind ?? presets[name]?.kind,
+            api: record?.api ?? config.providers[name]?.api,
+            ...(record?.models ? {models: record.models} : {}),
+          };
+        });
+      },
+      commitProvider: async (record, key) => {
+        const previous = await registry.customStorage.get(record.name);
+        const credential = await registry.auth.credential(record.name);
+        try {
+          if (key) await registry.auth.save(record.name, key, commands.signal);
+          await registry.customStorage.save({...previous, ...record, api: record.api});
+        } catch (error) {
+          if (key) {
+            if (!credential) await registry.auth.remove(record.name);
+            else if (credential.type === 'api_key') await registry.auth.save(record.name, credential.key, new AbortController().signal);
+            else await registry.auth.saveOAuth(record.name, credential, new AbortController().signal);
+          }
+          throw error;
+        }
+        await registry.syncCustom();
+        await syncCredential(record.name, source);
+      },
+      saveKey: async (name, key) => {
+        await registry.auth.save(name, key, commands.signal);
+        await syncCredential(name, source);
+      },
+      saveCustom: async record => {
+        const previous = await registry.customStorage.get(record.name);
+        await registry.customStorage.save({...previous, ...record, api: record.api});
+        await registry.syncCustom().catch(() => {});
+        await syncCredential(record.name, source);
+      },
+      removeCustom: async name => {
+        await registry.unregister(name);
+        modelPool.forget(name);
+        await modelPool.saveCache().catch(() => {});
+      },
+      signOut: async name => {await registry.auth.remove(name);},
+      browserLogin: async name => name === 'openai' ? authentication.browserLogin(name) : 'unsupported',
+    });
+  };
+  const syncCredential = async (name: string, owner: string) => {
+    try {await saveSelection(registry.candidate(name));}
+    catch {notice('Credential saved; model preference was not updated.', 'command_error', owner);}
+    await modelPool.syncProvider(name).catch(() => {});
+  };
   let loginError = '';
   const stopLoginErrors = authentication.subscribe(() => {
     const current = authentication.getSnapshot();
     const key = current?.error ? current.provider + ':' + current.error : '';
-    if (current?.error && key !== loginError) notice(current.error, 'command_error');
+    const changed = Boolean(current?.error && key !== loginError);
     loginError = key;
+    if (current?.error && changed) notice(current.error, 'command_error', loginOwner, undefined, {presentation: 'silent'});
   });
   const extraTools = [...actorServices.definitionsForValidation(), ...extensions.mcp.definitions()];
   const meteredOwners = new Set<string>();
@@ -209,28 +340,37 @@ export async function createSessionApplication(options: SessionApplicationOption
       provider: candidate.provider(),
     });
   });
-  const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1]) => {
+  const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
+    assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}) => {
     await configureMeter(context.ownerId);
     const role = actorServices.definition(context);
-    const base = await agentRequestBase(cwd, context.ownerId, [...actorServices.tools(context.ownerId), ...extensions.mcp.definitions()],
-      resources, {prompt: role.prompt, compression: role.compression, visibility: actorServices.skills(context)}, true, scratchpad);
     const model = taskModels.selection(context), thinking = taskModels.thinking(context);
     const policy = actorServices.skills(context);
     const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
-    const effective = environment.update(context.ownerId, {model: model.provider + '/' + model.model,
+    const history = (await journal.load(context.sessionId, context.ownerId)).map(storedMessage);
+    const effective = environment.plan({model: model.provider + '/' + model.model,
       effort: thinking.levels.length > 1 ? thinking.effort : 'unsupported', permission: permissions.mode + ' · ' +
         permissionModes[permissions.mode].description +
         '\nExplicit rules (still adjudicated per call): ' + permissionRules,
-      directory: cwd, tools: base.tools.map(tool => tool.name).sort(), skills: resources.skillsFor(policy).map(skill => skill.name + ' · ' + skill.description).sort(),
-      rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort()});
-    if (effective.changes) notice('Execution environment updated:\n' + effective.changes, 'environment_change', context.ownerId, context.activityId);
+      directory: cwd, scratchpad,
+      rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort()}, history);
+    const extensionRegistrations: ToolRegistration[] = extensions.mcp.definitions().map(definition => ({definition,
+      metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
+    const base = await agentRequestBase(cwd, context.ownerId, extensionRegistrations,
+      resources, {prompt: role.prompt, execution: role.execution, collaboration: role.collaboration,
+        compression: role.compression, visibility: policy}, true, scratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history});
+    const contextUpdates: RuntimeContextMessage[] = [...effective.updates, ...base.contextUpdates ?? []];
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     if (restriction) base.tools = [finishRoundTool];
     const pending = directorReports.get(context.activityId);
     await actorServices.flush();
     const facts = actorServices.facts(context);
-    return {...base, system: base.system + '\n' + REQUEST_ENVIRONMENT_HEADER + '\n' + effective.text +
-      (restriction ? '\n' + restriction : '') + (pending ? '\n' + PENDING_HANDOFF_HEADER + '\n' + pending : '') + (facts ? '\n' + facts : '')};
+    for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : ''], ['director-facts', facts]] as const) {
+      const previous = history.findLast(message => message.role === 'context' && message.kind === 'task-state' &&
+        message.data?.slot === slot && message.data?.activityId === context.activityId);
+      if (text || previous?.text) contextUpdates.push(createRuntimeContextMessage('task-state', text || 'No current ' + slot + '.', {slot, activityId: context.activityId}));
+    }
+    return {...base, contextUpdates};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),
@@ -247,6 +387,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     recoverExecution: (context, kind) => actorServices.recovery.execution(context.rootActivityId ?? context.activityId, kind, context.ownerId),
     executionProgress: (context, fingerprint) => actorServices.recovery.progress(context.rootActivityId ?? context.activityId, fingerprint),
+    contextUpdated: (context, update) => {if (update.kind === 'environment-change') notice('Execution environment updated:\n' + update.text, 'environment_change', context.ownerId, context.activityId, {presentation: 'silent'});},
     executionNotice: (context, text) => {if (context.ownerId === 'logox') notice(text, 'task_notice', context.ownerId, context.activityId);},
     resources, extraTools, extraApprovalHandled: extraTools.map(tool => tool.name),
     executeExtra: observeExtra(extensions.hooks, async (call, context) => {
@@ -309,21 +450,33 @@ export async function createSessionApplication(options: SessionApplicationOption
     const thinking = registry.thinking();
     void surfaces.openPicker({title: 'Thinking Effort', description: 'Available effort tiers for current model; auto uses provider default', current: thinking.effort},
       async () => ({items: thinking.levels.map(id => ({id, label: id}))}), async id => {
-        await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)'};
+        await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)', presentation: 'silent'};
       });
   };
   let pageOwner = 'logox';
-  let currentThemeName: ThemePresetName = 'Logox Dark';
+  let currentThemeName = DEFAULT_THEME;
   let currentCursorName: CursorStyleName = 'Block █';
   let activeCommandPage = '';
+  // Themes are data: shipped JSON plus any `~/.logox/themes/*.json` overlay.
+  loadThemePresets(homeDir);
   const uiPref = new StateFile(join(homeDir, '.logox', 'ui-preferences.json'), z.object({
     version: z.number().default(1),
-    theme: z.string().default('Logox Dark'),
+    theme: z.string().default(DEFAULT_THEME),
     cursor: z.string().default('Block █'),
   }));
+  // A `[theme]` table that differs from stock wins over the default theme file;
+  // an untouched table lets the shipped default take over.
+  const stockTheme = themeSchema.parse({});
+  const themeCustomizedInToml = config?.theme
+    ? config.theme.user !== stockTheme.user || config.theme.accent !== stockTheme.accent
+      || config.theme.dream_collapsed !== stockTheme.dream_collapsed || config.theme.dream_expanded !== stockTheme.dream_expanded
+    : false;
   void uiPref.read().then((saved: {theme?: string; cursor?: string} | undefined) => {
     if (saved?.theme) {
-      currentThemeName = saved.theme as ThemePresetName;
+      // Older preferences stored display names; persist back the file ID.
+      currentThemeName = resolveTheme(saved.theme)?.name ?? DEFAULT_THEME;
+      applyThemePreset(currentThemeName);
+    } else if (!themeCustomizedInToml) {
       applyThemePreset(currentThemeName);
     }
     if (saved?.cursor) {
@@ -402,12 +555,13 @@ export async function createSessionApplication(options: SessionApplicationOption
     session,
     pageOwner,
     currentTheme: currentThemeName,
+    themeOptions: listThemes().map(theme => theme.name),
     currentCursor: currentCursorName,
     motion: statusbar.getSnapshot().motion,
     permissions: {
       mode: permissions.mode,
       description: permissionModes[permissions.mode].description,
-      ...(permissionModes[permissions.mode].color ? {color: permissionModes[permissions.mode].color} : {}),
+      color: palette[permissionModes[permissions.mode].colorToken],
       lines: [
         ...tools.permissionGuard({sessionId: session}).lines(),
         'Readonly concurrency: ' + config.permissions.readonly_concurrency,
@@ -424,6 +578,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       approvalTokens: sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0),
     },
     statusbarModules: statusbar.getSnapshot().modules,
+    statusbarAppearance: {style: statusbar.getSnapshot().style, colorScheme: statusbar.getSnapshot().colorScheme},
+    statusbarStatus: status(pageOwner),
     statusLines: [
       'Session: ' + session + ' · Role: ' + pageOwner,
       '─────────────────────────────────────────────────────────────',
@@ -464,7 +620,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       'Max connection retries: ' + config.kernel.max_retries,
       '',
       '── Instructions ─────────────────────────────────────────────',
-      'Switch via /model or /provider; use /config to customize themes and preferences.',
+      'Switch via /model or /providers; use /settings to customize themes and preferences.',
     ],
     usageLines: [
       'Session: ' + session + ' · Role: ' + pageOwner,
@@ -501,7 +657,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   surfaces.subscribe(() => {
     if (!surfaces.getSnapshot()) activeCommandPage = '';
   });
-  const openModels = () => {
+  const openModels = (forActor = 'Logox') => {
     const groupedMap = new Map<string, GroupedModel>();
     const currentBase = (() => {
       const match = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/.exec(settings.model);
@@ -518,6 +674,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
       const currentForThisProvider = settings.provider === provider ? settings.model : '';
       const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
+      if (!groupedList.length) continue;
       for (const grouped of groupedList) {
         groupedMap.set(grouped.id, grouped);
         const currentThinkingEffort = registry.thinking().effort;
@@ -533,17 +690,18 @@ export async function createSessionApplication(options: SessionApplicationOption
           : '-';
         items.push({
           id: grouped.id,
-          label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
-          description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
+          label: grouped.baseModel,
+          description: win + ' · ' + eff + (recorded?.isOffline ? ' · offline' : ''),
           effort: currentEffort,
           effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
+          group: provider,
         });
       }
     }
 
     void surfaces.openPicker({
-      title: 'Select Model',
-      description: 'Model families grouped · Search models, use ← → to adjust thinking effort',
+      title: 'Select Model for ' + forActor,
+      description: 'Model families grouped by provider · Tab switches provider',
       current: JSON.stringify([settings.provider, currentBase]),
       items,
     },
@@ -561,6 +719,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           const providerModels = poolModels.filter(m => m.provider === provider).map(m => m.id);
           const currentForThisProvider = settings.provider === provider ? settings.model : '';
           const groupedList = groupModelsForProvider(providerModels, provider, currentForThisProvider);
+          if (!groupedList.length) continue;
           for (const grouped of groupedList) {
             groupedMap.set(grouped.id, grouped);
             const currentThinkingEffort = registry.thinking().effort;
@@ -576,10 +735,11 @@ export async function createSessionApplication(options: SessionApplicationOption
               : '-';
             freshItems.push({
               id: grouped.id,
-              label: (grouped.provider ? grouped.provider + ' / ' : '') + grouped.baseModel,
-              description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
+              label: grouped.baseModel,
+              description: win + ' · ' + eff + (recorded?.isOffline ? ' · offline' : ''),
               effort: currentEffort,
               effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
+              group: provider,
             });
           }
         }
@@ -615,14 +775,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           }
         }
         await saveSelection(candidate);
-        return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : '')};
-      });
-  };
-  const openProviders = () => {
-    void surfaces.openPicker({title: 'Select Provider', description: 'Switch default provider; run /model to inspect available models', current: settings.provider},
-      async () => ({items: registry.names().map(name => ({id: name, label: name}))}), async name => {
-        await saveSelection(registry.candidate(name));
-        return {message: 'Current provider: ' + name + '\nModel: ' + (settings.model || 'Select with /model')};
+        return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'silent'};
       });
   };
   const openAutomaModel = async () => {
@@ -641,15 +794,16 @@ export async function createSessionApplication(options: SessionApplicationOption
         const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
         return {
           id: choiceId,
-          label: item.provider + ' / ' + item.id,
+          label: item.id,
           description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
           effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
           effortLevels: levels.length > 0 ? levels : undefined,
+          group: item.provider,
         };
       }),
     ];
     await surfaces.openPicker({
-      title: 'Automa Model',
+      title: 'Select Model for Automa',
       description: 'Select dedicated model for Automa worker; Esc to cancel',
       current: currentModel ? JSON.stringify(currentModel) : 'inherit',
       ...(poolModels.length > 0 ? {items: initialItems} : {}),
@@ -677,10 +831,11 @@ export async function createSessionApplication(options: SessionApplicationOption
           const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
           return {
             id: choiceId,
-            label: item.provider + ' / ' + item.id,
+            label: item.id,
             description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
             effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
             effortLevels: levels.length > 0 ? levels : undefined,
+            group: item.provider,
           };
         }),
       ];
@@ -689,7 +844,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (!choices.has(choice)) throw new Error('Invalid model selection');
       await tools.modelStorage.save('automa', choices.get(choice), commands.signal);
       const chosen = choices.get(choice);
-      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model'};
+      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'silent'};
     });
   };
   // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
@@ -707,6 +862,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     return entries;
   }))).flat().sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   for (const entry of restored) {
+    if (entry.role === 'context') continue;
     const origin = {...(entry.activityId ? {activityId: entry.activityId} : {}), ...(entry.source ? {source: entry.source} : {}),
       inputKind: inputKind(entry), time: entry.time ?? 0};
     const activityId = entry.activityId;
@@ -714,12 +870,13 @@ export async function createSessionApplication(options: SessionApplicationOption
       const round = savedRounds.get(activityId), checkpoint = checkpoints.find(task => task.activityId === activityId);
       const savedModel = savedModels.find(item => item.activityId === activityId);
       store.activities.create({sessionId: session, activityId, ownerId: entry.ownerId, kind: entry.ownerId === 'logox' ? 'director' : 'actor',
-        title: entry.text.slice(0, 80) || entry.ownerId, status: round?.status ?? checkpoint?.status ?? 'completed',
+        title: checkpoint?.taskTitle ?? (entry.text.slice(0, 80) || entry.ownerId), status: round?.status ?? checkpoint?.status ?? 'completed',
         stage: round ? '恢复的' + ({completed: '完成', failed: '失败', cancelled: '取消'}[round.status])
           : checkpoint ? checkpoint.status === 'completed' ? '恢复的完成' : checkpoint.status === 'failed' ? '恢复的失败' : '已中断' : '历史记录',
         detail: checkpoint?.error ? '失败原因：' + checkpoint.error + '\n' + (round?.summary.report ?? '')
           : round?.summary.report ?? (checkpoint ? '恢复任务检查点；工具不会重放' : '历史记录未保存终态；工具不会重放'),
         inputKind: inputKind(checkpoint ?? entry),
+        ...(checkpoint?.taskTitle ? {taskTitle: checkpoint.taskTitle} : {}),
         ...(round ? {summary: round.summary} : {}),
         ...(checkpoint?.stopReason ? {stopReason: checkpoint.stopReason} : {}),
         ...(checkpoint?.rootActivityId ? {rootActivityId: checkpoint.rootActivityId} : {}),
@@ -741,10 +898,11 @@ export async function createSessionApplication(options: SessionApplicationOption
   for (const task of checkpoints) {
     if (store.activities.get(session, task.activityId)) continue;
     store.activities.create({sessionId: session, activityId: task.activityId, ownerId: task.ownerId,
-      kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.prompt.slice(0, 80),
+      kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.taskTitle ?? task.prompt.slice(0, 80),
       status: task.status, stage: task.status === 'cancelled' ? '已中断' : '恢复的任务',
       detail: task.error ? '失败原因：' + task.error : '恢复检查点，不自动执行',
       inputKind: inputKind(task),
+      ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
       ...(task.parentActivityId ? {parentActivityId: task.parentActivityId} : {}), ...(task.batchId ? {batchId: task.batchId} : {}),
       ...(task.progress ? {progress: task.progress} : {}), ...(task.recovery ? {recovery: task.recovery} : {}),
       ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}),
@@ -752,8 +910,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     store.message(session, task.ownerId, 'user', task.prompt, {activityId: task.activityId, source: task.source,
       inputKind: inputKind(task), time: task.time});
   }
-  systems.emit('Session ' + session + '\n' + (settings.model ? settings.model : 'No model set, use /model <name>') + ' · Run /help for assistance', 'task_notice', 'logox', undefined, false);
-  for (const issue of resources.snapshot().issues) notice('Resource failed to load: ' + issue.path + ' · ' + issue.reason);
+  systems.emit('Session ' + session + '\n' + (settings.model ? settings.model : 'No model set, use /model <name>') + ' · Run /help for assistance', 'task_notice', 'logox', undefined, false, {presentation: 'welcome'});
+  for (const issue of resources.snapshot().issues) notice('Resource failed to load: ' + issue.path + ' · ' + issue.reason, 'command_error');
   const terminal = new Set(checkpoints.filter(task => ['failed', 'cancelled'].includes(task.status)).map(task => task.activityId));
   const stopSystemUpdates = store.subscribe(() => {
     for (const activity of store.getSnapshot().activities) {
@@ -818,8 +976,9 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (selecting) throw new Error('Model settings are saving, please try again shortly...');
       if (reloadTask) throw new Error('Resources are reloading, please wait...');
       if (compactTask) throw new Error('Context is compacting, please wait or cancel...');
-      if (surfaces.getSnapshot()) {
-        if (text.startsWith('/')) {
+      const previousSurface = surfaces.getSnapshot();
+      if (previousSurface) {
+        if (text.startsWith('/') || previousSurface.kind === 'result' && previousSurface.ownerId && previousSurface.ownerId !== source) {
           surfaces.close();
         } else {
           throw new Error('Please close the current command pane first');
@@ -843,12 +1002,18 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (/^\/(new|resume|clear|rewind)(?:\s|$)/.test(text) && await options.sessionCommand(text)) return;
       if (text === '/login' || text.startsWith('/login ')) {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');
-        await authentication.begin(text === '/login' ? undefined : text.slice(7).trim()); return;
+        loginOwner = source;
+        const target = text === '/login' ? '' : text.slice(7).trim();
+        if (target) {await authentication.begin(target); return;}
+        const outcome = await loginWizard(source);
+        if (outcome === 'cancelled') notice('Login wizard closed without changes.', 'command_result', source, undefined, {presentation: 'silent'});
+        else if (outcome !== 'failed') receipt('Provider changes saved.', 'status', undefined, source);
+        return;
       }
       if (text === '/permissions mode') {
         void surfaces.openPicker({title: 'Permission Mode', description: 'Explicit deny is shared across all 3 tiers; pending actions will be re-evaluated', current: permissions.mode},
-          async () => ({items: Object.entries(permissionModes).map(([id, mode]) => ({id, label: id, description: mode.description, color: mode.color}))}),
-          async id => {await permissions.setMode(permissionModeSchema.parse(id)); return {message: 'Permission mode: ' + id};});
+          async () => ({items: Object.entries(permissionModes).map(([id, mode]) => ({id, label: id, description: mode.description, color: palette[mode.colorToken]}))}),
+          async id => {await permissions.setMode(permissionModeSchema.parse(id)); return {message: 'Permission mode: ' + id, presentation: 'status'};});
         return;
       }
       if (text.startsWith('/permissions ')) {
@@ -858,7 +1023,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           else if (parts[0] === 'revoke' && parts.length === 2) await permissions.revoke(parts[1]!);
           else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: z.enum(['session', 'project']).parse(parts[1]), decision: z.enum(['allow', 'deny']).parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')});
           else throw new Error('Run /permissions to view usage');
-          notice('Permissions updated.');
+          receipt('Permissions updated.', 'status', undefined, source);
         })();
         try {await permissionTask;} finally {permissionTask = undefined;}
         return;
@@ -876,7 +1041,7 @@ export async function createSessionApplication(options: SessionApplicationOption
             await actorServices.management.openDefaultModel(source, surfaces);
             return;
           }
-          openModels();
+          openModels(actors.find('logox')?.name ?? 'Logox');
           return;
         }
 
@@ -885,12 +1050,12 @@ export async function createSessionApplication(options: SessionApplicationOption
           if (specificModel) {
             if (specificModel.toLowerCase() === 'inherit') {
               await tools.modelStorage.save('automa', undefined, commands.signal);
-              notice('Automa model set to inherit session model');
+              receipt('Automa model set to inherit session model', 'silent', undefined, source);
               return;
             }
             const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
             await tools.modelStorage.save('automa', {provider: resolved.provider, model: resolved.model}, commands.signal);
-            notice('Automa model set to: ' + resolved.provider + '/' + resolved.model);
+            receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
             return;
           }
           await openAutomaModel();
@@ -902,11 +1067,11 @@ export async function createSessionApplication(options: SessionApplicationOption
           if (specificModel) {
             const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
             await actorServices.management.saveDefaultModel(targetActor.id, {provider: resolved.provider, model: resolved.model}, commands.signal);
-            notice('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model);
+            receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
             return;
           }
           if (targetActor.id === 'logox') {
-            openModels();
+            openModels(targetActor.name);
             return;
           }
           await actorServices.management.openDefaultModel(targetActor.id, surfaces);
@@ -918,21 +1083,25 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!model) throw new Error('Please specify a model name');
         const resolved = modelPool.resolveShorthand(model, settings.provider);
         await saveSelection(registry.candidate(resolved.provider, resolved.model));
-        notice('Current model: ' + resolved.provider + '/' + resolved.model);
+        receipt('Current model: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
         return;
       }
+      if (text === '/help' || text === '/commands') {
+        receipt(buildAppCommandContext().commandsLines.join('\n'), 'panel', 'Help & Commands'); return;
+      }
+      pageOwner = source;
       const pageSpec = createCommandTabsFor(text, buildAppCommandContext());
       if (pageSpec) {
-        pageOwner = source;
         activeCommandPage = text;
 
         surfaces.openPage(pageSpec.title, pageSpec.tabs, pageSpec.initialTab, {
-          onSaveToggles: async (tabId, items) => {
-            if (tabId === 'config') {
+          closeOnSave: pageSpec.tabs.filter(tab => tab.toggles).length <= 1,
+          onSaveToggles: async (tabId, items, appearance) => {
+            if (tabId === 'settings') {
               const res = await saveConfigToggles(items, {
                 saveMotion: async enabled => statusbar.saveMotion(enabled),
                 stdout: process.stdout,
-                onThemeChange: theme => { currentThemeName = theme as ThemePresetName; },
+                onThemeChange: theme => { currentThemeName = theme; },
                 onCursorChange: cursor => { currentCursorName = cursor as CursorStyleName; },
               });
               await uiPref.save({
@@ -943,8 +1112,9 @@ export async function createSessionApplication(options: SessionApplicationOption
               return res;
             }
             if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
-            await statusbar.save(items);
-            return {message: 'Statusbar layout saved.'};
+            await statusbar.save(items.map(({id, enabled}) => ({id, enabled})), appearance);
+            refreshCurrentPage();
+            return {message: 'Statusbar layout saved.', presentation: 'status'};
           },
           onTabAction: async (tabId, action) => {
             if (tabId === 'permissions' && action === 'toggle_mode') {
@@ -952,7 +1122,7 @@ export async function createSessionApplication(options: SessionApplicationOption
               const nextMode = modes[(modes.indexOf(permissions.mode) + 1) % modes.length]!;
               await permissions.setMode(nextMode);
               refreshCurrentPage();
-              return {message: 'Permission mode switched to: ' + nextMode};
+              return {message: 'Permission mode switched to: ' + nextMode, presentation: 'silent'};
             }
             if (tabId === 'providers') {
               const names = registry.names();
@@ -978,11 +1148,11 @@ export async function createSessionApplication(options: SessionApplicationOption
                   const elapsed = Date.now() - start;
                   providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
                   refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)"};
+                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)", presentation: 'silent'};
                 } catch (error) {
                   providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
                   refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connection failed"};
+                  return {message: "Provider '" + current + "' connection failed", kind: 'command_error', presentation: 'silent'};
                 }
               }
               if (action === 'refresh') {
@@ -993,11 +1163,11 @@ export async function createSessionApplication(options: SessionApplicationOption
                   const count = pool.filter(m => m.provider === current).length;
                   providerStatuses.set(current, '● Connected (' + count + ' models synced)');
                   refreshCurrentPage();
-                  return {message: "Refreshed " + count + " models from '" + current + "'"};
+                  return {message: "Refreshed " + count + " models from '" + current + "'", presentation: 'silent'};
                 } catch (error) {
                   providerStatuses.set(current, '○ Sync failed');
                   refreshCurrentPage();
-                  return {message: "Failed to refresh models from '" + current + "'"};
+                  return {message: "Failed to refresh models from '" + current + "'", kind: 'command_error', presentation: 'silent'};
                 }
               }
               if (action === 'logout') {
@@ -1006,7 +1176,7 @@ export async function createSessionApplication(options: SessionApplicationOption
                   viewingProviderIndex = Math.max(0, registry.names().length - 1);
                 }
                 refreshCurrentPage();
-                return {message: "Logged out provider '" + current + "'"};
+                return {message: "Logged out provider '" + current + "'", presentation: 'silent'};
               }
             }
             return {};
@@ -1014,18 +1184,19 @@ export async function createSessionApplication(options: SessionApplicationOption
         }); return;
       }
       if (text === '/skills') {
-        notice(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + ': ' + item.description + '\n' + item.path).join('\n\n') || 'No skills found'); return;
+        receipt(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + ': ' + item.description + '\n' + item.path).join('\n\n') || 'No skills found', 'panel', 'Skills'); return;
       }
       if (text === '/reload') {
         requireIdle();
-        reloadTask = (async () => {
+        reloadTask = queryResult(source, 'Resource reload', async () => {
           const report = await reloadResources(resources, () => loadConfig(cwd, {}, options.env ?? process.env,
             options.resourceOptions?.home, options.resourceOptions?.boundary));
           if (report.prefixChanged) contexts.invalidatePrefix();
+          await toolRegistry.reloadUserConfigs();
           const actorState = await actors.reload(); contexts.invalidatePrefix();
-          for (const issue of actorState.issues) notice('Actor failed to load: ' + issue.path + ' · ' + issue.reason);
-          if (!closed) notice(report.text);
-        })();
+          for (const issue of actorState.issues) notice('Actor failed to load: ' + issue.path + ' · ' + issue.reason, 'command_error', source);
+          return report.text;
+        });
         try {await reloadTask;} finally {reloadTask = undefined;}
         return;
       }
@@ -1034,41 +1205,51 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!effortCommand[1]) {openThinking(); return;}
         const effort = effortSchema.safeParse(effortCommand[1]);
         if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
-        await saveEffort(effort.data); notice('Thinking effort: ' + effort.data + ' (saved)'); return;
+        await saveEffort(effort.data); receipt('Thinking effort: ' + effort.data + ' (saved)', 'silent', undefined, source); return;
       }
-      if (text === '/provider') {openProviders(); return;}
-      if (text === '/model') {openModels(); return;}
+      if (text === '/model') {
+        if (source !== 'logox' && actors.find(source)) {
+          await actorServices.management.openDefaultModel(source, surfaces); return;
+        }
+        openModels(actors.find('logox')?.name ?? 'Logox'); return;
+      }
       if (text === '/models') {
         const provider = settings.provider;
-        const models = await registry.models(AbortSignal.any([commands.signal, AbortSignal.timeout(15000)]));
-        modelCandidates.set(provider, models);
-        notice(models.join('\n') || 'Provider returned empty model list'); return;
+        await queryResult(source, 'Available models', async () => {
+          const models = await registry.models(AbortSignal.any([commands.signal, AbortSignal.timeout(15000)]));
+          modelCandidates.set(provider, models);
+          return models.join('\n') || 'Provider returned empty model list';
+        }); return;
       }
-      if (text.startsWith('/provider ') || text.startsWith('/providers ')) {
-        const parts = text.replace(/^\/providers?\s+/, '').trim().split(/\s+/);
+      if (text.startsWith('/providers ')) {
+        const parts = text.replace(/^\/providers\s+/, '').trim().split(/\s+/);
         if (parts[0] === 'check') {
           if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
           const selection = registry.selection();
-          const result = await registry.check(commands.signal);
-          notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+          await queryResult(source, 'Provider check', async () => {
+            const result = await registry.check(commands.signal);
+            return 'Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms';
+          }); return;
         }
         if (parts[0] === 'unregister' || parts[0] === 'logout') {
           if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before unregistering provider.');
           const target = parts[1];
           if (!target) throw new Error('Usage: /providers unregister <name>');
           await registry.unregister(target);
-          notice("Provider '" + target + "' unregistered successfully."); return;
+          receipt("Provider '" + target + "' unregistered successfully.", 'status', undefined, source); return;
         }
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
-        if (!parts[0] || parts.length > 2) throw new Error('Usage: /provider <name> [model]');
+        if (!parts[0] || parts.length > 2) throw new Error('Usage: /providers <name> [model]');
         await saveSelection(registry.candidate(parts[0], parts[1]));
-        notice('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model')); return;
+        receipt('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model'), 'silent', undefined, source); return;
       }
       if (text === '/check-provider') {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
         const selection = registry.selection();
-        const result = await registry.check(commands.signal);
-        notice('Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms'); return;
+        await queryResult(source, 'Provider check', async () => {
+          const result = await registry.check(commands.signal);
+          return 'Provider check succeeded: ' + selection.provider + ' / ' + selection.model + '\n' + result.text + '\nLatency: ' + result.elapsedMs + ' ms';
+        }); return;
       }
       if (text === '/compact') {
         requireIdle();
@@ -1096,10 +1277,13 @@ export async function createSessionApplication(options: SessionApplicationOption
       }
       if (text === '/undo') {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before undoing.');
-        const activities = new Set((await journal.activeTasks(session)).map(task => task.activityId));
-        for (const owner of owners) for (const entry of await journal.load(session, owner)) if (entry.activityId) activities.add(entry.activityId);
-        const paths = await tools.snapshots.undo([...activities]);
-        notice(paths.length ? 'Undone:\n' + paths.join('\n') : 'No file changes to undo'); return;
+        await queryResult(source, 'File undo', async () => {
+          const activities = new Set((await journal.activeTasks(session)).map(task => task.activityId));
+          for (const owner of owners) for (const entry of await journal.load(session, owner)) if (entry.activityId) activities.add(entry.activityId);
+          const paths = await tools.snapshots.undo([...activities]);
+          if (!paths.length) {receipt('No file changes to undo', 'silent', undefined, source); return undefined;}
+          return 'Undone:\n' + paths.join('\n');
+        }); return;
       }
       if (text.startsWith('/cast ')) {
         const prompt = text.slice(6).trim();

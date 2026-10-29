@@ -1,10 +1,12 @@
 import {z} from 'zod';
+import {runtimeContextMessageSchema} from './context-updates.js';
 
 export const imageBlockSchema = z.strictObject({data: z.string(), mimeType: z.string()});
 export type ImageBlock = z.infer<typeof imageBlockSchema>;
-export const toolCallSchema = z.object({id: z.string(), name: z.string(), arguments: z.string()});
+export const toolCallSchema = z.object({id: z.string(), name: z.string(), arguments: z.string(), kind: z.literal('tool-search').optional()});
 export type ToolCall = z.infer<typeof toolCallSchema>;
 export const modelMessageSchema = z.discriminatedUnion('role', [
+  runtimeContextMessageSchema,
   z.object({role: z.literal('user'), text: z.string(), images: z.array(imageBlockSchema).optional()}),
   z.object({role: z.literal('assistant'), text: z.string(), reasoning: z.string().optional(),
     contextExcluded: z.literal(true).optional(),
@@ -12,14 +14,21 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     memoryOnly: z.literal(true).optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),
-    images: z.array(imageBlockSchema).optional()}),
+    discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional()}),
 ]);
 export type ModelMessage = z.infer<typeof modelMessageSchema>;
-export interface ToolDefinition {name: string; description: string; parameters: Record<string, unknown>}
+export type ToolDiscoveryProtocol = 'none' | 'anthropic' | 'openai-responses';
+export interface ToolDefinition {name: string; description: string; parameters: Record<string, unknown>; deferLoading?: true}
+export interface ProviderCapabilities {
+  toolDiscovery: ToolDiscoveryProtocol;
+  runtimeInstructions: 'meta-user' | 'system' | 'developer';
+  caching: 'none' | 'anthropic' | 'automatic';
+}
 export interface ModelRequest {
   system: string;
   messages: readonly ModelMessage[];
   tools: readonly ToolDefinition[];
+  toolDiscovery?: Exclude<ToolDiscoveryProtocol, 'none'>;
   maxTokens?: number;
   thinking?: false;
   supportsVision?: boolean;
@@ -32,6 +41,8 @@ export interface ModelTurn {
 }
 export type Delta = {kind: 'text' | 'reasoning'; text: string};
 export interface Provider {
+  readonly capabilities?: ProviderCapabilities;
+  resolveCapabilities?(signal: AbortSignal): Promise<ProviderCapabilities>;
   respond(request: ModelRequest, onDelta: (delta: Delta) => void, signal: AbortSignal): Promise<ModelTurn>;
 }
 /** 只修复请求视图；原始账本与已经执行的工具保持不变。 */

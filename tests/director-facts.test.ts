@@ -116,3 +116,158 @@ test('resident facts bound large ensembles without hiding the count of additiona
     assert.equal(data.tasks[0].status, 'queued');
   } finally {await f.close();}
 });
+
+test('activeEnsembleRoster returns empty string when solo and formats peer mainTitle · subTitle, files, and running tool when active', async () => {
+  const f = await fixture();
+  try {
+    activity(f.store, 'techne-1', 'techne', 'running');
+    assert.equal(f.facts(context('techne-1', 'techne')), '');
+
+    activity(f.store, 'kalon-idle', 'kalon', 'completed');
+    assert.equal(f.facts(context('techne-1', 'techne')), '');
+
+    f.store.activities.create({
+      sessionId: 's',
+      activityId: 'kalon-active',
+      ownerId: 'kalon',
+      kind: 'actor',
+      title: 'Kalon · 雅正 · 审美官',
+      taskTitle: 'Refine palette tokens',
+      progress: {label: 'Auditing contrast'},
+      status: 'running',
+      stage: '处理中',
+      detail: 'Check contrast ratios',
+      inputKind: 'director',
+      rootActivityId: 'root',
+      parentActivityId: 'root',
+    });
+    f.store.message('s', 'kalon', 'assistant', '', {
+      activityId: 'kalon-active',
+      kind: 'tool',
+      step: {
+        title: 'Edit · src/tui/theme.ts',
+        callId: 'edit-1',
+        state: 'completed',
+        elapsedMs: 12,
+        call: {id: 'edit-1', name: 'Edit', arguments: JSON.stringify({file_path: 'src\\tui\\theme.ts', old_string: 'a', new_string: 'b'})},
+      },
+    });
+    f.store.message('s', 'kalon', 'assistant', '', {
+      activityId: 'kalon-active',
+      kind: 'tool',
+      step: {
+        title: 'Read · docs/design.md',
+        callId: 'read-1',
+        state: 'completed',
+        elapsedMs: 5,
+        call: {id: 'read-1', name: 'Read', arguments: JSON.stringify({file_path: 'docs/design.md'})},
+      },
+    });
+    f.store.message('s', 'kalon', 'assistant', '', {
+      activityId: 'kalon-active',
+      kind: 'tool',
+      step: {
+        title: 'Shell · npm test',
+        callId: 'shell-1',
+        state: 'running',
+        elapsedMs: 200,
+      },
+    });
+
+    const roster = f.facts(context('techne-1', 'techne'));
+    assert.match(roster, /^Active ensemble roster \(Logox is always reachable as Director; idle roles omitted\):/);
+    assert.match(roster, /- kalon \(running\): Refine palette tokens · Auditing contrast \| files: src\/tui\/theme\.ts \(edit\), docs\/design\.md \(read\) \| running: Shell · npm test/);
+
+    f.store.activities.update('s', 'kalon-active', {status: 'completed'});
+    assert.equal(f.facts(context('techne-1', 'techne')), '');
+  } finally {await f.close();}
+});
+
+test('Actor dispatch with title preserves natural prompt without task-book headers, sets taskTitle, and renders Main Title · SubTitle while running and Main Title on completion', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-test-actor-title-'));
+  const config = await loadConfig(directory, {}, {}, directory, directory);
+  const catalog = new ActorCatalog(directory, {home: directory}); await catalog.load();
+  const store = new RuntimeStore();
+  const journal = new Journal(join(directory, 'journal'));
+  const {EnsembleRuntime} = await import('../src/actors/ensemble.js');
+  const {TaskProgress} = await import('../src/runtime/task-progress.js');
+  const {buildStageRows} = await import('../src/tui/timeline/stage.js');
+
+  let receivedPrompt = '';
+  let runningContext!: ActorContext;
+  let startedResolve!: () => void;
+  const started = new Promise<void>(resolve => {startedResolve = resolve;});
+  let finishResolve!: () => void;
+  const finishGate = new Promise<void>(resolve => {finishResolve = resolve;});
+
+  const ensemble = new EnsembleRuntime('s', store, journal, async (prompt, ctx) => {
+    receivedPrompt = prompt;
+    runningContext = ctx;
+    startedResolve();
+    await finishGate;
+    ctx.say('Completed token audit.');
+  });
+
+  let dispatchedHandle!: import('../src/actors/ensemble.js').TaskHandle;
+  const services = new ActorServices({
+    sessionId: 's',
+    catalog,
+    config,
+    journal,
+    registry: new ProviderRegistry(config, {}),
+    resources: new Resources(directory, {home: directory, boundary: directory}),
+    requireIdle() {},
+    approve: async () => false,
+    enqueue: (owner, prompt, source, origin) => {
+      dispatchedHandle = ensemble.dispatch(owner as 'techne', prompt, source, origin);
+      return dispatchedHandle;
+    },
+    getSnapshot: () => store.getSnapshot(),
+  });
+
+  try {
+    const dispatchRes = await services.execute({
+      id: 'call-actor-1',
+      name: 'Actor',
+      arguments: JSON.stringify({
+        tasks: [{
+          ownerId: 'techne',
+          title: 'Audit theme contrast',
+          prompt: 'Verify header and statusbar contrast ratios against WCAG AA.',
+        }],
+      }),
+    }, context('root', 'logox'));
+
+    assert.equal(dispatchRes.isError, false, dispatchRes.text);
+    await started;
+
+    assert.equal(receivedPrompt, 'Verify header and statusbar contrast ratios against WCAG AA.');
+    assert.doesNotMatch(receivedPrompt, /【User Goal|用户目标|Task Card Main Title|任务卡主标题/);
+
+    const act = store.activities.get('s', runningContext.activityId);
+    assert.ok(act);
+    assert.equal(act.taskTitle, 'Audit theme contrast');
+
+    const progress = new TaskProgress(store, runningContext);
+    assert.equal((await progress.update({label: 'Checking statusbar tokens'})).isError, false);
+
+    const runningRows = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {[runningContext.activityId]: false}, null)
+      .map(row => row.text).join('\n');
+    assert.match(runningRows, /Audit theme contrast · Checking statusbar tokens/);
+
+    finishResolve();
+    await dispatchedHandle.done;
+
+    const completedAct = store.activities.get('s', runningContext.activityId);
+    assert.equal(completedAct?.status, 'completed');
+    const completedRows = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {[runningContext.activityId]: false}, null)
+      .map(row => row.text).join('\n');
+    assert.match(completedRows, /Audit theme contrast/);
+    assert.doesNotMatch(completedRows, /Audit theme contrast · Checking statusbar tokens/);
+  } finally {
+    finishResolve();
+    await ensemble.close();
+    await services.flush();
+    await rm(directory, {recursive: true, force: true});
+  }
+});

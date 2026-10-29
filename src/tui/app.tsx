@@ -1,31 +1,41 @@
 import {useContext, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useStdout, useWindowSize, type DOMElement} from 'ink';
 import stringWidth from 'string-width';
-import {TerminalPlaneContext} from './terminal.js';
+import {TerminalPlaneContext} from './terminal/terminal.js';
 import {RuntimeStore} from '../runtime/store.js';
 import {emptyCommandContext, type CommandContext} from '../commands.js';
-import {applyCommandSuggestion, commandSuggestions, completionQuery, type CommandSuggestion} from './completion.js';
+import {applyCommandSuggestion, commandSuggestions, completionQuery, type CommandSuggestion} from './commands/completion.js';
 import type {CommandSurfaces} from '../commands/surfaces.js';
-import {Picker} from './picker.js';
-import {TabbedPage} from './tabbed-page.js';
+import {Picker} from './panels/picker.js';
+import {TabbedPage} from './panels/tabbed-page.js';
+import {CommandResultPanel} from './panels/command-result.js';
+import {COMPOSER_EXPAND_LABEL, COMPOSER_EXPAND_PADDING, FullscreenEditor} from './input/fullscreen-editor.js';
 import type {LoginFlow} from '../providers/login.js';
 import type {StageStatus} from '../runtime/stage-status.js';
 import type {SubmitDelivery} from '../application.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
-import {statusbarText, statusbarParts} from './statusbar.js';
-import {computeActivePills, calculatePillsWidth, ActorPills, findLatestActorRowIndex, extractStatusBarSlice, type ActivePillItem} from './actor-pills.js';
-import {MouseContext, type MouseSubscriber} from './mouse.js';
-import {LoginDialog} from './login.js';
-import {useContentHeight} from './metrics.js';
-import {CommandMenu} from './command-menu.js';
+import {statusbarText, statusbarParts} from './status/statusbar.js';
+import {computeActivePills, calculatePillsWidth, ActorPills, type ActivePillItem} from './status/actor-pills.js';
+import {findLatestActorRowIndex} from './timeline/actor-location.js';
+import {extractStatusBarSlice} from './status/statusbar.js';
+import {MouseContext, type MouseSubscriber} from './terminal/mouse.js';
+import {LoginDialog} from './login/login.js';
+import {useContentHeight} from './terminal/metrics.js';
+import {CommandMenu, commandMenuLayout} from './commands/command-menu.js';
+import {ProductionQuestionPanel} from './interactions/production-question.js';
 import type {PortfolioActivities} from '../demo/portfolio.js';
-import {buildStageRows, stageFoldOpen} from './stage.js';
-import {projectPortfolioScene} from './scene-state.js';
+import {buildStageRows, stageFoldOpen} from './timeline/stage.js';
+import {projectPortfolioScene} from './timeline/scene-state.js';
 import {answerEnvelope} from '../runtime/interactions.js';
 import type {Answer, Interaction} from '../runtime/contracts.js';
 import {cast, type ActorId} from '../actors/ensemble.js';
-import {ActivityCard, InteractionCard, ownerColor, ownerHeader, palette, safeText, type QuestionDraft, type ActorStyle, type ActorStyles} from './cards.js';
-import {cursorAt, emptyDraft, erase, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './editor.js';
+import {ActivityCard} from './timeline/activity-card.js';
+import {InteractionCard} from './interactions/interaction-card.js';
+import {ownerColor, ownerHeader, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
+import {palette} from './appearance/theme.js';
+import {safeText} from './terminal/text.js';
+import {type QuestionDraft} from './interactions/choice-style.js';
+import {cursorAt, emptyDraft, erase, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './input/editor.js';
 import {
   buildDemoSceneRows,
   hoveredCardAt,
@@ -38,23 +48,16 @@ import {
   type DemoSceneUi,
   type SceneRow,
   type SceneAction,
-} from './scene.js';
-import {
-  clipLine,
-  extractSelection,
-  osc52Clipboard,
-  parseSgrMouse,
-  timelineRows,
-  viewport,
-  normalizeSelection,
-  type Anchor,
-  type Row,
-  type SgrMouseEvent,
-} from './viewport.js';
+} from './timeline/scene.js';
+import {clipLine} from './terminal/text.js';
+import {extractSelection, timelineRows, viewport, normalizeSelection, type Anchor, type Row} from './timeline/viewport.js';
+import {osc52Clipboard} from './terminal/clipboard.js';
+import {parseSgrMouse, type SgrMouseEvent} from './terminal/mouse.js';
 
-import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './selection.js';
-import {decorateRow, presentedSegments} from './row-presentation.js';
+import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
+import {decorateRow, presentedSegments} from './timeline/row-presentation.js';
 import {getInteractionUI} from '../tools/ui-registry.js';
+import {themeRevision} from '../config/theme-palette.js';
 import type {ToolInteractionAction} from '../tools/ui-types.js';
 
 interface ResponseDraft extends QuestionDraft {answers: Record<string, Answer>; editor: Draft}
@@ -96,6 +99,7 @@ const noLoginSnapshot = () => null;
 
 export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const themeVersion = themeRevision();
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
     if (!definitions) return cast;
@@ -103,9 +107,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     for (const activity of snapshot.activities) if (activity.kind === 'actor' && !roles[activity.ownerId])
       roles[activity.ownerId] = {symbol: '◇', name: activity.ownerId, title: '历史角色', color: palette.accent};
     return roles;
-  }, [definitions, snapshot.activities]);
+  }, [definitions, snapshot.activities, themeVersion]);
   const loginState = useSyncExternalStore(authentication?.subscribe ?? noLoginSubscription, authentication?.getSnapshot ?? noLoginSnapshot);
-  const surface = useSyncExternalStore(surfaces?.subscribe ?? noLoginSubscription, surfaces?.getSnapshot ?? noLoginSnapshot);
+  const loginFolded = loginState?.phase === 'wizard' && Boolean(loginState.collapsed);
+  const rawSurface = useSyncExternalStore(surfaces?.subscribe ?? noLoginSubscription, surfaces?.getSnapshot ?? noLoginSnapshot);
   const layout = useSyncExternalStore(statusbar?.subscribe ?? noLoginSubscription, statusbar?.getSnapshot ?? noLoginSnapshot);
   const {columns, rows} = useWindowSize();
   const width = Math.max(1, columns - 1);
@@ -122,6 +127,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const [cardCursor, setCardCursor] = useState(4); // defaults to main-techne
 
   const [activeWindow, setActiveWindow] = useState('logox');
+  const [expandHovered, setExpandHovered] = useState(false);
+  const [composerMode, setComposerMode] = useState<{sessionId: string; ownerId: string; scrollOffset: number | null} | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => ({
     logox: demoScene ? insert(emptyDraft, INITIAL_DEMO_DRAFT) : emptyDraft,
     aletheia: emptyDraft,
@@ -163,7 +170,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const closingRef = useRef(false);
   const [completion, setCompletion] = useState({query: '', selected: 0, dismissed: false});
   const exitDeadline = useRef(0);
-  const statusSelectionRef = useRef<{startX: number; currentX: number; active: boolean} | null>(null);
+  const statusSelectionRef = useRef<{startX: number; currentX: number; active: boolean; text: string} | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flash = (text: string, duration = 1800) => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -172,6 +179,37 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   useEffect(() => () => {if (noticeTimer.current) clearTimeout(noticeTimer.current);}, []);
 
   const currentView = demoScene ? scene.view : activeWindow;
+  // A late read-only result belongs only to its originating window; hidden results cannot own input or the canvas.
+  const surface = rawSurface?.kind === 'result' && (
+    rawSurface.ownerId !== undefined && rawSurface.ownerId !== currentView ||
+    rawSurface.sessionId !== undefined && rawSurface.sessionId !== sessionId
+  ) ? null : rawSurface;
+  const composerExpanded = Boolean(composerMode?.sessionId === sessionId && composerMode.ownerId === currentView &&
+    !loginState && !surface && focus === 'input' && !editingCustom);
+  // Baseline every record already present at mount or session change. Replays and window switches never re-toast history.
+  const observedSystems = useRef({store, sessionId, view: currentView, ids: new Set(snapshot.messages.map(message => message.id))});
+  useEffect(() => {
+    const previous = observedSystems.current;
+    if (previous.store !== store || previous.sessionId !== sessionId) {
+      observedSystems.current = {store, sessionId, view: currentView, ids: new Set(snapshot.messages.map(message => message.id))};
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      setNotice('');
+      return;
+    }
+    if (previous.view !== currentView) {
+      previous.view = currentView;
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      setNotice('');
+    }
+    let latest = '';
+    for (const message of snapshot.messages) {
+      if (previous.ids.has(message.id)) continue;
+      previous.ids.add(message.id);
+      if (message.role === 'system' && message.systemPresentation === 'status' && !message.systemReplay &&
+          message.sessionId === sessionId && (currentView === 'logox' || message.ownerId === currentView)) latest = message.text;
+    }
+    if (latest) flash(safeText(latest).replace(/\n/g, ' '), 1800);
+  }, [store, sessionId, currentView, snapshot.messages]);
   const draft = drafts[currentView] ?? emptyDraft;
   const anchor = anchors.current[currentView] ?? null;
   const setDraft = (fn: (current: Draft) => Draft) => {
@@ -215,12 +253,23 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     (currentView === 'logox' || message.ownerId === currentView)
   ), [snapshot.messages, sessionId, currentView]);
 
+  const welcome = !demoScene && !activities.length && !pending.length && !visibleMessages.some(message =>
+    message.role !== 'system' || !message.systemPresentation || message.systemPresentation === 'timeline'
+  ) ? visibleMessages.findLast(message => message.role === 'system' && message.systemPresentation === 'welcome') : undefined;
+  const welcomeLines = useMemo(() => welcome
+    ? layoutInput({text: safeText((welcome.systemTitle ? welcome.systemTitle + '\n' : '') + welcome.text).replace(/\t/g, '  '), cursor: 0}, width).lines
+    : [], [welcome, width]);
+
+  const dockQuestion = !loginState && !surface && !demoScene && request?.kind === 'question' &&
+    (!stage || !Boolean(request.activityId && activities.some(a => a.activityId === request.activityId)));
+
   const messageRows: readonly Row[] = useMemo(() => {
     if (demoScene) return buildDemoSceneRows(scene, width, hoveredFoldId);
     if (stage) return buildStageRows(snapshot, sessionId, currentView, width, sceneUi.folds, hoveredFoldId, responses, roles,
-      {stopping, focusedStop: focus === 'stop' ? focusedStop : '', hoveredStop});
+      {stopping, focusedStop: focus === 'stop' ? focusedStop : '', hoveredStop,
+        focusedQuestionId: dockQuestion ? request.requestId : ''});
     return timelineRows(visibleMessages, width);
-  }, [demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop]);
+  }, [themeVersion, demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop, request, dockQuestion]);
 
   const foldIds = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
   const foldActivityId = (id: string | undefined) => {
@@ -236,7 +285,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const own = currentView !== 'logox';
   const statusLeft = notice
     ? notice
-    : getStatus ? statusbarText(getStatus(currentView), width, layout?.modules)
+    : getStatus ? statusbarText(getStatus(currentView), width, layout?.modules, layout ?? undefined)
     : demoScene
       ? own
         ? `${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].symbol} ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].name} · ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].role} · 独立对话`
@@ -268,11 +317,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const hairlineHeight = screenRows >= 4 ? 2 : 0;
   const freeAnswer = (!inlineRequest || stage) && focus === 'question' && request && response &&
     getInteractionUI(request)?.describe(interactionState(request, response)).editing;
-  const activeDraft = editingCustom ? customDraft : freeAnswer && response ? response.editor : draft;
-  const editableComposer = focus === 'input' || Boolean(freeAnswer) || editingCustom;
-  const promptGlyph = editingCustom ? '补充偏好 › ' : freeAnswer ? '答 › ' : '';
+  const questionPanel = dockQuestion && response ? request : undefined;
+  const activeDraft = editingCustom ? customDraft : draft;
+  const editableComposer = focus === 'input' || editingCustom;
+  const promptGlyph = editingCustom ? '补充偏好 › ' : '';
   const promptWidth = stringWidth(promptGlyph);
-  const inputColumns = Math.max(1, width - promptWidth - (promptWidth > 0 ? 1 : 0));
+  const showExpandButton = !closing && !composerExpanded && editableComposer && !editingCustom && !loginState && !surface && width >= 6;
+  const expandButtonWidth = showExpandButton ? stringWidth(COMPOSER_EXPAND_LABEL) + COMPOSER_EXPAND_PADDING * 2 : 0;
+  const composerTextWidth = width - (showExpandButton ? expandButtonWidth + 1 : 0);
+  const inputColumns = Math.max(1, composerTextWidth - promptWidth - (showExpandButton || promptWidth > 0 ? 1 : 0));
   const inputLayout = layoutInput(activeDraft, inputColumns);
   const inputMaxHeight = Math.max(1, Math.min(5, screenRows - footerHeight - hairlineHeight - 1));
   const inputHeight = editableComposer ? Math.min(inputMaxHeight, inputLayout.lines.length) : 1;
@@ -291,12 +344,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : '↑↓ 选择 · Enter 确认 · Esc 稍后';
 
   const query = completionQuery(draft, currentView);
-  const suggestions = stage && !loginState && !surface && focus === 'input' && !editingCustom && !(completion.query === query && completion.dismissed)
+  const suggestions = stage && !composerExpanded && !loginState && !surface && focus === 'input' && !editingCustom && !(completion.query === query && completion.dismissed)
     ? commandSuggestions(draft, getCommandContext?.() ?? emptyCommandContext) : [];
   const suggestionIndex = completion.query === query ? Math.min(completion.selected, Math.max(0, suggestions.length - 1)) : 0;
-  const menuHeight = Math.max(0, Math.min(5, suggestions.length, screenRows - inputHeight - hairlineHeight - footerHeight - 1));
-  const menuStart = Math.max(0, Math.min(suggestionIndex - Math.floor(menuHeight / 2), suggestions.length - menuHeight));
-  const menuItems = suggestions.slice(menuStart, menuStart + menuHeight);
+  const {count: menuCount, height: menuHeight, showCounts: menuShowCounts} = commandMenuLayout(suggestions.length,
+    Math.max(0, screenRows - inputHeight - hairlineHeight - footerHeight - (screenRows >= 8 ? 1 : 0)));
+  const moveSuggestion = (direction: number) => {
+    if (!suggestions.length) return;
+    setCompletion(previous => {
+      const selected = previous.query === query ? Math.min(previous.selected, suggestions.length - 1) : 0;
+      return {query, selected: (selected + direction + suggestions.length) % suggestions.length, dismissed: false};
+    });
+  };
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
   const activeOwners = useMemo(() => {
@@ -320,13 +379,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     plane?.time ?? Date.now(),
     width,
     activationOrderRef.current
-  ), [snapshot.activities, sessionId, roles, plane?.time, width]);
+  ), [themeVersion, snapshot.activities, sessionId, roles, plane?.time, width]);
 
   const pillsWidth = calculatePillsWidth(activePills);
   const footerStatus = getStatus && !notice ? getStatus(currentView) : undefined;
   const footerStatusWidth = Math.max(0, width - pillsWidth - (pillsWidth > 0 ? 1 : 0));
-  const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules) : [];
-  const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join(' · ') : clipLine(statusLeft, footerStatusWidth);
+  const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined) : [];
+  const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -335,7 +394,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const loginHeight = loginState
     ? Math.min(
         screenRows,
-        loginState.phase === 'provider'
+        loginState.phase === 'wizard'
+          ? loginFolded ? Math.min(4, screenRows) : Math.max(1, Math.min(24, screenRows - 2))
+          : loginState.phase === 'provider'
           ? Math.min(8, loginState.providers.length) + 6
           : loginState.phase === 'method'
             ? Math.min(6, loginState.methods?.length ?? 2) + 6
@@ -344,17 +405,29 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
               : 5,
       )
     : 0;
-  const pickerHeight = surface?.kind === 'picker' ? Math.min(screenRows, 11) : 0;
-  const fixedHeight = pickerHeight || (loginState ? loginHeight : inputHeight + hairlineHeight + footerHeight + menuHeight);
+  const groupedPicker = surface?.kind === 'picker' && new Set(surface.items.map(item => item.group).filter(Boolean)).size > 1;
+  const pickerListRows = surface?.kind === 'picker' ? Math.min(6, surface.items.length) : 0;
+  const pickerHasEffort = surface?.kind === 'picker' && surface.items.some(item => (item.effortLevels?.length ?? 0) > 0);
+  const pickerHeight = surface?.kind === 'picker'
+    ? Math.min(screenRows, (groupedPicker ? (pickerHasEffort ? 10 : 8) : (pickerHasEffort ? 7 : 5)) + pickerListRows)
+    : 0;
+  const fixedHeight = pickerHeight || (loginState && !loginFolded ? loginHeight : (loginFolded ? loginHeight : 0) + inputHeight + hairlineHeight + footerHeight + menuHeight);
   const activityHeight = !loginState && !surface && !demoScene && !stage && activity ? Math.max(0, Math.min(activityContentHeight || (expanded ? 6 : 4), screenRows - fixedHeight)) : 0;
-  const questionHeight = !loginState && !surface && !stage && (!demoScene || !inlineRequest) && request ? Math.max(0, Math.floor((screenRows - fixedHeight - activityHeight) * 0.6)) : 0;
+  const questionAvailable = Math.max(0, screenRows - fixedHeight - activityHeight);
+  const questionHeight = questionPanel
+    ? Math.min(questionAvailable, Math.min(22, Math.max(5, Math.floor(questionAvailable * 0.62))))
+    : !loginState && !surface && !stage && (!demoScene || !inlineRequest) && request
+      ? Math.max(0, Math.floor((screenRows - fixedHeight - activityHeight) * 0.6)) : 0;
   const timelineHeight = Math.max(0, screenRows - fixedHeight - activityHeight - questionHeight);
   const view = viewport(messageRows, timelineHeight, anchor);
   const selection = selectionInViewport(selectionRange(messageRows, contentSelection.current), view.start);
-  const inputY = timelineHeight + activityHeight + questionHeight + menuHeight + (hairlineHeight ? 1 : 0);
+  const inputY = timelineHeight + (loginFolded ? loginHeight : 0) + activityHeight + questionHeight + menuHeight + (hairlineHeight ? 1 : 0);
+  const atExpandButton = (point: {x: number; y: number}) => showExpandButton && point.y === inputY &&
+    point.x >= width - expandButtonWidth && point.x < width;
+  useEffect(() => {setExpandHovered(false);}, [showExpandButton, currentView, sessionId, inputY, width]);
   const detailMax = Math.max(0, detailContentHeight - questionHeight);
   const detailStart = Math.min(detailOffset, detailMax);
-  setCursorPosition(!loginState && !surface && editableComposer && !closing ? {
+  if (!(questionPanel && focus === 'question') && !(loginState?.phase === 'wizard' && !loginFolded)) setCursorPosition((!loginState || loginFolded) && !surface && !composerExpanded && editableComposer && !closing ? {
     x: Math.min(width - 1, promptWidth + inputLayout.cursorColumn),
     y: inputY + inputLayout.cursorRow - inputView.start,
   } : undefined);
@@ -386,8 +459,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     void onClose().then(() => exit(), error => exit(error));
   };
   const interrupt = () => {
-    if (closing) return;
-    const copied = !surface && !loginState ? copySelection() : '';
+    if (closing || surface?.kind === 'result') return;
+    const copied = !composerExpanded && !surface && !loginState ? copySelection() : '';
     if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('已复制选区'); return;}
     const now = Date.now();
     if (exitDeadline.current > now) {close(); return;}
@@ -407,6 +480,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   }, [snapshot.activities, stopping]);
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
+    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
     if (plane) plane.present({
       ...current,
       width,
@@ -420,7 +494,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
-    if (surface?.kind === 'page') plane.hide();
+    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'result' || welcome) plane.hide();
     else plane.present({
       ...view,
       width,
@@ -487,6 +561,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'queue'}) => {
     if (!text.trim() || submitting.current) return;
     submitting.current = true;
+    setComposerMode(null);
     setNotice('');
     const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
     const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
@@ -645,10 +720,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
   mouseHandlerRef.current = (event: SgrMouseEvent) => {
     for (const listener of mouseListeners.current) listener(event);
-    if (loginState || surface) return;
+    if (composerExpanded || loginState && !loginFolded || surface) return;
     if (event.action === 'wheel_up') { if (event.y < timelineHeight) scroll(-3); return; }
     if (event.action === 'wheel_down') { if (event.y < timelineHeight) scroll(3); return; }
     if (event.action === 'move') {
+      const nextExpandHover = atExpandButton(event);
+      setExpandHovered(previous => previous === nextExpandHover ? previous : nextExpandHover);
       if (lastHoverRef.current.x === event.x && lastHoverRef.current.y === event.y) return;
       lastHoverRef.current = {x: event.x, y: event.y};
       const rows = readingRows();
@@ -674,10 +751,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
     if (event.action === 'press') {
       const menuY = timelineHeight + activityHeight + questionHeight;
-      if (menuHeight && event.y >= menuY && event.y < menuY + menuHeight) {
-        setCompletion({query, selected: menuStart + event.y - menuY, dismissed: false});
-        return;
-      }
+      // The shared menu handles its own item coordinates through MouseContext.
+      // Keep presses on its title/footer away from the timeline/composer handlers.
+      if (menuHeight && event.y >= menuY && event.y < menuY + menuHeight) return;
       // Footer click
       if (event.y >= screenRows - footerHeight) {
         if (currentView !== 'logox') {
@@ -709,8 +785,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           return;
         }
         clearSelection();
-        statusSelectionRef.current = {startX: event.x, currentX: event.x, active: true};
+        statusSelectionRef.current = {startX: event.x, currentX: event.x, active: true, text: footerStatusText};
         return;
+      }
+      if (atExpandButton(event)) {
+        clearSelection(); setNotice(''); exitDeadline.current = 0;
+        setComposerMode({sessionId, ownerId: currentView, scrollOffset: null}); return;
       }
       // Composer input click focuses input
       if (event.y >= inputY && event.y < inputY + inputHeight) {
@@ -755,10 +835,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     }
     if (event.action === 'release') {
       if (statusSelectionRef.current?.active) {
-        const {startX, currentX} = statusSelectionRef.current;
+        const {startX, currentX, text} = statusSelectionRef.current;
         statusSelectionRef.current = null;
         if (Math.abs(startX - currentX) > 0) {
-          const rawText = footerStatusParts.length > 0 ? footerStatusParts.map(p => p.text).join(' · ') : footerStatusText;
+          const rawText = text;
           const copied = extractStatusBarSlice(rawText, startX, currentX);
           if (copied) {
             stdout?.write(osc52Clipboard(copied));
@@ -851,23 +931,32 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       onDraft?.();
     }
   };
-  usePaste(text => {exitDeadline.current = 0; setNotice(''); if (!loginState && !surface) edit(current => insert(current, text));});
+  const steerInput = () => {
+    if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
+    if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.'); return;}
+    if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
+    sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId});
+  };
+  usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
   useInput((input, key) => {
     if (closing || key.eventType === 'release') return;
+    if (composerExpanded) {
+      if (!(key.ctrl && input === 'c')) exitDeadline.current = 0;
+      return;
+    }
+    if (surface?.kind === 'result') {
+      if (key.ctrl && input === 'd') close();
+      return;
+    }
     if (key.ctrl && input === 'c') {interrupt(); return;}
     exitDeadline.current = 0; if (notice) setNotice('');
     if (key.ctrl && input === 'd') { close(); return; }
-    if (loginState) return;
+    if (loginState && (!loginFolded || key.ctrl && input === 'k' || key.escape)) return;
     if (surface) return;
-    if (key.ctrl && input === 't') {
-      if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
-      if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.'); return;}
-      if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
-      sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId}); return;
-    }
+    if (key.ctrl && input === 't') {steerInput(); return;}
     if (menuHeight && !key.ctrl && !key.meta && !key.shift) {
       if (key.upArrow || key.downArrow) {
-        setCompletion({query, selected: (suggestionIndex + (key.upArrow ? suggestions.length - 1 : 1)) % suggestions.length, dismissed: false});
+        moveSuggestion(key.upArrow ? -1 : 1);
         return;
       }
       if (key.escape) {setCompletion({query, selected: suggestionIndex, dismissed: true}); return;}
@@ -1025,6 +1114,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         : reduceResponse(request, current, {kind: 'move', delta: key.upArrow ? -1 : 1}));
       return;
     }
+    if (questionPanel && focus === 'question' && response && input === ' ' && !key.ctrl && !key.meta
+      && questionPanel.questions[response.questionIndex]?.multiSelect) {
+      changeResponse(current => reduceResponse(questionPanel, current, {kind: 'select', index: current.selected}));
+      return;
+    }
     if (key.ctrl && input === 'j') { edit(current => insert(current, '\n')); return; }
     if (key.return) {
       if (focus === 'stop') {stopActor(focusedStop); setFocus('input'); return;}
@@ -1070,14 +1164,30 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (!key.ctrl && !key.meta && input) edit(current => insert(current, input));
   });
 
+  if (composerExpanded) return <MouseContext.Provider value={subscribeMouse}>
+    <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
+      onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
+      onCollapse={() => {setComposerMode(null); exitDeadline.current = 0;}}
+      onSubmit={() => sendSceneInput()} onSteer={steerInput}
+      onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}
+      onInterrupt={interrupt} onClose={close} onCursor={setCursorPosition}
+      scrollOffset={composerMode?.scrollOffset ?? null}
+      onScroll={scrollOffset => setComposerMode(previous => previous && previous.scrollOffset !== scrollOffset ? {...previous, scrollOffset} : previous)}/>
+  </MouseContext.Provider>;
+  if (surface?.kind === 'result' && surfaces) return <MouseContext.Provider value={subscribeMouse}>
+    <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} width={width} height={screenRows}
+      onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
+  </MouseContext.Provider>;
   if (surface?.kind === 'page' && surfaces) return <MouseContext.Provider value={subscribeMouse}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
-    saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items) => {void surfaces.saveToggles(surface.id, tabId, items);}}
+    saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
     onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseContext.Provider>;
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
-      {!plane && view.rows.map((rawRow, index) => {
+      {welcome ? welcomeLines.slice(0, timelineHeight).map((line, index) => <Box key={index} height={1} flexShrink={0} overflow="hidden">
+        <Text color={welcome.systemTitle && index === 0 ? palette.accent : palette.muted} wrap="truncate">{clipLine(line.text, width) || ' '}</Text>
+      </Box>) : !plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;
         const rail = row.gutterCols > 0 ? <Text color={row.railColor}>▎ </Text> : null;
         return <Box key={index} height={1} flexShrink={0} overflow="hidden">
@@ -1087,34 +1197,65 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         </Box>;
       })}
     </Box>
+    {loginState?.phase === 'wizard' && authentication && <MouseContext.Provider value={subscribeMouse}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseContext.Provider>}
     {surface?.kind === 'picker' && surfaces ? <Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
       effort={surface.effort} effortLevels={surface.effortLevels}
       notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/>
-      : loginState && authentication ? <LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/> : <>
+      : loginState && authentication && !loginFolded ? loginState.phase === 'wizard' ? null : <MouseContext.Provider value={subscribeMouse}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseContext.Provider> : <>
     {!demoScene && !stage && activity && activityHeight > 0 && <Box height={activityHeight} flexShrink={0} overflow="hidden" flexDirection="column">
       <Box ref={activityRef} flexDirection="column" flexShrink={0}><ActivityCard activity={activity} expanded={expanded} hovered={hoveredFoldId === activity.activityId}/></Box>
     </Box>}
-    {!stage && (!demoScene || !inlineRequest) && request && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
+    {questionPanel && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
+      <MouseContext.Provider value={subscribeMouse}>
+        <ProductionQuestionPanel question={(() => {
+          const item = questionPanel.questions[response.questionIndex]!;
+          return {header: questionPanel.title
+            ? (item.header && item.header !== questionPanel.title ? `${questionPanel.title} · ${item.header}` : questionPanel.title)
+            : item.header,
+            question: item.question,
+            ...(item.detail !== undefined ? {detail: item.detail} : {}),
+            ...(item.link !== undefined ? {link: item.link} : {}),
+            ...(item.options ? {options: item.options.map(option => ({label: option.label, ...(option.description ? {description: option.description} : {})}))} : {}),
+            ...(item.multiSelect !== undefined ? {multiSelect: item.multiSelect} : {}),
+            ...(item.secret !== undefined ? {secret: item.secret} : {}),
+            ...(item.hideCustomInput !== undefined ? {hideCustomInput: item.hideCustomInput} : {})};
+        })()}
+          position={response.questionIndex + 1} total={questionPanel.questions.length}
+          width={width} height={questionHeight} y={timelineHeight + activityHeight - detailStart}
+          draft={response} cursor={response.editor.cursor} focused={focus === 'question'}
+          onSelect={index => {setFocus('question'); changeResponse(current => reduceResponse(questionPanel, current, {kind: 'select', index}));}}
+          onMove={delta => {setFocus('question'); changeResponse(current => reduceResponse(questionPanel, current, {kind: 'move', delta}));}}
+          onFocusInput={() => {setFocus('question'); changeResponse(current =>
+            reduceResponse(questionPanel, current, {kind: 'select', index: questionPanel.questions[current.questionIndex]?.options?.length ?? 0}));}}/>
+      </MouseContext.Provider>
+    </Box>}
+    {!questionPanel && !stage && (!demoScene || !inlineRequest) && request && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
       <Box ref={detailRef} flexDirection="column" flexShrink={0}>
         <InteractionCard request={request} draft={response} focused={focus === 'question'}/>
       </Box>
     </Box>}
-    {menuHeight > 0 && <CommandMenu items={menuItems} selected={suggestionIndex - menuStart} width={width}/>}
+    {menuHeight > 0 && <MouseContext.Provider value={subscribeMouse}>
+      <CommandMenu items={suggestions} selected={suggestionIndex} width={width} query={draft.text} maxVisible={menuCount} showCounts={menuShowCounts}
+        y={timelineHeight + activityHeight + questionHeight}
+        onPick={selected => setCompletion({query, selected, dismissed: false})}
+        onWheelStep={moveSuggestion}/>
+    </MouseContext.Provider>}
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
     <Box height={inputHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {editableComposer ? inputView.lines.map((line, index) => <Box key={index} height={1} flexShrink={0}>
-        <Text wrap="truncate">
+        <Box width={composerTextWidth} overflow="hidden"><Text wrap="truncate">
           {promptWidth > 0 && <Text color={palette.user}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
           <Text color={activeDraft.text ? palette.fg : palette.muted}>{activeDraft.text ? line.text : (placeholder ? clipLine(placeholder, inputColumns) : '')}</Text>
-        </Text>
+        </Text></Box>
+        {showExpandButton && index === 0 && <Text color={expandHovered ? palette.strong : palette.muted}>{' '.repeat(COMPOSER_EXPAND_PADDING + 1) + COMPOSER_EXPAND_LABEL + ' '.repeat(COMPOSER_EXPAND_PADDING)}</Text>}
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
     {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="row" justifyContent="space-between">
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
-        ? footerStatusParts.map((part, index) => <Text key={index}>{index > 0 ? ' · ' : ''}<Text color={part.color ?? statusLeftColor}>{part.text}</Text></Text>)
+        ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
         : footerStatusText}</Text>
       {activePills.length > 0 ? <ActorPills pills={activePills}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>

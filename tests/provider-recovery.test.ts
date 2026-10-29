@@ -9,7 +9,7 @@ import {loadConfig} from '../src/config/config.js';
 import {createProvider, providerFailure} from '../src/providers/http.js';
 import {normalizeMessages, type ModelMessage} from '../src/runtime/messages.js';
 import {waitForSnapshot} from './runtime-fixture.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 interface WireMessage {role: string; content?: string | null; reasoning_content?: string; tool_calls?: unknown[]}
 const frame = (delta: Record<string, string>, finish_reason: string | null = null) =>

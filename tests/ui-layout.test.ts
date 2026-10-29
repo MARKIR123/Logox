@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
-import {cursorAt, emptyDraft, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical} from '../src/tui/editor.js';
-import {buildDemoSceneRows, demoRoles, hoveredCardAt, initialDemoSceneState, type DemoSceneState} from '../src/tui/scene.js';
-import {actorCardPalette, palette} from '../src/tui/cards.js';
-import {extractSelection, parseSgrMouse} from '../src/tui/viewport.js';
+import {cursorAt, emptyDraft, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical} from '../src/tui/input/editor.js';
+import {buildDemoSceneRows, demoRoles, hoveredCardAt, initialDemoSceneState, type DemoSceneState} from '../src/tui/timeline/scene.js';
+import {ownerSurface} from '../src/tui/appearance/actor-style.js';
+import {palette} from '../src/tui/appearance/theme.js';
+import {cast} from '../src/actors/ensemble.js';
+import {extractSelection} from '../src/tui/timeline/viewport.js';
+import {parseSgrMouse} from '../src/tui/terminal/mouse.js';
 
 test('视觉折行保留草稿原文与完整字形，行尾光标不制造额外空行', () => {
   const text = '中文🙂ab\n👨‍👩‍👧‍👦é尾\n';
@@ -88,20 +91,16 @@ test('窄屏保留完整任务与状态；嵌套正文复制只过滤左侧轨�
 test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透出父色，展开独立灰底；选中项只改变标识和文字', () => {
   const denyRows = buildDemoSceneRows(initialDemoSceneState, 99);
   const allowRows = buildDemoSceneRows({...initialDemoSceneState, permissionChoice: 'allow'}, 99);
-  assert.equal(actorCardPalette.aletheia.closed, '#2c473d');
-  assert.equal(actorCardPalette.aletheia.highlight, '#7ee7c4');
-  assert.equal(actorCardPalette.techne.closed, '#483c27');
-  assert.equal(actorCardPalette.techne.highlight, '#e5b567');
-  assert.equal(actorCardPalette.kalon.closed, '#544359');
-  assert.equal(actorCardPalette.kalon.highlight, '#e8a8dc');
-  for (const hex of Object.values(actorCardPalette).flatMap(p => [p.closed, p.open])) {
+  const closed = ownerSurface('aletheia', false), open = ownerSurface('aletheia', true);
+  assert.ok(closed && open && closed !== open, '角色底色由角色配置推导');
+  for (const hex of ['aletheia', 'techne', 'kalon'].map(id => ownerSurface(id, false)!)) {
     const channels = hex.slice(1).match(/../g)!.map(c => Number.parseInt(c, 16));
     assert.ok(channels.every(c => c >= 35 && c <= 130), hex);
   }
   for (const id of ['main-techne-perm-allow', 'main-techne-perm-deny']) {
     const before = denyRows.find(r => r.messageId === id)!;
     const after = allowRows.find(r => r.messageId === id)!;
-    assert.equal(before.bg, actorCardPalette.techne.open);
+    assert.equal(before.bg, ownerSurface('techne', true));
     assert.equal(after.bg, before.bg);
     assert.deepEqual(before.prefixSegments, after.prefixSegments);
     assert.equal(before.gutterCols, 4);
@@ -111,7 +110,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
     assert.ok(unselected.text.startsWith('  '));
     assert.equal(selected.segments!.find(s => s.text.includes('允许'))!.color, demoRoles.techne.color);
     const description = (id.endsWith('deny') ? denyRows : allowRows).find(r => r.messageId === id + '-description')!;
-    assert.equal(description.gutterCols, selected.gutterCols + 2);
+    assert.equal(description.gutterCols, selected.gutterCols + 6);
     assert.equal(description.color, demoRoles.techne.color);
   }
   const question = buildDemoSceneRows({...initialDemoSceneState, permission: 'deny'}, 99);
@@ -119,7 +118,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
   assert.ok(kalonSelection.text.startsWith('❯ '));
   assert.equal(kalonSelection.segments!.find(s => s.text.includes('克制'))!.color, demoRoles.kalon.color);
   const nested = buildDemoSceneRows({...initialDemoSceneState, folds: {'main-aletheia': true}}, 99);
-  assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, actorCardPalette.aletheia.open, 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
+  assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, ownerSurface('aletheia', true), 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
 });
 
 test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Actor 底色与内层灰底独立', () => {
@@ -130,10 +129,10 @@ test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Ac
     const card = hovered.filter(r => r.hover?.foldId === id);
     assert.equal(card.length, 4, '40 列下含上下对称 0.5 行封边（▄ / ▀）与两行完整标题');
     const roleKey = id === 'main-aletheia' ? 'aletheia' : 'kalon';
-    const expected = actorCardPalette[roleKey].open;
+    const expected = ownerSurface(roleKey, true);
     assert.equal(card.find(r => r.messageId === id)!.bg, expected);
     const taskSeg = card.find(r => r.messageId === id + '-task')!.segments!.find(s => s.text.includes('首页'))!;
-    assert.equal(taskSeg.color, actorCardPalette[roleKey].highlight);
+    assert.equal(taskSeg.color, cast[roleKey].color);
     assert.equal(Boolean(taskSeg.bold), false, '标题高亮仅改变为高亮色，不加粗');
     const wideCard = buildDemoSceneRows(initialDemoSceneState, 99, id).filter(r => r.hover?.foldId === id);
     assert.equal(wideCard.length, 3, '宽屏含上下对称 0.5 行封边（▄ / ▀）与单行标题');
@@ -167,11 +166,11 @@ test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Ac
     }
   }
   const memory = buildDemoSceneRows({...initialDemoSceneState, style: '克制', folds: {'main-memory': true}}, 99);
-  assert.equal(memory.find(r => r.messageId === 'main-memory')!.bg, '#dce2e8');
+  assert.equal(memory.find(r => r.messageId === 'main-memory')!.bg, '#E4EAF5');
   assert.equal(memory.find(r => r.messageId === 'main-memory-body-0')!.color, palette.dreamText);
   assert.equal(memory.find(r => r.messageId === 'main-memory')!.segments!.find(s => s.text.includes('Anamnesis'))!.color, palette.dreamText);
-  assert.equal(palette.dreamCollapsed, '#c4cbd2');
-  assert.equal(palette.dreamExpanded, '#dce2e8');
+  assert.equal(palette.dreamCollapsed, '#C9D3E4');
+  assert.equal(palette.dreamExpanded, '#E4EAF5');
   assert.equal(hoveredCardAt(base.find(r => r.messageId === 'main-techne'), 4), null);
   assert.deepEqual(parseSgrMouse('\x1b[<35;8;12M\x1b[<32;9;13M').map(e => e.action), ['move', 'drag']);
 });

@@ -4,7 +4,7 @@ import {PassThrough} from 'node:stream';
 import {act} from 'react';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {App, type AppProps} from '../src/tui/app.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});

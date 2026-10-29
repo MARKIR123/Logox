@@ -9,7 +9,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ApplicationStage} from '../src/tui/application.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 

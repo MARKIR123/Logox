@@ -9,15 +9,16 @@ import {Profiler} from 'react';
 import stringWidth from 'string-width';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {actionAt} from '../src/tui/scene.js';
-import {extractSelection} from '../src/tui/viewport.js';
-import {contentPoint, selectionRange, type ContentSelection} from '../src/tui/selection.js';
-import {decorateRow, stepIcon} from '../src/tui/row-presentation.js';
-import {encodeRow} from '../src/tui/terminal-plane.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {actionAt} from '../src/tui/timeline/scene.js';
+import {extractSelection} from '../src/tui/timeline/viewport.js';
+import {contentPoint, selectionRange, type ContentSelection} from '../src/tui/timeline/selection.js';
+import {decorateRow} from '../src/tui/timeline/row-presentation.js';
+import {stepIcon} from '../src/tui/appearance/animation.js';
+import {encodeRow} from '../src/tui/terminal/terminal-plane.js';
 import {StatusbarPreferences} from '../src/config/statusbar-preferences.js';
 import {App} from '../src/tui/app.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
@@ -49,7 +50,7 @@ test('折叠只命中实际图标标题，展开灰底优先，露出背景命�
   assert.equal(actionAt(row, row.gutterCols + stringWidth('▮ read README.md'))?.foldId, 'actor', '耗时与行尾空白不扩大标题命中');
   const open = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true, [id]: true}, null);
   const body = open.find(row => row.text === '完整结果')!;
-  assert.equal(body.bg, '#22252a'); assert.equal(actionAt(body, 76)?.foldId, id);
+  assert.equal(body.bg, '#242B3A'); assert.equal(actionAt(body, 76)?.foldId, id);
   assert.equal(actionAt(body, 2)?.foldId, 'actor');
   const header = open.findIndex(row => row.messageId === 'actor');
   assert.match(extractSelection(open, {anchor: {x: 2, y: header}, focus: {x: 78, y: header}}), /Techne.*整理布局.*停止/);

@@ -187,3 +187,5 @@ export async function executeAutoma(
     isError: false,
   };
 }
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'Automa', category: 'orchestration', roles: 'director', terminalVisibility: 'card', description: 'Dispatch a stateless mechanical subtask to Automa'};

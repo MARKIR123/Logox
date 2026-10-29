@@ -27,7 +27,7 @@ async function fixture(provider?: Provider) {
     provider: provider ?? {async respond(request) {
       requests.push(request);
       const prompt = [...request.messages].reverse().find(message => message.role === 'user')?.text;
-      if (request.messages.at(-1)?.role !== 'tool' && (prompt === 'mcp任务' || prompt === '读取任务')) return {stop: 'tools', usage: {input: 13, output: 4},
+      if (request.messages.findLast(message => message.role !== 'context')?.role !== 'tool' && (prompt === 'mcp任务' || prompt === '读取任务')) return {stop: 'tools', usage: {input: 13, output: 4},
         message: {role: 'assistant', text: '', toolCalls: [{id: 'call-' + requests.length, name: prompt === 'mcp任务' ? 'mcp' : 'read',
           arguments: JSON.stringify(prompt === 'mcp任务' ? {server: 'fixture', action: 'call', tool: 'echo', arguments: {value: 2}} : {path: 'sample.txt'})}]}};
       return {message: {role: 'assistant', text: '完成'}, stop: 'complete', usage: {input: 20, output: 5}};
@@ -106,17 +106,19 @@ test('MCP长驻进程跨new/resume/rewind复用，Tools观察不重复；reload�
     assert.equal(observed.filter(item => item.tool === 'read').length, 3);
     assert.equal(observed.filter(item => item.tool === 'mcp').length, 2);
     assert.equal(app.extensions.hooks.history().filter(item => item.event === 'session_start').length, 4);
-    await writeFile(join(f.cwd, 'AGENTS.md'), '规则第二版'); await app.submit('/reload'); await submit(app, '新规则任务');
+    await writeFile(join(f.cwd, 'AGENTS.md'), '规则第二版'); await app.submit('/reload');
+    assert.equal(app.surfaces.getSnapshot()?.kind, 'result'); app.surfaces.cancel();
+    await submit(app, '新规则任务');
     assert.match(f.requests.at(-1)!.system, /规则第二版/); assert.ok(!f.requests.at(-1)!.system.includes('规则第一版'));
     const prepare = app.contexts.prepare.bind(app.contexts); let compactSystem = '';
     app.contexts.prepare = async (identity, base, signal, force) => {compactSystem = base.system; return prepare(identity, base, signal, force);};
     await app.submit('/compact');
     const agentSystem = f.requests.at(-1)!.system;
-    const environmentStart = agentSystem.indexOf('Current execution environment (authoritative for this request):');
-    const contractStart = agentSystem.indexOf('Role memory focus (guidance under the round memory contract):');
+    const environmentStart = agentSystem.indexOf('# Current Environment');
+    const contractStart = agentSystem.search(/^## (?:Coordination memory focus|Role Memory Focus)$/m);
     assert.ok(environmentStart >= 0 && contractStart >= 0 && environmentStart > contractStart);
-    assert.equal(compactSystem, agentSystem.slice(0, environmentStart - 1),
-      '资源规范和摘要契约一致；请求时的执行环境由普通任务单独补充');
+    assert.equal(compactSystem.slice(0, compactSystem.indexOf('# Current Environment')), agentSystem.slice(0, environmentStart),
+      'Manual cleanup uses the same static rules and memory focus.');
     assert.match(compactSystem, /规则第二版/); assert.ok(!compactSystem.includes('规则第一版'));
     // 资源重载尚未完成时，禁止构造带旧前缀的候选会话。
     const reload = resources.reload.bind(resources); let finish: (() => void) | undefined, enter!: () => void;

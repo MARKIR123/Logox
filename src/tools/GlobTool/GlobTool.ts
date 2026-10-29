@@ -48,3 +48,5 @@ export async function executeGlob(
     isError: false,
   };
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Glob', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Fast pattern matching of file paths'};

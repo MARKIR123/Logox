@@ -13,6 +13,8 @@ import type {Journal} from '../store/journal.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
+import {defaultToolRegistry, type ToolRegistry} from '../tools/registry.js';
+import {builtinToolRegistrations} from '../tools/catalog.js';
 import type {ToolResult} from '../tools/tools.js';
 import {contextPolicySchema, type Config} from '../config/config.js';
 import type {RoundStatus} from '../context/contracts.js';
@@ -36,26 +38,17 @@ import {
 } from '../tools/index.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
-import {directorFacts} from './facts.js';
+import {activeEnsembleRoster, directorFacts} from './facts.js';
 import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READY, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice} from '../prompts/runtime/director.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {inputKind} from '../runtime/provenance.js';
 
-const tool = (name: string, description: string, schema: z.ZodType): ToolDefinition => ({name, description, parameters: z.toJSONSchema(schema)});
-const listActorsTool = tool('ListActors', LIST_ACTORS_DESCRIPTION, listActorsSchema);
-const cancelActorTool = tool('CancelActor', CANCEL_ACTOR_DESCRIPTION, cancelActorSchema);
-const directorTools = [
-  tool('Actor', ACTOR_DESCRIPTION, actorSchema),
-  cancelActorTool,
-  listActorsTool,
-  tool('CraftActor', CRAFT_ACTOR_DESCRIPTION, craftActorSchema),
-  tool('ReadActor', READ_ACTOR_DESCRIPTION, readActorSchema),
-];
-const borrowTool = tool('BorrowSkill', BORROW_SKILL_DESCRIPTION, borrowSkillSchema);
+const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'BorrowSkill', 'SendMessage']);
 
 export interface ActorServicesOptions {
+  toolRegistry?: ToolRegistry;
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
   deliveries?: DeliveryQueue;
   enqueue(owner: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
@@ -63,6 +56,7 @@ export interface ActorServicesOptions {
   canReceiveMessage?(ownerId: string): boolean;
   injectMessage?(targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue'): Promise<boolean> | boolean;
   interrupt?(targetOwnerId: string, message: string, source: string, summary?: string): boolean;
+  recordPeerMessage?(targetOwnerId: string, activityId: string, text: string, source: string): void;
   pauseBatch?(batchId: string): void;
   resumeBatch?(batchId: string): void;
   cancelActivity?(activityId: string, reason?: string): boolean;
@@ -117,6 +111,25 @@ export class ActorServices {
       interrupt: (target, message, source, summary) => {
         return options.interrupt ? options.interrupt(target, message, source, summary) : false;
       },
+      deliverToCompletedPeer: async (target, message, source, summary, context) => {
+        const snapshot = options.getSnapshot?.();
+        if (!snapshot) return false;
+        const root = context.rootActivityId ?? context.activityId;
+        const completedPeer = [...snapshot.activities].reverse().find(activity =>
+          activity.ownerId === target &&
+          activity.status === 'completed' &&
+          (activity.rootActivityId === root || activity.parentActivityId === root)
+        );
+        if (!completedPeer) return false;
+        const fullText = `[Message from ${source}${summary ? ' · ' + summary : ''}]\n${message}`;
+        await options.journal.append({
+          version: 1, sessionId: options.sessionId, activityId: completedPeer.activityId,
+          ownerId: target, source, inputKind: 'collaboration', role: 'user',
+          text: fullText, message: {role: 'user', text: fullText}, time: Date.now(),
+        });
+        options.recordPeerMessage?.(target, completedPeer.activityId, fullText, source);
+        return true;
+      },
       projectDir: options.projectDir,
     });
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
@@ -134,7 +147,9 @@ export class ActorServices {
   }
   facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
     const snapshot = this.options.getSnapshot?.();
-    const facts = snapshot && directorFacts(snapshot, context, this.deliveries.snapshot());
+    if (!snapshot) return '';
+    if (context.ownerId !== 'logox') return activeEnsembleRoster(snapshot, context);
+    const facts = directorFacts(snapshot, context, this.deliveries.snapshot());
     return facts ? DIRECTOR_FACTS_HEADER + '\n' + JSON.stringify(facts) : '';
   }
   policy(ownerId: string) {
@@ -146,13 +161,10 @@ export class ActorServices {
   skills(context: ActorContext) {return {actorId: context.ownerId, skills: this.definition(context).skills,
     borrowed: [...this.borrowed.get(context.activityId) ?? []]};}
   tools(ownerId: string): readonly ToolDefinition[] {
-    return [
-      ...(ownerId === 'logox' ? directorTools : [borrowTool, listActorsTool]),
-      ...this.collaboration.tools(ownerId),
-    ];
+    return (this.options.toolRegistry ?? defaultToolRegistry).getToolsForActor(ownerId).filter(tool => serviceTools.has(tool.name));
   }
   definitionsForValidation(): readonly ToolDefinition[] {
-    return [...directorTools, borrowTool, listActorsTool, ...this.collaboration.tools('logox'), ...this.collaboration.tools('actor')];
+    return builtinToolRegistrations().filter(item => serviceTools.has(item.definition.name)).map(item => item.definition);
   }
   async execute(call: ToolCall, context: ActorContext): Promise<ToolResult> {
     try {
@@ -170,8 +182,8 @@ export class ActorServices {
         if (context.recovery?.exhausted) throw new Error('同一故障已补救两次，需要用户决定下一步，不能继续自动派工');
         let parsedInput: z.infer<typeof actorSchema>;
         if (input && typeof input === 'object' && 'actor' in input && typeof (input as {actor: unknown}).actor === 'string') {
-          const single = input as {actor: string; prompt: string; description?: string};
-          parsedInput = {tasks: [{ownerId: single.actor, prompt: single.prompt, goal: single.description}]};
+          const single = input as {actor: string; prompt: string; title?: string; description?: string; goal?: string};
+          parsedInput = {tasks: [{ownerId: single.actor, prompt: single.prompt, title: single.title ?? single.description ?? single.goal}]};
         } else {
           parsedInput = actorSchema.parse(input);
         }
@@ -179,15 +191,8 @@ export class ActorServices {
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
         const resumed = new Set<string>(), roots = new Set<string>();
         for (const task of tasks) {
-          if (task.goal || task.minDeliverable || task.stopCondition || task.constraints?.length) {
-            const parts: string[] = [];
-            if (task.goal) parts.push('【User Goal / 用户目标】\n' + task.goal);
-            if (task.constraints?.length) parts.push('【Confirmed Constraints / 硬约束】\n' + task.constraints.join('; '));
-            if (task.minDeliverable) parts.push('【Minimum Deliverable / 本轮最小成果】\n' + task.minDeliverable + '\n(Deliver a runnable/usable version in the text channel; do not perform work entirely in thinking blocks)');
-            if (task.stopCondition) parts.push('【Completion Criteria / 收尾条件】\n' + task.stopCondition + '\n(Return deliverables and findings once sufficient evidence is gathered; avoid unbounded exploration)');
-            parts.push('【Task Instructions / 任务要求】\n' + task.prompt);
-            task.prompt = parts.join('\n\n');
-          }
+          const explicitTitle = (task.title ?? task.description ?? task.goal)?.replace(/\s+/g, ' ').trim().slice(0, 120);
+          if (explicitTitle) task.title = explicitTitle;
           if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('角色无效：' + task.ownerId);
           for (const name of task.skills ?? []) if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('技能不存在：' + name);
           if (task.resumeTask) {
@@ -223,11 +228,12 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('已达到三次无新进展的角色调度，请根据已有结果收束任务');
         }
-        const grouped = new Map<string, {prompts: string[]; skills: Set<string>; resumeTaskId?: string}>();
+        const grouped = new Map<string, {prompts: string[]; skills: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('同一角色一次只能续做一个原活动，不能合并不同断点');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
+          if (!group.taskTitle && task.title) group.taskTitle = task.title;
           group.prompts.push(task.prompt); for (const skill of task.skills ?? []) group.skills.add(skill); grouped.set(task.ownerId, group);
         }
         if (resumeBatch) {
@@ -246,7 +252,7 @@ export class ActorServices {
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const handles = [...grouped].map(([owner, task]) => {
-          const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {})};
+          const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth); this.borrowed.set(handle.activityId, task.skills);

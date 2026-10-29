@@ -12,7 +12,7 @@ import {answerEnvelope} from '../src/runtime/interactions.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {inputKind, inputMessage} from '../src/runtime/provenance.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {Tools} from '../src/tools/tools.js';
 import type {ActorContext} from '../src/actors/ensemble.js';

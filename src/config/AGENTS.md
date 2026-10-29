@@ -1,7 +1,7 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: Hierarchical configuration cascade, TOML schema validation, `modelSettings()` resolving thinking protocols and level sets, atomic `StateFile<T>` persistence (`~/.logox/model-preferences.json`, legacy `.logox-ts` fallback), and model variant grouping.
+- **Owns**: Hierarchical configuration cascade, TOML schema validation, `modelSettings()` resolving thinking protocols and level sets, atomic `StateFile<T>` persistence (`~/.logox/model-preferences.json`, legacy `.logox-ts` fallback), model variant grouping, and the theme palette registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
 - **Does not own**: Low-level HTTP transport or network model fetching (owned by `src/providers/`).
 
 ## 2. Start Here (Task Router)
@@ -11,7 +11,8 @@
 | Thinking protocol capability or effort levels | `config.ts:modelSettings()` | `thinkingProtocol` and `thinkingLevels` logic |
 | Atomic state file corruption or lock contention | `model-preferences.ts:StateFile` | `withFileLock()` in `src/store/file-lock.ts` |
 | Model grouping or suffix collapsing in picker | `model-grouping.ts` | `groupModelsForProvider()` |
-| User statusbar preferences | `statusbar-preferences.ts` | `~/.logox-ts/statusbar.json` |
+| Statusbar modules, styles or migration | `statusbar-preferences.ts` | Canonical `~/.logox/statusbar.json`, then legacy `.logox-ts`; palette data is `statusbar-palettes.json` |
+| Theme palette files, `base` chains, or user theme overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/*.json` and `~/.logox/themes/*.json` |
 
 ## 3. Hard Boundaries
 - **Hierarchical Configuration Cascade**:
@@ -22,6 +23,10 @@
 - **StateFile Atomic Safety**:
   - State files use `.tmp` random-UUID writes followed by atomic replace, wrapped inside `withFileLock()`.
   - Corrupted state files MUST throw to trigger diagnostic notices; never silently swallow corruption with empty defaults.
+- **Theme Palettes Are Data**:
+  - System colors live in `src/config/themes/*.json` (shipped) and `~/.logox/themes/*.json` (user, same name overrides shipped). `logox-dark.json` is the complete baseline; deltas use `base` and `colors` with hex values or `$token` references. `theme-palette.ts` resolves references after inheritance, applies atomically, and increments the render-cache revision. Adding a semantic token requires a baseline data entry and the hardcoded-color/override regressions.
+  - Invalid user theme files are skipped and reported through `themeIssues()`; they never abort startup. An invalid shipped file is a developer error and throws.
+  - Actor colors and card surfaces are NOT theme data: they belong to `~/.logox/actors/<id>/config.yaml` (`color`, `card_closed`, `card_open`).
 - **Thinking Protocol Capabilities**:
   - `deepseek`: defaults to `['auto', 'off', 'low', 'high', 'max']` (no `medium`).
   - `anthropic-adaptive`: defaults to `['auto', 'off', 'low', 'medium', 'high', 'max']` on Opus, 5 tiers on Sonnet.

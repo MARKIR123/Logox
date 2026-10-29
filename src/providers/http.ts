@@ -1,7 +1,23 @@
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import type {ModelSettings} from '../config/config.js';
-import type {Delta, ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall} from '../runtime/messages.js';
+import type {Delta, ModelMessage, ModelRequest, ModelTurn, Provider, ProviderCapabilities, ToolCall, ToolDefinition} from '../runtime/messages.js';
+import {runtimeContextText} from '../runtime/context-updates.js';
+import {resolveProviderCapabilities} from './capabilities.js';
+import {encodeAnthropicTools, encodeAnthropicContext} from './disclosure/anthropic.js';
+import {decodeOpenAIToolSearchCall, encodeOpenAIToolSearch, encodeOpenAIFunction, encodeOpenAIToolSearchResult, encodeRuntimeContext} from './disclosure/openai.js';
+import {FALLBACK_CAPABILITIES} from './capabilities.js';
+
+function decodeSearchCall(item: Record<string, unknown>): ToolCall | undefined {
+  try {return decodeOpenAIToolSearchCall(item);}
+  catch (error) {throw new ProviderError(error instanceof Error ? error.message : 'Invalid client tool-search call.');}
+}
+
+type WireMessage = Exclude<ModelMessage, {role: 'context'}>;
+function portableMessages(messages: readonly ModelMessage[]): WireMessage[] {
+  return messages.flatMap<WireMessage>(message => message.role !== 'context' ? [message] :
+    message.kind === 'environment-baseline' || message.kind === 'capability-change' && message.data?.baseline === true ? [] : [{role: 'user', text: runtimeContextText(message)}]);
+}
 
 export type ProviderErrorCategory = 'model_missing' | 'authentication' | 'quota' | 'temporary' | 'capacity' | 'protocol';
 type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field';
@@ -120,6 +136,7 @@ const usageSchema = z.object({
   prompt_tokens: z.number().optional(), completion_tokens: z.number().optional(),
   prompt_cache_hit_tokens: z.number().optional(), cached_tokens: z.number().optional(),
   cache_read_input_tokens: z.number().optional(), cache_creation_input_tokens: z.number().optional(),
+  input_tokens_details: z.object({cached_tokens: z.number().optional()}).optional(),
   prompt_tokens_details: z.object({cached_tokens: z.number().optional()}).optional(),
 });
 const deltaSchema = z.object({
@@ -133,14 +150,12 @@ const eventSchema = z.object({
   output_index: z.number().int().nonnegative().optional(),
   arguments: z.string().optional(),
   item: z.object({
-    type: z.string().optional(), id: z.string().optional(), call_id: z.string().optional(),
-    name: z.string().optional(), arguments: z.string().optional(),
+    type: z.string().optional(), id: z.string().optional(), call_id: z.unknown().optional(),
+    name: z.string().optional(), arguments: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
   }).passthrough().optional(),
   response: z.object({
     id: z.string().optional(), status: z.string().optional(),
-    usage: z.object({
-      input_tokens: z.number().optional(), output_tokens: z.number().optional(), total_tokens: z.number().optional(),
-    }).nullable().optional(),
+    usage: usageSchema.nullable().optional(),
   }).passthrough().optional(),
   content_block: z.object({
     type: z.string(), id: z.string().optional(), name: z.string().optional(),
@@ -171,7 +186,9 @@ function hasProgress(event: StreamEvent): boolean {
     (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning ||
       !!choice.delta.tool_calls?.some(call => !!call.id || !!call.function?.name || !!call.function?.arguments))) ?? false;
 }
-export function responsesInput(messages: readonly ModelMessage[], supportsVision = false, maxImages = 2): ObjectValue[] {
+export function responsesInput(input: readonly ModelMessage[], supportsVision = false, maxImages = 2,
+  discovery?: {tools: readonly ToolDefinition[]; capabilities: ProviderCapabilities}): ObjectValue[] {
+  const messages = input;
   const imageIndices = messages
     .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
     .filter(i => i >= 0);
@@ -182,7 +199,9 @@ export function responsesInput(messages: readonly ModelMessage[], supportsVision
     const message = messages[i]!;
     const keepImage = activeImageIndices.has(i);
 
-    if (message.role === 'user') {
+    if (message.role === 'context') {
+      result.push(...encodeRuntimeContext(message, discovery?.capabilities ?? FALLBACK_CAPABILITIES));
+    } else if (message.role === 'user') {
       if (supportsVision && message.images?.length && keepImage) {
         result.push({
           role: 'user',
@@ -202,7 +221,11 @@ export function responsesInput(messages: readonly ModelMessage[], supportsVision
         result.push({role: 'assistant', content: message.text});
       }
       for (const call of message.toolCalls ?? []) {
-        result.push({
+        if (discovery && call.name === 'LoadTools') {
+          let arguments_: unknown;
+          try {arguments_ = JSON.parse(call.arguments);} catch {arguments_ = call.arguments;}
+          result.push({type: 'tool_search_call', execution: 'client', call_id: call.id, status: 'completed', arguments: arguments_});
+        } else result.push({
           type: 'function_call',
           call_id: call.id,
           name: call.name,
@@ -210,7 +233,9 @@ export function responsesInput(messages: readonly ModelMessage[], supportsVision
         });
       }
     } else if (message.role === 'tool') {
-      result.push({
+      if (discovery && message.name === 'LoadTools') {
+        result.push(encodeOpenAIToolSearchResult(message.callId, message.isError ? [] : message.discoveredTools ?? [], discovery.tools));
+      } else result.push({
         type: 'function_call_output',
         call_id: message.callId,
         output: message.text,
@@ -219,7 +244,8 @@ export function responsesInput(messages: readonly ModelMessage[], supportsVision
   }
   return result;
 }
-export function openaiMessages(messages: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
+export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
+  const messages = portableMessages(input);
   const imageIndices = messages
     .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
     .filter(i => i >= 0);
@@ -259,7 +285,9 @@ export function openaiMessages(messages: readonly ModelMessage[], requiresReason
       }))} : {})};
   });
 }
-export function anthropicMessages(messages: readonly ModelMessage[], maxImages = 2): ObjectValue[] {
+export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2, referenceNames?: ReadonlySet<string>, caching = false): ObjectValue[] {
+  const messages = input.flatMap<WireMessage>(message => message.role !== 'context' ? [message] : encodeAnthropicContext(message)
+    .map(block => ({role: 'user', text: String(block.text)})));
   const imageIndices = messages
     .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
     .filter(i => i >= 0);
@@ -272,7 +300,12 @@ export function anthropicMessages(messages: readonly ModelMessage[], maxImages =
     const role = message.role === 'tool' ? 'user' : message.role;
     const content: ObjectValue[] = [];
     if (message.role === 'tool') {
-      if (message.images?.length && keepImage) {
+      const references = !message.isError ? message.discoveredTools?.filter(name => !referenceNames || referenceNames.has(name)) : [];
+      if (message.name === 'LoadTools' && references?.length) {
+        content.push({type: 'tool_result', tool_use_id: message.callId, content: [
+          {type: 'text', text: message.text}, ...references.map(name => ({type: 'tool_reference', tool_name: name})),
+        ], is_error: false});
+      } else if (message.images?.length && keepImage) {
         const blocks: ObjectValue[] = [{type: 'text', text: message.text}];
         for (const img of message.images) {
           blocks.push({type: 'image', source: {type: 'base64', media_type: img.mimeType, data: img.data}});
@@ -303,6 +336,10 @@ export function anthropicMessages(messages: readonly ModelMessage[], maxImages =
     const previous = result.at(-1);
     if (previous?.role === role) previous.content.push(...content);
     else result.push({role, content});
+  }
+  if (caching) {
+    const boundary = result.at(-1)?.content.findLast(block => block.type !== 'thinking');
+    if (boundary) boundary.cache_control = {type: 'ephemeral'};
   }
   return result;
 }
@@ -336,10 +373,13 @@ async function* events(response: Response, received: (length: number) => void): 
   } finally {await reader.cancel().catch(() => {}); reader.releaseLock();}
 }
 export function createProvider(settings: ModelSettings, fetcher: typeof fetch = fetch): Provider {
-  return {async respond(request, onDelta, signal) {
+  const capabilities = resolveProviderCapabilities(settings);
+  return {capabilities, async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 名称或 --model 名称');
     const native = settings.kind === 'anthropic';
-    const isResponsesApi = (settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && typeof settings.key === 'string' && (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-')));
+    const oauthResponses = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' &&
+      (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
+    const isResponsesApi = !native && (oauthResponses || settings.api === 'responses' || capabilities.toolDiscovery === 'openai-responses');
     const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : isResponsesApi ? '/responses' : '/chat/completions');
     const headers: Record<string, string> = {'content-type': 'application/json'};
     if (native) {
@@ -349,11 +389,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       headers.authorization = 'Bearer ' + settings.key;
       if (isResponsesApi) headers.accept = 'text/event-stream';
     }
-    const tools = request.tools.map(tool => native
-      ? {name: tool.name, description: tool.description, input_schema: tool.parameters}
-      : isResponsesApi
-        ? {type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters}
-        : {type: 'function', function: tool});
+    if (request.toolDiscovery && request.toolDiscovery !== capabilities.toolDiscovery) throw new ProviderError('Tool discovery does not match the active provider protocol.');
+    if (native && request.toolDiscovery === 'anthropic') headers['anthropic-beta'] = 'advanced-tool-use-2025-11-20';
+    const caching = capabilities.caching === 'anthropic';
+    const tools = native ? encodeAnthropicTools(request.tools, caching) : request.tools.map(tool => isResponsesApi
+        ? request.toolDiscovery === 'openai-responses' && tool.name === 'LoadTools' ? encodeOpenAIToolSearch(tool.parameters) : encodeOpenAIFunction(tool)
+        : {type: 'function', function: {name: tool.name, description: tool.description, parameters: tool.parameters}});
     const maxTokens = Math.min(settings.maxTokens, request.maxTokens ?? Infinity);
     const effort = request.thinking === false ? 'off' : settings.thinkingEffort ?? 'auto';
     const protocol = settings.thinkingProtocol;
@@ -379,22 +420,22 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       }
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
     const supportsVision = request.supportsVision ?? true;
-    const isStream = isResponsesApi ? true : request.stream !== false;
-    let chosenModel = settings.model;
-    if (isResponsesApi && (!chosenModel || chosenModel.includes('gpt-4') || chosenModel.includes('o3-mini'))) {
-      chosenModel = 'gpt-6.1-sol';
-    }
+    const isStream = oauthResponses ? true : request.stream !== false;
+    const chosenModel = settings.model;
     const body = native
       ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),
-        system: request.system, messages: anthropicMessages(request.messages), tools, ...thinking}
+        system: caching ? [{type: 'text', text: request.system, cache_control: {type: 'ephemeral'}}] : request.system,
+        messages: anthropicMessages(request.messages, 2, new Set(request.tools.filter(tool => tool.deferLoading).map(tool => tool.name)), caching), tools, ...thinking}
       : isResponsesApi
         ? {
             model: chosenModel,
             store: false,
-            stream: true,
+            stream: isStream,
+            ...(!oauthResponses ? {max_output_tokens: maxTokens} : {}),
             instructions: request.system,
-            input: responsesInput(request.messages, supportsVision),
+            input: responsesInput(request.messages, supportsVision, 2,
+              request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined),
             ...(tools.length ? {tools} : {}),
             ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort}} : {}),
           }
@@ -459,7 +500,30 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             : ['end_turn', 'stop_sequence'].includes(reason ?? '') ? 'complete' : 'other';
           if (parsed.usage && typeof parsed.usage === 'object') {
             const u = parsed.usage as Record<string, number>;
-            usage = {input: u.input_tokens ?? 0, output: u.output_tokens ?? 0};
+            usage = {input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: u.output_tokens ?? 0,
+              ...(u.cache_read_input_tokens !== undefined ? {cacheRead: u.cache_read_input_tokens} : {}),
+              ...(u.cache_creation_input_tokens !== undefined ? {cacheWrite: u.cache_creation_input_tokens} : {})};
+          }
+        } else if (isResponsesApi) {
+          const output = Array.isArray(parsed.output) ? parsed.output : [];
+          for (const value of output) {
+            const item = z.record(z.string(), z.unknown()).safeParse(value);
+            if (!item.success) continue;
+            const search = decodeSearchCall(item.data);
+            if (search) calls.set(calls.size, search);
+            else if (item.data.type === 'function_call') {
+              if (typeof item.data.call_id !== 'string' || !item.data.call_id) throw new ProviderError('Function call requires call_id.');
+              calls.set(calls.size, {id: item.data.call_id, name: String(item.data.name ?? ''), arguments: String(item.data.arguments ?? '')});
+            } else if (item.data.type === 'message' && Array.isArray(item.data.content)) {
+              for (const block of item.data.content) if (block && typeof block === 'object' && block.type === 'output_text') append('text', block.text);
+            }
+          }
+          stop = parsed.status === 'incomplete' ? 'length' : parsed.status === 'completed' ? calls.size ? 'tools' : 'complete' : 'other';
+          const parsedUsage = usageSchema.safeParse(parsed.usage);
+          if (parsedUsage.success) {
+            const value = parsedUsage.data;
+            usage = {input: value.input_tokens ?? 0, output: value.output_tokens ?? 0,
+              ...(value.input_tokens_details?.cached_tokens !== undefined ? {cacheRead: value.input_tokens_details.cached_tokens} : {})};
           }
         } else {
           const choices = Array.isArray(parsed.choices) ? parsed.choices as Array<Record<string, unknown>> : [];
@@ -507,28 +571,37 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               if (typeof event.delta === 'string') call.arguments += event.delta;
               calls.set(idx, call);
             } else if (event.type === 'response.output_item.added') {
-              if (event.item?.type === 'function_call') {
+              if (event.item?.type === 'tool_search_call') {
+                const idx = event.output_index ?? calls.size;
+                calls.set(idx, {id: typeof event.item.call_id === 'string' ? event.item.call_id : '', name: 'LoadTools', kind: 'tool-search', arguments: ''});
+              } else if (event.item?.type === 'function_call') {
                 const idx = event.output_index ?? calls.size;
                 const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
-                if (event.item.call_id) call.id = event.item.call_id;
+                if (typeof event.item.call_id === 'string') call.id = event.item.call_id;
                 if (event.item.name) call.name = event.item.name;
                 calls.set(idx, call);
               }
             } else if (event.type === 'response.output_item.done') {
-              if (event.item?.type === 'function_call') {
+              if (event.item?.type === 'tool_search_call') {
+                const call = decodeSearchCall(event.item);
+                if (call) calls.set(event.output_index ?? calls.size, call);
+              } else if (event.item?.type === 'function_call') {
                 const idx = event.output_index ?? 0;
                 const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
-                if (event.item.call_id) call.id = event.item.call_id;
+                if (typeof event.item.call_id === 'string') call.id = event.item.call_id;
                 if (event.item.name) call.name = event.item.name;
-                if (event.item.arguments) call.arguments = event.item.arguments;
+                if (typeof event.item.arguments === 'string') call.arguments = event.item.arguments;
                 calls.set(idx, call);
               }
+            } else if (event.type === 'response.incomplete') {
+              stop = 'length';
             } else if (event.type === 'response.completed') {
-              stop = calls.size > 0 ? 'tools' : 'complete';
+              stop = event.response?.status === 'incomplete' ? 'length' : calls.size > 0 ? 'tools' : 'complete';
               if (event.response?.usage) {
                 usage = {
                   input: event.response.usage.input_tokens ?? 0,
                   output: event.response.usage.output_tokens ?? 0,
+                  ...(event.response.usage.input_tokens_details?.cached_tokens !== undefined ? {cacheRead: event.response.usage.input_tokens_details.cached_tokens} : {}),
                 };
               }
             }
@@ -595,6 +668,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       }
     }
       const toolCalls = [...calls.values()];
+      if (toolCalls.some(call => call.kind === 'tool-search') && (toolCalls.some(call => call.kind === 'tool-search' && (!call.id || !call.arguments)) ||
+        new Set(toolCalls.map(call => call.id)).size !== toolCalls.length)) throw new ProviderError('Client tool search requires a completed item with a unique original call_id.');
       return {message: {role: 'assistant', text, ...(reasoning ? {reasoning} : {}),
         ...(signature ? {signature} : {}), ...(toolCalls.length ? {toolCalls} : {})}, stop,
         ...(usage ? {usage} : {})};

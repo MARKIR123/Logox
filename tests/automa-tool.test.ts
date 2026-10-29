@@ -4,7 +4,7 @@ import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {automaSchema, executeAutoma, runAutomaReadOnlyTool, automaToolDefinitions} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
-import {AUTOMA_ANIMATION_FRAMES, AUTOMA_THEME_COLOR} from '../src/tools/orchestration/AutomaTool/prompt.js';
+import {AUTOMA_ANIMATION_FRAMES, AUTOMA_COLOR_TOKEN} from '../src/tools/orchestration/AutomaTool/prompt.js';
 import {UI} from '../src/tools/orchestration/AutomaTool/UI.js';
 import {validateToolCall} from '../src/tools/index.js';
 import type {ModelMessage, ToolCall} from '../src/runtime/messages.js';
@@ -166,9 +166,9 @@ test('Automa execution is stateless across calls', async () => {
   }
 });
 
-test('Automa UI metadata has radar rotation animation and steel gray color', () => {
+test('Automa UI metadata has radar rotation animation and a semantic color token', () => {
   assert.deepEqual(AUTOMA_ANIMATION_FRAMES, ['◜', '◠', '◝', '◞', '◡', '◟']);
-  assert.equal(AUTOMA_THEME_COLOR, '#8a95a0');
+  assert.equal(AUTOMA_COLOR_TOKEN, 'automa');
 
   const title = UI.title({
     id: 'call_automa',

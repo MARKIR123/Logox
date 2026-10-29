@@ -4,8 +4,8 @@ import {PassThrough} from 'node:stream';
 import {TerminalScreen} from './terminal-screen.js';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {renderTerminal as render} from '../src/tui/terminal.js';
-import {Picker, effortStyles} from '../src/tui/picker.js';
+import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
+import {Picker, effortStyles} from '../src/tui/panels/picker.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 
@@ -75,7 +75,7 @@ test('Picker：模型列表下方空一行，呈现思考强度与颜色，支�
 
   // 2. 验证思考强度行呈现在下方，包含 ✦ 符号、滑轨与激活的 high
   assert.match(screen, /(?:✦ 思考强度:|✦ Thinking:)/);
-  assert.match(screen, /\[.*●.*\]/);
+  assert.match(screen, /\[■\]/);
   assert.match(screen, /high/);
 
   // 3. 验证模型列表与思考强度行之间存在空行

@@ -4,9 +4,9 @@ import {PassThrough} from 'node:stream';
 import {TerminalScreen} from './terminal-screen.js';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {renderTerminal as render} from '../src/tui/terminal.js';
+import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import chalk from 'chalk';
-import {buildDemoSceneRows, initialDemoSceneState} from '../src/tui/scene.js';
+import {buildDemoSceneRows, initialDemoSceneState} from '../src/tui/timeline/scene.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {createDemo} from '../src/demo.js';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -409,9 +409,14 @@ test('真实舞台的多问题可逐项选择和自由输入，回答不会覆�
   });
   const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await flushRender(instance);};
   try {
+    await flushRender(instance);
+    assert.match(output.lines.join('\n'), /Question 1\/2/);
+    assert.match(output.lines.join('\n'), /My view:/);
+    assert.doesNotMatch(output.lines.join('\n'), /AskUserQuestion ·/, 'Focused question is not duplicated in the timeline');
     await key('主草稿');
     await key('\t'); await key('\r');
     assert.equal(store.interactions.list()[0]?.status, 'pending');
+    assert.match(output.lines.join('\n'), /Question 2\/2/);
     await key('上下保留留白'); await key('\r');
     const outcome = await ticket.result;
     assert.equal(outcome.status, 'answered');
@@ -419,6 +424,74 @@ test('真实舞台的多问题可逐项选择和自由输入，回答不会覆�
       {language: {type: 'option', optionId: 'zh'}, layout: {type: 'text', text: '上下保留留白'}});
     await key('\r');
     assert.deepEqual(submissions, ['主草稿']);
+  } finally {
+    store.interactions.close(); await act(async () => instance.unmount()); await instance.waitUntilExit();
+    input.destroy(); output.destroy();
+  }
+});
+
+test('生产提问面板：多选空格切换与提交', {timeout: 8000}, async () => {
+  const input = new TerminalInput(), output = new TerminalOutput(), store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor',
+    title: '确认', status: 'waiting_input', stage: '待回答', detail: ''});
+  const ticket = store.interactions.open({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'question', title: '确认',
+    questions: [{id: 'checks', header: '检查', question: '选哪些？', multiSelect: true, options: [
+      {id: 'a', label: 'Alpha', description: '第一项'}, {id: 'b', label: 'Beta', description: '第二项'},
+    ]}]});
+  let instance!: ReturnType<typeof render>;
+  await act(async () => {
+    instance = render(<App stage store={store} sessionId="s" onSubmit={async () => {}}
+      onCancel={() => {}} onClose={async () => store.interactions.close()}/>, {
+      stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true,
+      patchConsole: false, exitOnCtrlC: false, maxFps: 100,
+    });
+  });
+  const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await flushRender(instance);};
+  try {
+    await flushRender(instance);
+    await key('\t');
+    await key(' ');
+    assert.match(output.lines.join('\n'), /\[■\] Alpha/);
+    await key('\x1b[B');
+    await key(' ');
+    assert.match(output.lines.join('\n'), /❯ \[■\] Beta/);
+    await key('\r');
+    const outcome = await ticket.result;
+    assert.equal(outcome.status, 'answered');
+    if (outcome.status === 'answered' && outcome.response.kind === 'question') assert.deepEqual(outcome.response.answers,
+      {checks: {type: 'options', optionIds: ['a', 'b']}});
+  } finally {
+    store.interactions.close(); await act(async () => instance.unmount()); await instance.waitUntilExit();
+    input.destroy(); output.destroy();
+  }
+});
+
+test('生产提问面板：密钥只显示遮罩并提交原文', {timeout: 8000}, async () => {
+  const input = new TerminalInput(), output = new TerminalOutput(), store = new RuntimeStore();
+  const ticket = store.interactions.open({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'question', title: '密钥',
+    questions: [{id: 'key', header: '密钥', question: '输入密钥', secret: true}]});
+  let instance!: ReturnType<typeof render>;
+  await act(async () => {
+    instance = render(<App stage store={store} sessionId="s" onSubmit={async () => {}}
+      onCancel={() => {}} onClose={async () => store.interactions.close()}/>, {
+      stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true,
+      patchConsole: false, exitOnCtrlC: false, maxFps: 100,
+    });
+  });
+  const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await flushRender(instance);};
+  try {
+    await flushRender(instance);
+    await key('\t');
+    assert.match(output.lines.join('\n'), /Input:/);
+    assert.doesNotMatch(output.lines.join('\n'), /My view/);
+    await key('synthetic-secret-value');
+    assert.ok(!output.text.includes('synthetic-secret-value'), 'Secret value is never rendered');
+    assert.match(output.lines.join('\n'), /•/);
+    await key('\r');
+    const outcome = await ticket.result;
+    assert.equal(outcome.status, 'answered');
+    if (outcome.status === 'answered' && outcome.response.kind === 'question') assert.deepEqual(outcome.response.answers,
+      {key: {type: 'text', text: 'synthetic-secret-value'}});
   } finally {
     store.interactions.close(); await act(async () => instance.unmount()); await instance.waitUntilExit();
     input.destroy(); output.destroy();
@@ -459,9 +532,8 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await flushRender(instance);
   };
   try {
-    await key('/lo');await key('\r');await phase('provider');
-    assert.ok(/登录提供商|Log In Provider/.test(output.text));
-    await key('\x1b[B');await key('\r');await phase('key');
+    await act(async () => {await app.submit('/login deepseek');});await phase('key');
+    assert.ok(/Log In deepseek/.test(output.text));
     assert.equal(app.authentication.getSnapshot()?.provider, 'deepseek');
     await key('\x1b[200~synthetic-ui-secret\x1b[201~');
     assert.ok(!output.text.includes('synthetic-ui-secret'));
@@ -469,7 +541,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await key('\r');await phase(null);
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!JSON.stringify(app.store.getSnapshot()).includes('synthetic-ui-secret'));
-    assert.deepEqual(submissions, ['/login']);
+    assert.deepEqual(submissions, []);
     await key('ordinary-draft');
     await act(async () => {await app.submit('/login deepseek');});await phase('key');
     output.columns = 32;output.rows = 12;
@@ -477,7 +549,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await key('cancelled-secret');await key('\x1b');await phase(null);
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!output.text.includes('cancelled-secret'));
-    await key('\r');assert.deepEqual(submissions, ['/login', 'ordinary-draft']);
+    await key('\r');assert.deepEqual(submissions, ['ordinary-draft']);
     assert.deepEqual(await app.journal.load(app.sessionId, 'logox'), []);
   } finally {
     await act(async () => {await app.close();instance.unmount();});await instance.waitUntilExit();
@@ -505,7 +577,7 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
   const frame = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
   try {
     await key('/');
-    assert.match(frame(), /\/help/); assert.match(frame(), /(?:登录并保存 API key|Log in and save)/);
+    assert.match(frame(), /\/help/); assert.match(frame(), /(?:登录并保存 API key|Log in, save)/);
     await key('\x1b[B'); await key('\t');
     assert.deepEqual(submissions, [], 'Tab 不执行命令，也不抢占审批');
     assert.match(frame(), /\/login/);
@@ -515,18 +587,17 @@ test('正式舞台命令联想：过滤、选择、补齐、执行、参数确�
     await key('\x1b[B'); await key('\t');
     assert.deepEqual(submissions, ['/login']);
     await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne']);
-    await key('/pro'); await key('\x1b[B'); await key('\t');
-    assert.match(frame(), /deepseek/);
-    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne'], '参数确认只补齐');
-    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne', '/provider deepseek']);
+    await key('/pro'); await key('\t');
+    assert.match(frame(), /\/providers/);
+    await key('\r'); assert.deepEqual(submissions, ['/login', '/model techne', '/providers']);
     await key('/l'); await key('\x1b');
-    assert.doesNotMatch(frame(), /(?:登录并保存 API key|Log in and save)/); assert.match(frame(), /\/l/);
+    assert.doesNotMatch(frame(), /(?:登录并保存 API key|Log in, save)/); assert.match(frame(), /\/l/);
     await key('\t'); await key('\r');
     assert.equal((await ticket.result).status, 'answered', '菜单关闭后 Tab 仍可聚焦审批');
     assert.match(frame(), /\/l/, '审批后保留主草稿');
-    await key('o'); assert.match(frame(), /(?:登录并保存 API key|Log in and save)/, '编辑后重新联想');
+    await key('o'); assert.match(frame(), /(?:登录并保存 API key|Log in, save)/, '编辑后重新联想');
     await key('g'); await key('\x7f');
-    assert.match(frame(), /(?:登录并保存 API key|Log in and save)/, '回到曾经关闭的前缀也重新联想');
+    assert.match(frame(), /(?:登录并保存 API key|Log in, save)/, '回到曾经关闭的前缀也重新联想');
     output.columns = 32; output.rows = 12;
     await act(async () => output.emit('resize')); await flushRender(instance);
     assert.match(frame(), /\/login/);

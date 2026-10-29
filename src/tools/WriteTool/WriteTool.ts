@@ -19,23 +19,32 @@ export async function executeWrite(
   canonicalPath: string,
   snapshots: Snapshots,
   activityId = 'task',
-  signal: AbortSignal = new AbortController().signal
+  signal: AbortSignal = new AbortController().signal,
+  ownerId?: string,
 ): Promise<ToolResult> {
-  const size = await stat(canonicalPath).then(info => info.size).catch(error => {
-    if (error.code === 'ENOENT') return 0;
-    throw error;
+  return snapshots.withLock(canonicalPath, async () => {
+    const size = await stat(canonicalPath).then(info => info.size).catch(error => {
+      if (error.code === 'ENOENT') return 0;
+      throw error;
+    });
+    if (size > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
+
+    const before = await bytesOrMissing(canonicalPath);
+    if (before && before.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB');
+    const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId);
+    if (peer) {
+      throw new Error(`File was modified by ${peer} since your last read. Please Read the latest file content (or use Edit for targeted changes) before overwriting.`);
+    }
+
+    const after = Buffer.from(args.content);
+    if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
+
+    await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId);
+    return {
+      text: 'Updated ' + canonicalPath + '; use /undo to revert file changes from this round.',
+      isError: false,
+    };
   });
-  if (size > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
-
-  const before = await bytesOrMissing(canonicalPath);
-  if (before && before.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB');
-
-  const after = Buffer.from(args.content);
-  if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
-
-  await snapshots.apply(canonicalPath, before, after, activityId, signal);
-  return {
-    text: 'Updated ' + canonicalPath + '; use /undo to revert file changes from this round.',
-    isError: false,
-  };
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Write', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Write or overwrite file contents completely'};

@@ -53,3 +53,5 @@ export async function executeGitStatus(args: GitStatusArgs, cwd: string): Promis
     };
   }
 }
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: '_GitStatus', category: 'protocol', roles: 'all', terminalVisibility: 'silent', description: 'Fetch current Git branch, tracking status, and clean/dirty working tree state on demand'};

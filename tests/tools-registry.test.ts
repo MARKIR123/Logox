@@ -69,44 +69,30 @@ test('ToolRegistry loads and applies user overrides from .logox/tools.json', asy
   }
 });
 
-test('ToolRegistry formats compact explicit prompt section grouped by category', () => {
+test('ToolRegistry formats all deferred contracts under category descriptions', () => {
   const registry = new ToolRegistry();
   const promptSection = registry.formatExplicitPromptSection('logox');
-  assert.ok(promptSection.includes('Protocol'));
-  assert.ok(promptSection.includes('_FinishRound'));
-  assert.ok(promptSection.includes('Orchestration'));
-  assert.ok(promptSection.includes('Actor'));
+  assert.match(promptSection, /  - protocol\/:/);
+  assert.doesNotMatch(promptSection, /    - _FinishRound:/);
+  assert.match(promptSection, /  - orchestration\/:/);
+  assert.match(promptSection, /    - Actor:/);
 });
 
-test('ToolRegistry formats tiered tools prompt aligned with user specification', () => {
+test('ToolRegistry discovery omits eager tools and includes every eligible deferred tool', () => {
   const registry = new ToolRegistry();
   const text = registry.formatTieredToolsPrompt('logox');
-
-  // 1. Starts with tools:
-  assert.ok(text.startsWith('tools:\n'));
-
-  // 2. Core tools are indented by 2 spaces directly under tools:
-  assert.ok(text.includes('  Read: '));
-  assert.ok(text.includes('  Grep: '));
-  assert.ok(text.includes('  Shell: '));
-
-  // 3. Subdirectory tools are categorized bullet points
-  assert.ok(text.includes('  - 流程规范工具 (Protocol):'));
-  assert.ok(text.includes('    - _FinishRound: '));
-  assert.ok(text.includes('    - _GitStatus: '));
-
-  assert.ok(text.includes('  - 团队协作工具 (Coordination):'));
-  assert.ok(text.includes('    - ListActors: '));
-
-  assert.ok(text.includes('  - 调度编排工具 (Orchestration):'));
-  assert.ok(text.includes('    - Actor: '));
-
-  // 4. For worker (techne), Orchestration tools are omitted
-  const workerText = registry.formatTieredToolsPrompt('techne');
-  assert.ok(workerText.includes('  Read: '));
-  assert.ok(workerText.includes('  - 流程规范工具 (Protocol):'));
-  assert.ok(workerText.includes('    - _FinishRound: '));
-  assert.ok(workerText.includes('    - _GitStatus: '));
-  assert.ok(!workerText.includes('Actor: '));
-  assert.ok(!workerText.includes('CancelActor: '));
+  assert.match(text, /LoadTools/);
+  assert.doesNotMatch(text, /^\s*(?:- )?(Read|Grep|Shell|_FinishRound):/m);
+  assert.match(text, /^  - protocol\/:/m);
+  assert.match(text, /^    - _GitStatus: /m);
+  assert.match(text, /^  - coordination\/:/m);
+  assert.match(text, /^    - ListActors: /m);
+  assert.match(text, /^  - orchestration\/:/m);
+  assert.match(text, /^    - Actor: /m);
+  const workerText = registry.formatTieredToolsPrompt('new-worker');
+  assert.doesNotMatch(workerText, /^\s*(?:- )?(Read|_FinishRound):/m);
+  assert.match(workerText, /^    - _GitStatus: /m);
+  assert.match(workerText, /^    - SendMessage: /m);
+  assert.match(workerText, /^    - UpdateTaskProgress: /m);
+  assert.doesNotMatch(workerText, /^    - (Actor|CancelActor): /m);
 });

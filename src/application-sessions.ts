@@ -7,6 +7,7 @@ import {assertActorProfiles, seedActorProfiles} from './actors/profiles.js';
 import {loadConfig} from './config/config.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {AuthStorage} from './providers/auth.js';
+import {CustomProviderStorage} from './providers/custom-storage.js';
 import {Journal} from './store/journal.js';
 import {SessionManager, type SessionLease} from './store/sessions.js';
 import {Tools} from './tools/tools.js';
@@ -25,10 +26,12 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
   if (!sessionId) throw new Error('没有可恢复的会话');
   const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
-  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher, new AuthStorage(options.authPath));
+  const home = options.resourceOptions?.home ?? homedir();
+  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher,
+    new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json'), options.resourceOptions?.home ? [] : undefined),
+    new CustomProviderStorage(join(home, '.logox', 'custom-providers.json')));
   await registry.syncCustom();
   const journal = new Journal(join(manager.directory, 'sessions'));
-  const home = options.resourceOptions?.home ?? homedir();
   if (options.resourceOptions?.home && resolve(home) !== resolve(homedir())) await seedActorProfiles(home);
   else await assertActorProfiles(home);
   const actors = new ActorCatalog(cwd, options.resourceOptions?.home ? {home} : {});
@@ -215,7 +218,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       if (await journal.pending(current.sessionId)) throw new Error('请先完成未结束的回退');
       requireIdle();
       current.store.clearTimeline(current.sessionId); publish();
-      notice('已清空当前对话显示，模型上下文、账本与文件保留。');
+      current.systemNotice('Conversation view cleared. Model context, history and files are unchanged.', 'command_result', 'logox', undefined, {presentation: 'status'});
       return true;
     }
     if (text === '/resume') {requireIdle(); await openResume(); return true;}

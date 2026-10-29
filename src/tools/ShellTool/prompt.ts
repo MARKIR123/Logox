@@ -1,4 +1,4 @@
 export const SHELL_TOOL_NAME = 'Shell';
 
 export const SHELL_DESCRIPTION =
-  'Execute a shell command in the working directory (PowerShell on Windows, sh on Unix). Provide a concise description (5-10 words) of the immediate goal in active voice. Use the Playwright MCP server for browser interaction and screenshots.';
+  'Execute a foreground command in the working directory, using PowerShell on Windows and sh on Unix. Write commands and quoting for that shell. Returns the exit code, stdout and stderr; nonzero exit codes are errors. Execution stops on timeout or cancellation. Background execution and background-task management are not supported.';

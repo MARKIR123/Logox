@@ -140,7 +140,7 @@ test('AskUserQuestion 完整对齐 Claude 参数并支持多选答案', () => {
       options: [{id: 'o0', label: 'Night', description: ''}, {id: 'o1', label: 'Amber', description: ''}],
     }],
   } as unknown as Interaction;
-  let draft: import('../src/tui/cards.js').QuestionDraft = {questionIndex: 0, selected: 0, text: '', error: '', checked: []};
+  let draft: import('../src/tui/interactions/choice-style.js').QuestionDraft = {questionIndex: 0, selected: 0, text: '', error: '', checked: []};
   const adapter = getInteractionUI(request)!;
   let answers: Record<string, import('../src/runtime/contracts.js').Answer> = {};
   for (const index of [0, 1]) {

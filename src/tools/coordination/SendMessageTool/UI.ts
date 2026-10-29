@@ -1,9 +1,9 @@
 import type {ToolCall} from '../../../runtime/messages.js';
 import type {ToolRenderContext, ToolUI} from '../../ui-types.js';
-import {messageToolCall} from '../../../tui/tool-ui.js';
-import {palette, actorCardPalette} from '../../../tui/cards.js';
+import {messageToolCall} from '../../../tui/timeline/tool-ui.js';
+import {palette} from '../../../tui/appearance/theme.js';
 import {cast} from '../../../actors/ensemble.js';
-import type {SceneSegment} from '../../../tui/scene.js';
+import type {SceneSegment} from '../../../tui/timeline/scene.js';
 
 function parseSendMessage(call: ToolCall, bodyText = '') {
   let args: Record<string, unknown> = {};
@@ -16,7 +16,7 @@ function parseSendMessage(call: ToolCall, bodyText = '') {
       : '';
   const cleanResult = bodyText.toLowerCase();
   const mode = (args.mode === 'interrupt' || cleanResult.includes('interrupt')) ? 'interrupt' : 'queued';
-  const targetColor = (cast as any)[target]?.color ?? (actorCardPalette as any)[target]?.highlight ?? palette.accent;
+  const targetColor = (cast as any)[target]?.color ?? palette.accent;
   const descStr = desc ? ` · ${desc}` : '';
   const title = `SendMessage to ${target}${descStr} · ${mode}`;
   return {args, target, desc, mode, targetColor, descStr, title};

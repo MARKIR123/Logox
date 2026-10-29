@@ -67,11 +67,11 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
 
     // Progressive Prompt Formatting: Kalon sees Core Principles and Domain Repositories, but NOT individual domain files
     const kalonPrompt = resources.prompt({actorId: 'kalon'}).context;
-    assert.ok(kalonPrompt.includes('【Core Principles】'));
+    assert.ok(kalonPrompt.includes('### Core Principles'));
     assert.ok(kalonPrompt.includes('design-principles'));
     assert.ok(kalonPrompt.includes('browser-screenshot'));
     assert.ok(kalonPrompt.includes('skill-internalization'));
-    assert.ok(kalonPrompt.includes('【Domain Repositories】'));
+    assert.ok(kalonPrompt.includes('### Domain Repositories'));
     assert.ok(kalonPrompt.includes('styling/: Visual UI design languages'));
     assert.ok(kalonPrompt.includes('color/: Specialized palettes'));
     assert.ok(kalonPrompt.includes('literature/: Narrative storytelling'));

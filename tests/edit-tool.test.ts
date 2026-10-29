@@ -5,6 +5,8 @@ import {mkdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {executeEdit} from '../src/tools/EditTool/EditTool.js';
+import {executeRead} from '../src/tools/ReadTool/ReadTool.js';
+import {executeWrite} from '../src/tools/WriteTool/WriteTool.js';
 import {Snapshots} from '../src/tools/snapshots.js';
 
 async function fixture(t: TestContext, content: string) {
@@ -77,4 +79,87 @@ test('Edit keeps whitespace matching exact and leaves a missing target unchanged
   await assert.rejects(f.edit('old\nline', 'new'), /No match/);
   assert.deepEqual(await readFile(f.file), Buffer.from(before));
   assert.deepEqual(await f.snapshots.undo(['edit-round']), []);
+});
+
+test('concurrent non-overlapping Edit calls by two actors both succeed, while stale conflicting Edit or unread Write rejects and names the peer actor', async t => {
+  const initial = [
+    'const header = "initial-header";',
+    'const shared = "untouched";',
+    'const footer = "initial-footer";',
+    '',
+  ].join('\n');
+  const f = await fixture(t, initial);
+  const abortSignal = new AbortController().signal;
+
+  await executeRead({file_path: f.file}, f.file, f.snapshots, 'techne');
+  await executeRead({file_path: f.file}, f.file, f.snapshots, 'kalon');
+
+  const [techneRes, kalonRes] = await Promise.all([
+    executeEdit(
+      {file_path: f.file, old_string: 'const header = "initial-header";', new_string: 'const header = "techne-header";'},
+      f.file,
+      f.snapshots,
+      'techne-round',
+      abortSignal,
+      'techne',
+    ),
+    executeEdit(
+      {file_path: f.file, old_string: 'const footer = "initial-footer";', new_string: 'const footer = "kalon-footer";'},
+      f.file,
+      f.snapshots,
+      'kalon-round',
+      abortSignal,
+      'kalon',
+    ),
+  ]);
+
+  assert.equal(techneRes.isError, false);
+  assert.equal(kalonRes.isError, false);
+  assert.equal(
+    await readFile(f.file, 'utf8'),
+    [
+      'const header = "techne-header";',
+      'const shared = "untouched";',
+      'const footer = "kalon-footer";',
+      '',
+    ].join('\n'),
+  );
+
+  // techne has not re-read after kalon's edit: conflicting Edit and blind Write must reject naming kalon
+  await assert.rejects(
+    executeEdit(
+      {file_path: f.file, old_string: 'const footer = "initial-footer";', new_string: 'const footer = "techne-override";'},
+      f.file,
+      f.snapshots,
+      'techne-round-2',
+      abortSignal,
+      'techne',
+    ),
+    /updated by kalon since your last read/,
+  );
+
+  await assert.rejects(
+    executeWrite(
+      {file_path: f.file, content: 'blind full overwrite by techne\n'},
+      f.file,
+      f.snapshots,
+      'techne-round-2',
+      abortSignal,
+      'techne',
+    ),
+    /modified by kalon since your last read/,
+  );
+
+  // After techne re-reads the file, Write succeeds
+  await executeRead({file_path: f.file}, f.file, f.snapshots, 'techne');
+  const writeAfterRead = await executeWrite(
+    {file_path: f.file, content: 'coordinated write after read\n'},
+    f.file,
+    f.snapshots,
+    'techne-round-3',
+    abortSignal,
+    'techne',
+  );
+  assert.equal(writeAfterRead.isError, false);
+  assert.equal(await readFile(f.file, 'utf8'), 'coordinated write after read\n');
 });

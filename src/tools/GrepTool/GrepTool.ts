@@ -262,3 +262,5 @@ export async function executeGrep(
     throw error;
   }
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Grep', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Regex search in file contents via built-in ripgrep'};

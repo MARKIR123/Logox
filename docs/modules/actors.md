@@ -4,9 +4,9 @@
 
 ## 定义与覆盖
 
-内置档案位于 `src/actors/profiles/<id>/`，包含 `config.yaml`、`persona.md` 和 `compression.md`。用户和项目可以覆盖同 ID 的定义，也能添加自己的角色。
+内置档案位于 `src/actors/profiles/<id>/`，包含必备 `config.yaml`、`persona.md`、`compression.md`，以及可选 `execution.md`、`collaboration.md`。Persona 保存身份和语气，后两者保存角色私有行动及协作规则，公共规则由系统统一装配。用户和项目可以添加同 ID 的层或自己的角色；项目的 persona/execution/collaboration 追加到用户层，不静默抹去已有正文。
 
-`src/actors/profiles/` 是分发母本，构建只复制到 dist。安装时或执行 `logox --install-profiles` 时，将缺失档案复制到 `~/.logox/actors/`，不覆盖已有文件；运行时从用户目录读取母本，再加载用户旧目录和项目覆盖。开发命令 `npm run sync:profiles` 可单向同步母本。当前支持三文件目录档案，也保留带 YAML frontmatter 的单个 Markdown 定义。目录加载仅迁移内容指纹匹配已知旧默认值的 `compression.md`，自定义内容、人设、配置和模型绑定保持不变。
+`src/actors/profiles/` 是分发母本，构建只复制到 dist。安装时或执行 `logox --install-profiles` 时，将缺失档案复制到 `~/.logox/actors/`，不覆盖已有文件；运行时从用户目录读取母本，再加载用户旧目录和项目覆盖。开发命令 `npm run sync:profiles` 会强制替换角色目录，使用前自行备份，不应用于保留自定义内容的日常更新。当前支持必备三文件加可选规则文件的目录档案，也保留带 YAML frontmatter 的单个 Markdown 定义。目录加载仅迁移内容指纹匹配已知旧默认值的 `compression.md`，自定义内容、人设、配置和模型绑定保持不变。
 
 例如在项目 `.logox/actors/scout.md` 中写入：
 

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBuilder, appendActorCard} from '../src/tui/scene.js';
-import {decorateRow, stepIcon} from '../src/tui/row-presentation.js';
+import {createBuilder, appendActorCard} from '../src/tui/timeline/scene.js';
+import {decorateRow} from '../src/tui/timeline/row-presentation.js';
+import {stepIcon} from '../src/tui/appearance/animation.js';
 
 test('stepIcon uses natural frame pacing for breathing rhythm', () => {
   const custom8Frames = ['·', '○', '⊙', '⊚', '◉', '⊚', '⊙', '○'];

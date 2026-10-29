@@ -76,7 +76,7 @@ test('zero retained closed rounds still protect current work and include real le
     await f.append('current', {role: 'assistant', text: '当前进展'});
     const {request} = await f.contexts.prepare(identity, base, signal, true);
     assert.ok(!request.messages.some(message => message.text.startsWith('OLD'.repeat(1000))));
-    assert.equal(request.messages.at(-1)?.text, '当前进展');
+    assert.equal(request.messages.filter(message => message.role !== 'context').at(-1)?.text, '当前进展');
     assert.match(request.messages[0]!.text, /^1 \| .* \| Completed \| .* \| 1:2$/);
     assert.ok(request.messages.some(message => message.text === '新的完整目标'));
   } finally {await f.cleanup();}
@@ -273,7 +273,7 @@ test('oversized closed history uses bounded summarization without tools, thinkin
     assert.ok(f.reports.some(text => text.startsWith('[Context] Summarizing')));
     assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
     assert.match(result.request.messages[0]!.text, /Historical working overview/);
-    assert.equal(result.request.messages.at(-1)?.text, 'CURRENT_ONLY');
+    assert.equal(result.request.messages.filter(message => message.role !== 'context').at(-1)?.text, 'CURRENT_ONLY');
     const state = await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox'));
     assert.equal(state?.memo?.end, 8);
   } finally {await f.cleanup();}
@@ -312,7 +312,7 @@ test('long-running compaction preserves the current goal and latest paired tool 
     const result = await f.contexts.prepare(identity, base, signal);
     assert.equal(result.request.messages[0]?.text, 'CURRENT_GOAL');
     assert.match(result.request.messages[1]!.text, /Current task progress/);
-    assert.equal(result.request.messages.at(-1)?.text, '第二处证据');
+    assert.equal(result.request.messages.filter(message => message.role !== 'context').at(-1)?.text, '第二处证据');
     assertPairs(result.request.messages);
   } finally {await f.cleanup();}
 });
@@ -367,7 +367,7 @@ test('application auto-compaction and manual compaction share policy and restore
     assert.equal(requests.length, 3, 'Restore makes no model request');
     await app.ensemble.dispatch('logox', '继续').done;
     assert.ok(requests[3]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
-    assert.equal(requests[3]!.messages.at(-1)?.text, '继续');
+    assert.equal(requests[3]!.messages.findLast(message => message.role === 'user')?.text, '继续');
     assert.ok(requests[3]!.maxTokens! < config.provider.max_tokens);
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });

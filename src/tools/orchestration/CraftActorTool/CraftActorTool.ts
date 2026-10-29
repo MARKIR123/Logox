@@ -5,3 +5,5 @@ export const craftActorSchema = z.strictObject({
 });
 
 export type CraftActorArgs = z.infer<typeof craftActorSchema>;
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'CraftActor', category: 'orchestration', roles: 'director', terminalVisibility: 'card', description: 'Create and register a new persistent actor persona'};

@@ -6,8 +6,8 @@ import {htmlToMarkdown} from './utils.js';
 export {htmlToMarkdown};
 
 export const webFetchSchema = z.strictObject({
-  url: z.string().url(),
-  prompt: z.string().optional(),
+  url: z.string().url().describe('HTTP or HTTPS URL to fetch. Returns the response body as Markdown; does not render JavaScript.'),
+  prompt: z.string().optional().describe('Optional context goal included in the result header only. Does not filter, extract or summarize the fetched content.'),
 });
 
 export type WebFetchArgs = z.infer<typeof webFetchSchema>;
@@ -72,3 +72,5 @@ export async function executeWebFetch(
     isError: false,
   };
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'WebFetch', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Fetch URL contents and convert to clean markdown'};

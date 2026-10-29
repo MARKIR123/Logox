@@ -5,6 +5,22 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {loadConfig, modelSettings} from '../src/config/config.js';
 
+test('tool disclosure configuration uses model over selected provider over named provider', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-disclosure-config-'));
+  try {
+    const config = await loadConfig(root, {provider: {name: 'local', model: 'fixture', tool_discovery: 'none'},
+      providers: {local: {kind: 'anthropic', base_url: 'http://127.0.0.1:9999/v1', tool_discovery: 'anthropic'}},
+      models: {'local/fixture': {tool_discovery: 'anthropic'}}}, {}, root, root);
+    assert.equal(modelSettings(config, {}).toolDiscovery, 'anthropic');
+    delete config.models['local/fixture'];
+    assert.equal(modelSettings(config, {}).toolDiscovery, 'none');
+    delete config.provider.tool_discovery;
+    assert.equal(modelSettings(config, {}).toolDiscovery, 'anthropic');
+    config.provider.kind = 'openai_compat';
+    assert.throws(() => modelSettings(config, {}), /Anthropic.*protocol/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test('配置按用户、祖先项目、当前项目、环境和命令覆盖，凭据仅在环境读取', async () => {
   const root = await mkdtemp(join(tmpdir(), 'logox-config-'));
   const home = join(root, 'home'), project = join(root, 'project'), child = join(project, 'child');

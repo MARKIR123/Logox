@@ -4,18 +4,27 @@ import {immutable, type InteractionInput, type InteractionOutcome, type Step, ty
 import {repairToolResults, type ModelMessage} from '../runtime/messages.js';
 import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
 import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
-import type {HistoryEntry, HistoryStore, TaskCheckpoint} from '../store/journal.js';
+import {storedMessage, type HistoryEntry, type HistoryStore, type TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
 
+import {builtinActors} from './builtins.js';
+
+// Fallback roles share the shipped profile colors with builtinActors. Runtime
+// prefers the loaded catalog; keep this compatibility shape without card surfaces.
+function builtinColor(id: string): string {
+  const actor = builtinActors.find(actor => actor.id === id);
+  if (!actor) throw new Error('Missing shipped actor: ' + id);
+  return actor.color;
+}
 export const cast = immutable({
-  logox: {symbol: '◈', name: 'Logox', title: '执导者', color: '#d97757'},
-  aletheia: {symbol: '◎', name: 'Aletheia', title: '澄明 · 侦察者', color: '#7ee7c4'},
-  techne: {symbol: '⊞', name: 'Techne', title: '精工 · 构建匠人', color: '#e5b567'},
-  kalon: {symbol: '✧', name: 'Kalon', title: '雅正 · 审美官', color: '#e8a8dc'},
+  logox: {symbol: '◈', name: 'Logox', title: '执导者', color: builtinColor('logox')},
+  aletheia: {symbol: '◎', name: 'Aletheia', title: '澄明 · 侦察者', color: builtinColor('aletheia')},
+  techne: {symbol: '⊞', name: 'Techne', title: '精工 · 构建匠人', color: builtinColor('techne')},
+  kalon: {symbol: '✧', name: 'Kalon', title: '雅正 · 审美官', color: builtinColor('kalon')},
 });
 export type ActorId = keyof typeof cast;
 export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel';
@@ -104,7 +113,7 @@ export class EnsembleRuntime<Id extends string> {
     this.controllers.set(activityId, controller);
     this.store.activities.create({
       sessionId: this.sessionId, activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
-      title: member.name + ' · ' + member.title,
+      title: origin.taskTitle ?? (member.name + ' · ' + member.title),
       status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: '等待登场', detail: prompt,
       ...this.identityOrigin(origin),
     });
@@ -251,9 +260,10 @@ export class EnsembleRuntime<Id extends string> {
     await Promise.allSettled([...this.pendingWrites]);
   }
   private identityOrigin(origin: TaskOrigin) {
-    const {parentActivityId, rootActivityId, batchId, resumeTaskId} = origin;
+    const {parentActivityId, rootActivityId, batchId, resumeTaskId, taskTitle} = origin;
     return {...(parentActivityId ? {parentActivityId} : {}), ...(rootActivityId ? {rootActivityId} : {}), ...(batchId ? {batchId} : {}),
       ...(resumeTaskId ? {resumeTaskId} : {}),
+      ...(taskTitle ? {taskTitle} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
       ...(origin.coordinationWake ? {coordinationWake: true} : {}),
@@ -323,7 +333,7 @@ export class EnsembleRuntime<Id extends string> {
       } catch {
         this.store.message(this.sessionId, ownerId, 'notice', 'Round memory could not be saved; original messages are preserved.', {activityId});
         const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
-        const messages: ModelMessage[] = entries.map(entry => entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text});
+        const messages: ModelMessage[] = entries.map(storedMessage);
         const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly), status);
         const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && message.text.trim())?.text;
         if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text};

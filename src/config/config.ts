@@ -5,11 +5,14 @@ import {parse} from 'smol-toml';
 import {z} from 'zod';
 import {effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
 import {hooksSchema, mcpServerSchema} from '../extensions/config.js';
+import {defaultPalette, hexColorSchema} from './theme-palette.js';
 
 export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
   input: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative().optional(),
   cache_read: z.number().finite().nonnegative().optional(), cache_write: z.number().finite().nonnegative().optional()});
+export const toolDiscoverySchema = z.enum(['auto', 'none', 'anthropic', 'openai-responses']);
 const capacitySchema = z.object({
+  tool_discovery: toolDiscoverySchema.optional(),
   thinking_protocol: z.enum(['deepseek', 'anthropic-budget', 'anthropic-adaptive', 'reasoning-effort']).optional(),
   thinking_levels: z.array(effortSchema).min(1).optional(), prices: priceSchema.optional(),
   context_window: z.number().int().min(256).optional(),
@@ -27,17 +30,16 @@ export const contextPolicySchema = z.object({
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens 必须小于 max_budget_tokens');
 export type ContextPolicy = z.infer<typeof contextPolicySchema>;
+const legacyThemeDefaults = {
+  user: defaultPalette.user, accent: defaultPalette.accent,
+  dream_collapsed: defaultPalette.dreamCollapsed, dream_expanded: defaultPalette.dreamExpanded,
+};
 export const themeSchema = z.object({
-  user: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#5282b5'),
-  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#d97757'),
-  dream_collapsed: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#c4cbd2'),
-  dream_expanded: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#dce2e8'),
-}).default({
-  user: '#5282b5',
-  accent: '#d97757',
-  dream_collapsed: '#c4cbd2',
-  dream_expanded: '#dce2e8',
-});
+  user: hexColorSchema.default(legacyThemeDefaults.user),
+  accent: hexColorSchema.default(legacyThemeDefaults.accent),
+  dream_collapsed: hexColorSchema.default(legacyThemeDefaults.dream_collapsed),
+  dream_expanded: hexColorSchema.default(legacyThemeDefaults.dream_expanded),
+}).default(legacyThemeDefaults);
 export type ThemeConfig = z.infer<typeof themeSchema>;
 const schema = z.object({
   theme: themeSchema,
@@ -53,7 +55,9 @@ const schema = z.object({
     name: z.string().default('openai-compatible'), model: z.string().default(''),
     base_url: z.string().url().optional(), api_key_env: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
+    tool_discovery: toolDiscoverySchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
+    api: z.enum(['completions', 'responses']).optional(),
     temperature: z.number().min(0).max(2).default(0.2),
     max_tokens: z.number().int().positive().default(16384),
     timeout: z.number().positive().default(600),
@@ -63,17 +67,21 @@ const schema = z.object({
     max_retries: z.number().int().nonnegative().max(10).default(3),
   }).default({max_iterations: 0, max_retries: 3}),
   providers: z.record(z.string(), z.object({
+    tool_discovery: toolDiscoverySchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
+    api: z.enum(['completions', 'responses']).optional(),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
   })).default({}),
 });
 export type Config = z.infer<typeof schema>;
 export interface ModelSettings {
+  api?: 'completions' | 'responses' | undefined;
   kind: 'openai_compat' | 'anthropic'; baseUrl: string; model: string; key: string;
   temperature: number; maxTokens: number; timeoutMs: number; thinkingControl?: boolean;
   thinkingEffort?: import('./model-preferences.js').ThinkingEffort;
   thinkingProtocol?: 'deepseek' | 'anthropic-budget' | 'anthropic-adaptive' | 'reasoning-effort';
+  toolDiscovery?: z.infer<typeof toolDiscoverySchema>;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
@@ -182,6 +190,9 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   const cleanModel = model.toLowerCase();
   const cleanProvider = provider.name.toLowerCase();
   const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
+  const toolDiscovery = declared?.tool_discovery ?? provider.tool_discovery ?? config.providers[provider.name]?.tool_discovery ?? 'auto';
+  if (toolDiscovery === 'anthropic' && kind !== 'anthropic') throw new Error('Anthropic tool discovery requires the Anthropic message protocol.');
+  if (toolDiscovery === 'openai-responses' && kind !== 'openai_compat') throw new Error('OpenAI Responses discovery requires the OpenAI protocol.');
   const protocol = declared?.thinking_protocol ?? (
     official && provider.name === 'deepseek' && ['deepseek-flash', 'deepseek-v4-pro'].includes(model) ? 'deepseek'
     : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
@@ -191,7 +202,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
-  return {kind, baseUrl,
+  return {kind, baseUrl, toolDiscovery, api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

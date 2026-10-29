@@ -14,7 +14,7 @@ import {UsageLedger} from '../src/context/usage.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import {ApplicationStage} from '../src/tui/application.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});

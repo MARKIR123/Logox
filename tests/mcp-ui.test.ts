@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {Step} from '../src/runtime/contracts.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {getToolUI} from '../src/tools/ui-registry.js';
 
 function render(args: unknown, text: string, options: {state?: Step['state']; disposition?: Step['disposition']; open?: boolean; width?: number} = {}) {

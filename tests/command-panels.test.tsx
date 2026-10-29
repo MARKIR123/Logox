@@ -4,12 +4,14 @@ import {PassThrough} from 'node:stream';
 import {TerminalScreen} from './terminal-screen.js';
 import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
-import {renderTerminal as render} from '../src/tui/terminal.js';
+import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import {createServer} from 'node:http';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {App} from '../src/tui/app.js';
+import stringWidth from 'string-width';
+import {COMPOSER_EXPAND_LABEL, COMPOSER_EXPAND_PADDING} from '../src/tui/input/fullscreen-editor.js';
 import {CommandSurfaces} from '../src/commands/surfaces.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {loadConfig} from '../src/config/config.js';
@@ -20,6 +22,10 @@ class TerminalInput extends PassThrough {
 }
 class TerminalOutput extends TerminalScreen {}
 function frame(output: TerminalOutput): string {return output.lines.join('\n');}
+function composerLine(output: TerminalOutput, draft: string): string {
+  // The original draft stays intact; the new action occupies only the far-right cells.
+  return draft + ' '.repeat(output.columns - 1 - COMPOSER_EXPAND_PADDING - stringWidth(draft) - stringWidth(COMPOSER_EXPAND_LABEL)) + COMPOSER_EXPAND_LABEL;
+}
 async function press(input: TerminalInput, instance: ReturnType<typeof render>, value: string): Promise<void> {
   await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();
 }
@@ -69,6 +75,98 @@ test('实际 Ink picker：搜索、跳过禁用、翻页、取消；页签保留
     await instance.waitUntilExit();
   } finally {surfaces.close(); store.interactions.close(); await act(async () => instance.unmount()); await instance.waitUntilExit(); input.destroy(); output.destroy();}
 });
+test('slash menu frame preserves mouse row selection and composer space after resize', async () => {
+  const input = new TerminalInput(), output = new TerminalOutput(), store = new RuntimeStore();
+  let instance!: ReturnType<typeof render>;
+  await act(async () => {instance = render(<App stage sessionId="menu-frame" store={store}
+    onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/>,
+    {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
+  const key = async (value: string) => press(input, instance, value);
+  try {
+    await key('/');
+    const top = output.lines.findIndex(line => line.startsWith('─ Commands'));
+    assert.ok(top >= 0, 'Slash suggestions have a top border');
+    const first = output.lines[top + 1]!.match(/\/\S+/)![0];
+    const second = output.lines[top + 2]!.match(/\/\S+/)![0];
+    const click = async (x: number, y: number) => {
+      await key(`\x1b[<0;${x + 1};${y + 1}M`);
+      await key(`\x1b[<0;${x + 1};${y + 1}m`);
+    };
+    await click(4, top + 2);
+    assert.ok(frame(output).includes('❯ ' + second), 'Clicking the second body row selects exactly the second command');
+    await click(4, top);
+    assert.ok(frame(output).includes('❯ ' + second), 'Top border is not a selectable command');
+    await click(0, top + 1);
+    assert.ok(frame(output).includes('❯ ' + first), 'Without side borders, the full body row is selectable');
+    await click(4, top + 1);
+    assert.ok(frame(output).includes('❯ ' + first), 'First body row maps to the first command');
+    await act(async () => {output.resize(32, 10);});
+    await instance.waitUntilRenderFlush();
+    assert.ok(output.lines.some(line => line.startsWith('─ Commands')));
+    assert.doesNotMatch(frame(output), /[╭╮╰╯│]/);
+    assert.ok(output.lines.includes(composerLine(output, '/')), 'Composer is still visible below the menu');
+    await key('\x1b');
+    assert.ok(!frame(output).includes('❯ ' + first), 'Escape closes the menu');
+    assert.ok(output.lines.includes(composerLine(output, '/')), 'Closing keeps the command draft');
+  } finally {
+    await act(async () => {instance.unmount();});
+    await instance.waitUntilExit(); input.destroy(); output.destroy(); store.interactions.close();
+  }
+});
+
+test('production dsh menu keeps global indexes across windowing, wheel, clicks and narrow layouts', async () => {
+  const input = new TerminalInput(), output = new TerminalOutput(), store = new RuntimeStore(), submitted: string[] = [];
+  let instance!: ReturnType<typeof render>;
+  await act(async () => {instance = render(<App stage sessionId="dsh-window" store={store}
+    getCommandContext={() => ({providers: [], loginProviders: [], models: [],
+      customCommands: Array.from({length: 9}, (_, index) => ({name: 'zz' + index, description: 'Custom action ' + index}))})}
+    onSubmit={async text => {submitted.push(text);}} onCancel={() => {}} onClose={async () => {}}/>,
+    {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
+  const key = async (value: string) => press(input, instance, value);
+  const click = async (y: number) => {
+    await key(`\x1b[<0;8;${y + 1}M`); await key(`\x1b[<0;8;${y + 1}m`);
+  };
+  try {
+    await key('/zz');
+    assert.match(frame(output), /Commands · 9/);
+    assert.match(frame(output), /↓4/);
+    for (let index = 0; index < 6; index++) await key('\x1b[B');
+    assert.match(frame(output), /❯ \/zz6/);
+    assert.match(frame(output), /↑4/);
+    let top = output.lines.findIndex(line => line.startsWith('─ Commands'));
+    await key(`\x1b[<64;8;${top + 2}M`);
+    assert.match(frame(output), /❯ \/zz5/);
+    assert.match(frame(output), /↑3 · ↓1/);
+    await key(`\x1b[<65;8;${top + 2}M\x1b[<65;8;${top + 2}M`);
+    assert.match(frame(output), /❯ \/zz7/, 'Two wheel events in one input chunk advance two items');
+    await key(`\x1b[<64;8;${top + 2}M\x1b[<64;8;${top + 2}M`);
+    assert.match(frame(output), /❯ \/zz5/);
+    await click(top + 2);
+    assert.match(frame(output), /❯ \/zz4/, 'Second visible item maps to global index four');
+    await click(top);
+    await click(top + 6);
+    assert.match(frame(output), /❯ \/zz4/, 'Title and hidden-count footer cannot select commands');
+    assert.deepEqual(submitted, [], 'Mouse navigation never executes a command');
+    await act(async () => {output.resize(32, 10);}); await instance.waitUntilRenderFlush();
+    top = output.lines.findIndex(line => line.startsWith('─ Commands'));
+    assert.ok(top >= 0);
+    assert.ok(output.lines.includes(composerLine(output, '/zz')), 'Composer remains visible after shrinking the menu');
+    assert.match(frame(output), /❯ \/zz4/);
+    await click(top + 1);
+    assert.match(frame(output), /❯ \/zz3/, 'Click offsets track the smaller visible window');
+    for (const rows of [7, 6]) {
+      await act(async () => {output.resize(32, rows);}); await instance.waitUntilRenderFlush();
+      assert.match(frame(output), /❯ \/zz3/, `Selected option stays visible at ${rows} terminal rows`);
+      assert.ok(output.lines.includes(composerLine(output, '/zz')));
+    }
+    await key('\t');
+    assert.ok(output.lines.includes(composerLine(output, '/zz3')), 'Tab completes using the original Logox candidate');
+    assert.deepEqual(submitted, []);
+  } finally {
+    await act(async () => {instance.unmount();}); await instance.waitUntilExit(); input.destroy(); output.destroy(); store.interactions.close();
+  }
+});
+
 test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 /status 不调用模型', {timeout: 8000}, async () => {
   const server = createServer((request, response) => {response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({data: [{id: 'same'}, {id: request.url?.startsWith('/beta') ? 'beta-only' : 'alpha-only'}]}));});
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -96,14 +194,18 @@ test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 
   const selected = async () => {
     await act(async () => {
       for (let i = 0; i < 100; i++) {if (!app.surfaces.getSnapshot()) return; await delay(10);}
-      throw new Error('模型选择未完成');
+      throw new Error('模型选择未完成:\n' + frame(output));
     });
     await instance.waitUntilRenderFlush();
   };
   try {
     await openModels();
-    assert.match(frame(output), /(?:选择模型|Select Model)/); assert.match(frame(output), /same · (?:当前|current)/);
-    await key('beta'); assert.doesNotMatch(frame(output), /alpha-only/); await key('\r'); await selected();
+    assert.match(frame(output), /(?:Select Model for|选择模型)/); assert.match(frame(output), /same · (?:当前|current)/);
+    for (let i = 0; i < 8 && !/\[ beta \]/.test(frame(output)); i++) await key('\t');
+    assert.match(frame(output), /\[ beta \]/, 'Tab 切到 beta 标签页:\n' + frame(output));
+    await key('beta');
+    assert.match(frame(output), /❯ .*beta-only/, '过滤后选中 beta-only');
+    assert.doesNotMatch(frame(output), /alpha-only/); await key('\r'); await selected();
     assert.equal(app.commandContext().models[0], 'beta-only');
     await openModels(); await key('alpha'); await key('\x1b');
     assert.equal(app.commandContext().models[0], 'beta-only');

@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {cast} from '../src/actors/ensemble.js';
-import {palette} from '../src/tui/cards.js';
-import {thinkingRequests} from '../src/tui/thinking-groups.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {decorateRow} from '../src/tui/row-presentation.js';
-import {actionAt} from '../src/tui/scene.js';
-import {contentPoint, selectionRange, type ContentSelection} from '../src/tui/selection.js';
-import {extractSelection} from '../src/tui/viewport.js';
+import {palette} from '../src/tui/appearance/theme.js';
+import {thinkingRequests} from '../src/tui/timeline/thinking-groups.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {decorateRow} from '../src/tui/timeline/row-presentation.js';
+import {actionAt} from '../src/tui/timeline/scene.js';
+import {contentPoint, selectionRange, type ContentSelection} from '../src/tui/timeline/selection.js';
+import {extractSelection} from '../src/tui/timeline/viewport.js';
 
 test('请求投影按快照缓存，界面操作复用时钟，流式只更新该请求估算 Tokens', () => {
   const f = fixture(), id = f.steps.thinking(); f.store.appendMessage(id, '先检查');

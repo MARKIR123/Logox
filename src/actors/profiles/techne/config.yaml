@@ -2,19 +2,19 @@ id: techne
 name: Techne
 title: 精工 · 构建匠人
 description: 推理、构建模块、修复根因，用实际验证闭合实现。
-color: "#e5b567"
-card_closed: "#483c27"
-card_open: "#5c4d32"
+color: "#E5C07B"
+card_closed: "#403622"
+card_open: "#57492F"
 symbol: ⊞
 thinking_animation:
-  - "▖"
-  - "▌"
-  - "▘"
-  - "▀"
-  - "▝"
-  - "▐"
-  - "▗"
-  - "▄"
+  - "\U000F08A1"
+  - "\U000F00CB"
+  - "\U000F00C7"
+  - "\U000F11D9"
+  - "\U000F0570"
+  - "\U000F11D9"
+  - "\U000F00C7"
+  - "\U000F00CB"
 context:
   keep_recent_rounds: 0
   keep_recent_tools: 2

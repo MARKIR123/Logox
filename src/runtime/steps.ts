@@ -32,8 +32,8 @@ export class Steps {
     if (this.groupThinking) this.store.updateMessage(this.groupThinking, {step: {...this.get(this.groupThinking), groupState: state}});
     this.groupId = undefined; this.groupThinking = undefined;
   }
-  tool(call: ToolCall): string {
-    return this.create('tool', {title: legacyToolTitle(call), callId: call.id, call, ...(this.groupId ? {groupId: this.groupId} : {}), state: 'queued', elapsedMs: 0}, call.name + '\n' + call.arguments);
+  tool(call: ToolCall, terminalVisibility?: Step['terminalVisibility']): string {
+    return this.create('tool', {title: legacyToolTitle(call), callId: call.id, call, ...(terminalVisibility ? {terminalVisibility} : {}), ...(this.groupId ? {groupId: this.groupId} : {}), state: 'queued', elapsedMs: 0}, call.name + '\n' + call.arguments);
   }
   private create(kind: 'thinking' | 'tool', step: Step, text: string): string {
     const stage = this.currentStage();

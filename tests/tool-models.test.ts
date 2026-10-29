@@ -6,8 +6,8 @@ import {join} from 'node:path';
 import {ToolModelStorage} from '../src/tools/tool-models.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
-import {commandSuggestions} from '../src/tui/completion.js';
-import type {Draft} from '../src/tui/editor.js';
+import {commandSuggestions} from '../src/tui/commands/completion.js';
+import type {Draft} from '../src/tui/input/editor.js';
 
 test('ToolModelStorage reads, writes, and deletes tool model configurations atomically', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'logox-tool-models-'));
@@ -85,7 +85,7 @@ test('/model automa configures automa model via slash command, opens picker, and
     await app.submit('/model automa');
     const picker = app.surfaces.getSnapshot();
     assert.ok(picker?.kind === 'picker');
-    assert.equal(picker.title, 'Automa Model');
+    assert.equal(picker.title, 'Select Model for Automa');
     assert.equal(picker.current, JSON.stringify({provider: 'beta', model: 'fast-model'}));
 
     // Cancel picker

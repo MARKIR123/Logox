@@ -11,7 +11,8 @@ function mockContext(): ApplicationCommandContext {
   return {
     session: 'session-1',
     pageOwner: 'logox',
-    currentTheme: 'Logox Dark',
+    currentTheme: 'mist-dark',
+    themeOptions: ['mist-dark', 'logox-dark'],
     currentCursor: 'Block █',
     motion: true,
     permissions: {
@@ -34,21 +35,36 @@ function mockContext(): ApplicationCommandContext {
   };
 }
 
-test('createCommandTabsFor returns dedicated single tab for /config with theme, cursor, and motion', () => {
-  const result = createCommandTabsFor('/config', mockContext())!;
+test('createCommandTabsFor exposes appearance and the shared statusbar editor from /settings', () => {
+  const result = createCommandTabsFor('/settings', mockContext())!;
   assert.equal(result.title, 'Settings');
-  assert.equal(result.tabs.length, 1);
-  assert.equal(result.tabs[0]!.id, 'config');
+  assert.equal(result.initialTab, 'settings');
+  assert.deepEqual(result.tabs.map(tab => tab.id), ['settings', 'statusbar']);
+  assert.deepEqual(result.tabs[1], createCommandTabsFor('/statusbar', mockContext())!.tabs[0]);
+  assert.deepEqual(createCommandTabsFor('/animations', mockContext()), result, 'Animations remains a settings alias');
+  assert.equal(result.tabs[0]!.id, 'settings');
+  assert.deepEqual(result.tabs[0]!.lines, [], 'Visual settings never include effective configuration output');
   const toggles = result.tabs[0]!.toggles!;
   assert.equal(toggles.length, 3);
   assert.equal(toggles[0]!.id, 'theme');
-  assert.equal(toggles[0]!.value, 'Logox Dark');
-  assert.ok(toggles[0]!.options?.includes('Claude Warm'));
+  assert.equal(toggles[0]!.value, 'mist-dark');
+  assert.ok(toggles[0]!.options?.includes('logox-dark'));
   assert.equal(toggles[1]!.id, 'cursor');
   assert.equal(toggles[1]!.value, 'Block █');
   assert.ok(toggles[1]!.options?.includes('Underline _'));
   assert.equal(toggles[2]!.id, 'motion');
   assert.equal(toggles[2]!.enabled, true);
+});
+
+test('createCommandTabsFor exposes only read-only effective configuration from /config', () => {
+  const configLines = ['Provider: fixture', 'Model: local-only', 'Max tokens: 8192'];
+  const result = createCommandTabsFor('/config', {...mockContext(), configLines})!;
+  assert.equal(result.title, 'Effective Configuration');
+  assert.equal(result.initialTab, 'config');
+  assert.equal(result.tabs[0]!.toggles, undefined);
+  assert.equal(result.tabs[0]!.statusbar, undefined);
+  assert.deepEqual(result.tabs, [{id: 'config', title: 'Config', lines: configLines}]);
+  assert.deepEqual(createCommandTabsFor('/config', mockContext())!.tabs[0]!.lines, []);
 });
 
 test('createCommandTabsFor returns dedicated single tab for /permissions', () => {

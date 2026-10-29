@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 const thought = (): ModelTurn => ({message: {role: 'assistant', text: '', reasoning: '核对当前步骤的实现方式'},
   stop: 'length', usage: {input: 7000, output: 16384}});
@@ -35,8 +35,8 @@ test('Director stops after repeated reasoning-only turns while preserving usage 
     const handle = f.app.ensemble.dispatch('logox', '核对这个任务'); await handle.done;
     assert.equal(f.requests.length, 3);
     assert.equal(f.app.store.activities.get('task-flow', handle.activityId)?.status, 'failed');
-    assert.match(f.requests[1]!.system, /minimum deliverable step/i);
-    assert.match(f.requests[2]!.system, /Pivot the action plan/i);
+    assert.match(f.requests[1]!.messages.findLast(message => message.role === 'context' && message.kind === 'recovery')?.text ?? '', /minimum deliverable step/i);
+    assert.match(f.requests[2]!.messages.findLast(message => message.role === 'context' && message.kind === 'recovery')?.text ?? '', /Pivot the action plan/i);
     for (const request of f.requests) assert.ok(request.messages.every(message => message.role !== 'assistant' || message.text.trim() || message.toolCalls?.length));
     const history = await f.app.journal.load('task-flow', 'logox');
     const reasoning = history.filter(entry => entry.message?.role === 'assistant' && entry.message.reasoning);
@@ -83,7 +83,7 @@ test('activity labels execute through Agent, remain self-reports and restore wit
     assert.equal(activity.status, 'completed');
     assert.deepEqual(activity.progress, {label: 'Preparing the report'});
     assert.equal(f.requests.length, 6);
-    assert.match(f.requests[4]!.system, /Current activity label \(self-reported, not verification\): Preparing the report/);
+    assert.match(f.requests[4]!.messages.findLast(message => message.role === 'context' && message.kind === 'task-state')?.text ?? '', /Current activity label \(self-reported, not verification\): Preparing the report/);
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.ok(history.every(entry => entry.step?.stage === undefined));
     await f.app.close();

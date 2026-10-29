@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {palette} from '../src/tui/cards.js';
-import {decorateRow} from '../src/tui/row-presentation.js';
-import {actionAt} from '../src/tui/scene.js';
-import {contentPoint, selectionRange} from '../src/tui/selection.js';
-import {extractSelection} from '../src/tui/viewport.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {palette} from '../src/tui/appearance/theme.js';
+import {decorateRow} from '../src/tui/timeline/row-presentation.js';
+import {actionAt} from '../src/tui/timeline/scene.js';
+import {contentPoint, selectionRange} from '../src/tui/timeline/selection.js';
+import {extractSelection} from '../src/tui/timeline/viewport.js';
 import {TaskProgress} from '../src/runtime/task-progress.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 

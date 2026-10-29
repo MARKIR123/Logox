@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readFile, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {EnsembleRuntime, type TaskResult} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {ModelRequest, ModelTurn, Provider, ToolCall} from '../src/runtime/messages.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
@@ -38,7 +39,7 @@ async function fixture(respond: (request: ModelRequest, index: number) => ModelT
     return value;
   }};
   const execute = createAgent({cwd, store, tools: new Tools(cwd), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => ({system: 'Test execution', tools: toolDefinitions})});
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd, ownerId: 'techne', builtinPrompt: 'Test execution'}), tools: toolDefinitions})});
   const ensemble = new EnsembleRuntime<string>('s', store, journal, execute, {handoff: async result => {handed.push(result);}});
   return {cwd, journal, store, requests, handed, ensemble,
     async cleanup() {await ensemble.close(); unsubscribe(); await rm(cwd, {recursive: true, force: true});}};
@@ -144,11 +145,12 @@ test('internal repair text and memory metadata stay invisible across actor views
     }
     await app.ensemble.dispatch('techne', 'Continue', 'direct', {inputKind: 'human'}).done;
     assert.equal(calls, 3);
-    assert.ok(!JSON.stringify(seen.at(-1)!.messages).includes('_FinishRound'));
+    assert.ok(!seen.at(-1)!.messages.some(message => message.role === 'tool' && message.name === '_FinishRound' ||
+      message.role === 'assistant' && message.toolCalls?.some(call => call.name === '_FinishRound')));
     assert.ok(!JSON.stringify(seen.at(-1)!.messages).includes('PRIVATE_REPAIR_TEXT'));
     const entries = await app.journal.load('s', 'techne');
     const records = await app.journal.rounds('s', 'techne', entries);
-    assert.deepEqual(records[0]?.sourceLines, {start: 1, end: 4});
+    assert.deepEqual(records[0]?.sourceLines, {start: 1, end: original.trimEnd().split('\n').length});
     assert.ok((await readFile(app.journal.path('s', 'techne'), 'utf8')).startsWith(original));
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
@@ -179,11 +181,11 @@ test('only formal Director dispatch produces an independent full report', async 
     const formal = f.handed[0] as TaskResult<string> & {delivery?: {text: string}};
     assert.equal(formal?.delivery?.text, report);
     assert.ok(formal.summary.report.length <= 2000);
-    assert.match(f.requests[0]!.system, /Outcome[\s\S]*Deliverables[\s\S]*Verification[\s\S]*Open Items/);
+    assert.match(f.requests[0]!.system, /Only when this round was formally assigned by Director[\s\S]*no rigid template headings required/);
     const direct = f.ensemble.dispatch('techne', 'Discuss', 'direct', {inputKind: 'human'});
     await direct.done;
     assert.equal(f.handed.length, 1);
-    assert.ok(!f.requests[1]!.system.includes('# Task report'));
+    assert.equal(f.requests[1]!.system, f.requests[0]!.system, 'Report rules are stable and conditional on assignment provenance.');
     assert.ok(!JSON.stringify(f.requests[1]!.messages).includes('_FinishRound'));
     const entries = await f.journal.load('s', 'techne');
     const records = await f.journal.rounds('s', 'techne', entries);
@@ -196,7 +198,7 @@ test('missing metadata gets one metadata-only correction without repeating the a
     if (index === 1) return turn('Already delivered');
     assert.equal(index, 2);
     assert.deepEqual(request.tools.map(tool => tool.name), ['_FinishRound']);
-    assert.match(request.system, /metadata-only/i);
+    assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'finalizer')?.text ?? '', /metadata-only/i);
     return turn('Already delivered', [finish()]);
   });
   try {

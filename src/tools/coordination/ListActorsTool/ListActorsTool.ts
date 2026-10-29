@@ -37,3 +37,5 @@ export function executeListActors(_args: ListActorsArgs, context: {
   });
   return {text: JSON.stringify({actors}, null, 2), isError: false};
 }
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'ListActors', category: 'coordination', roles: 'all', terminalVisibility: 'card', description: 'List available actors in the active ensemble'};

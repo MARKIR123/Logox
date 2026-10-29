@@ -59,9 +59,8 @@ test('思考及提供商 picker 确认才写入；取消、无效档位、坏文
     app.surfaces.cancel(); await assert.rejects(readFile(f.file), {code: 'ENOENT'});
     await app.submit('/think low'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).effort, 'low');
     await assert.rejects(app.submit('/effort medium'), /未声明支持/);
-    await app.submit('/provider'); await new Promise(resolve => setImmediate(resolve)); picker = app.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker');
-    await app.surfaces.choose(picker.id, 'antigravity'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).provider, 'antigravity');
-    await app.submit('/provider local first');
+    await app.submit('/providers antigravity'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).provider, 'antigravity');
+    await app.submit('/providers local first');
     await writeFile(f.file, '{broken'); await assert.rejects(app.submit('/model second'), /保存状态失败/);
     assert.equal(await readFile(f.file, 'utf8'), '{broken');
     await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); app.surfaces.cancel();

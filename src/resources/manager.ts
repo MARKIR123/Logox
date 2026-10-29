@@ -17,6 +17,7 @@ export interface SkillResource {
   readonly description: string;
   readonly path: string;
   readonly actors?: readonly string[];
+  readonly public?: true;
   readonly level?: 'core' | 'domain';
   readonly category?: string;
 }
@@ -33,6 +34,7 @@ export interface ResourceSnapshot {
   readonly commands: readonly CommandResource[];
   readonly issues: readonly ResourceIssue[];
 }
+export interface ResourcePromptSections {readonly guidelines: readonly TextResource[]; readonly skills: string}
 export interface ResourceOptions {home?: string; boundary?: string}
 export interface SkillVisibility {readonly actorId: string; readonly skills?: readonly string[]; readonly borrowed?: readonly string[]}
 const maxBytes = 64 * 1024;
@@ -118,7 +120,7 @@ export class Resources {
     actorIdSchema.parse(input.actorId);
     return Object.freeze(this.value.skills.filter(skill => {
       const explicit = input.skills?.includes(skill.name) || this.assignments.get(skill.name)?.has(input.actorId);
-      return explicit || input.borrowed?.includes(skill.name) || skill.actors?.includes(input.actorId)
+      return explicit || input.borrowed?.includes(skill.name) || skill.public || skill.actors?.includes(input.actorId)
         || (input.actorId === 'logox' && skill.actors === undefined);
     }));
   }
@@ -167,42 +169,28 @@ export class Resources {
 
     return Object.freeze(result.sort((a, b) => a.category.localeCompare(b.category)));
   }
-  prompt(visibility: SkillVisibility = {actorId: 'logox'}): {context: string} {
-    const state = this.value;
+  promptSections(visibility: SkillVisibility = {actorId: 'logox'}): ResourcePromptSections {
     const skills = this.skillsFor(visibility);
-    const guidelines = state.guidelines.map(item => 'Project Collaboration Guidelines: ' + item.path + '\n' + item.text);
-
-    if (!skills.length) {
-      return {context: guidelines.join('\n\n')};
-    }
-
     const coreSkills = skills.filter(item => item.level !== 'domain');
-    const domainSkills = skills.filter(item => item.level === 'domain');
-    const actorCategories = this.categoriesFor(visibility.actorId, domainSkills);
-
+    const actorCategories = this.categoriesFor(visibility.actorId, skills.filter(item => item.level === 'domain'));
     const sections: string[] = [];
-
-    if (coreSkills.length) {
-      sections.push([
-        '【Core Principles】(Always in effect. Read full text via path as needed)',
-        ...coreSkills.map(item => `- ${item.name}: ${item.description} (path: ${item.path})`),
-      ].join('\n'));
-    }
-
-    if (actorCategories.length) {
-      sections.push([
-        `【Domain Repositories】(Base root: skills/${visibility.actorId}/)`,
-        ...actorCategories.map(cat => `- ${cat.category}/: ${cat.description}`),
-        `(Note: For specialized domain workflows, inspect directory via Glob and Read target SOP. See skills/${visibility.actorId}/agent.md for taxonomy boundaries.)`,
-      ].join('\n'));
-    }
-
-    return {
-      context: [
-        ...guidelines,
-        ...sections,
-      ].filter(Boolean).join('\n\n'),
-    };
+    if (coreSkills.length) sections.push([
+      '### Core Principles',
+      'Read the full instructions at the listed path when applicable.',
+      ...coreSkills.map(item => `- ${item.name}: ${item.description} (path: ${item.path})`),
+    ].join('\n'));
+    if (actorCategories.length) sections.push([
+      '### Domain Repositories',
+      `Base root: skills/${visibility.actorId}/`,
+      ...actorCategories.map(cat => `- ${cat.category}/: ${cat.description}`),
+      `Discover domain instructions with Glob and Read. See skills/${visibility.actorId}/agent.md for category boundaries.`,
+    ].join('\n'));
+    return {guidelines: this.value.guidelines, skills: sections.join('\n\n')};
+  }
+  prompt(visibility: SkillVisibility = {actorId: 'logox'}): {context: string} {
+    const sections = this.promptSections(visibility);
+    return {context: [...sections.guidelines.map(item => 'Project Collaboration Guidelines: ' + item.path + '\n' + item.text),
+      sections.skills].filter(Boolean).join('\n\n')};
   }
   expand(name: string, args: string): string | undefined {
     const command = this.value.commands.find(item => item.name === name.toLowerCase());
@@ -366,6 +354,7 @@ export class Resources {
         }
 
         let actors = defaultActors;
+        let publicSkill = firstSegment === 'public';
         try {
           const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
           if (header) {
@@ -373,6 +362,7 @@ export class Resources {
             if (document.errors.length) throw new Error('技能 Frontmatter 无效');
             const fields: unknown = document.toJS({maxAliasCount: 0});
             if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'actors')) {
+              publicSkill = false;
               const raw: unknown = (fields as Record<string, unknown>).actors;
               if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors 必须是角色 ID 列表');
               actors = Object.freeze([...new Set(raw.map(value => actorIdSchema.parse(String(value))))]);
@@ -385,6 +375,7 @@ export class Resources {
             path: resource.path,
             level,
             ...(category ? {category} : {}),
+            ...(publicSkill ? {public: true as const} : {}),
             ...(actors ? {actors} : {}),
           };
           skills.set(name, Object.freeze(item));

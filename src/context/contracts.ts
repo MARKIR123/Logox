@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import type {ModelMessage} from '../runtime/messages.js';
+import {executionEnvironmentSchema} from '../runtime/context-updates.js';
 import {roundMemorySchema, taskDeliverySchema} from './round-memory.js';
 
 import {roundSummarySchema as summarySchema, type RoundSummary} from '../runtime/contracts.js';
@@ -17,6 +18,8 @@ export type RoundRecord = z.infer<typeof roundSchema>;
 export const contextStateSchema = z.strictObject({
   version: z.literal(1), sessionId: z.string(), ownerId: z.string(),
   sourceLength: z.number().int().nonnegative(), sourceHash: z.string(),
+  discoveredTools: z.array(z.string()).readonly().optional(),
+  environmentBaseline: executionEnvironmentSchema.optional(), environmentCurrent: executionEnvironmentSchema.optional(),
   folded: z.array(z.number().int().nonnegative()),
   archives: z.array(z.strictObject({callIndex: z.number().int().nonnegative(), resultIndex: z.number().int().nonnegative(), hash: z.string().regex(/^[a-f0-9]{64}$/)})),
   memo: z.strictObject({end: z.number().int().positive(), text: z.string().min(1)}).optional(),

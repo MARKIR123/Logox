@@ -4,7 +4,7 @@ import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {App} from '../src/tui/app.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 
 class Input extends PassThrough {

@@ -17,12 +17,26 @@ export const actorDefinitionSchema = z.strictObject({
   color: z.string().regex(/^#[\da-fA-F]{6}$/), symbol: text(8).refine(value => !/\s/.test(value) && [...new Intl.Segmenter().segment(value)].length === 1),
   cardClosed: z.string().regex(/^#[\da-fA-F]{6}$/).optional(),
   cardOpen: z.string().regex(/^#[\da-fA-F]{6}$/).optional(),
-  prompt: text(48000), compression: text(4000), context: actorContextSchema,
+  prompt: text(48000), execution: text(24000).optional(), collaboration: text(24000).optional(),
+  compression: text(4000), context: actorContextSchema,
   defaultModel: actorModelSchema.optional(), skills: z.array(actorIdSchema).max(256).default([]),
   thinkingAnimation: z.array(z.string().min(1)).min(1).max(32).optional(),
 });
 export type ActorDefinition = Readonly<z.infer<typeof actorDefinitionSchema>>;
 export type ActorModel = z.infer<typeof actorModelSchema>;
+
+export function mergeActorPromptLayer(base: ActorDefinition, next: ActorDefinition): ActorDefinition {
+  if (base.id !== next.id) throw new Error('Cannot merge different actor identities.');
+  const append = (previous: string | undefined, current: string | undefined) => {
+    if (!current) return previous;
+    if (!previous || previous === current || current.includes(previous)) return current;
+    return previous + '\n\n' + current;
+  };
+  const execution = append(base.execution, next.execution);
+  const collaboration = append(base.collaboration, next.collaboration);
+  return immutable(actorDefinitionSchema.parse({...next, prompt: append(base.prompt, next.prompt),
+    ...(execution ? {execution} : {}), ...(collaboration ? {collaboration} : {})}));
+}
 
 export function deriveActorCardColors(color: string, closed?: string, open?: string): {closed: string; open: string; highlight: string} {
   const highlight = color;
@@ -76,12 +90,17 @@ export interface ActorProfileFiles {
   readonly config: string;
   readonly persona: string;
   readonly compression?: string | undefined;
+  readonly execution?: string | undefined;
+  readonly collaboration?: string | undefined;
 }
 
 export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
   if (Buffer.byteLength(files.config) > 64 * 1024) throw new Error('角色配置文件超过 64 KiB');
   if (Buffer.byteLength(files.persona) > 64 * 1024) throw new Error('角色人设文件超过 64 KiB');
   if (files.compression && Buffer.byteLength(files.compression) > 64 * 1024) throw new Error('角色压缩文件超过 64 KiB');
+  for (const name of ['execution', 'collaboration'] as const) {
+    if (files[name] && Buffer.byteLength(files[name]) > 64 * 1024) throw new Error(name + '.md exceeds 64 KiB.');
+  }
   const doc = parseDocument(files.config, {uniqueKeys: true});
   if (doc.errors.length) throw new Error(doc.errors.map(error => error.message).join('；'));
   const fields: unknown = doc.toJS({maxAliasCount: 0});
@@ -108,5 +127,8 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
     : raw.context === undefined ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2} : raw.context;
   const compression = (files.compression?.trim() || (typeof raw.compression === 'string' ? raw.compression.trim() : ''));
   const prompt = files.persona.trim();
-  return immutable(actorDefinitionSchema.parse({...raw, context, prompt, compression}));
+  const execution = files.execution?.trim() || raw.execution;
+  const collaboration = files.collaboration?.trim() || raw.collaboration;
+  return immutable(actorDefinitionSchema.parse({...raw, context, prompt, compression,
+    ...(execution ? {execution} : {}), ...(collaboration ? {collaboration} : {})}));
 }

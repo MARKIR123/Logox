@@ -1,7 +1,7 @@
 import type {ToolInteractionAdapter, ToolUI} from './ui-types.js';
 import {canonicalToolName} from './types.js';
 import {defaultToolRegistry} from './registry.js';
-import {createToolUI, messageToolCall} from '../tui/tool-ui.js';
+import {createToolUI, messageToolCall} from '../tui/timeline/tool-ui.js';
 import type {Interaction, Message} from '../runtime/contracts.js';
 import {UI as Read} from './ReadTool/UI.js';
 import {UI as Write} from './WriteTool/UI.js';
@@ -20,6 +20,7 @@ import {UI as CancelActor} from './orchestration/CancelActorTool/UI.js';
 import {UI as UpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/UI.js';
 import {UI as SendMessage} from './coordination/SendMessageTool/UI.js';
 import {UI as FinishRound} from './protocol/_FinishRoundTool/UI.js';
+import {UI as LoadTools} from './protocol/LoadToolsTool/UI.js';
 import {UI as GitStatus} from './protocol/_GitStatusTool/UI.js';
 import {UI as Automa} from './orchestration/AutomaTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
@@ -27,7 +28,7 @@ import {UI as Mcp} from '../extensions/UI.js';
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
   Read, Write, Edit, Glob, Grep, Shell, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
   BorrowSkill, ListActors, CancelActor, UpdateTaskProgress, SendMessage, Automa,
-  _FinishRound: FinishRound, _GitStatus: GitStatus, mcp: Mcp,
+  _FinishRound: FinishRound, _GitStatus: GitStatus, LoadTools, mcp: Mcp,
 };
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));
 const fallback = createToolUI();
@@ -40,6 +41,6 @@ export function getInteractionUI(request: Interaction): ToolInteractionAdapter |
 export function isVisibleToolMessage(message: Message): boolean {
   const call = messageToolCall(message);
   if (!call) return true;
-  if (defaultToolRegistry.getTerminalVisibility(call.name) === 'silent') return false;
+  if ((message.step?.terminalVisibility ?? defaultToolRegistry.getTerminalVisibility(call.name)) === 'silent') return false;
   return getToolUI(call.name).visibility !== 'hidden';
 }

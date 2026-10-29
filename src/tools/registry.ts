@@ -1,209 +1,108 @@
 import {readFile} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
-import {z} from 'zod';
-import type {ToolDefinition} from '../runtime/messages.js';
-import {
-  type ToolMetadata,
-  type ToolTerminalVisibility,
-  type ToolPromptVisibility,
-  type UserToolConfig,
-  userToolConfigSchema,
-  isToolAllowedForActor,
-} from './metadata.js';
-import {schemas, descriptions, canonicalToolName} from './index.js';
-import {sendMessageSchema, sendMessageTool} from './coordination/SendMessageTool/SendMessageTool.js';
-
-const defaultMetadataList: readonly ToolMetadata[] = [
-  // Core: First-class citizens, always present in top-level prompt
-  {name: 'Read', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Read local file contents and inspect visual images'},
-  {name: 'Write', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Write or overwrite file contents completely'},
-  {name: 'Edit', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Perform exact string replacement in a file'},
-  {name: 'Glob', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Fast pattern matching of file paths'},
-  {name: 'Grep', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Regex search in file contents via built-in ripgrep'},
-  {name: 'Shell', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Execute shell commands with timeout and permission controls'},
-  {name: 'AskUserQuestion', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Present structured clarification questions to user'},
-  {name: 'WebFetch', category: 'core', roles: 'all', promptVisibility: 'always', terminalVisibility: 'card', description: 'Fetch URL contents and convert to clean markdown'},
-
-  // Protocol: Lifecycle & environment state inspection
-  {name: '_FinishRound', category: 'protocol', roles: 'all', promptVisibility: 'explicit', terminalVisibility: 'silent', description: 'Record internal round memory and deliver turn'},
-  {name: '_GitStatus', category: 'protocol', roles: 'all', promptVisibility: 'explicit', terminalVisibility: 'silent', description: 'Fetch current Git branch, tracking status, and clean/dirty working tree state on demand'},
-
-  // Coordination: Team collaboration & communication
-  {name: 'SendMessage', category: 'coordination', roles: 'actors', promptVisibility: 'explicit', terminalVisibility: 'notice', description: 'Deliver message to director or peer actor'},
-  {name: 'ListActors', category: 'coordination', roles: 'all', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'List available actors in the active ensemble'},
-  {name: 'BorrowSkill', category: 'coordination', roles: 'actors', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Borrow a specialized skill on demand'},
-
-  // Orchestration: Director dispatch & task control
-  {name: 'Actor', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Dispatch tasks to ensemble actors'},
-  {name: 'CraftActor', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Create and register a new persistent actor persona'},
-  {name: 'ReadActor', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Inspect persona details of a specific actor'},
-  {name: 'CancelActor', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Cancel an active actor task'},
-  {name: 'UpdateTaskProgress', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Update current high-level task progress'},
-  {name: 'Automa', category: 'orchestration', roles: 'director', promptVisibility: 'explicit', terminalVisibility: 'card', description: 'Dispatch a stateless mechanical subtask to Automa'},
-];
+import {fileURLToPath} from 'node:url';
+import type {ToolDefinition, ToolDiscoveryProtocol} from '../runtime/messages.js';
+import {toolMetadataSchema, userToolConfigSchema, isToolAllowedForActor,
+  type ToolMetadata, type ToolMetadataInput, type ToolTerminalVisibility, type ToolPromptVisibility, type UserToolConfig} from './metadata.js';
+import {canonicalToolName} from './types.js';
+import {builtinToolRegistrations, type ToolRegistration, type ResolvedTool} from './catalog.js';
+import {readToolCategories} from './taxonomy.js';
 
 export class ToolRegistry {
-  private readonly metadata = new Map<string, ToolMetadata>();
-  private readonly definitions = new Map<string, ToolDefinition>();
+  private readonly registrations = new Map<string, ResolvedTool>();
   private readonly userOverrides = new Map<string, UserToolConfig>();
-  readonly projectDir: string;
-  readonly userHomeDir: string;
-
-  constructor(
-    projectDir: string = process.cwd(),
-    userHomeDir: string = homedir()
-  ) {
-    this.projectDir = projectDir;
-    this.userHomeDir = userHomeDir;
-    this.initializeDefaults();
+  private readonly categories: ReadonlyMap<string, string>;
+  constructor(readonly projectDir = process.cwd(), readonly userHomeDir = homedir(),
+    toolsDirectory = fileURLToPath(new URL('./', import.meta.url))) {
+    this.categories = readToolCategories(toolsDirectory);
+    for (const item of builtinToolRegistrations()) this.register(item.metadata, item.definition);
   }
-
-  private initializeDefaults(): void {
-    for (const meta of defaultMetadataList) {
-      this.metadata.set(meta.name, meta);
-
-      // Create ToolDefinition from schemas/descriptions if available
-      if (meta.name === 'SendMessage') {
-        this.definitions.set(meta.name, sendMessageTool);
-      } else if (Object.hasOwn(schemas, meta.name)) {
-        const schema = schemas[meta.name as keyof typeof schemas];
-        const desc = descriptions[meta.name as keyof typeof descriptions] || meta.description || '';
-        this.definitions.set(meta.name, {
-          name: meta.name,
-          description: desc,
-          parameters: z.toJSONSchema(schema),
-        });
-      }
-    }
+  private canonical(name: string): string {
+    return canonicalToolName(name) ?? [...this.registrations.keys()].find(key => key.toLowerCase() === name.toLowerCase()) ?? name;
   }
-
-  register(meta: ToolMetadata, definition?: ToolDefinition): void {
-    this.metadata.set(meta.name, meta);
-    if (definition) {
-      this.definitions.set(meta.name, definition);
-    }
+  register(meta: ToolMetadataInput, definition?: ToolDefinition): void {
+    const name = this.canonical(meta.name);
+    const previous = this.registrations.get(name);
+    const value = definition ?? previous?.definition;
+    if (!value) throw new Error('Tool registration requires a definition: ' + name);
+    if (this.canonical(value.name) !== name) throw new Error('Tool metadata and definition names do not match: ' + name);
+    if (previous && JSON.stringify({...value, name}) !== JSON.stringify(previous.definition)) throw new Error('Conflicting tool registration: ' + name);
+    this.registrations.set(name, {metadata: toolMetadataSchema.parse({...meta, name}), definition: {...value, name}});
   }
-
   getMetadata(toolName: string): ToolMetadata | undefined {
-    const canonical = canonicalToolName(toolName) ?? toolName;
-    const base = this.metadata.get(canonical);
+    const name = this.canonical(toolName), base = this.registrations.get(name)?.metadata;
     if (!base) return undefined;
-
-    const override = this.userOverrides.get(canonical);
-    if (!override) return base;
-
-    return {
-      ...base,
-      ...(override.roles !== undefined ? {roles: override.roles} : {}),
-      ...(override.promptVisibility !== undefined ? {promptVisibility: override.promptVisibility} : {}),
-      ...(override.terminalVisibility !== undefined ? {terminalVisibility: override.terminalVisibility} : {}),
-    };
+    const metadata = toolMetadataSchema.parse({...base, ...this.userOverrides.get(name)});
+    // Terminal round closure is an internal protocol, never a user-disableable business capability.
+    return name === '_FinishRound' ? {...metadata, roles: 'all', loading: 'eager', promptVisibility: 'explicit', terminalVisibility: 'silent'} : metadata;
   }
-
-  getTerminalVisibility(toolName: string): ToolTerminalVisibility {
-    return this.getMetadata(toolName)?.terminalVisibility ?? 'card';
+  getTerminalVisibility(name: string): ToolTerminalVisibility {return this.getMetadata(name)?.terminalVisibility ?? 'card';}
+  getPromptVisibility(name: string): ToolPromptVisibility {return this.getMetadata(name)?.promptVisibility ?? 'always';}
+  resolveForActor(actorId: string, extras: readonly ToolRegistration[] = []): readonly ResolvedTool[] {
+    const entries = new Map(this.registrations);
+    for (const item of extras) {
+      const name = this.canonical(item.metadata.name);
+      // Builtins always use their owning contract and policy, including when the caller is denied.
+      if (this.registrations.has(name)) continue;
+      const metadata = toolMetadataSchema.parse({...item.metadata, name, ...this.userOverrides.get(name)});
+      if (this.canonical(item.definition.name) !== name) throw new Error('Tool metadata and definition names do not match: ' + name);
+      const definition = {...item.definition, name};
+      const previous = entries.get(name);
+      if (previous && JSON.stringify(previous) !== JSON.stringify({metadata, definition})) throw new Error('Conflicting tool registration: ' + name);
+      entries.set(name, {metadata, definition});
+    }
+    return [...entries.values()].map(item => ({...item, metadata: this.getMetadata(item.metadata.name) ?? item.metadata}))
+      .filter(item => item.metadata.promptVisibility !== 'hidden' && isToolAllowedForActor(item.metadata.roles, actorId))
+      .sort((a, b) => a.metadata.category.localeCompare(b.metadata.category) || a.definition.name.localeCompare(b.definition.name));
   }
-
-  getPromptVisibility(toolName: string): ToolPromptVisibility {
-    return this.getMetadata(toolName)?.promptVisibility ?? 'always';
-  }
-
-  getToolsForActor(actorId: string): readonly ToolDefinition[] {
-    const result: ToolDefinition[] = [];
-    for (const [name, def] of this.definitions) {
-      const meta = this.getMetadata(name);
-      if (!meta) continue;
-      if (meta.promptVisibility === 'hidden') continue;
-      if (isToolAllowedForActor(meta.roles, actorId)) {
-        result.push(def);
+  getToolsForActor(actorId: string): readonly ToolDefinition[] {return this.resolveForActor(actorId).map(item => item.definition);}
+  formatDiscoveryCatalog(pool: readonly ResolvedTool[], protocol: ToolDiscoveryProtocol): string {
+    if (protocol === 'none') return '';
+    const categories = new Map<string, ResolvedTool[]>();
+    for (const item of pool) {
+      if (item.metadata.loading !== 'deferred') continue;
+      const entries = categories.get(item.metadata.category) ?? [];
+      entries.push(item); categories.set(item.metadata.category, entries);
+    }
+    const lines: string[] = [];
+    for (const [category, tools] of [...categories].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push(`  - ${category}/${this.categories.has(category) ? ': ' + this.categories.get(category) : ''}`);
+      for (const item of tools.sort((a, b) => a.definition.name.localeCompare(b.definition.name))) {
+        const description = (item.metadata.description ?? item.definition.description).split(/\r?\n/)[0]!.trim();
+        lines.push(`    - ${item.definition.name}: ${description}`);
       }
     }
-    return result;
+    const instruction = protocol === 'openai-responses' ? 'For the deferred tools listed below, use client tool search to load full contracts by exact name before first use.'
+      : 'For the deferred tools listed below, load full contracts by exact name with LoadTools before first use.';
+    return lines.length ? [instruction, ...lines].join('\n') : '';
   }
-
-  formatTieredToolsPrompt(actorId: string): string {
-    const lines: string[] = ['tools:'];
-
-    // 1. First-class Core tools (at root)
-    for (const [name] of this.metadata) {
-      const effective = this.getMetadata(name)!;
-      if (effective.category !== 'core') continue;
-      if (effective.promptVisibility === 'hidden') continue;
-      if (!isToolAllowedForActor(effective.roles, actorId)) continue;
-
-      const desc = effective.description || descriptions[effective.name as keyof typeof descriptions] || '';
-      lines.push(`  ${effective.name}: ${desc.split('\n')[0]}`);
-    }
-
-    // 2. Second-class Subdirectory tools
-    const categoryLabels: Record<string, string> = {
-      protocol: '流程规范工具 (Protocol): 轮次规范与环境状态检查',
-      coordination: '团队协作工具 (Coordination): 跨角色即时通信与协作',
-      orchestration: '调度编排工具 (Orchestration): Director 派工与任务控制',
-      extension: '扩展工具 (Extensions)',
-    };
-
-    const categorized: Record<string, {name: string; description: string}[]> = {};
-
-    for (const [name] of this.metadata) {
-      const effective = this.getMetadata(name)!;
-      if (effective.category === 'core') continue;
-      if (effective.promptVisibility !== 'explicit') continue;
-      if (!isToolAllowedForActor(effective.roles, actorId)) continue;
-
-      const catKey = effective.category;
-      categorized[catKey] = categorized[catKey] || [];
-      categorized[catKey].push({
-        name: effective.name,
-        description: effective.description || descriptions[effective.name as keyof typeof descriptions] || '',
-      });
-    }
-
-    for (const [catKey, tools] of Object.entries(categorized)) {
-      if (tools.length === 0) continue;
-      const label = categoryLabels[catKey] || (catKey.charAt(0).toUpperCase() + catKey.slice(1));
-      lines.push(`  - ${label}:`);
-      for (const t of tools) {
-        lines.push(`    - ${t.name}: ${t.description.split('\n')[0]}`);
-      }
-    }
-
-    return lines.join('\n');
-  }
-
-  formatExplicitPromptSection(actorId: string): string {
-    return this.formatTieredToolsPrompt(actorId);
-  }
-
+  formatTieredToolsPrompt(actorId: string): string {return this.formatDiscoveryCatalog(this.resolveForActor(actorId), 'anthropic');}
+  formatExplicitPromptSection(actorId: string): string {return this.formatTieredToolsPrompt(actorId);}
   async reloadUserConfigs(): Promise<void> {
-    this.userOverrides.clear();
-
-    const candidates = [
-      join(this.userHomeDir, '.logox', 'tools.json'),
-      join(this.userHomeDir, '.logox-ts', 'tools.json'),
-      join(this.projectDir, '.logox', 'tools.json'),
-    ];
-
+    const overrides = new Map<string, UserToolConfig>();
+    const candidates = [join(this.userHomeDir, '.logox-ts', 'tools.json'), join(this.userHomeDir, '.logox', 'tools.json'), join(this.projectDir, '.logox', 'tools.json')];
     for (const file of candidates) {
       try {
-        const raw = await readFile(file, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          for (const [toolName, config] of Object.entries(parsed)) {
-            const validated = userToolConfigSchema.safeParse(config);
-            if (validated.success) {
-              const canonical = canonicalToolName(toolName) ?? toolName;
-              this.userOverrides.set(canonical, {
-                ...this.userOverrides.get(canonical),
-                ...validated.data,
-              });
-            }
+        const value: unknown = JSON.parse(await readFile(file, 'utf8'));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+        for (const [key, config] of Object.entries(value)) {
+          const parsed = userToolConfigSchema.safeParse(config);
+          if (parsed.success) {
+            const name = this.canonical(key);
+            if (name === '_FinishRound' && (parsed.data.loading === 'deferred' || parsed.data.promptVisibility === 'hidden' ||
+              parsed.data.roles !== undefined && parsed.data.roles !== 'all')) throw new Error('The mandatory _FinishRound tool cannot be disabled or deferred.');
+            overrides.set(name, {...overrides.get(name), ...parsed.data});
           }
         }
-      } catch {}
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      }
     }
+    this.userOverrides.clear();
+    for (const [name, config] of overrides) this.userOverrides.set(name, config);
   }
 }
 
+/** Compatibility for stateless presentation helpers; application assembly owns its own registry. */
 export const defaultToolRegistry = new ToolRegistry();

@@ -1,6 +1,6 @@
 import {z} from 'zod';
 
-export const toolCategorySchema = z.enum(['core', 'protocol', 'coordination', 'orchestration', 'extension']);
+export const toolCategorySchema = z.string().min(1).max(160).regex(/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/);
 export type ToolCategory = z.infer<typeof toolCategorySchema>;
 
 export const toolRolesSchema = z.union([
@@ -9,7 +9,10 @@ export const toolRolesSchema = z.union([
 ]);
 export type ToolRoles = 'all' | 'director' | 'actors' | readonly string[];
 
-export const toolPromptVisibilitySchema = z.enum(['always', 'explicit', 'hidden']);
+export const toolLoadingSchema = z.enum(['eager', 'deferred']);
+export type ToolLoading = z.infer<typeof toolLoadingSchema>;
+
+export const toolPromptVisibilitySchema = z.enum(['always', 'explicit', 'summary', 'hidden']);
 export type ToolPromptVisibility = z.infer<typeof toolPromptVisibilitySchema>;
 
 export const toolTerminalVisibilitySchema = z.enum(['card', 'notice', 'silent']);
@@ -19,13 +22,18 @@ export const toolMetadataSchema = z.strictObject({
   name: z.string().min(1),
   category: toolCategorySchema,
   roles: toolRolesSchema,
-  promptVisibility: toolPromptVisibilitySchema,
+  loading: toolLoadingSchema.optional(),
+  promptVisibility: toolPromptVisibilitySchema.optional(),
   terminalVisibility: toolTerminalVisibilitySchema,
   description: z.string().optional(),
-});
+}).transform(meta => ({...meta,
+  loading: meta.loading ?? (meta.category === 'core' ? 'eager' : 'deferred'),
+  promptVisibility: meta.promptVisibility ?? (meta.category === 'core' ? 'always' : 'summary')}));
 export type ToolMetadata = z.infer<typeof toolMetadataSchema>;
+export type ToolMetadataInput = z.input<typeof toolMetadataSchema>;
 
 export const userToolConfigSchema = z.strictObject({
+  loading: toolLoadingSchema.optional(),
   roles: toolRolesSchema.optional(),
   promptVisibility: toolPromptVisibilitySchema.optional(),
   terminalVisibility: toolTerminalVisibilitySchema.optional(),

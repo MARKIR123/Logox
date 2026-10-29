@@ -71,3 +71,5 @@ export async function executeAskUserQuestion(
     isError: outcome.status !== 'answered',
   };
 }
+
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'AskUserQuestion', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Present structured clarification questions to user'};

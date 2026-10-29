@@ -37,7 +37,7 @@ test('prompt tree keeps rules separated and composed by category indexes', () =>
     assert.match(charter, new RegExp('export const ' + name));
   }
   const collaboration = files(join(promptDir, 'collaboration'));
-  for (const name of ['common.ts', 'director.ts', 'actor.ts', 'reporting.ts']) {
+  for (const name of ['common.ts', 'reporting.ts']) {
     assert.ok(collaboration.some(file => file.endsWith(name)), name);
   }
   const all = sources.map(file => readFileSync(file, 'utf8')).join('\n');
@@ -52,7 +52,7 @@ test('base prompt exposes a fixed static zone order and runtime sections stay dy
     rulesContext: 'project rules', scratchpadDir: '/tmp/scratchpad', includeSummary: true,
   });
   assert.deepEqual(result.sections.map(section => section.name),
-    ['persona', 'memory_focus', 'environment', 'scratchpad', 'tool_rules', 'execution_charter', 'collaboration', 'rules_context']);
+    ['persona', 'tool_rules', 'execution_charter', 'activity_visibility', 'round_memory', 'memory_focus', 'guidelines', 'collaboration', 'environment']);
   assert.ok(result.sections.every(section => section.zone === 'static'));
   const summary = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'logox', builtinPrompt: 'Logox persona', includeSummary: false});
   assert.ok(!summary.system.includes('Round memory contract'));

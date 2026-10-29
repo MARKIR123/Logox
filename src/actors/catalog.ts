@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {immutable} from '../runtime/contracts.js';
 import {withFileLock} from '../store/file-lock.js';
 import {builtinActors} from './builtins.js';
-import {actorIdSchema, parseActor, parseActorProfile, serializeActor, type ActorDefinition} from './definitions.js';
+import {actorIdSchema, parseActor, parseActorProfile, serializeActor, mergeActorPromptLayer, type ActorDefinition} from './definitions.js';
 import {ActorModelStorage} from './actor-models-storage.js';
 import {refreshShippedCompression} from './compression-migration.js';
 
@@ -21,6 +21,18 @@ export async function assertActorPath(path: string): Promise<void> {
     const parent = dirname(current); if (parent === current) break; current = parent;
   }
 }
+async function readOptionalProfile(path: string): Promise<Buffer | undefined> {
+  try {
+    await assertActorPath(path);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('Invalid profile file or exceeds 64 KiB: ' + path);
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 export class ActorCatalog {
   private value: ActorSnapshot = immutable({definitions: builtinActors, issues: [], revision: 0});
   readonly modelStorage: ActorModelStorage;
@@ -59,7 +71,7 @@ export class ActorCatalog {
               if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('不是普通文件或超过 64 KiB');
               const actor = parseActor(new TextDecoder('utf-8', {fatal: true}).decode(await readFile(path)));
               if (basename(path, '.md') !== actor.id) throw new Error('文件名必须与角色 id 相同');
-              definitions.set(actor.id, actor);
+              definitions.set(actor.id, definitions.has(actor.id) ? mergeActorPromptLayer(definitions.get(actor.id)!, actor) : actor);
             } catch (error) {issues.push({path, reason: error instanceof Error ? error.message : '加载失败'});}
             continue;
           }
@@ -90,31 +102,26 @@ export class ActorCatalog {
               if (!personaStat.isFile() || personaStat.size > 64 * 1024) throw new Error('缺少 persona.md 或超过 64 KiB');
               const personaRaw = await readFile(personaPath);
               const compressionPath = join(actorDir, 'compression.md');
-              let compressionRaw: Buffer | undefined;
-              try {
-                await assertActorPath(compressionPath);
-                const compressionStat = await lstat(compressionPath);
-                if (compressionStat.isFile()) {
-                  if (compressionStat.size > 64 * 1024) throw new Error('compression.md 超过 64 KiB');
-                  compressionRaw = await readFile(compressionPath);
-                }
-              } catch (e) {
-                if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-              }
+              const [compressionRaw, executionRaw, collaborationRaw] = await Promise.all([
+                readOptionalProfile(compressionPath), readOptionalProfile(join(actorDir, 'execution.md')),
+                readOptionalProfile(join(actorDir, 'collaboration.md')),
+              ]);
               const decoder = new TextDecoder('utf-8', {fatal: true});
               const config = decoder.decode(configRaw);
               const persona = decoder.decode(personaRaw);
               let compression = compressionRaw ? decoder.decode(compressionRaw) : undefined;
-              let actor = parseActorProfile({config, persona, compression});
+              const execution = executionRaw ? decoder.decode(executionRaw) : undefined;
+              const collaboration = collaborationRaw ? decoder.decode(collaborationRaw) : undefined;
+              let actor = parseActorProfile({config, persona, compression, execution, collaboration});
               if (entry.name !== actor.id) throw new Error('目录名必须与角色 id 相同');
               if (compression !== undefined) {
                 await refreshShippedCompression(compressionPath, actor.id, compression);
                 await assertActorPath(compressionPath);
                 try {compression = decoder.decode(await readFile(compressionPath));}
                 catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; compression = undefined;}
-                actor = parseActorProfile({config, persona, compression});
+                actor = parseActorProfile({config, persona, compression, execution, collaboration});
               }
-              definitions.set(actor.id, actor);
+              definitions.set(actor.id, definitions.has(actor.id) ? mergeActorPromptLayer(definitions.get(actor.id)!, actor) : actor);
             } catch (error) {
               issues.push({path: actorDir, reason: error instanceof Error ? error.message : '加载失败'});
             }

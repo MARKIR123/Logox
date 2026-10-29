@@ -11,7 +11,7 @@ import {answerEnvelope} from '../src/runtime/interactions.js';
 import {ProviderError} from '../src/providers/http.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 test('Actor compaction notices retain activity ownership, folding and restart identity', async () => {
   let calls = 0;
@@ -137,7 +137,7 @@ test('actor creation requires exact-content approval and rejection writes nothin
   const content = serializeActor({...builtinActors[2]!, id: 'builder'});
   let calls = 0;
   const f = await fixture(async request => ++calls === 1 ? call('craft_actor', {content}) : (() => {
-    const result = request.messages.at(-1); assert.ok(result?.role === 'tool' && result.isError);
+    const result = request.messages.findLast(message => message.role === 'tool'); assert.ok(result?.role === 'tool' && result.isError);
     return complete('保留角色方案');
   })());
   try {

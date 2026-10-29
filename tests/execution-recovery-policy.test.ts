@@ -169,7 +169,7 @@ test('application continuation retains Actor labels and root identity without to
       if (requests.length === 1) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'plan',
         name: 'update_task_progress', arguments: JSON.stringify({label: 'Building the runnable baseline'})}]}};
       if (allowedContinue) {
-        assert.match(request.system, /Current activity label.*Building the runnable baseline/);
+        assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'task-state')?.text ?? '', /Current activity label.*Building the runnable baseline/);
         assert.ok(request.messages.every(message => message.role !== 'assistant' || !!message.text || !!message.toolCalls?.length));
         return {stop: 'complete', message: {role: 'assistant', text: '已有阶段和工具结果已核对，当前步骤可以继续。'}};
       }

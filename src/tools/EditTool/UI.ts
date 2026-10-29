@@ -1,5 +1,5 @@
 import type {ToolRenderContext, ToolUI} from '../ui-types.js';
-import {renderEditDiff, messageToolCall} from '../../tui/tool-ui.js';
+import {renderEditDiff, messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {formatToolCardTitle} from '../ui-format.js';
 
 export const UI: ToolUI = {

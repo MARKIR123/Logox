@@ -2,6 +2,8 @@ import {z} from 'zod';
 import {createHash, randomUUID} from 'node:crypto';
 import type {ModelMessage, ModelRequest, ModelTurn} from '../runtime/messages.js';
 import type {ModelCapacity} from './contracts.js';
+import {extractDiscoveredToolNames, retainDiscoveryPairs} from '../tools/discovery.js';
+import {runtimeContextText} from '../runtime/context-updates.js';
 
 export function digest(value: unknown): string {return createHash('sha256').update(JSON.stringify(value)).digest('hex');}
 export function estimateText(text: string): number {
@@ -10,12 +12,19 @@ export function estimateText(text: string): number {
   return Math.ceil(tokens);
 }
 function estimateMessage(message: ModelMessage): number {
+  if (message.role === 'context') {
+    if (message.kind === 'environment-baseline' || message.kind === 'capability-change' && message.data?.baseline === true) return 0;
+    return estimateText(runtimeContextText(message)) + 8;
+  }
   const images = 'images' in message ? message.images : undefined;
   const textOnly = images?.length ? {...message, images: undefined} : message;
   return estimateText(JSON.stringify(textOnly)) + (images?.length ?? 0) * 1200 + 8;
 }
 export function estimateRequest(request: ModelRequest): number {
-  return estimateText(request.system) + estimateText(JSON.stringify(request.tools)) + 16 +
+  const expanded = extractDiscoveredToolNames(retainDiscoveryPairs(request.messages, extractDiscoveredToolNames(request.messages)));
+  const tools = request.toolDiscovery ? request.tools.filter(tool => !tool.deferLoading || expanded.has(tool.name))
+    .map(({deferLoading: _, ...tool}) => tool) : request.tools;
+  return estimateText(request.system) + estimateText(JSON.stringify(tools)) + 16 +
     request.messages.reduce((sum, message) => sum + estimateMessage(message), 0);
 }
 export interface BudgetPolicy {
@@ -52,7 +61,7 @@ export class TokenMeter {
   estimate(request: ModelRequest, model: ModelCapacity): number {
     const anchor = this.anchor;
     if (anchor?.identity === model.identity && request.messages.length >= anchor.prefix.messages.length &&
-      digest({system: request.system, tools: request.tools, messages: request.messages.slice(0, anchor.prefix.messages.length)}) === digest(anchor.prefix)) {
+      digest({system: request.system, tools: request.tools, ...(request.toolDiscovery ? {toolDiscovery: request.toolDiscovery} : {}), messages: request.messages.slice(0, anchor.prefix.messages.length)}) === digest(anchor.prefix)) {
       return anchor.tokens + request.messages.slice(anchor.prefix.messages.length)
         .reduce((sum, message) => sum + estimateMessage(message), 0);
     }
@@ -71,6 +80,7 @@ export class TokenMeter {
     if (!usage || !['complete', 'tools'].includes(turn.stop) || !Number.isFinite(usage.input + usage.output) ||
       usage.input <= 0 || usage.output < 0) {this.anchor = undefined; return;}
     this.anchor = {identity: model.identity, prefix: {system: request.system, tools: request.tools,
+      ...(request.toolDiscovery ? {toolDiscovery: request.toolDiscovery} : {}),
       messages: [...request.messages, turn.message]}, tokens: usage.input + usage.output};
   }
   invalidate(): void {this.anchor = undefined;}

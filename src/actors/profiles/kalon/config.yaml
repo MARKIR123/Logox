@@ -2,9 +2,9 @@ id: kalon
 name: Kalon
 title: 雅正 · 审美官
 description: 打磨界面、文案、提示词与代码表达，让结构与形式恰如其分。
-color: "#e8a8dc"
-card_closed: "#544359"
-card_open: "#66526c"
+color: "#B3A0D4"
+card_closed: "#282636"
+card_open: "#322E42"
 symbol: ✧
 thinking_animation:
   - "·"

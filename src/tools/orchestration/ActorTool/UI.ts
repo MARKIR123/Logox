@@ -1,16 +1,19 @@
 import type {Activity, Interaction, Message} from '../../../runtime/contracts.js';
-import type {ThinkingRequest} from '../../../tui/thinking-groups.js';
-import type {ActorStyles} from '../../../tui/cards.js';
+import type {ThinkingRequest} from '../../../tui/timeline/thinking-groups.js';
+import {type ActorStyles} from '../../../tui/appearance/actor-style.js';
 import type {ToolFrame} from '../../ui-types.js';
-import {ownerColor, palette} from '../../../tui/cards.js';
-import {appendActorCard, type createBuilder} from '../../../tui/scene.js';
+import {ownerColor} from '../../../tui/appearance/actor-style.js';
+import {palette} from '../../../tui/appearance/theme.js';
+import {appendActorCard, type createBuilder} from '../../../tui/timeline/scene.js';
 import {stepElapsed} from '../../../runtime/steps.js';
-import {createToolUI} from '../../../tui/tool-ui.js';
+import {createToolUI} from '../../../tui/timeline/tool-ui.js';
 
 export interface ActorActivityContext {
   builder: ReturnType<typeof createBuilder>;
   activity: Activity;
   roles: ActorStyles;
+  /** Rail of the surrounding surface (Director accent in the main timeline). */
+  railColor?: string | undefined;
   title: string;
   status: string;
   active: boolean;
@@ -26,7 +29,7 @@ export interface ActorActivityContext {
 }
 export function renderActivity(context: ActorActivityContext): void {
   const {builder, activity, roles, messages} = context;
-  const color = ownerColor(activity.ownerId, roles);
+  const color = context.railColor ?? ownerColor(activity.ownerId, roles);
   appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles,
     task: context.title, status: context.status, active: context.active, open: context.open, railColor: color,
     ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: context.stop} : {}),
@@ -45,7 +48,12 @@ export function renderActivity(context: ActorActivityContext): void {
       for (const message of messages) {
         if (message.inputKind === 'collaboration_interrupt') {
           builder.pushBlank(color, frame);
-          builder.pushProse(message.id + '-interrupt', message.text, '#d97757', 'body', frame, undefined, '#d97757');
+          builder.pushProse(message.id + '-interrupt', message.text, palette.directorIntervention, 'body', frame, undefined, palette.directorIntervention);
+          builder.pushBlank(color, frame);
+        } else if (message.inputKind === 'collaboration') {
+          const senderColor = message.source ? ownerColor(message.source, roles) : color;
+          builder.pushBlank(color, frame);
+          builder.pushProse(message.id + '-collab', message.text, senderColor, 'body', frame, undefined, senderColor);
           builder.pushBlank(color, frame);
         } else if (context.detailed && message.role !== 'user' && !(message.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) {
           context.renderMessage(message, frame);
@@ -62,8 +70,11 @@ export const UI = {...base, renderActivity, title(call: Parameters<typeof base.t
     const tasks = args && typeof args === 'object' ? (args as Record<string, unknown>).tasks : undefined;
     const task = Array.isArray(tasks) && tasks[0] && typeof tasks[0] === 'object' ? tasks[0] as Record<string, unknown> : undefined;
     if (task && typeof task.ownerId === 'string') {
-      const goal = typeof task.goal === 'string' ? task.goal : typeof task.prompt === 'string' ? task.prompt : '';
-      const detail = goal.replace(/\s+/g, ' ').trim().slice(0, 60);
+      const mainTitle = typeof task.title === 'string' ? task.title
+        : typeof task.description === 'string' ? task.description
+        : typeof task.goal === 'string' ? task.goal
+        : typeof task.prompt === 'string' ? task.prompt : '';
+      const detail = mainTitle.replace(/\s+/g, ' ').trim().slice(0, 60);
       return 'Actor · ' + task.ownerId + (detail ? ' (' + detail + ')' : '');
     }
   } catch {}

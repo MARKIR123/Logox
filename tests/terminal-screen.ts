@@ -22,6 +22,7 @@ export class TerminalScreen extends Writable {
   }
   get lines(): readonly string[] {return Array.from({length: this.rows}, (_, index) => (this.cells[index] ?? []).join('').trimEnd());}
   get backgroundColors(): readonly (readonly (string | undefined)[])[] {return this.backgrounds;}
+  get cursorPosition(): {readonly x: number; readonly y: number} {return {x: this.x, y: this.y};}
   private scroll(count: number): void {
     const region = Array.from({length: this.bottom - this.top + 1}, (_, i) => this.cells[this.top + i] ?? []);
     const backgrounds = Array.from({length: this.bottom - this.top + 1}, (_, i) => this.backgrounds[this.top + i] ?? []);

@@ -89,15 +89,16 @@ export class ActorManagement {
         const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
         return {
           id: choiceId,
-          label: item.provider + ' / ' + item.id,
+          label: item.id,
           description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
           effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
           effortLevels: levels.length > 0 ? levels : undefined,
+          group: item.provider,
         };
       }),
     ];
     await surfaces.openPicker({
-      title: actor.name + ' Default Model',
+      title: 'Select Model for ' + actor.name,
       description: 'Confirm to apply to this actor only; Esc to cancel',
       current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit',
       ...(poolModels.length > 0 ? {items: initialItems} : {}),
@@ -125,10 +126,11 @@ export class ActorManagement {
           const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
           return {
             id: choiceId,
-            label: item.provider + ' / ' + item.id,
+            label: item.id,
             description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
             effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
             effortLevels: levels.length > 0 ? levels : undefined,
+            group: item.provider,
           };
         }),
       ];
@@ -136,7 +138,7 @@ export class ActorManagement {
     }, async choice => {
       if (!choices.has(choice)) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);
-      return {message: actor.name + ' default model saved'};
+      return {message: actor.name + ' default model saved', presentation: 'silent'};
     });
   }
   async craftActor(content: string, approve: (review: ActorWriteReview) => Promise<boolean>, signal: AbortSignal): Promise<CraftResult> {

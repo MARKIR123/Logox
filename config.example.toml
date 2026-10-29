@@ -28,10 +28,10 @@ readonly_concurrency = 4
 
 # Optional theme overrides.
 # [theme]
-# user = "#5282b5"
-# accent = "#d97757"
-# dream_collapsed = "#c4cbd2"
-# dream_expanded = "#dce2e8"
+# user = "#D77757"
+# accent = "#7DA1DE"
+# dream_collapsed = "#C9D3E4"
+# dream_expanded = "#E4EAF5"
 
 # Custom OpenAI-compatible service. Select it with /provider work.
 # Do not save api_key in TOML; use api_key_env or /login.

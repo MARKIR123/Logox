@@ -1,10 +1,11 @@
 import {z} from 'zod';
 import {toolCallSchema} from './messages.js';
 import {inputKindSchema, type InputKind} from './provenance.js';
+import type {SystemEvent, SystemPresentation} from './system-events.js';
 
 const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
-  resumeTaskId: id.optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
+  resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
   stopReason: z.enum(['user', 'shutdown', 'interrupted', 'director_cancel']).optional(),
   recovery: z.strictObject({key: id, attempt: z.number().int().nonnegative(), exhausted: z.boolean().optional(),
@@ -70,8 +71,16 @@ export type Activity = z.infer<typeof activitySchema>;
 const optionSchema = z.strictObject({id, label: z.string().min(1), description: z.string()});
 export const questionSchema = z.strictObject({
   id, header: z.string().min(1).max(12), question: z.string().min(1),
-  options: z.array(optionSchema).min(2).max(4).optional(),
+  options: z.array(optionSchema).min(2).max(24).optional(),
   multiSelect: z.boolean().optional(),
+  /** Extra context line rendered under the question body. */
+  detail: z.string().optional(),
+  /** URL the question refers to; shown as one dim line. */
+  link: z.string().optional(),
+  /** Mask the typed answer (one bullet per code point); the answer itself stays real. */
+  secret: z.boolean().optional(),
+  /** Hide the free-text row for purely option-driven questions (local wizards). Ignored when there are no options. */
+  hideCustomInput: z.boolean().optional(),
 }).superRefine((question, ctx) => {
   const ids = question.options?.map(option => option.id) ?? [];
   if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: '选项 ID 必须唯一'});
@@ -128,8 +137,13 @@ export interface Message {
   readonly inputKind?: InputKind;
   readonly step?: Step;
   readonly time?: number;
+  readonly systemPresentation?: SystemPresentation;
+  readonly systemEventKind?: SystemEvent['kind'];
+  readonly systemTitle?: string;
+  readonly systemReplay?: boolean;
 }
 export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),
+  terminalVisibility: z.enum(['card', 'notice', 'silent']).optional(),
   stage: stepStageSchema.optional(), disposition: z.enum(['denied', 'error']).optional(), note: z.string().max(1000).optional(),
   groupId: z.string().optional(), groupState: z.enum(['completed', 'failed', 'cancelled']).optional(),
   state: z.enum(['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled']),

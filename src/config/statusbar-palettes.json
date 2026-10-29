@@ -1,0 +1,16 @@
+{
+  "gruvbox": {
+    "bg": "#282828", "fg": "#EBDBB2", "muted": "#928374", "accent": "#83A598",
+    "system": "#8EC07C", "success": "#B8BB26", "warning": "#FABD2F", "error": "#FB4934",
+    "strong": "#D3869B", "user": "#FE8019", "question": "#D3869B",
+    "effortOff": "#928374", "effortLow": "#8EC07C", "effortMedium": "#83A598",
+    "effortHigh": "#D3869B", "effortMax": "#FB4934", "effortAuto": "#B8BB26"
+  },
+  "dracula": {
+    "bg": "#282A36", "fg": "#F8F8F2", "muted": "#6272A4", "accent": "#BD93F9",
+    "system": "#8BE9FD", "success": "#50FA7B", "warning": "#F1FA8C", "error": "#FF5555",
+    "strong": "#FF79C6", "user": "#FFB86C", "question": "#BD93F9",
+    "effortOff": "#6272A4", "effortLow": "#8BE9FD", "effortMedium": "#50FA7B",
+    "effortHigh": "#BD93F9", "effortMax": "#FF79C6", "effortAuto": "#F1FA8C"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "base": "logox-dark",
+  "colors": {
+    "user": "#81a1c1",
+    "accent": "#88c0d0",
+    "dreamCollapsed": "#d8dee9",
+    "dreamExpanded": "#eceff4"
+  }
+}

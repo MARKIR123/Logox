@@ -43,8 +43,8 @@ test('folding replaces human logs and Director assignments with exact indexes, n
       assert.ok(!text.includes('PASTED_LOG') && !text.includes('FULL_TASK_REPORT') && !text.includes('_FinishRound'));
       assert.ok(request.messages.some(message => message.text === '1 | Fixed cancellation cleanup | Completed; Targeted tests passed | Windows integration unverified | 1:5'));
       assert.deepEqual(request.messages.filter(message => message.role === 'tool').map(message => message.callId), ['read']);
-      assert.match(request.messages.at(-1)!.text, /do not write files[\s\S]*unverified/);
-      assert.ok(request.system.includes(journal.path('s', ownerId)));
+      assert.match(request.messages.findLast(message => message.role === 'user')!.text, /do not write files[\s\S]*unverified/);
+      assert.ok(request.messages.some(message => message.role === 'context' && message.kind === 'ledger' && message.text.includes(journal.path('s', ownerId))));
       assert.ok(!text.includes('Round Summary') && !text.includes('轮次摘要') && !text.includes('<number>'));
       assert.equal(await readFile(journal.path('s', ownerId), 'utf8'), before);
     }

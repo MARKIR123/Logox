@@ -6,3 +6,5 @@ export const readActorSchema = z.strictObject({
 });
 
 export type ReadActorArgs = z.infer<typeof readActorSchema>;
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'ReadActor', category: 'orchestration', roles: 'director', terminalVisibility: 'card', description: 'Inspect persona details of a specific actor'};

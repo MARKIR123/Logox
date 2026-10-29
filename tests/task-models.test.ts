@@ -167,7 +167,8 @@ test('已输出未完整工具的技术故障结束本次执行，不询问转�
     const task = f.ensemble.dispatch('techne', '测试'); await task.done;
     assert.equal(f.store.activities.get('s', task.activityId)?.status, 'failed');
     assert.equal(f.store.interactions.list().length, 0);
-    assert.equal(f.writes(), 0); assert.equal(f.requests.length, 1);
+    assert.equal(f.writes(), 0);
+    assert.equal(f.requests.length, 1, JSON.stringify({activity: f.store.activities.get('s', task.activityId), messages: f.store.getSnapshot().messages}));
     const entries = await f.journal.load('s', 'techne'); assert.ok(entries.some(entry => entry.text === '已有进展'));
     assert.equal(entries.some(entry => entry.message?.role === 'assistant' && entry.message.toolCalls?.length), false);
   } finally {await f.cleanup();}

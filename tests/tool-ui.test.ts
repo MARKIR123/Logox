@@ -6,8 +6,9 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {schemas} from '../src/tools/index.js';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {timelineRows} from '../src/tui/viewport.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {timelineRows} from '../src/tui/timeline/viewport.js';
+import {cast} from '../src/actors/ensemble.js';
 import {formatToolSummary, formatToolCardTitle, formatToolCardBody} from '../src/tools/ui-format.js';
 import type {Interaction} from '../src/runtime/contracts.js';
 
@@ -23,7 +24,7 @@ test('all built-in and collaboration tool names resolve to explicitly owned pres
   for (const name of [...Object.keys(schemas), 'SendMessage']) {
     assert.ok(Object.hasOwn(toolUIs, name), name);
     assert.equal(getToolUI(name), toolUIs[name]);
-    assert.equal(getToolUI(name).visibility, name === '_FinishRound' ? 'hidden' : 'visible');
+    assert.equal(getToolUI(name).visibility, ['_FinishRound', '_GitStatus', 'LoadTools'].includes(name) ? 'hidden' : 'visible');
   }
   assert.equal(getToolUI('bash'), getToolUI('Shell'));
   assert.equal(getToolUI('read'), getToolUI('Read'));
@@ -117,6 +118,17 @@ test('distribution asset build preserves user profiles and skills', async () => 
       await put(join(root, 'src', 'actors', 'profiles', actor, 'compression.md'), 'new bundled focus');
     }
     await put(join(root, 'src', 'resources', 'builtin-skills', 'public', 'agent.md'), 'new bundled skill');
+    const toolSignpost = '---\ncategories:\n  custom: Custom inspection tools\n---\n';
+    await put(join(root, 'src', 'tools', 'AGENTS.md'), toolSignpost);
+    const statusbarPalettes = '{"gruvbox":{},"dracula":{}}';
+    await put(join(root, 'src', 'config', 'statusbar-palettes.json'), statusbarPalettes);
+    await put(join(root, 'dist', 'src', 'tools', 'AGENT.md'), 'retired category source');
+    const noticeName = 'THIRD-PARTY-LICENSES.txt';
+    const notice = await readFile(new URL('../../src/tui/' + noticeName, import.meta.url), 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (notice !== undefined) await put(join(root, 'src', 'tui', noticeName), notice);
     await put(join(root, 'src', 'tools', 'bin', 'browser-shot.cmd'), 'fixture');
     await put(join(root, 'dist', 'src', 'tools', 'bin', 'browser-shot.cmd'), 'retired CLI');
     await put(join(root, 'dist', 'src', 'tools', 'BrowserShot', 'cli.js'), 'retired implementation');
@@ -126,9 +138,13 @@ test('distribution asset build preserves user profiles and skills', async () => 
     await put(profile, 'custom user focus'); await put(skill, 'custom user skill');
     const result = spawnSync(process.execPath, [script], {encoding: 'utf8', env: {...process.env, HOME: home, USERPROFILE: home}});
     assert.equal(result.status, 0, result.stderr);
+    assert.equal(await readFile(join(root, 'dist', 'src', 'config', 'statusbar-palettes.json'), 'utf8'), statusbarPalettes);
     await assert.rejects(readFile(join(root, 'dist', 'src', 'tools', 'bin', 'browser-shot.cmd')), {code: 'ENOENT'});
     await assert.rejects(readFile(join(root, 'dist', 'src', 'tools', 'BrowserShot', 'cli.js')), {code: 'ENOENT'});
     assert.equal(await readFile(join(root, 'dist', 'src', 'actors', 'profiles', 'techne', 'compression.md'), 'utf8'), 'new bundled focus');
+    assert.equal(await readFile(join(root, 'dist', 'src', 'tools', 'AGENTS.md'), 'utf8'), toolSignpost);
+    await assert.rejects(readFile(join(root, 'dist', 'src', 'tools', 'AGENT.md')), {code: 'ENOENT'});
+    if (notice !== undefined) assert.equal(await readFile(join(root, 'dist', 'src', 'tui', noticeName), 'utf8'), notice);
     assert.equal(await readFile(profile, 'utf8'), 'custom user focus');
     assert.equal(await readFile(skill, 'utf8'), 'custom user skill');
   } finally {await rm(root, {recursive: true, force: true});}
@@ -293,14 +309,14 @@ test('expanded Edit card renders colored diff lines with line numbers and red/gr
   // Red line for removal
   const removedRow = rows.find(r => r.text.includes('const oldVar = 1;'));
   assert.ok(removedRow, 'Removed line should be present in rows');
-  assert.equal(removedRow.bg, '#361e22'); // palette.diffRemovedBg
-  assert.ok(removedRow.segments?.some(s => s.text.includes('-') && s.color === '#d96c73'));
+  assert.equal(removedRow.bg, '#3E2A2C'); // palette.diffRemovedBg
+  assert.ok(removedRow.segments?.some(s => s.text.includes('-') && s.color === '#B26671'));
 
   // Green line for addition
   const addedRow = rows.find(r => r.text.includes('const newVar = 2;'));
   assert.ok(addedRow, 'Added line should be present in rows');
-  assert.equal(addedRow.bg, '#1a3024'); // palette.diffAddedBg
-  assert.ok(addedRow.segments?.some(s => s.text.includes('+') && s.color === '#58c79b'));
+  assert.equal(addedRow.bg, '#27392C'); // palette.diffAddedBg
+  assert.ok(addedRow.segments?.some(s => s.text.includes('+') && s.color === '#57956B'));
 });
 
 test('SendMessage card formats as SendMessage to <actor> · description · queued with actor color', () => {
@@ -329,12 +345,12 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   // Full text contains SendMessage to kalon · Polish skyline · queued
   assert.ok(row.text.includes('SendMessage to kalon · Polish skyline · queued'));
   // Icon is gray for success
-  assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#b8c4ce');
+  assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#8D95A6');
   // Actor name kalon is rendered with kalon color (#e8a8dc) and bold
   const targetSeg = row.segments?.find(s => s.selectionKey === successId + ':title_target');
   assert.ok(targetSeg);
   assert.equal(targetSeg.text, 'kalon');
-  assert.equal(targetSeg.color, '#e8a8dc');
+  assert.equal(targetSeg.color, cast.kalon.color);
   assert.equal(targetSeg.bold, true);
 
   // When hovered, the title segments brighten with the actor's highlight color
@@ -343,7 +359,7 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   assert.ok(hoveredRow);
   const hoveredTitleSeg = hoveredRow.segments?.find(s => s.selectionKey === successId + ':title');
   assert.ok(hoveredTitleSeg);
-  assert.notEqual(hoveredTitleSeg.color, '#b8c4ce');
+  assert.notEqual(hoveredTitleSeg.color, '#8D95A6');
 });
 
 test('SendMessage card turns leading square icon red on failure', () => {
@@ -369,8 +385,8 @@ test('SendMessage card turns leading square icon red on failure', () => {
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 90, {}, null);
   const row = rows.find(r => r.messageId === failId);
   assert.ok(row);
-  // Leading icon ▮ is RED (#e08b90) on failure
-  assert.equal(row.segments?.find(s => s.selectionKey === failId + ':icon')?.color, '#e08b90');
+  // Leading icon ▮ uses the default error color on failure
+  assert.equal(row.segments?.find(s => s.selectionKey === failId + ':icon')?.color, '#DA8A93');
   // Contains Error fault label
   assert.ok(row.text.includes('Error'));
 });

@@ -7,10 +7,17 @@ export interface ToolResult {
   text: string;
   isError: boolean;
   disposition?: 'denied' | 'error' | undefined;
+  discoveredTools?: readonly string[] | undefined;
   images?: ImageBlock[] | undefined;
 }
 
 export const toolAliases = {
+  LoadTools: 'LoadTools',
+  loadtools: 'LoadTools',
+  load_tools: 'LoadTools',
+  SendMessage: 'SendMessage',
+  sendmessage: 'SendMessage',
+  send_message: 'SendMessage',
   read: 'Read',
   Read: 'Read',
   write: 'Write',

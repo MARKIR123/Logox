@@ -2,13 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   composeBaseSystemPrompt,
-  composeRuntimeSystemPrompt,
   CORE_EXECUTION_CHARTER,
   TOOL_USAGE_RULES,
-  NO_VISION_NOTE,
   collaborationFor,
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
+import {createRuntimeContextMessage} from '../src/runtime/context-updates.js';
 
 test('提示词工程：基础系统提示词按静态切片分层组装，核心准则在最前，定制人设追加在后', () => {
   const result = composeBaseSystemPrompt({
@@ -23,7 +22,7 @@ test('提示词工程：基础系统提示词按静态切片分层组装，核�
   // 1. 结构化切片数组正确导出
   assert.ok(result.sections.length >= 4);
   const names = result.sections.map(s => s.name);
-  assert.deepEqual(names, ['persona', 'environment', 'tool_rules', 'execution_charter', 'collaboration', 'rules_context']);
+  assert.deepEqual(names, ['persona', 'tool_rules', 'execution_charter', 'activity_visibility', 'round_memory', 'guidelines', 'collaboration', 'environment']);
 
   // 2. 文本拼接严格遵循前缀顺序
   assert.ok(result.system.includes('与其思考，不如实践'));
@@ -66,28 +65,11 @@ test('提示词工程：纯自定义角色在无内置底座时直接使用自�
   }, /Actor has no valid persona: ghost/);
 });
 
-test('提示词工程：单轮运行时动态组装，安全沉底追加视觉约束、阶段推进与自愈提示', () => {
-  const baseSystem = '基础静态系统提示词';
-  const runtimeSystem = composeRuntimeSystemPrompt({
-    baseSystem,
-    supportsVision: false,
-    progressInstruction: '当前阶段：骨架验证。成果：无。',
-    recoveryInstruction: '输出已截断，缩小调用。',
-  });
-
-  // 基础系统提示词始终保持在最前面（保证前缀 Prompt Cache 不变）
-  assert.ok(runtimeSystem.startsWith(baseSystem));
-  // 视觉提示注入
-  assert.ok(runtimeSystem.includes(NO_VISION_NOTE));
-  // 阶段推进指令注入
-  assert.ok(runtimeSystem.includes('当前阶段：骨架验证。'));
-  // 恢复提示沉底
-  assert.ok(runtimeSystem.includes('输出已截断，缩小调用。'));
-
-  // 当支持视觉且无恢复时，不污染运行时系统提示
-  const cleanSystem = composeRuntimeSystemPrompt({
-    baseSystem,
-    supportsVision: true,
-  });
-  assert.equal(cleanSystem, baseSystem);
+test('runtime facts remain typed messages rather than rewriting the system prompt', () => {
+  const base = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'techne', builtinPrompt: 'Techne'});
+  const recovery = createRuntimeContextMessage('recovery', 'Continue from preserved evidence.');
+  assert.equal(recovery.role, 'context');
+  assert.equal(recovery.kind, 'recovery');
+  assert.ok(!base.system.includes(recovery.text));
+  assert.ok(!base.system.includes('does not support image input'));
 });

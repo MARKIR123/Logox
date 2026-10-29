@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {RuntimeStore} from '../runtime/store.js';
-import type {SystemEvent} from '../runtime/system-events.js';
+import type {SystemEvent, SystemPresentation} from '../runtime/system-events.js';
 import type {Journal} from './journal.js';
 
 /** 界面和持久历史共享事件身份；临时会话先缓冲，正式提交后保存。 */
@@ -9,10 +9,13 @@ export class SystemHistory {
   private tail: Promise<void> = Promise.resolve();
   constructor(private readonly sessionId: string, private readonly store: RuntimeStore,
     private readonly journal: Journal, private readonly isPersistent: () => boolean) {}
-  async restore(): Promise<void> {for (const event of await this.journal.systemEvents(this.sessionId)) this.store.system(event);}
-  emit(text: string, kind: SystemEvent['kind'] = 'command_result', ownerId = 'logox', activityId?: string, persist = true): void {
+  async restore(): Promise<void> {for (const event of await this.journal.systemEvents(this.sessionId)) this.store.system(event, true);}
+  emit(text: string, kind: SystemEvent['kind'] = 'command_result', ownerId = 'logox', activityId?: string, persist = true,
+    options?: {presentation?: SystemPresentation; title?: string}): void {
     const event: SystemEvent = {version: 1, id: randomUUID(), sessionId: this.sessionId, ownerId, kind, text,
-      time: Date.now(), ...(activityId ? {activityId} : {})};
+      time: Date.now(), ...(activityId ? {activityId} : {}),
+      ...(options?.presentation !== undefined ? {presentation: options.presentation} : {}),
+      ...(options?.title !== undefined ? {title: options.title} : {})};
     this.store.system(event);
     if (!persist) return;
     this.pending.push(event);

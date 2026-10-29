@@ -12,3 +12,5 @@ export type FinishRoundArgs = z.infer<typeof finishRoundSchema>;
 export const finishRoundTool: ToolDefinition = {name: FINISH_ROUND_NAME, description: FINISH_ROUND_DESCRIPTION, parameters: z.toJSONSchema(finishRoundSchema)};
 export const finishRoundPolicy = Object.freeze({terminal: true, replay: 'omit-pair'} as const);
 export const isFinishRound = (name: string): boolean => name.toLowerCase() === FINISH_ROUND_NAME.toLowerCase();
+
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: '_FinishRound', category: 'protocol', loading: 'eager', roles: 'all', terminalVisibility: 'silent', description: 'Record internal round memory and deliver turn'};

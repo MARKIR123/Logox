@@ -6,6 +6,7 @@ import {z} from 'zod';
 import type {ModelCapacity} from '../context/contracts.js';
 import type {Provider} from '../runtime/messages.js';
 import {modelSettings, presets, type Config, type ModelSettings} from '../config/config.js';
+import {resolveProviderCapabilities} from './capabilities.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
 import {type ThinkingEffort, isOpenAiReasoningModel} from '../config/model-preferences.js';
@@ -90,20 +91,22 @@ export class ProviderRegistry {
     for (const record of list) {
       this.customProviders.set(record.name, record);
       this.config.providers[record.name] = {
+        ...this.config.providers[record.name],
         kind: record.kind,
         base_url: record.base_url,
-        default_model: record.default_model,
+        default_model: record.default_model ?? this.config.providers[record.name]?.default_model,
+        api: record.api ?? (record.kind === 'anthropic' ? undefined : this.config.providers[record.name]?.api),
       };
     }
   }
 
   async unregister(name: string): Promise<void> {
-    await this.auth.remove(name);
     if (this.customProviders.has(name)) {
       await this.customStorage.remove(name);
       this.customProviders.delete(name);
       delete this.config.providers[name];
     }
+    await this.auth.remove(name);
   }
 
   names(): string[] {return [...new Set([...Object.keys(presets), ...Object.keys(this.config.providers), ...this.customProviders.keys(), this.config.provider.name])];}
@@ -124,9 +127,11 @@ export class ProviderRegistry {
     const providers = {...this.config.providers};
     if (custom) {
       providers[name] = {
+        ...providers[name],
         kind: custom.kind,
         base_url: custom.base_url,
-        default_model: custom.default_model,
+        default_model: custom.default_model ?? providers[name]?.default_model,
+        api: custom.api ?? (custom.kind === 'anthropic' ? undefined : providers[name]?.api),
       };
     }
     return {...this.config, providers, provider: name === current.name
@@ -217,7 +222,14 @@ export class ProviderRegistry {
     return this.candidate(name, model).provider();
   }
   provider(): Provider {
-    return {respond: async (request, onDelta, signal) => {
+    const registry = this;
+    return {get capabilities() {return resolveProviderCapabilities(modelSettings(registry.config, registry.env));},
+      resolveCapabilities: async signal => {
+        signal.throwIfAborted();
+        const settings = await registry.settings(false);
+        signal.throwIfAborted();
+        return resolveProviderCapabilities(settings);
+      }, respond: async (request, onDelta, signal) => {
       signal.throwIfAborted();
       const settings = await this.settings();
       signal.throwIfAborted();
@@ -228,6 +240,9 @@ export class ProviderRegistry {
     return this.modelsFor(this.config.provider.name, signal);
   }
   async modelsFor(name: string, signal: AbortSignal): Promise<string[]> {
+    signal.throwIfAborted();
+    const enabled = this.customProviders.get(name)?.models;
+    if (enabled?.length) return [...enabled];
     const settings = await this.settingsFor(name, true);
     signal.throwIfAborted();
     const headers: Record<string, string> = {};

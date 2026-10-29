@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {Activities} from './activities.js';
 import {Interactions} from './interactions.js';
 import {immutable, type Message, type RuntimeSnapshot} from './contracts.js';
+import type {SystemEvent} from './system-events.js';
 
 export class RuntimeStore {
   private readonly listeners = new Set<() => void>();
@@ -31,11 +32,13 @@ export class RuntimeStore {
     this.publish();
     return id;
   }
-  system(event: {id: string; sessionId: string; ownerId: string; text: string; time: number; activityId?: string | undefined}): void {
+  system(event: Pick<SystemEvent, 'id' | 'sessionId' | 'ownerId' | 'text' | 'time' | 'activityId' | 'presentation' | 'title'> &
+    Partial<Pick<SystemEvent, 'kind'>>, replay = false): void {
     if (this.messages.some(message => message.id === event.id)) return;
-    const {id, sessionId, ownerId, text, time, activityId} = event;
-    this.messages.push(immutable({id, sessionId, ownerId, text, time, role: 'system' as const,
-      ...(activityId ? {activityId} : {})}));
+    const {id, sessionId, ownerId, text, time, activityId, presentation, title} = event;
+    this.messages.push(immutable({id, sessionId, ownerId, text, time, role: 'system' as const, systemReplay: replay,
+      ...(activityId ? {activityId} : {}), ...(presentation !== undefined ? {systemPresentation: presentation} : {}),
+      ...(title !== undefined ? {systemTitle: title} : {}), ...(event.kind !== undefined ? {systemEventKind: event.kind} : {})}));
     this.messages.sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
     this.publish();
   }

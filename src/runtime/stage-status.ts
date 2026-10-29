@@ -2,6 +2,7 @@
 export interface StageStatus {
   readonly ownerId: string;
   readonly name: string;
+  readonly color?: string;
   readonly model?: {readonly provider: string; readonly model: string};
   readonly effort?: string;
   readonly permission?: string;

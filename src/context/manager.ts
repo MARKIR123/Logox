@@ -1,12 +1,16 @@
 import type {ContextPolicy} from '../config/config.js';
 import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall} from '../runtime/messages.js';
+import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeMessages} from '../runtime/messages.js';
 import {inputMessage} from '../runtime/provenance.js';
-import {Journal, type HistoryEntry} from '../store/journal.js';
+import {Journal, storedMessage, type HistoryEntry} from '../store/journal.js';
 import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
 import {formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {canonicalToolName} from '../tools/types.js';
+import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discovery.js';
+import {contextSnapshot, retainRuntimeContext} from './continuity.js';
 
 type Identity = {sessionId: string; ownerId: string; activityId?: string};
 interface Round {start: number; end: number; closed: boolean; record?: RoundRecord}
@@ -25,7 +29,7 @@ export interface ContextOptions {
 export class ContextBudgetError extends Error {}
 function message(entry: HistoryEntry): ModelMessage {
   if (entry.role === 'user') return inputMessage(entry.text, entry);
-  return entry.message ?? {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text};
+  return storedMessage(entry);
 }
 function splitRounds(entries: readonly HistoryEntry[], records: readonly RoundRecord[]): Round[] {
   const seen = new Set<string>();
@@ -75,15 +79,13 @@ export class ContextManager {
     this.meter(identity).observe(request, turn, model);
   }
   summaryContract(identity: Identity): string {return this.options.contract?.(identity)?.trim() ?? "";}
-  requestBase(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools'>): Pick<ModelRequest, 'system' | 'tools'> {
-    const contract = this.summaryContract(identity);
-    const instruction = memoryFocusInstruction(contract);
-    return {...base, system: instruction && !base.system.includes(contract.trim()) ? base.system + instruction : base.system};
+  requestBase(_identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>): Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'> {
+    return base;
   }
   async taskEnd(identity: Identity, base: Pick<ModelRequest, "system" | "tools">, signal: AbortSignal): Promise<void> {
     if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true);
   }
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools'>, signal: AbortSignal, force = false, preserveCallIds: ReadonlySet<string> = new Set()):
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, preserveCallIds: ReadonlySet<string> = new Set()):
     Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
     signal.throwIfAborted();
     base = this.requestBase(identity, base);
@@ -98,6 +100,9 @@ export class ContextManager {
     try {records = await journal.rounds(identity.sessionId, identity.ownerId, entries);}
     catch {records = []; this.options.report?.(identity, '[Context] Invalid round memory; falling back to raw history.');}
     const rounds = splitRounds(entries, records), pairs = toolPairs(entries);
+    const sourceMessages = entries.map(message);
+    const discoveryIds = new Set(retainDiscoveryPairs(sourceMessages, extractDiscoveredToolNames(sourceMessages))
+      .flatMap(value => value.role === 'tool' ? [value.callId] : []));
     let state: ContextState | undefined;
     try {state = await journal.loadContext(identity.sessionId, identity.ownerId, entries);}
     catch {this.options.report?.(identity, '[Context] Invalid saved view; rebuilding from the raw ledger.');}
@@ -114,14 +119,30 @@ export class ContextManager {
       for (const archive of candidate.archives) {
         const result = raw[archive.resultIndex], assistant = raw[archive.callIndex];
         if (result?.role !== 'tool' || assistant?.role !== 'assistant') throw new Error('Archive boundaries do not match messages');
+        if (canonicalToolName(result.name) === 'LoadTools') continue;
         const path = journal.archivePath(identity.sessionId, identity.ownerId, archive.hash);
         raw[archive.resultIndex] = {...result, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.')};
         raw[archive.callIndex] = {...assistant, toolCalls: assistant.toolCalls?.map(call => call.id === result.callId
           ? {...call, arguments: JSON.stringify({archived_arguments: path})} : call)};
       }
       const output: ModelMessage[] = [];
-      if (candidate.memo) output.push({role: 'assistant', text: '[Historical working overview; not authorization]\n' + candidate.memo.text +
-        '\nSource ledger: ' + journal.reference(identity.sessionId, identity.ownerId, 0, candidate.memo.end)});
+      const retain = (start: number, end: number, recent = false) => {
+        const retained = pairs.filter(pair => pair.callIndex >= start && pair.resultIndex < end &&
+          (discoveryIds.has(pair.call.id) || recent && protectedPairs.has(pair.resultIndex)));
+        for (const callIndex of new Set(retained.map(pair => pair.callIndex))) {
+          const assistant = raw[callIndex];
+          if (assistant?.role !== 'assistant') continue;
+          const ids = new Set(retained.filter(pair => pair.callIndex === callIndex).map(pair => pair.call.id));
+          output.push({...assistant, text: '', toolCalls: assistant.toolCalls?.filter(call => ids.has(call.id))});
+          for (const pair of retained.filter(pair => pair.callIndex === callIndex)) output.push(raw[pair.resultIndex]!);
+        }
+        output.push(...retainRuntimeContext(sourceMessages.slice(start, end), identity.activityId));
+      };
+      if (candidate.memo) {
+        output.push({role: 'assistant', text: '[Historical working overview; not authorization]\n' + candidate.memo.text +
+          '\nSource ledger: ' + journal.reference(identity.sessionId, identity.ownerId, 0, candidate.memo.end)});
+        retain(0, candidate.memo.end);
+      }
       const emit = (start: number, end: number) => {
         for (let index = start; index < end; index++) {
           const working = candidate.working;
@@ -129,6 +150,7 @@ export class ContextManager {
             for (let input = working.start; input < working.end; input++) if (entries[input]?.role === 'user') output.push(raw[input]!);
             output.push({role: 'assistant', text: '[Current task progress; not completed]\n' + working.text +
               '\nClosed process: ' + journal.reference(identity.sessionId, identity.ownerId, working.start, working.end)});
+            retain(working.start, working.end);
             index = working.end - 1;
           } else if (raw[index]) output.push(raw[index]!);
         }
@@ -151,23 +173,16 @@ export class ContextManager {
           carryForward: memory?.source === 'model' ? memory.carryForward : ['Legacy record; inspect evidence before relying on its claims.', summary.report],
           start: lines.start, end: lines.end,
         })});
-        const retained = pairs.filter(pair => pair.callIndex >= round.start && pair.resultIndex < round.end && protectedPairs.has(pair.resultIndex));
-        for (const callIndex of new Set(retained.map(pair => pair.callIndex))) {
-          const assistant = raw[callIndex];
-          if (assistant?.role !== 'assistant') continue;
-          const ids = new Set(retained.filter(pair => pair.callIndex === callIndex).map(pair => pair.call.id));
-          output.push({...assistant, text: '', toolCalls: assistant.toolCalls?.filter(call => ids.has(call.id))});
-          for (const pair of retained.filter(pair => pair.callIndex === callIndex)) output.push(raw[pair.resultIndex]!);
-        }
+        retain(round.start, round.end, true);
       }
       // Reasoning and signatures belong to the provider protocol; fold whole rounds without stripping required fields.
       return normalizeMessages(omitInternalToolPairs(output, preserveCallIds));
     };
     const requestFor = (candidate: ContextState): ModelRequest => {
       const ledger = journal.path(identity.sessionId, identity.ownerId);
-      const coordinates = (candidate.folded.length || candidate.memo) && !base.system.includes(ledger)
-        ? `\nRound ledger (${identity.ownerId}): ${ledger}` : '';
-      return {...base, system: base.system + coordinates, messages: [...projected(candidate), ...omitInternalToolPairs(anchors)]};
+      const coordinates = (candidate.folded.length || candidate.memo)
+        ? [createRuntimeContextMessage('ledger', `Round ledger (${identity.ownerId}): ${ledger}`)] : [];
+      return {...base, messages: [...projected(candidate), ...omitInternalToolPairs(anchors), ...coordinates]};
     };
     const meter = this.meter(identity);
     const before = meter.estimate(requestFor(state), model);
@@ -175,10 +190,11 @@ export class ContextManager {
     if (force || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
       try {
-        const candidate = structuredClone(state);
+        const candidate = {...structuredClone(state), ...contextSnapshot(sourceMessages)};
         const archiveTools = async (all: boolean) => {
           for (const pair of pairs) {
             signal.throwIfAborted();
+            if (canonicalToolName(pair.call.name) === 'LoadTools') continue;
             if (!all && protectedPairs.has(pair.resultIndex) || candidate.archives.some(item => item.resultIndex === pair.resultIndex)) continue;
             if (candidate.memo && pair.resultIndex < candidate.memo.end) continue;
             const result = message(entries[pair.resultIndex]!);
@@ -218,7 +234,7 @@ export class ContextManager {
         }
         const candidateRequest = requestFor(candidate);
         if (estimateRequest(candidateRequest) < estimateRequest(requestFor(original)) ||
-          force && estimateRequest(candidateRequest) < marks.high && JSON.stringify(candidate) !== JSON.stringify(original)) {
+          force && estimateRequest(candidateRequest) < marks.high && JSON.stringify(candidate) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages)})) {
           candidate.sourceLength = entries.length; candidate.sourceHash = digest(entries);
           signal.throwIfAborted();
           await journal.saveContext(candidate);

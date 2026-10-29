@@ -11,8 +11,10 @@
 | Built-in official skills library | `builtin-skills/agent.md` | `builtin-skills/<actor>/` |
 | Background guideline or skill hot-reloading | `reload.ts:reloadResources()` | `/reload` slash command in `application.ts` |
 | Custom slash command registration | `manager.ts:snapshot()` | `commands` list in `Resources` |
+| Guidelines versus skills in system topics | `manager.ts:promptSections()` | `prompts/boundary.ts` and `reload.ts` |
 
 ## 3. Hard Boundaries
+- `promptSections()` separates guidelines from skill discovery; tool discovery does not turn skill files into native tools. Public skills apply to custom Actors unless explicit actor restrictions narrow them. Reload invalidation compares all roles' skill/category metadata, not only Director visibility.
 - **Path as Prompt / Semantic Signposts**:
   - Skills are organized hierarchically: `skills/<actor>/<domain>/<name>.md`.
   - Directory prefixes dictate default role visibility (`skills/kalon/...` visible to Kalon; `skills/public/...` visible to all).
@@ -44,3 +46,7 @@ application.ts (instantiates Resources)
   ```bash
   node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js
   ```
+
+## 6. Known Gaps
+- Skill discovery is metadata/file-based; there is no native provider skill search or automatic body injection.
+- The mixed `prompt()` formatter remains a compatibility wrapper; production assembly and reload consume structured sections/snapshots.

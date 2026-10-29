@@ -33,7 +33,7 @@ Logox 将终端显示、任务执行、模型请求和持久化分开。使用�
 | 活动与交互状态 | [contracts.ts](../../src/runtime/contracts.ts)、[store.ts](../../src/runtime/store.ts) |
 | 权限与文件快照 | [engine.ts](../../src/permissions/engine.ts)、[snapshots.ts](../../src/tools/snapshots.ts) |
 | 会话与原始记录 | [sessions.ts](../../src/store/sessions.ts)、[journal.ts](../../src/store/journal.ts) |
-| 终端显示 | [app.tsx](../../src/tui/app.tsx)、[scene.ts](../../src/tui/scene.ts)、[terminal-plane.ts](../../src/tui/terminal-plane.ts) |
+| 终端显示 | [app.tsx](../../src/tui/app.tsx)、[scene.ts](../../src/tui/timeline/scene.ts)、[terminal-plane.ts](../../src/tui/terminal/terminal-plane.ts) |
 
 ## 存储与恢复的边界
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {computeActivePills, type ActivePillItem} from '../src/tui/actor-pills.js';
+import {computeActivePills, type ActivePillItem} from '../src/tui/status/actor-pills.js';
 
 test('computeActivePills maintains activation order docking newest on the right', () => {
   const roles = {

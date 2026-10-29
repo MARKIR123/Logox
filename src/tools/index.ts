@@ -11,6 +11,7 @@ import type {ActorContext} from '../actors/ensemble.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import {Snapshots, bytesOrMissing} from './snapshots.js';
 
+import type {ToolRegistry} from './registry.js';
 import {pathArg, toolAliases, canonicalToolName, type ToolResult, type CanonicalToolName} from './types.js';
 import {filePathOf} from './aliases.js';
 import {readSchema, executeRead} from './ReadTool/ReadTool.js';
@@ -43,6 +44,8 @@ import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './orc
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './orchestration/CancelActorTool/prompt.js';
 import {updateTaskProgressSchema, type UpdateTaskProgressArgs} from './orchestration/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
 import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from './orchestration/UpdateTaskProgressTool/prompt.js';
+import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
+import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {automaSchema, executeAutoma, type AutomaArgs} from './orchestration/AutomaTool/AutomaTool.js';
@@ -103,6 +106,7 @@ export {
 };
 
 export const schemas = {
+  LoadTools: loadToolsSchema,
   Read: readSchema,
   Write: writeSchema,
   Edit: editSchema,
@@ -126,6 +130,7 @@ export const schemas = {
 export type ToolName = keyof typeof schemas;
 
 export const descriptions: Record<ToolName, string> = {
+  LoadTools: LOAD_TOOLS_DESCRIPTION,
   Read: READ_DESCRIPTION,
   Write: WRITE_DESCRIPTION,
   Edit: EDIT_DESCRIPTION,
@@ -247,6 +252,8 @@ export class Tools {
     );
   }
 
+  private registry: ToolRegistry | undefined;
+  setRegistry(registry: ToolRegistry): void {this.registry = registry;}
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
   private automaRunner?: ((args: AutomaArgs, context: ActorContext) => Promise<ToolResult>) | undefined;
@@ -334,6 +341,9 @@ export class Tools {
       context.signal.throwIfAborted();
       const canonical = canonicalToolName(call.name);
       if (!canonical || !Object.hasOwn(schemas, canonical)) throw new Error('Unknown tool: ' + call.name);
+      if (this.registry && !this.registry.getToolsForActor(context.ownerId).some(tool => tool.name === canonical)) {
+        return {text: 'Tool is unavailable for this actor: ' + canonical, isError: true, disposition: 'denied'};
+      }
       const name = canonical as ToolName;
       const raw: unknown = JSON.parse(call.arguments);
       const parsed = schemas[name].parse(raw);
@@ -385,7 +395,7 @@ export class Tools {
       if ([path, ...(targetPath ? [resolve(this.cwd, targetPath)] : [])].some(c => c.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy'))) {
         throw new Error('Project conventions forbid reading or modifying legacy materials');
       }
-      const preparedVersion = ['Write', 'Edit'].includes(name) ? await fileVersion(path) : undefined;
+      const preparedVersion = name === 'Write' ? await fileVersion(path) : undefined;
       const shellPaths: {original: string; canonical: string}[] = [];
       if (name === 'Shell') {
         for (const word of shellWords(schemas.Shell.parse(parsed).command).words.slice(1)) {
@@ -443,13 +453,13 @@ export class Tools {
       context.startTool?.();
 
       if (name === 'Read') {
-        return await executeRead(schemas.Read.parse(parsed), path);
+        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.ownerId);
       }
       if (name === 'Write') {
-        return await executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal);
+        return await executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId);
       }
       if (name === 'Edit') {
-        return await executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal);
+        return await executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId);
       }
       if (name === 'Glob') {
         return await executeGlob(schemas.Glob.parse(parsed), path, originalPath, context.signal);

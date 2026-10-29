@@ -27,7 +27,7 @@ test('Actor 失败轮即时收尾不等待模型压缩，下次请求补折叠�
       const request = (await contexts.prepare(identity, base, signal)).request;
       assert.equal(request.messages.some(message => message.text.startsWith('旧工作流程')), ownerId === 'logox');
       if (ownerId === 'techne') assert.match(request.messages[0]!.text, /^1 \| .* \| Failed \| .* \| 1:2$/);
-      assert.equal(request.messages.at(-1)?.text, '新任务');
+      assert.equal(request.messages.findLast(message => message.role === 'user')?.text, '新任务');
     }
   } finally {await rm(directory, {recursive: true, force: true});}
 });
@@ -47,11 +47,12 @@ test('Actor task_end 用零旧轮和2/2/0工具组装实际请求，重启与回
       for (let n = 0; n < 3; n++) await append('first', {role: 'tool', text: '证据' + n, callId: 'c' + n, name: 'read', isError: false});
       await append('first', {role: 'assistant', text: '完整工作'.repeat(200) + '\n【轮次摘要】\n标题：已核验\n报告：验证通过'});
       await journal.finish('s', ownerId, 'first', 'completed');
-      await contexts.taskEnd(identity, base, signal);
+      const actorBase = {system: roleSummaryInstruction(options.contract(identity)), tools: []};
+      await contexts.taskEnd(identity, actorBase, signal);
       await append('next', {role: 'user', text: '继续核验'});
-      const request = (await new ContextManager(options).prepare(identity, base, signal)).request;
+      const request = (await new ContextManager(options).prepare(identity, actorBase, signal)).request;
       assert.match(request.system, new RegExp(ownerId + '：保留实际验证'));
-      assert.equal(request.messages.at(-1)?.text, '继续核验');
+      assert.equal(request.messages.findLast(message => message.role === 'user')?.text, '继续核验');
       assert.equal(request.messages.some(message => message.text.startsWith('完整工作')), ownerId === 'logox');
       const tools = request.messages.filter(message => message.role === 'tool');
       assert.equal(tools.length, ownerId === 'kalon' ? 0 : ownerId === 'logox' ? 3 : 2);

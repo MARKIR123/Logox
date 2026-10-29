@@ -26,13 +26,46 @@ export async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
 }
 export class Snapshots {
   private lastTime = 0;
+  private readonly locks = new Map<string, Promise<unknown>>();
+  private readonly observations = new Map<string, Map<string, string>>();
+  private readonly writers = new Map<string, {ownerId: string; activityId: string; afterHash: string; time: number}>();
   constructor(private readonly directory: string) {}
-  async apply(path: string, before: Buffer | null, after: Buffer, activityId: string, signal: AbortSignal): Promise<void> {
+  async withLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.locks.get(path) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {release = resolve;});
+    const tail = prior.then(() => gate, () => gate);
+    this.locks.set(path, tail);
+    await prior.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.locks.get(path) === tail) this.locks.delete(path);
+    }
+  }
+  observe(path: string, bytes: Uint8Array | null, ownerId?: string): void {
+    if (!ownerId || !bytes) return;
+    let byOwner = this.observations.get(path);
+    if (!byOwner) {byOwner = new Map(); this.observations.set(path, byOwner);}
+    byOwner.set(ownerId, hash(bytes));
+  }
+  stalePeerWriter(path: string, currentBytes: Uint8Array | null, ownerId?: string): string | undefined {
+    if (!ownerId || !currentBytes) return undefined;
+    const writer = this.writers.get(path);
+    if (!writer || writer.ownerId === ownerId) return undefined;
+    const currentHash = hash(currentBytes);
+    if (writer.afterHash !== currentHash) return undefined;
+    const observedHash = this.observations.get(path)?.get(ownerId);
+    return observedHash === currentHash ? undefined : writer.ownerId;
+  }
+  async apply(path: string, before: Buffer | null, after: Buffer, activityId: string, signal: AbortSignal, ownerId?: string): Promise<void> {
     signal.throwIfAborted();
     if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('文件已被其他操作修改，请重新读取后再编辑');
     this.lastTime = Math.max(Date.now(), this.lastTime + 1);
+    const afterHash = hash(after);
     const snapshot: Snapshot = {id: randomUUID(), activityId, path, time: this.lastTime,
-      before: before?.toString('base64') ?? null, afterHash: hash(after)};
+      before: before?.toString('base64') ?? null, afterHash};
     await mkdir(this.directory, {recursive: true});
     const file = join(this.directory, snapshot.id + '.json');
     await writeFile(file, JSON.stringify(snapshot), {flag: 'wx'});
@@ -40,6 +73,10 @@ export class Snapshots {
       signal.throwIfAborted();
       if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('备份期间文件发生变化，未执行修改');
       await atomicWrite(path, after);
+      if (ownerId) {
+        this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime});
+        this.observe(path, after, ownerId);
+      }
     } catch (error) {await unlink(file).catch(() => {}); throw error;}
   }
   private async records() {

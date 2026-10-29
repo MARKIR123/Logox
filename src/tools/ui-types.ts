@@ -2,8 +2,8 @@ import type {ReactNode} from 'react';
 import type {Answer, Interaction, Message} from '../runtime/contracts.js';
 import type {ToolCall} from '../runtime/messages.js';
 import type {ToolResult} from './types.js';
-import type {QuestionDraft} from '../tui/cards.js';
-import type {createBuilder, insetFrame} from '../tui/scene.js';
+import {type QuestionDraft} from '../tui/interactions/choice-style.js';
+import type {createBuilder, insetFrame} from '../tui/timeline/scene.js';
 import type {ActorActivityContext} from './orchestration/ActorTool/UI.js';
 
 export type ToolFrame = Parameters<typeof insetFrame>[0];

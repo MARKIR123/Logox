@@ -48,7 +48,7 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
   const options = {cwd, config, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'),
     provider: {async respond(request: ModelRequest) {
       seen.push(request);
-      if (request.messages.at(-1)?.text === '合成失败') throw new Error('合成请求错误');
+      if (request.messages.findLast(message => message.role === 'user')?.text === '合成失败') throw new Error('合成请求错误');
       return {message: {role: 'assistant' as const, text: '已确认'}, stop: 'complete' as const};
     }}};
   let app = await createApplication(options);
@@ -69,9 +69,12 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
     await app.submit('合成失败');
     await waitForSnapshot(app.store, snapshot => snapshot.activities.at(-1)?.status === 'failed');
     await new Promise<void>(resolve => setImmediate(resolve));
-    assert.match(seen[1]!.system, /Task model: .+\/latest/);
-    assert.match(seen[1]!.system, /Permission and action boundary: creative/);
-    assert.match(seen[1]!.system, /deny write private.txt/);
+    assert.equal(seen[1]!.system, seen[0]!.system, 'Live changes preserve the baseline prefix.');
+    const update = seen[1]!.messages.findLast(message => message.role === 'context' && message.kind === 'environment-change');
+    assert.match(update?.text ?? '', /Task model: .+\/latest/);
+    assert.match(update?.text ?? '', /Permission and action boundary: creative/);
+    assert.match(update?.text ?? '', /deny write private.txt/);
+    assert.deepEqual(seen[1]!.messages.slice(0, seen[0]!.messages.length), seen[0]!.messages, 'Earlier history is unchanged.');
     const changes = (await app.journal.systemEvents(app.sessionId)).filter(event => event.kind === 'environment_change');
     assert.equal(changes.length, 1);
     assert.match(changes[0]!.text, /latest/); assert.ok(!changes[0]!.text.includes('/next'));

@@ -6,8 +6,8 @@ import {tmpdir} from 'node:os';
 import {createDemo} from '../src/demo.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import {waitForSnapshot as waitFor} from './runtime-fixture.js';
-import {initialDemoSceneState, buildDemoSceneRows} from '../src/tui/scene.js';
-import {projectPortfolioScene} from '../src/tui/scene-state.js';
+import {initialDemoSceneState, buildDemoSceneRows} from '../src/tui/timeline/scene.js';
+import {projectPortfolioScene} from '../src/tui/timeline/scene-state.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'logox-demo-test-'));

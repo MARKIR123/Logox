@@ -1,9 +1,10 @@
 import {createElement} from 'react';
 import {QuestionCard} from './QuestionCard.js';
 import type {ToolInteractionAdapter, ToolInteractionContext, ToolInteractionTransition, ToolUI} from '../ui-types.js';
-import {createToolUI} from '../../tui/tool-ui.js';
-import {insetFrame, type SceneAction} from '../../tui/scene.js';
-import {choiceStyle, palette} from '../../tui/cards.js';
+import {createToolUI} from '../../tui/timeline/tool-ui.js';
+import {insetFrame, type SceneAction} from '../../tui/timeline/scene.js';
+import {choiceStyle} from '../../tui/interactions/choice-style.js';
+import {palette} from '../../tui/appearance/theme.js';
 
 function renderQuestion(context: ToolInteractionContext): void {
   const {builder, request, draft, accent, frame: parent} = context;
@@ -16,16 +17,20 @@ function renderQuestion(context: ToolInteractionContext): void {
   const multi = question?.multiSelect === true;
   builder.pushBlank(accent, frame);
   builder.pushProse(request.requestId + '-question', (draft.questionIndex + 1) + '/' + request.questions.length + ' · ' + (question?.question ?? ''), accent, 'body', frame);
-  const options = [...question?.options ?? [], {label: 'Custom input', description: draft.text || 'Enter your answer in the input area.'}];
+  const options = [...question?.options ?? []];
+  const optionCount = options.length;
+  const customRow = !question?.hideCustomInput || optionCount === 0;
+  if (customRow) options.push({id: 'custom', label: 'Custom input', description: draft.text || 'Enter your answer in the input area.'});
   for (const [index, option] of options.entries()) {
-    const style = choiceStyle(index === draft.selected, accent);
+    const checked = multi && index < optionCount ? draft.checked?.includes(index) === true : index === draft.selected;
+    const style = choiceStyle(index === draft.selected, accent, palette.fg, palette.muted, multi ? checked : undefined);
     const action: SceneAction = {kind: 'select_answer', requestId: request.requestId, value: String(index)};
     builder.pushBlank(accent, frame, action);
-    const marker = multi && index < (question?.options?.length ?? 0)
-      ? (draft.checked?.includes(index) ? '[x] ' : '[ ] ')
-      : style.marker;
-    builder.pushProse(request.requestId + '-option-' + index, marker + option.label, accent, 'body', frame, action, style.color);
-    builder.pushProse(request.requestId + '-description-' + index, '  ' + option.description, accent, 'body', frame, action, style.descriptionColor);
+    builder.pushFramedLine(request.requestId + '-option-' + index, accent, [
+      {text: style.marker, color: style.markerColor, selectionOffset: 0},
+      {text: option.label, color: style.color, selectionOffset: style.marker.length},
+    ], frame, action);
+    builder.pushProse(request.requestId + '-description-' + index, ' '.repeat(style.indent) + option.description, accent, 'body', frame, action, style.descriptionColor);
   }
   builder.pushBlank(accent, frame);
   if (draft.error) builder.pushProse(request.requestId + '-error', draft.error, accent, 'body', frame, undefined, palette.error);
@@ -38,11 +43,13 @@ export const interaction: ToolInteractionAdapter = {
   describe({request, draft}) {
     if (request.kind !== 'question') return {editing: false, hint: ''};
     const question = request.questions[draft.questionIndex];
+    const optionCount = question?.options?.length ?? 0;
+    const customRow = !question?.hideCustomInput || optionCount === 0;
     if (question?.multiSelect === true) {
-      return {editing: draft.selected === (question.options?.length ?? 0),
+      return {editing: customRow && draft.selected === optionCount,
         hint: 'Selected: ' + (draft.checked?.length ?? 0) + ' option(s) · Enter to confirm'};
     }
-    return {editing: draft.selected === (question?.options?.length ?? 0),
+    return {editing: customRow && draft.selected === optionCount,
       hint: 'Selected: ' + (question?.options?.[draft.selected]?.label ?? 'Custom input') + ' · Enter to confirm'};
   },
   render: renderQuestion,
@@ -53,11 +60,13 @@ export const interaction: ToolInteractionAdapter = {
     const question = request.questions[draft.questionIndex];
     if (!question) return current;
     const multi = question.multiSelect === true;
-    const count = (question.options?.length ?? 0) + 1;
+    const optionCount = question.options?.length ?? 0;
+    const customRow = !question.hideCustomInput || optionCount === 0;
+    const count = Math.max(1, optionCount + (customRow ? 1 : 0));
     if (action.kind === 'defer') return {...current, deferred: true};
     if (action.kind === 'select') {
       const index = Math.max(0, Math.min(count - 1, action.index));
-      if (multi && index < (question.options?.length ?? 0)) {
+      if (multi && index < optionCount) {
         const checked = new Set(draft.checked ?? []);
         if (checked.has(index)) checked.delete(index); else checked.add(index);
         return {...current, draft: {...draft, selected: index, checked: [...checked].sort((a, b) => a - b), error: ''}};
@@ -65,8 +74,11 @@ export const interaction: ToolInteractionAdapter = {
       return {...current, draft: {...draft, selected: index, error: ''}};
     }
     if (action.kind === 'move') return {...current, draft: {...draft, selected: ((draft.selected + action.delta) % count + count) % count, error: ''}};
-    if (action.kind === 'text') return {...current, draft: {...draft, selected: count - 1, text: action.text, error: ''}};
-    const customSelected = draft.selected === count - 1;
+    if (action.kind === 'text') {
+      if (!customRow) return current;
+      return {...current, draft: {...draft, selected: count - 1, text: action.text, error: ''}};
+    }
+    const customSelected = customRow && draft.selected === optionCount;
     if (customSelected && draft.text.trim()) {
       const nextAnswers = {...answers, [question.id]: {type: 'text' as const, text: draft.text}};
       if (draft.questionIndex + 1 < request.questions.length) return {answers: nextAnswers,

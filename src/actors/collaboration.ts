@@ -14,6 +14,7 @@ export interface CollaborationOptions {
   getActiveTask?: ((ownerId: string) => { activityId: string } | undefined) | undefined;
   injectMessage?: ((targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue') => Promise<boolean> | boolean) | undefined;
   interrupt?: ((targetOwnerId: string, message: string, source: string, summary?: string) => boolean) | undefined;
+  deliverToCompletedPeer?: ((targetOwnerId: string, message: string, source: string, summary: string | undefined, context: ActorContext) => Promise<boolean> | boolean) | undefined;
   projectDir?: string | undefined;
   members?: (() => string[]) | undefined;
   coordinate?(callId: string, message: string, summary: string | undefined, context: ActorContext): Promise<void>;
@@ -110,6 +111,18 @@ export class Collaboration {
         context.signal.throwIfAborted();
         await this.options.journal.saveCollaborations(context.sessionId, records);
         context.signal.throwIfAborted();
+        if (!sendInput.wake && context.ownerId !== 'logox' && this.options.deliverToCompletedPeer) {
+          const deliveredPassive = await this.options.deliverToCompletedPeer(to, sendInput.message, context.ownerId, sendInput.summary, context);
+          if (deliveredPassive) {
+            return {
+              role: 'tool' as const,
+              callId: call.id,
+              name: call.name,
+              text: `Delivered message to ${to} (recipient already completed their task in this round and remains idle; pass wake: true only if they must start a new turn).`,
+              isError: false,
+            };
+          }
+        }
         try {
           const handle = this.options.enqueue(delivery.owner, delivery.prompt, delivery.source, {inputKind: 'collaboration',
             authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? []});

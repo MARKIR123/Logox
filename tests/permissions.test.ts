@@ -268,10 +268,9 @@ test('真实 Agent 扩展 schema 合法才审批；拒绝不执行；无效扩�
 
     const turns: ModelTurn[] = [{stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('mcp_test', {path: 'a'})]}}, {stop: 'complete', message: {role: 'assistant', text: '完成'}}];
 
+    const extension = {name: 'mcp_test', description: 'test', parameters: {type: 'object', properties: {path: {type: 'string'}}, required: ['path'], additionalProperties: false}};
     const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
-
-      extraTools: [{name: 'mcp_test', description: 'test', parameters: {type: 'object', properties: {path: {type: 'string'}}, required: ['path'], additionalProperties: false}}],
-
+      extraTools: [extension], extraRegistrations: [{definition: extension, metadata: {name: extension.name, category: 'extensions', roles: 'all', terminalVisibility: 'card'}}],
       async executeExtra() {executed++; return {text: 'done', isError: false};}});
 
     await run('扩展', f.context); assert.deepEqual(f.requests, ['mcp_test']); assert.equal(executed, 0);
@@ -354,7 +353,7 @@ test('可信装配交接 MCP 审批：远端参数无效不询问，有效唯一
     const turns: ModelTurn[] = [];
     const outer = {name: 'mcp', description: 'MCP入口', parameters: {type: 'object', properties: {server: {type: 'string'}, tool: {type: 'string'}, arguments: {type: 'object'}}, required: ['server', 'tool', 'arguments'], additionalProperties: false}};
     const run = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
-      extraTools: [outer], extraApprovalHandled: ['mcp'], async executeExtra(item, context) {
+      extraTools: [outer], extraRegistrations: [{definition: outer, metadata: {name: outer.name, category: 'extensions', roles: 'all', terminalVisibility: 'card'}}], extraApprovalHandled: ['mcp'], async executeExtra(item, context) {
         validations++;
         const raw: {arguments: {path?: unknown}} = JSON.parse(item.arguments);
         if (typeof raw.arguments.path !== 'string') return {text: '远端参数无效', isError: true};
@@ -367,8 +366,9 @@ test('可信装配交接 MCP 审批：远端参数无效不询问，有效唯一
     await run('无效', f.context); assert.equal(validations, 1); assert.equal(f.requests.length, 0); assert.equal(remoteExecutions, 0);
     turns.push(turn({server: 'test', tool: 'read', arguments: {path: 'a'}}), complete);
     await run('有效', f.context); assert.deepEqual(f.requests, ['mcp:test:read']); assert.equal(remoteExecutions, 0);
+    const unknown = {name: 'unknown', description: 'unknown', parameters: {type: 'object', additionalProperties: true}};
     const unknownRun = createAgent({cwd: f.cwd, store: new RuntimeStore(), tools: f.tools, provider: () => finalizingProvider({async respond() {return turns.shift()!;}}), iterations: 10, retries: 0,
-      extraTools: [{name: 'unknown', description: 'unknown', parameters: {type: 'object', additionalProperties: true}}], async executeExtra() {remoteExecutions++; return {text: 'bad', isError: false};}});
+      extraTools: [unknown], extraRegistrations: [{definition: unknown, metadata: {name: unknown.name, category: 'extensions', roles: 'all', terminalVisibility: 'card'}}], async executeExtra() {remoteExecutions++; return {text: 'bad', isError: false};}});
     turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('unknown', {extraApprovalHandled: ['unknown']})]}}, complete);
     await unknownRun('模型伪造', f.context); assert.deepEqual(f.requests, ['mcp:test:read', 'unknown']); assert.equal(remoteExecutions, 0);
   } finally {await f.close();}

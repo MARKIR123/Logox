@@ -9,17 +9,24 @@ import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
+import {contextSnapshot} from '../context/continuity.js';
 import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
 const entrySchema = z.strictObject({
   version: z.literal(1), sessionId: z.string(), ownerId: z.string(),
-  role: z.enum(['user', 'assistant', 'tool']), text: z.string(),
+  role: z.enum(['user', 'assistant', 'tool', 'context']), text: z.string(),
   time: z.number().optional(), message: modelMessageSchema.optional(), activityId: z.string().optional(), source: z.string().optional(),
   inputKind: inputKindSchema.optional(), step: stepSchema.optional(), deliveryIds: z.array(z.string()).optional(),
-}).refine(entry => !entry.message || entry.message.role === entry.role && entry.message.text === entry.text, '历史正文或角色不一致');
+}).refine(entry => (entry.role !== 'context' || entry.message?.role === 'context') &&
+  (!entry.message || entry.message.role === entry.role && entry.message.text === entry.text), 'History message or role does not match.');
 export type HistoryEntry = z.infer<typeof entrySchema>;
+export function storedMessage(entry: HistoryEntry): ModelMessage {
+  if (entry.message) return entry.message;
+  if (entry.role === 'context') throw new Error('Runtime history requires its typed context message.');
+  return {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text};
+}
 const branchSchema = z.strictObject({version: z.literal(1), id: z.string().regex(/^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$/), sessionId: z.string(),
   hidden: z.record(z.string(), z.array(z.number().int().nonnegative())), excludedTasks: z.array(z.string()).default([])});
 const taskSchema = z.strictObject({activityId: z.string(), ownerId: z.string(), prompt: z.string(), source: z.string(),
@@ -297,7 +304,7 @@ export class Journal implements HistoryStore {
     if (start < 0) throw new Error('Round input was not recorded.');
     const last = entries.findLastIndex(entry => entry.activityId === activityId);
     const end = last + 1;
-    const messages: ModelMessage[] = entries.slice(start, end).map(entry => entry.message ?? {role: entry.role === 'tool' ? 'user' as const : entry.role, text: entry.text});
+    const messages: ModelMessage[] = entries.slice(start, end).map(storedMessage);
     const legacy = summarizeRound(messages, status);
     const accepted = status === 'completed' ? extractRoundMemory(messages, finalizerCallId) : undefined;
     const modernClosure = finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
@@ -342,6 +349,10 @@ export class Journal implements HistoryStore {
     const state = contextStateSchema.parse(JSON.parse(raw));
     if (state.sessionId !== sessionId || state.ownerId !== ownerId || state.sourceLength > entries.length ||
       digest(entries.slice(0, state.sourceLength)) !== state.sourceHash) return undefined;
+    const snapshot = contextSnapshot(entries.slice(0, state.sourceLength).map(storedMessage));
+    for (const key of ['discoveredTools', 'environmentBaseline', 'environmentCurrent'] as const) {
+      if (state[key] !== undefined && JSON.stringify(state[key]) !== JSON.stringify(snapshot[key])) return undefined;
+    }
     const inRange = (index: number) => index >= 0 && index < state.sourceLength;
     if (state.folded.some(index => !inRange(index) || entries[index]?.role !== 'user') ||
       state.memo && (state.memo.end > state.sourceLength || state.memo.end < state.sourceLength && entries[state.memo.end]?.role !== 'user') ||

@@ -8,6 +8,7 @@ import {ProviderRegistry} from '../src/providers/registry.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import {loadConfig} from '../src/config/config.js';
 import {createApplication} from '../src/application.js';
+import {isTimelineMessage} from '../src/runtime/system-events.js';
 
 const spec = {title: '选择', description: '说明', current: 'a'};
 test('命令界面取消中止查询，旧响应不能复活或覆盖新页面', async () => {
@@ -74,16 +75,20 @@ test('页签命令和提供商选择不触发模型、不进账本；确认才�
   let calls = 0;
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不该调用模型');}}});
   try {
-    const before = app.store.getSnapshot().messages.length;
-    for (const [command, tab] of [['/status', 'status'], ['/config', 'config'], ['/help', 'commands']]) {
+    const before = app.store.getSnapshot().messages.filter(isTimelineMessage).length;
+    for (const [command, tab] of [['/status', 'status'], ['/config', 'config'], ['/settings', 'settings']]) {
       await app.submit(command!); const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page'); assert.equal(page.initialTab, tab);
       app.surfaces.cancel();
     }
-    await app.submit('/provider'); await Promise.resolve();
-    const picker = app.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker');
-    app.surfaces.cancel(); assert.equal(app.store.getSnapshot().messages.length, before);
-    await app.submit('/provider'); await Promise.resolve();
-    await app.surfaces.choose(app.surfaces.getSnapshot()!.id, 'beta');
+    await app.submit('/help');
+    const help = app.surfaces.getSnapshot(); assert.ok(help?.kind === 'result');
+    assert.match(help.text, /\/model/);
+    assert.ok(app.store.getSnapshot().messages.some(message => message.systemPresentation === 'panel'));
+    app.surfaces.cancel();
+    await app.submit('/providers'); await Promise.resolve();
+    const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page');
+    app.surfaces.cancel(); assert.equal(app.store.getSnapshot().messages.filter(isTimelineMessage).length, before);
+    await app.submit('/providers beta');
     assert.equal(app.commandContext().models[0], 'second');
     await app.submit('/model alpha/custom/model'); assert.equal(app.commandContext().models[0], 'custom/model');
     assert.equal(calls, 0); assert.deepEqual(await app.journal.load(app.sessionId, 'logox'), []);

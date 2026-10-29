@@ -12,8 +12,12 @@
 | Compaction triggers or output allowance | `budget.ts:watermarks()` | `manager.ts:prepare()` |
 | Common contract or role memory focus | `contracts.ts` | `actors/profiles/*/compression.md` |
 | Restart, rollback or physical references | `store/journal.ts` | source hashes, branch maps and `sourceLines()` |
+| Discovery or environment lost during compaction | `continuity.ts` and `tools/discovery.ts` | `ContextState`, original LoadTools pairs and provider encoders |
 
 ## 3. Hard Boundaries
+- Discovery snapshots are the sorted full union from real results, bound to source length/hash. Preserve minimal original successful LoadTools call/result pairs through closed, memo and working projections; never archive their arguments or fabricate IDs/results. Current eligibility still filters old references.
+- Keep environment baseline and complete latest snapshots from the effective branch. Condensed host records stay at the removed range's position before newer live changes; they are not human requests or permission grants.
+- Native budget estimates charge eager and actually inline-expanded selected contracts once, not every deferred registration. Changing disclosure protocol invalidates a usage anchor.
 - Token estimation excludes image base64 on both full-request and usage-anchored incremental paths; per-image allowance is approximate, not a vendor tokenizer. Compaction notices state the trigger and registered model window.
 - Compaction never rewrites or deletes raw journal lines. References use one-based inclusive physical ranges in the authoritative ledger, not the optional readable mirror.
 - `_FinishRound` pairs disappear together before repair, budgeting and serialization; retained business tools remain paired. In-memory and context-disabled requests follow the same rule.

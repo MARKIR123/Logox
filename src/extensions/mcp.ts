@@ -12,6 +12,12 @@ const argsSchema = z.discriminatedUnion('action', [
   z.strictObject({server: z.string().min(1), action: z.literal('list')}),
   z.strictObject({server: z.string().min(1), action: z.literal('call'), tool: z.string().min(1), arguments: z.record(z.string(), z.json())}),
 ]);
+const mcpParametersSchema = z.strictObject({
+  server: z.string().min(1).describe('The MCP server name (e.g. "playwright")'),
+  action: z.enum(['list', 'call']).describe('Action to take: "list" to list available tools, or "call" to invoke a tool'),
+  tool: z.string().min(1).optional().describe('Name of the MCP tool to call (when action is "call")'),
+  arguments: z.record(z.string(), z.any()).optional().describe('Arguments dictionary for the tool (when action is "call")'),
+});
 const remoteToolSchema = z.object({name: z.string().min(1).max(256), description: z.string().max(10_000).optional(),
   inputSchema: z.record(z.string(), z.json())});
 type RemoteTool = z.infer<typeof remoteToolSchema> & {validator?: ValidateFunction};
@@ -41,9 +47,25 @@ export class Mcp {
   }
   definitions(): readonly ToolDefinition[] {
     return this.clients.size ? [{name: 'mcp', description: 'Call MCP tools. First list a server, then call a listed tool with arguments matching its full schema. Calls require permission. Browser interactions and screenshots use the local playwright server; returned images are delivered directly to your visual input. Servers: ' +
-      [...this.clients.keys()].join(', '), parameters: z.toJSONSchema(argsSchema)}] : [];
+      [...this.clients.keys()].join(', '), parameters: z.toJSONSchema(mcpParametersSchema)}] : [];
   }
-  status() {return [...this.clients].map(([name, client]) => ({name, state: client.status()}));}
+  status() {
+    return Object.keys(this.servers).filter(name => this.clients.has(name)).map(name => ({name, state: this.clients.get(name)!.status()}));
+  }
+  private clientFor(server: string, ownerId?: string): McpClient | undefined {
+    const base = this.clients.get(server);
+    if (!base) return undefined;
+    if (!ownerId || ownerId === 'logox') return base;
+    const key = `${server}:${ownerId}`;
+    let scoped = this.clients.get(key);
+    if (!scoped) {
+      const config = this.servers[server];
+      if (!config) return base;
+      scoped = new McpClient(config, this.cwd);
+      this.clients.set(key, scoped);
+    }
+    return scoped;
+  }
   private async list(server: string, client: McpClient, signal: AbortSignal) {
     const tools: RemoteTool[] = [], cursors = new Set<string>();
     let cursor: string | undefined;
@@ -62,7 +84,7 @@ export class Mcp {
       context.signal.throwIfAborted();
       if (call.name !== 'mcp') throw new Error('未知扩展工具');
       const args = argsSchema.parse(JSON.parse(call.arguments));
-      const client = this.clients.get(args.server);
+      const client = this.clientFor(args.server, context.ownerId);
       if (!client) throw new Error('MCP 服务不存在或已禁用');
       if (args.action === 'list') {
         context.startTool?.();
@@ -85,7 +107,8 @@ export class Mcp {
       if (!tool.validator) {
         // 每份 schema 独立注册 $id；目录刷新替换对象，也替换其校验器。
         const compiler = dialect === 'https://json-schema.org/draft/2020-12/schema'
-          ? new Ajv2020({strict: false, allErrors: false}) : new Ajv({strict: false, allErrors: false});
+          ? new Ajv2020({strict: false, allErrors: false, useDefaults: true})
+          : new Ajv({strict: false, allErrors: false, useDefaults: true});
         formats.default(compiler);
         tool.validator = compiler.compile(tool.inputSchema);
       }

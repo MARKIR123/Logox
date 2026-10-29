@@ -10,8 +10,9 @@ import {Mcp} from '../src/extensions/mcp.js';
 import {mcpServerSchema} from '../src/extensions/config.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
-import {statusbarParts, statusbarText} from '../src/tui/statusbar.js';
+import {statusbarParts, statusbarText} from '../src/tui/status/statusbar.js';
 import {permissionModes} from '../src/runtime/permission-mode.js';
+import {palette} from '../src/tui/appearance/theme.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 import type {ModelMessage, ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -209,8 +210,8 @@ test('模式颜色：状态栏保留名称和宽度规则，三档各自颜色�
   for (const mode of ['default', 'auto', 'creative'] as const) {
     const status = {ownerId: 'logox', name: 'Logox', state: '就绪', permission: mode};
     const parts = statusbarParts(status, 80, [{id: 'permission', enabled: true}]);
-    assert.equal(parts[0]?.color, permissionModes[mode].color);
-    assert.equal(statusbarText(status, 80, [{id: 'permission', enabled: true}]), 'Permission ' + mode);
+    assert.equal(parts[0]?.color, palette[permissionModes[mode].colorToken]);
+    assert.equal(statusbarText(status, 80, [{id: 'permission', enabled: true}]), '\uf023 Permission ' + mode);
     assert.deepEqual(statusbarParts(status, 2, [{id: 'permission', enabled: true}]), []);
   }
 });

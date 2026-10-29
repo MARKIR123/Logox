@@ -34,7 +34,8 @@ export function stageStatus(options: {sessionId: string; cwd: string; store: Run
     cost += buckets.reduce((sum, [tokens, rate]) => sum + tokens * (rate ?? 0) / 1e6, 0);
   }
   const spent = contexts.meter(identity).spent;
-  return {ownerId, name: actors.find(ownerId)?.name ?? ownerId, model: {provider: selected.provider, model: selected.model},
+  const actor = actors.find(ownerId);
+  return {ownerId, name: actor?.name ?? ownerId, ...(actor?.color ? {color: actor.color} : {}), model: {provider: selected.provider, model: selected.model},
     effort, permission: permissions.mode, state: active ? states[active.status] : '就绪',
     ...(context ? {context: {tokens: context.input, window: context.window}} : {}), tokens: spent.input + spent.output,
     ...(known ? {cost, ...(currency ? {costCurrency: currency} : {})} : {}), session: sessionId, project: cwd};

@@ -4,9 +4,9 @@ import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
 import {act} from 'react';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {buildStageRows} from '../src/tui/stage.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {App} from '../src/tui/app.js';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 import {cast} from '../src/actors/ensemble.js';
 
@@ -125,4 +125,41 @@ test('真实 Ink：新请求重新展开已折叠 Actor 卡片，同一请求刷
     assert.ok(!screen().includes('第二个模型候选'));
     assert.equal(store.interactions.list().filter(item => item.status === 'pending').length, 1);
   } finally {await act(async () => {store.interactions.close(); instance.unmount();});}
+});
+
+test('Actor 卡片主副标题联动：运行中渲染 Main Title · SubTitle，完成后恢复为 Main Title', () => {
+  const store = new RuntimeStore();
+  store.activities.create({
+    sessionId: 's',
+    activityId: 'a-title',
+    ownerId: 'techne',
+    kind: 'actor',
+    title: 'Techne · 精工 · 构建匠人',
+    taskTitle: 'Refactor collaboration roster',
+    progress: {label: 'Wiring active peer snapshot'},
+    status: 'running',
+    stage: '处理中',
+    detail: 'Wire activeEnsembleRoster into ActorServices.facts',
+  });
+  store.message('s', 'techne', 'user', 'Wire activeEnsembleRoster into ActorServices.facts', {activityId: 'a-title'});
+
+  const runningClosed = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': false}, null).map(row => row.text).join('\n');
+  assert.match(runningClosed, /Refactor collaboration roster · Wiring active peer snapshot/);
+
+  // Incoming queue SendMessage (inputKind: 'collaboration') renders inside the expanded recipient card.
+  store.message('s', 'techne', 'user', '[Message from kalon · Shell ready]\nindex.html and styles.css are on disk.', {
+    activityId: 'a-title', source: 'kalon', inputKind: 'collaboration',
+  });
+  const runningOpen = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': true}, null).map(row => row.text).join('\n');
+  assert.match(runningOpen, /\[Message from kalon · Shell ready\]/);
+  assert.match(runningOpen, /index\.html and styles\.css are on disk\./);
+
+  store.activities.update('s', 'a-title', {
+    status: 'completed',
+    stage: '已完成',
+    summary: {title: 'Completed roster wiring', report: 'All tests green.', source: 'model'},
+  });
+  const completedClosed = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': false}, null).map(row => row.text).join('\n');
+  assert.match(completedClosed, /Refactor collaboration roster/);
+  assert.doesNotMatch(completedClosed, /Wiring active peer snapshot/);
 });

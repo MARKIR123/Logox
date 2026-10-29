@@ -5,15 +5,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
-import {renderTerminal} from '../src/tui/terminal.js';
+import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
 import {App} from '../src/tui/app.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {CommandSurfaces} from '../src/commands/surfaces.js';
 import {StatusbarPreferences, defaultStatusbar} from '../src/config/statusbar-preferences.js';
-import {statusbarText} from '../src/tui/statusbar.js';
-import {buildStageRows} from '../src/tui/stage.js';
-import {palette} from '../src/tui/cards.js';
+import {statusbarText} from '../src/tui/status/statusbar.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {palette} from '../src/tui/appearance/theme.js';
 
 class Input extends PassThrough {
   isTTY = true;
@@ -47,14 +47,14 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
     const reversed = [...defaultStatusbar].reverse();
     await prefs.save(reversed);
     const reloaded = new StatusbarPreferences(path); await reloaded.load(); assert.deepEqual(reloaded.getSnapshot().modules, reversed);
-    await assert.rejects(prefs.save([{id: 'role', enabled: true}])); assert.deepEqual(prefs.getSnapshot().modules, reversed);
+    await assert.rejects(prefs.save([{id: 'unknown-module', enabled: true}])); assert.deepEqual(prefs.getSnapshot().modules, reversed);
     await writeFile(path, '{invalid');
     await assert.rejects(prefs.load()); await assert.rejects(prefs.save(defaultStatusbar)); assert.equal(await readFile(path, 'utf8'), '{invalid');
     const status = {ownerId: 'logox', name: 'Logox', model: {provider: 'demo', model: 'flash'}, effort: 'high', permission: '工作区',
       context: {tokens: 20, window: 100}, state: '执行中'};
-    assert.equal(statusbarText(status, 5), 'Logox');
-    assert.equal(statusbarText(status, 25), 'Logox · demo/flash');
-    assert.match(statusbarText(status, 120), /(?:Thinking|思考) high.*(?:Permission|权限) 工作区.*(?:Context|上下文) 20%.*执行中/);
+    assert.equal(statusbarText(status, 5), '\uf007 Lo…');
+    assert.equal(statusbarText(status, 25), '\uf007 Logox | \uf4b8 demo/flash');
+    assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*Context \[.*\] 20% USED.*running/);
     assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Cost|费用) CNY 1.2500/);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
@@ -153,14 +153,14 @@ test('status modules and the queue badge share one line across actor views and n
     effort: 'high', permission: '工作区', context: {tokens: 25, window: 100}, state: '就绪'})});
   try {
     await delay(80);
-    assert.ok(ui.output.lines.at(-1)?.includes('logox · demo/logox-model'));
-    await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('aletheia · demo/aletheia-model'));
+    assert.ok(ui.output.lines.at(-1)?.includes('\uf007 logox | \uf4b8 demo/logox-model'));
+    await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('\uf007 aletheia | \uf4b8 demo/aletheia-model'));
     await prefs.save(defaultStatusbar.map(item => ({...item, enabled: item.id === 'context'}))); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
+    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /25% USED/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /(?:上下文|Context) 25%/);
+    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /25% USED/);
     assert.doesNotMatch(ui.output.lines.at(-1)?.trim() ?? '', /Q0/, 'Noisy Q0 badge is removed from footer');
-    assert.ok(!ui.output.lines.at(-2)?.match(/(?:上下文|Context) 25%/), 'Status does not wrap to a second line');
+    assert.ok(!ui.output.lines.at(-2)?.match(/25% USED/), 'Status does not wrap to a second line');
   } finally {await ui.cleanup(); await rm(dir, {recursive: true, force: true});}
 });
 

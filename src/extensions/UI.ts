@@ -2,9 +2,10 @@ import stringWidth from 'string-width';
 import type {ToolCall} from '../runtime/messages.js';
 import type {ToolUI} from '../tools/ui-types.js';
 import {formatByteSize} from '../tools/ui-format.js';
-import {messageToolCall} from '../tui/tool-ui.js';
-import {palette, safeText} from '../tui/cards.js';
-import {stepStatus} from '../tui/row-presentation.js';
+import {messageToolCall} from '../tui/timeline/tool-ui.js';
+import {palette} from '../tui/appearance/theme.js';
+import {safeText} from '../tui/terminal/text.js';
+import {stepStatus} from '../tui/appearance/animation.js';
 
 const sensitive = /password|passwd|secret|token|api[_-]?key|authorization|credential|cookie|private[_-]?key/i;
 const redacted = '[redacted]';

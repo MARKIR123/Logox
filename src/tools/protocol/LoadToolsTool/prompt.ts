@@ -1,0 +1,1 @@
+export const LOAD_TOOLS_DESCRIPTION = 'Load full tool contracts by exact name from the Tools & Skills directory. Supply one or more names together. Loading does not execute the tools or grant permissions; use loaded tools in a later call. Existing loaded names are harmless.';

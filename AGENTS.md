@@ -38,9 +38,9 @@ Before exploring, reading, or modifying files in any subsystem directory (`src/<
    - All ephemeral test scripts, numerical calculations, and screenshots MUST be created in the session scratchpad directory (`tmpdir()/logox-scratchpad/<cwdHash>/<sessionId>/`), never in the project root.
 4. **Multimodal Vision & Browser Verification**:
    - Multimodal vision is enabled by default. `Read` inspects local images; MCP image blocks enter visual input directly.
-   - Use the local Playwright MCP server for web/SVG/UI verification. Keep interaction, state checks, and screenshots in the same page session; coordinate one browser operator across actors.
-5. **Single-Writer Safety**:
-   - Production source code files have strictly one designated writer at any time (typically Techne). Reviewers (Aletheia, Kalon) provide coordinates and visual QA, never competing write handles.
+   - Use the local Playwright MCP server for web/SVG/UI verification. Keep interaction, state checks, and screenshots in the same page session; each actor receives its own isolated browser instance.
+5. **Shared Workspace & Observation Guard**:
+   - Companion actors hold full tool access (`Read`, `Edit`, `Write`, `Shell`, `Grep`, `Glob`, `SendMessage`) and self-verify their work. Concurrent non-overlapping `Edit` calls serialize under per-file atomic locks, while stale overwrites are blocked by per-actor read observation guards.
 6. **Persistent User Configuration in `~/.logox/`**:
    - Primary user storage is `~/.logox/`. Some components still load `~/.logox-ts/` for compatibility, with component-specific precedence; see [usage](docs/USAGE.md). Credentials and runtime data stay outside tracked source files.
 7. **Internal Round Memory and Independent Reports**:

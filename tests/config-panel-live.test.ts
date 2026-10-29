@@ -1,10 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {saveConfigToggles} from '../src/application-commands.js';
-import {palette} from '../src/tui/cards.js';
-import {themePresets} from '../src/config/theme-presets.js';
+import {palette} from '../src/tui/appearance/theme.js';
+import {loadThemePresets, resolveTheme} from '../src/config/theme-presets.js';
 
-test('saveConfigToggles applies theme preset and motion in real time', async () => {
+test('saveConfigToggles applies theme preset and motion in real time', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'logox-test-themes-'));
+  t.after(() => {
+    loadThemePresets(join(home, 'empty'));
+    rmSync(home, {recursive: true, force: true});
+  });
+  loadThemePresets(home);
   const items = [
     {id: 'theme', value: 'Claude Warm', enabled: true},
     {id: 'cursor', value: 'Block █', enabled: true},
@@ -20,7 +29,7 @@ test('saveConfigToggles applies theme preset and motion in real time', async () 
   });
 
   assert.equal(result.message, 'Settings saved.');
-  assert.equal(palette.accent, themePresets['Claude Warm'].accent);
+  assert.equal(palette.user, resolveTheme('claude-warm')?.colors.user);
   assert.equal(savedMotion, false);
   assert.ok(written.includes('\x1b[2 q'), 'Block cursor escape code emitted');
 
@@ -30,7 +39,7 @@ test('saveConfigToggles applies theme preset and motion in real time', async () 
     {id: 'cursor', value: 'Block █', enabled: true},
     {id: 'motion', enabled: true},
   ], {saveMotion: async () => {}, stdout: mockStdout as any});
-  assert.equal(palette.accent, themePresets['Logox Dark'].accent);
+  assert.equal(palette.accent, '#7DA1DE');
 });
 
 test('saveConfigToggles supports changing cursor to Underline and Bar', async () => {
