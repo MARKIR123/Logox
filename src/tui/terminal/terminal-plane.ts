@@ -64,6 +64,7 @@ export class TerminalPlane {
   private displayedRows: readonly Row[] = [];
   private clock = Date.now();
   private lastPaint = -Infinity;
+  private lastInputAt = -Infinity;
   private active = false;
   private closed = false;
   private outputHeld = false;
@@ -71,6 +72,8 @@ export class TerminalPlane {
 
   get rows(): readonly Row[] {return this.displayedRows;}
   get time(): number {return this.clock;}
+  get height(): number {return this.frame?.height ?? 0;}
+  noteInput(): void {this.lastInputAt = performance.now();}
   present(frame: PlaneFrame): void {
     if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height)) this.erase();
     const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId;
@@ -91,9 +94,7 @@ export class TerminalPlane {
     if (text.includes('\x1b[?1049l')) {this.active = false; this.cancel(); return;}
     if (text.includes('\x1b[?1049h')) {this.active = true; this.invalidate();}
     if (!this.active || this.closed) return;
-    // Escape-only cursor/mouse mode changes do not damage the canvas.
-    const visible = text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[\d;?]*[ -/]*[@-~]/g, '');
-    if (/[^\x00-\x1f\x7f-\x9f]/.test(visible) || /\x1b\[[\d;]*[JKHf]/.test(text)) this.invalidate();
+    if (text.includes('\x1b[2J') || text.includes('\x1b[1;1H\x1b[J') || text.includes('\x1b[H\x1b[J')) this.invalidate();
     this.flush();
   }
   invalidate(): void {this.previous = undefined; this.previousLines = [];}
@@ -116,7 +117,10 @@ export class TerminalPlane {
       return a?.step?.state === 'running' || a?.active;
     });
     if (!hasRunning) return;
-    this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame?.motion === false ? 100 : 80);
+    const sinceInput = performance.now() - this.lastInputAt;
+    const baseWait = this.frame?.motion === false ? 100 : 80;
+    const wait = sinceInput < 120 ? Math.max(baseWait, 150 - Math.round(sinceInput)) : baseWait;
+    this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, wait);
     this.animationTimer.unref?.();
   }
   private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}

@@ -1,0 +1,110 @@
+<!-- Logox - GitHub Hero Banner -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 280" width="920" height="280" fill="none">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bannerBg" x1="0" y1="0" x2="920" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#15171D"/>
+      <stop offset="50%" stop-color="#101216"/>
+      <stop offset="100%" stop-color="#0A0B0E"/>
+    </linearGradient>
+
+    <!-- Role Gradients for Emblem -->
+    <linearGradient id="bDirector" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#9BB7EE"/><stop offset="100%" stop-color="#5E83D0"/></linearGradient>
+    <linearGradient id="bTechne" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#F2D18E"/><stop offset="100%" stop-color="#CFA44F"/></linearGradient>
+    <linearGradient id="bKalon" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#E59BB0"/><stop offset="100%" stop-color="#BD6A82"/></linearGradient>
+    <linearGradient id="bAletheia" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#96C7B3"/><stop offset="100%" stop-color="#6B9D88"/></linearGradient>
+
+    <linearGradient id="textGrad" x1="0" y1="0" x2="300" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#DCDAD5"/>
+    </linearGradient>
+
+    <!-- Ambient Glow behind emblem -->
+    <radialGradient id="bannerGlow" cx="130" cy="140" r="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7DA1DE" stop-opacity="0.16"/>
+      <stop offset="70%" stop-color="#E5C07B" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#101216" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Banner Card Base -->
+  <rect width="920" height="280" rx="20" fill="url(#bannerBg)"/>
+  <rect width="918" height="278" x="1" y="1" rx="19" stroke="#252932" stroke-width="1.5" stroke-opacity="0.8"/>
+
+  <!-- Subtle Grid Pattern in Header -->
+  <g opacity="0.07" stroke="#FFFFFF" stroke-width="1">
+    <line x1="280" y1="0" x2="280" y2="280" stroke-dasharray="3 6"/>
+    <line x1="440" y1="0" x2="440" y2="280" stroke-dasharray="3 6"/>
+    <line x1="600" y1="0" x2="600" y2="280" stroke-dasharray="3 6"/>
+    <line x1="760" y1="0" x2="760" y2="280" stroke-dasharray="3 6"/>
+    <line x1="0" y1="70" x2="920" y2="70" stroke-dasharray="3 6"/>
+    <line x1="0" y1="140" x2="920" y2="140" stroke-dasharray="3 6"/>
+    <line x1="0" y1="210" x2="920" y2="210" stroke-dasharray="3 6"/>
+  </g>
+
+  <!-- Ambient Glow on Emblem -->
+  <circle cx="135" cy="140" r="130" fill="url(#bannerGlow)"/>
+
+  <!-- Left: The Ensemble Emblem (Scaled & Centered around 135, 140) -->
+  <g transform="translate(45, 50) scale(0.703)">
+    <!-- Outer dashed boundary -->
+    <path d="M 128 32 L 224 128 L 128 224 L 32 128 Z" stroke="#2E3442" stroke-width="2" stroke-dasharray="4 6" opacity="0.5"/>
+
+    <!-- Interlocking 4 Wings -->
+    <!-- Logox Director -->
+    <path d="M 128 48 L 194 114 L 160 114 L 128 82 L 96 114 L 62 114 Z" fill="url(#bDirector)"/>
+    <!-- Techne -->
+    <path d="M 208 128 L 142 194 L 142 160 L 174 128 L 142 96 L 142 62 Z" fill="url(#bTechne)"/>
+    <!-- Kalon -->
+    <path d="M 128 208 L 62 142 L 96 142 L 128 174 L 160 142 L 194 142 Z" fill="url(#bKalon)"/>
+    <!-- Aletheia -->
+    <path d="M 48 128 L 114 62 L 114 96 L 82 128 L 114 160 L 114 194 Z" fill="url(#bAletheia)"/>
+
+    <!-- Inner Cavity -->
+    <rect x="104" y="104" width="48" height="48" rx="10" transform="rotate(45 128 128)" fill="#0C0E12" stroke="#333846" stroke-width="2.5"/>
+
+    <!-- Floating Core Diamond -->
+    <polygon points="128,114 142,128 128,142 114,128" fill="#F4F2ED"/>
+
+    <!-- Corner Dots -->
+    <circle cx="128" cy="48" r="4" fill="#9BB7EE"/>
+    <circle cx="208" cy="128" r="4" fill="#F2D18E"/>
+    <circle cx="128" cy="208" r="4" fill="#E59BB0"/>
+    <circle cx="48" cy="128" r="4" fill="#96C7B3"/>
+  </g>
+
+  <!-- Right: Title & Rhetoric -->
+  <!-- Main Brand Title -->
+  <text x="270" y="112" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'JetBrains Mono', sans-serif" font-size="52" font-weight="800" letter-spacing="8" fill="url(#textGrad)">LOGOX</text>
+  
+  <!-- Version Tag Pill -->
+  <rect x="525" y="74" width="62" height="24" rx="12" fill="#20242E" stroke="#363C4D" stroke-width="1"/>
+  <text x="556" y="90" font-family="system-ui, monospace" font-size="12" font-weight="600" fill="#7DA1DE" text-anchor="middle">v0.1.0</text>
+
+  <!-- Tagline -->
+  <text x="272" y="148" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="500" fill="#A8A6A0" letter-spacing="0.5">Terminal AI Ensemble · 终端多角色协同编程剧团</text>
+  <text x="272" y="174" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="400" fill="#6A6C75">不是冰冷的单体代理，而是自主分工、原子文件防踩踏与持久记忆的专业协作团队</text>
+
+  <!-- Bottom: 4 Ensemble Role Badges -->
+  <g transform="translate(272, 202)">
+    <!-- Logox Pill -->
+    <rect x="0" y="0" width="136" height="30" rx="8" fill="#1C2433" stroke="#2B3A52" stroke-width="1"/>
+    <text x="14" y="19" font-family="system-ui, monospace" font-size="13" font-weight="600" fill="#7DA1DE">◈ Logox</text>
+    <text x="76" y="19" font-family="system-ui, sans-serif" font-size="12" fill="#8FA4C7">导演 / 编排</text>
+
+    <!-- Techne Pill -->
+    <rect x="148" y="0" width="138" height="30" rx="8" fill="#2E281B" stroke="#4D3F23" stroke-width="1"/>
+    <text x="162" y="19" font-family="system-ui, monospace" font-size="13" font-weight="600" fill="#E5C07B">⊞ Techne</text>
+    <text x="228" y="19" font-family="system-ui, sans-serif" font-size="12" fill="#C2AB78">精工 / 构建</text>
+
+    <!-- Kalon Pill -->
+    <rect x="298" y="0" width="138" height="30" rx="8" fill="#2B1E28" stroke="#4A2E44" stroke-width="1"/>
+    <text x="312" y="19" font-family="system-ui, monospace" font-size="13" font-weight="600" fill="#D3869B">✧ Kalon</text>
+    <text x="372" y="19" font-family="system-ui, sans-serif" font-size="12" fill="#BC8B9B">审美 / 表达</text>
+
+    <!-- Aletheia Pill -->
+    <rect x="448" y="0" width="144" height="30" rx="8" fill="#1D2926" stroke="#2C453E" stroke-width="1"/>
+    <text x="462" y="19" font-family="system-ui, monospace" font-size="13" font-weight="600" fill="#7FAE99">◎ Aletheia</text>
+    <text x="532" y="19" font-family="system-ui, sans-serif" font-size="12" fill="#85A99B">调查 / 审计</text>
+  </g>
+</svg>

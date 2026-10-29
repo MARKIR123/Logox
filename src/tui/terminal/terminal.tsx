@@ -19,6 +19,7 @@ export function renderTerminal(node: ReactNode, options: TerminalOptions = {}): 
     if (restoration) restoration.push(text.replace(synchronized, ''));
     else terminal.write(text);
   }, options.onHistoryFrame);
+  let resized = false;
   const output = new class extends Writable {
     private batch: string[] | undefined;
     get isTTY(): boolean {return Boolean(terminal.isTTY);}
@@ -35,12 +36,19 @@ export function renderTerminal(node: ReactNode, options: TerminalOptions = {}): 
       } else this.commit(text, done);
     }
     private commit(text: string, done: (error?: Error | null) => void): void {
-      // Ink writes BSU, content and ESU as separate chunks. Restore history before
-      // the sole ESU; a nested plane ESU would expose Ink's cleared middle frame.
+      const h = plane.height;
+      let inkText = text;
+      if (!resized && h > 0) {
+        const regex = new RegExp(`^\\x1b\\[(?:1;1|H)?H\\x1b\\[J\\n{${h}}`);
+        if (regex.test(inkText)) {
+          inkText = inkText.replace(regex, `\x1b[${h + 1};1H\x1b[J`);
+        }
+      }
+      resized = false;
       plane.beginOutput(); restoration = [];
       try {
-        plane.afterInkWrite(text); plane.endOutput();
-        const content = text.replace(synchronized, '') + restoration.join('');
+        plane.afterInkWrite(inkText); plane.endOutput();
+        const content = inkText.replace(synchronized, '') + restoration.join('');
         restoration = undefined;
         if (content) terminal.write('\x1b[?2026h' + content + '\x1b[?2026l', done);
         else done();
@@ -51,7 +59,7 @@ export function renderTerminal(node: ReactNode, options: TerminalOptions = {}): 
       else done();
     }
   }();
-  const resize = () => {plane.hide(); output.emit('resize');};
+  const resize = () => {resized = true; plane.hide(); output.emit('resize');};
   terminal.on('resize', resize);
   let cleaned = false;
   const cleanup = () => {if (cleaned) return; cleaned = true; plane.dispose(); terminal.removeListener('resize', resize);};

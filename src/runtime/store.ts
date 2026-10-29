@@ -57,7 +57,7 @@ export class RuntimeStore {
       this.publishTimer = setTimeout(() => {
         this.publishTimer = undefined;
         for (const listener of this.listeners) listener();
-      }, 40);
+      }, 60);
       this.publishTimer.unref?.();
     }
   }

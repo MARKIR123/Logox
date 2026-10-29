@@ -1,4 +1,4 @@
-import {useContext, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
+import {useContext, useDeferredValue, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useStdout, useWindowSize, type DOMElement} from 'ink';
 import stringWidth from 'string-width';
 import {TerminalPlaneContext} from './terminal/terminal.js';
@@ -99,6 +99,7 @@ const noLoginSnapshot = () => null;
 
 export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const deferredSnapshot = useDeferredValue(snapshot);
   const themeVersion = themeRevision();
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
@@ -146,6 +147,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   });
   const [hoveredFoldId, setHoveredFoldId] = useState<string | null>(null);
   const hoveredFoldIdRef = useRef<string | null>(null);
+  const [hoveredPill, setHoveredPill] = useState<string | null>(null);
+  const hoveredPillRef = useRef<string | null>(null);
   const contentSelection = useRef<ContentSelection | null>(null);
   const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow; lastDragX?: number; lastDragY?: number} | null>(null);
   const lastHoverRef = useRef<{x: number; y: number}>({x: -1, y: -1});
@@ -248,10 +251,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     activities.findLast(item => ['running', 'queued', 'paused'].includes(item.status)) ??
     activities.at(-1);
 
-  const visibleMessages = useMemo(() => snapshot.messages.filter(message =>
+  const visibleMessages = useMemo(() => deferredSnapshot.messages.filter(message =>
     message.sessionId === sessionId &&
     (currentView === 'logox' || message.ownerId === currentView)
-  ), [snapshot.messages, sessionId, currentView]);
+  ), [deferredSnapshot.messages, sessionId, currentView]);
 
   const welcome = !demoScene && !activities.length && !pending.length && !visibleMessages.some(message =>
     message.role !== 'system' || !message.systemPresentation || message.systemPresentation === 'timeline'
@@ -265,11 +268,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   const messageRows: readonly Row[] = useMemo(() => {
     if (demoScene) return buildDemoSceneRows(scene, width, hoveredFoldId);
-    if (stage) return buildStageRows(snapshot, sessionId, currentView, width, sceneUi.folds, hoveredFoldId, responses, roles,
+    if (stage) return buildStageRows(deferredSnapshot, sessionId, currentView, width, sceneUi.folds, hoveredFoldId, responses, roles,
       {stopping, focusedStop: focus === 'stop' ? focusedStop : '', hoveredStop,
         focusedQuestionId: dockQuestion ? request.requestId : ''});
     return timelineRows(visibleMessages, width);
-  }, [themeVersion, demoScene, stage, responses, snapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop, request, dockQuestion]);
+  }, [themeVersion, demoScene, stage, responses, deferredSnapshot, sessionId, currentView, sceneUi.folds, scene, visibleMessages, width, hoveredFoldId, roles, stopping, focusedStop, focus, hoveredStop, request, dockQuestion]);
 
   const foldIds = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
   const foldActivityId = (id: string | undefined) => {
@@ -283,9 +286,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : liveWindowTasks.length === 1 ? liveWindowTasks[0] : undefined;
   const steerTarget = selectedSteerTask && ['running', 'waiting_input'].includes(selectedSteerTask.status) ? selectedSteerTask : undefined;
   const own = currentView !== 'logox';
+  const cachedStageStatus = useMemo(() => {
+    if (!getStatus || notice) return undefined;
+    return getStatus(currentView);
+  }, [getStatus, notice, currentView, snapshot.revision, themeVersion]);
   const statusLeft = notice
     ? notice
-    : getStatus ? statusbarText(getStatus(currentView), width, layout?.modules, layout ?? undefined)
+    : cachedStageStatus ? statusbarText(cachedStageStatus, width, layout?.modules, layout ?? undefined)
     : demoScene
       ? own
         ? `${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].symbol} ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].name} · ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].role} · 独立对话`
@@ -376,16 +383,19 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     snapshot.activities,
     sessionId,
     roles,
-    plane?.time ?? Date.now(),
+    0,
     width,
     activationOrderRef.current
-  ), [themeVersion, snapshot.activities, sessionId, roles, plane?.time, width]);
+  ), [themeVersion, snapshot.activities, sessionId, roles, width]);
 
   const pillsWidth = calculatePillsWidth(activePills);
-  const footerStatus = getStatus && !notice ? getStatus(currentView) : undefined;
+  const footerStatus = cachedStageStatus;
   const footerStatusWidth = Math.max(0, width - pillsWidth - (pillsWidth > 0 ? 1 : 0));
-  const footerStatusParts = footerStatus ? statusbarParts(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined) : [];
-  const footerStatusText = getStatus && !notice ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
+  const footerStatusParts = useMemo(() => {
+    if (!footerStatus) return [];
+    return statusbarParts(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined);
+  }, [footerStatus, footerStatusWidth, layout]);
+  const footerStatusText = footerStatus ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -726,6 +736,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (event.action === 'move') {
       const nextExpandHover = atExpandButton(event);
       setExpandHovered(previous => previous === nextExpandHover ? previous : nextExpandHover);
+      if (event.y >= screenRows - footerHeight) {
+        const hovered = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
+        const nextHoveredPill = hovered ? hovered.ownerId : null;
+        if (hoveredPillRef.current !== nextHoveredPill) {
+          hoveredPillRef.current = nextHoveredPill;
+          setHoveredPill(nextHoveredPill);
+        }
+      } else if (hoveredPillRef.current !== null) {
+        hoveredPillRef.current = null;
+        setHoveredPill(null);
+      }
       if (lastHoverRef.current.x === event.x && lastHoverRef.current.y === event.y) return;
       lastHoverRef.current = {x: event.x, y: event.y};
       const rows = readingRows();
@@ -756,14 +777,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (menuHeight && event.y >= menuY && event.y < menuY + menuHeight) return;
       // Footer click
       if (event.y >= screenRows - footerHeight) {
-        if (currentView !== 'logox') {
-          switchView('logox');
-          return;
-        }
         const clickedPill = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
         if (clickedPill) {
           const now = Date.now();
           if (now - lastClickRef.current.time < 350 && lastClickRef.current.key === 'pill:' + clickedPill.ownerId) {
+            switchView(clickedPill.ownerId);
+            lastClickRef.current = {time: 0, key: ''};
+          } else {
+            if (currentView !== 'logox') {
+              switchView('logox');
+            }
             const targetIndex = findLatestActorRowIndex(messageRows, clickedPill.ownerId);
             if (targetIndex >= 0) {
               const targetRow = messageRows[targetIndex]!;
@@ -778,10 +801,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
               hoveredFoldIdRef.current = highlightId;
               presentReading();
             }
-            lastClickRef.current = {time: 0, key: ''};
-          } else {
             lastClickRef.current = {time: now, key: 'pill:' + clickedPill.ownerId};
           }
+          return;
+        }
+        if (currentView !== 'logox') {
+          switchView('logox');
           return;
         }
         clearSelection();
@@ -939,6 +964,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
   usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
   useInput((input, key) => {
+    plane?.noteInput();
     if (closing || key.eventType === 'release') return;
     if (composerExpanded) {
       if (!(key.ctrl && input === 'c')) exitDeadline.current = 0;
@@ -1257,7 +1283,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
         ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
         : footerStatusText}</Text>
-      {activePills.length > 0 ? <ActorPills pills={activePills}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
+      {activePills.length > 0 ? <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
         <Text color={palette.muted}>{renderedFooterKeys}</Text>
       </> : null}

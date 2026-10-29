@@ -30,6 +30,8 @@ function transform(segments: readonly SceneSegment[], fn: (glyph: SceneSegment, 
   }
   return result;
 }
+const decoratedCache = new WeakMap<Row, {animNow: number; motion: boolean; decorated: SceneRow}>();
+
 /** Color and fixed-size slots only: no layout or runtime publication on a clock tick. */
 export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const row = raw as SceneRow, animation = row.animation;
@@ -38,6 +40,13 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const activeActor = Boolean(animation.active);
   if (!running && !activeActor) return row;
   if (!motion && !running) return row;
+
+  const animNow = Math.floor(now / 100) * 100;
+  const cached = decoratedCache.get(raw);
+  if (cached && cached.animNow === animNow && cached.motion === motion) {
+    return cached.decorated;
+  }
+
   const status = animation.step && running ? animation.thinking ? thinkingDuration(animation.step, now) : stepStatus(animation.step, now).slice(0, 7) : '';
   const base = rowSegments(row);
   const mappedCells = new Map(row.selectionCells?.map(cell => [cell.column, cell]));
@@ -64,7 +73,9 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
     }
     return segment;
   });
-  return {...row, segments, displayText: segments.map(segment => segment.text).join('')};
+  const decorated = {...row, segments, displayText: segments.map(segment => segment.text).join('')};
+  decoratedCache.set(raw, {animNow, motion, decorated});
+  return decorated;
 }
 export function presentedSegments(row: SceneRow, index: number, selection: SelectionRange | null, isHovered = false): readonly SceneSegment[] {
   const bounds = rowSelectionBounds(row, index, selection);

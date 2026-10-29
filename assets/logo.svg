@@ -1,0 +1,89 @@
+<!-- Logox - Terminal AI Ensemble Icon -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#16181D"/>
+      <stop offset="100%" stop-color="#0B0C0E"/>
+    </linearGradient>
+
+    <!-- Role Gradients -->
+    <!-- Logox Director: Celestial Blue-Violet -->
+    <linearGradient id="directorGrad" x1="128" y1="44" x2="180" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9BB7EE"/>
+      <stop offset="100%" stop-color="#5E83D0"/>
+    </linearGradient>
+
+    <!-- Techne: Watchmaker Amber Gold -->
+    <linearGradient id="techneGrad" x1="212" y1="128" x2="136" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F2D18E"/>
+      <stop offset="100%" stop-color="#CFA44F"/>
+    </linearGradient>
+
+    <!-- Kalon: Shivers Rose-Violet -->
+    <linearGradient id="kalonGrad" x1="128" y1="212" x2="76" y2="136" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E59BB0"/>
+      <stop offset="100%" stop-color="#BD6A82"/>
+    </linearGradient>
+
+    <!-- Aletheia: Lens Sage-Mint -->
+    <linearGradient id="aletheiaGrad" x1="44" y1="128" x2="120" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#96C7B3"/>
+      <stop offset="100%" stop-color="#6B9D88"/>
+    </linearGradient>
+
+    <!-- Core Glow & Shadows -->
+    <radialGradient id="ambientGlow" cx="128" cy="128" r="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7DA1DE" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="#E5C07B" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#101216" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="subtleShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+
+    <filter id="facetGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Container Box -->
+  <rect width="256" height="256" rx="56" fill="url(#bgGrad)"/>
+  <rect width="254" height="254" x="1" y="1" rx="55" stroke="#262A33" stroke-width="1.5" stroke-opacity="0.7"/>
+
+  <!-- Ambient Light -->
+  <circle cx="128" cy="128" r="90" fill="url(#ambientGlow)"/>
+
+  <!-- Subtle Outer Diamond Frame -->
+  <path d="M 128 32 L 224 128 L 128 224 L 32 128 Z" stroke="#2A2F3B" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.4"/>
+
+  <!-- The Interlocking Ensemble Aperture -->
+  <g filter="url(#subtleShadow)">
+    <!-- Top Wing: Logox (Director) -->
+    <path d="M 128 48 L 194 114 L 160 114 L 128 82 L 96 114 L 62 114 Z" fill="url(#directorGrad)"/>
+
+    <!-- Right Wing: Techne (Craftsman) -->
+    <path d="M 208 128 L 142 194 L 142 160 L 174 128 L 142 96 L 142 62 Z" fill="url(#techneGrad)"/>
+
+    <!-- Bottom Wing: Kalon (Aesthete) -->
+    <path d="M 128 208 L 62 142 L 96 142 L 128 174 L 160 142 L 194 142 Z" fill="url(#kalonGrad)"/>
+
+    <!-- Left Wing: Aletheia (Scout) -->
+    <path d="M 48 128 L 114 62 L 114 96 L 82 128 L 114 160 L 114 194 Z" fill="url(#aletheiaGrad)"/>
+  </g>
+
+  <!-- Inner Terminal Diamond Cavity -->
+  <rect x="104" y="104" width="48" height="48" rx="10" transform="rotate(45 128 128)" fill="#0E1014" stroke="#333846" stroke-width="2"/>
+
+  <!-- Central Luminous Core Glyphs -->
+  <!-- Floating Diamond Core -->
+  <polygon points="128,114 142,128 128,142 114,128" fill="#F4F2ED"/>
+
+  <!-- Precise Corner Pins -->
+  <circle cx="128" cy="48" r="3.5" fill="#9BB7EE"/>
+  <circle cx="208" cy="128" r="3.5" fill="#F2D18E"/>
+  <circle cx="128" cy="208" r="3.5" fill="#E59BB0"/>
+  <circle cx="48" cy="128" r="3.5" fill="#96C7B3"/>
+</svg>

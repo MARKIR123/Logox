@@ -10,6 +10,12 @@ import {ProviderRegistry} from './providers/registry.js';
 import {applyTheme} from './tui/appearance/theme.js';
 
 async function main(): Promise<void> {
+  try {
+    process.loadEnvFile?.();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
   const {values} = parseArgs({options: {
     demo: {type: 'boolean'}, help: {type: 'boolean'}, session: {type: 'string'}, resume: {type: 'boolean'},
     model: {type: 'string'}, provider: {type: 'string'}, 'base-url': {type: 'string'}, 'check-config': {type: 'boolean'},

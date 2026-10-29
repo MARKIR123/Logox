@@ -12,6 +12,16 @@
   "bugs": {
     "url": "https://github.com/MARKIR123/Logox/issues"
   },
+  "keywords": [
+    "tui",
+    "agent",
+    "terminal",
+    "ai",
+    "coding-assistant",
+    "subagents",
+    "multi-agent",
+    "ink"
+  ],
   "bin": {
     "logox": "./dist/src/cli.js",
     "logox-ts": "./dist/src/cli.js"
@@ -22,6 +32,8 @@
   "files": [
     "dist/src",
     "scripts/install-actor-profiles.mjs",
+    "config.example.toml",
+    "assets",
     "README.md",
     "LICENSE"
   ],
@@ -55,10 +67,11 @@
     "test": "npm run check:docs && npm run build && node --test --test-concurrency=4 dist/tests/*.test.js",
     "build": "tsc && node scripts/copy-actor-profiles.mjs",
     "demo": "npm run build && node dist/src/cli.js --demo",
+    "demo:actor-bar": "npm run build && node scripts/demo-actor-bar.mjs",
     "sync:profiles": "node scripts/sync-actor-profiles.mjs",
     "check:docs": "node scripts/check-docs.mjs"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   }
 }

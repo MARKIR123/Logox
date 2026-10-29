@@ -125,7 +125,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const actorColor = railFor(message.ownerId);
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     const systemError = isTimelineError(message);
-    const key = JSON.stringify([themeRevision(), width, frame, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id]);
+    const frameKey = frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '';
+    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
