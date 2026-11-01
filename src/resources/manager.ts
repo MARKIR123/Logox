@@ -73,7 +73,7 @@ export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkill
         const previous = previousBrowserSkills[rel.replaceAll('\\', '/')];
         if (!previous || (await lstat(target)).isSymbolicLink()) continue;
         const current = (await readFile(target, 'utf8')).replace(/\r\n/g, '\n').replace(/\r/g, '');
-        if (createHash('sha256').update(current).digest('hex') === previous) await writeFile(target, await readFile(file));
+        if (previous.includes(createHash('sha256').update(current).digest('hex'))) await writeFile(target, await readFile(file));
       }
     }
   } catch {}

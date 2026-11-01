@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   composeBaseSystemPrompt,
-  CORE_EXECUTION_CHARTER,
-  TOOL_USAGE_RULES,
+  SHARED_EXECUTION_RULES,
   collaborationFor,
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
@@ -22,15 +21,14 @@ test('提示词工程：基础系统提示词按静态切片分层组装，核�
   // 1. 结构化切片数组正确导出
   assert.ok(result.sections.length >= 4);
   const names = result.sections.map(s => s.name);
-  assert.deepEqual(names, ['persona', 'tool_rules', 'execution_charter', 'activity_visibility', 'round_memory', 'guidelines', 'collaboration', 'environment']);
+  assert.deepEqual(names, ['persona', 'shared_execution', 'round_memory', 'guidelines', 'collaboration', 'environment']);
 
   // 2. 文本拼接严格遵循前缀顺序
   assert.ok(result.system.includes('与其思考，不如实践'));
   assert.ok(result.system.includes('## Custom Persona Extension'));
   assert.ok(result.system.includes('【特别约束】单文件输出'));
   assert.ok(result.system.includes('Working directory: /workspace/project'));
-  assert.ok(result.system.includes(TOOL_USAGE_RULES));
-  assert.ok(result.system.includes(CORE_EXECUTION_CHARTER));
+  assert.ok(result.system.includes(SHARED_EXECUTION_RULES));
   assert.ok(result.system.includes(collaborationFor('techne')));
   assert.ok(result.system.includes('【项目规则】遵循 AGENTS.md。'));
 

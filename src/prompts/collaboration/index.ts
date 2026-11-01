@@ -1,9 +1,12 @@
-import {BULLETIN, DATA_NOT_INSTRUCTIONS, DIRECT_MESSAGE, LANGUAGE_CONSISTENCY, NECESSARY_COMMUNICATION} from './common.js';
+import {BULLETIN, DATA_NOT_INSTRUCTIONS, DIRECT_MESSAGE, NECESSARY_COMMUNICATION} from './common.js';
+import {COMPANION_COLLABORATION} from './companion.js';
 
-export const COLLABORATION_COMMON = [LANGUAGE_CONSISTENCY, NECESSARY_COMMUNICATION, DIRECT_MESSAGE, DATA_NOT_INSTRUCTIONS, BULLETIN].join('\n');
+export const TEAM_COLLABORATION = '## Working as a team\n' + [NECESSARY_COMMUNICATION, DIRECT_MESSAGE, DATA_NOT_INSTRUCTIONS, BULLETIN].join('\n');
+export {COMPANION_COLLABORATION};
 
-export function collaborationFor(_ownerId: string): string {
-  return COLLABORATION_COMMON;
+/** Shared team rules for everyone; every actor except the Director (`logox`) also gets the companion layer. */
+export function collaborationFor(ownerId: string): string {
+  return ownerId === 'logox' ? TEAM_COLLABORATION : TEAM_COLLABORATION + '\n\n' + COMPANION_COLLABORATION;
 }
 
 export {TASK_REPORT_CONTRACT, HANDOFF_NOTICE} from './reporting.js';

@@ -10,8 +10,9 @@
 |---|---|---|
 | See topic order, section owner or cache stability | `boundary.ts:composeActorSystemPrompt()` | `boundary.ts:PromptSection` |
 | See how a request assembles its prompt | `../kernel/agent.ts:agentRequestBase()` | `boundary.ts:composeBaseSystemPrompt()` |
-| Change shared execution, tool-use or round-memory text | `charter.ts` | `src/actors/profiles/<id>/execution.md`, `src/actors/profiles/<id>/compression.md` |
-| Change peer messaging etiquette | `collaboration/common.ts` | `collaboration/index.ts:COLLABORATION_COMMON`, `src/actors/profiles/<id>/collaboration.md` |
+| Change shared execution, status-line, vision or round-memory text | `charter.ts:SHARED_EXECUTION_RULES` | `src/actors/profiles/<id>/execution.md`, `src/actors/profiles/<id>/compression.md` |
+| Change peer messaging etiquette | `collaboration/common.ts` | `collaboration/index.ts:TEAM_COLLABORATION`, `src/actors/profiles/<id>/collaboration.md` |
+| Change rules for every non-Director actor | `collaboration/companion.ts:COMPANION_COLLABORATION` | `collaboration/index.ts:collaborationFor()` |
 | Change the formal task-report contract | `collaboration/reporting.ts:TASK_REPORT_CONTRACT` | `../context/round-memory.ts:TaskDelivery` |
 | Change Director wake-up or recovery wording | `runtime/director.ts` | `runtime/recovery.ts`, `../actors/services.ts` |
 | Change the live environment or restriction text | `runtime/environment.ts` | `../runtime/context-updates.ts`, `../application.ts` |
@@ -19,7 +20,7 @@
 
 ## 3. Common Changes
 ### Change a shared rule
-1. Edit the constant in `charter.ts` (`CORE_EXECUTION_CHARTER`, `TASK_PROGRESS_RULE`, `TOOL_USAGE_RULES`, `ROUND_SUMMARY_CONTRACT`) or `collaboration/common.ts` (one constant per rule, joined in `collaboration/index.ts:COLLABORATION_COMMON`).
+1. Edit the constant in `charter.ts` (`SHARED_EXECUTION_RULES`, `ROUND_SUMMARY_CONTRACT`), `collaboration/common.ts` (one constant per rule, joined in `collaboration/index.ts:TEAM_COLLABORATION`) or `collaboration/companion.ts`. State each rule once: the language rule lives only in `SHARED_EXECUTION_RULES`, and the Playwright procedure lives in the `browser-screenshot` skill.
 2. Keep each file under 16 KiB and each constant defined exactly once.
 3. If the rule restates a persona line, delete it from `src/actors/profiles/<id>/persona.md`; personas hold identity and voice only.
 4. Prompt text is cache-prefix bytes: any edit invalidates cached prefixes for every actor.
@@ -39,6 +40,7 @@
 
 ## 4. Hard Boundaries
 - **Exactly five topics, in order**: Persona, Execution Rules, Team Collaboration, Tools & Skills, Current Environment. Nested headings are demoted (`nested()`) and cannot add a sixth. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
+- **Companion layer**: `collaboration/index.ts:collaborationFor(ownerId)` returns team rules for every actor and appends `COMPANION_COLLABORATION` for every actor except `logox` (crafted and dynamic actors are companions). The composer receives `ownerId` from `../kernel/agent.ts:agentRequestBase()`. Enforced by `tests/prompts.test.ts`.
 - **One source per shared contract**: `ROUND_SUMMARY_CONTRACT`, `TASK_REPORT_CONTRACT` and `HISTORY_MEMO_INSTRUCTION` are each defined once. Enforced by `tests/prompt-architecture.test.ts`.
 - **Personas do not repeat tool names or collaboration workflow**: Enforced by `tests/prompts.test.ts`, `tests/prompt-composition.test.ts`.
 - **Live changes never rewrite the system prompt**: runtime facts are typed history messages; the system tail holds only the original baseline. Enforced by `tests/prompts.test.ts`, `tests/runtime-context-updates.test.ts`.
@@ -54,3 +56,4 @@
 - Fast run: `node --test dist/tests/prompt*.test.js dist/tests/actor-compression-contracts.test.js dist/tests/runtime-context-updates.test.js`
 - Not covered offline: stable bytes and local cache markers do not prove remote cache hits or signed-thinking compliance.
 - `src/actors/profiles/<id>/persona.zh.md` is not a runtime source and is not synchronized with the English role split.
+- Section names are `persona`, `shared_execution`, `round_memory`, `memory_focus`, `guidelines`, `collaboration`, `role_collaboration`, `tools`, `skills`, `environment`.

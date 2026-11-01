@@ -36,7 +36,7 @@ for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisf
         const request = seen.at(-1)!;
         assert.deepEqual(request.system.match(/^# .+$/gm), headings);
         assert.equal(request.system.split('<number> | <title> | <status>[; <verification>] | <carry-forward> | <start>:<end>').length - 1, 1);
-        assert.equal((request.system.match(/never delegate understanding/g) ?? []).length, 1, 'Shared delegation policy has one authoritative source');
+        assert.equal((request.system.match(/never delegate understanding/gi) ?? []).length, id === 'logox' ? 1 : 0, 'Delegation policy is Director-only and has one source');
         const role = builtinActors.find(actor => actor.id === id);
         for (const text of role ? [role.prompt, role.execution, role.collaboration, role.compression] : ['Custom identity.', 'Custom execution method.', 'Custom collaboration boundary.', 'Custom evidence focus.']) {
           if (text) assert.equal(request.system.split(text.trim()).length - 1, 1, id + ' owns each rule once');

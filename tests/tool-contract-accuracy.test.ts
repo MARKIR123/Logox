@@ -53,7 +53,7 @@ test('Read default pagination retains line numbering and exposes the remaining r
 });
 
 test('memory focus keeps an authored heading without adding a duplicate section label', () => {
-  const input = {persona: 'A specialist.', guidelines: [], toolsIndex: '', skillsIndex: '', environmentBaseline: 'Fixture environment.'};
+  const input = {ownerId: 'techne', persona: 'A specialist.', guidelines: [], toolsIndex: '', skillsIndex: '', environmentBaseline: 'Fixture environment.'};
   const titled = composeActorSystemPrompt({...input, memoryFocus: '# Evidence focus\nPreserve proof.'}).system;
   assert.deepEqual(titled.match(/^# .+$/gm), ['# Persona', '# Execution Rules', '# Team Collaboration', '# Tools & Skills', '# Current Environment']);
   assert.match(titled, /## Evidence focus\nPreserve proof\./);

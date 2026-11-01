@@ -1,5 +1,5 @@
-import {CORE_EXECUTION_CHARTER, ROUND_SUMMARY_CONTRACT, TASK_PROGRESS_RULE, TOOL_USAGE_RULES} from './charter.js';
-import {COLLABORATION_COMMON, TASK_REPORT_CONTRACT} from './collaboration/index.js';
+import {ROUND_SUMMARY_CONTRACT, SHARED_EXECUTION_RULES} from './charter.js';
+import {collaborationFor, TASK_REPORT_CONTRACT} from './collaboration/index.js';
 import {workingDirectory} from './runtime/environment.js';
 import {getScratchpadPromptSection} from './runtime/scratchpad.js';
 
@@ -15,6 +15,7 @@ export interface PromptSection {
   readonly stability: 'stable' | 'revisioned' | 'live';
 }
 export interface ActorSystemPromptInput {
+  ownerId: string;
   persona: string;
   execution?: string | undefined;
   collaboration?: string | undefined;
@@ -50,9 +51,7 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
     if (text.trim()) sections.push({name, topic, owner, stability, zone: 'static', text: nested(text)});
   };
   add('persona', 'persona', 'role', input.persona);
-  add('tool_rules', 'execution', 'shared', TOOL_USAGE_RULES);
-  add('execution_charter', 'execution', 'shared', CORE_EXECUTION_CHARTER);
-  add('activity_visibility', 'execution', 'shared', TASK_PROGRESS_RULE);
+  add('shared_execution', 'execution', 'shared', SHARED_EXECUTION_RULES);
   if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', ROUND_SUMMARY_CONTRACT);
   if (input.execution) add('role_execution', 'execution', 'role', input.execution);
   if (input.memoryFocus?.trim()) {
@@ -61,7 +60,7 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   }
   for (const guideline of input.guidelines) add('guidelines', 'execution', 'resource',
     '## Project and User Guidelines\nSource: ' + guideline.path + '\n\n' + nested(guideline.text), 'revisioned');
-  add('collaboration', 'collaboration', 'shared', COLLABORATION_COMMON + '\n\n' + TASK_REPORT_CONTRACT);
+  add('collaboration', 'collaboration', 'shared', collaborationFor(input.ownerId) + '\n\n' + TASK_REPORT_CONTRACT);
   if (input.collaboration) add('role_collaboration', 'collaboration', 'role', input.collaboration);
   add('tools', 'tools-skills', 'resource', input.toolsIndex ? '## Tools\n' + input.toolsIndex : '', 'revisioned');
   add('skills', 'tools-skills', 'resource', input.skillsIndex ? '## Skills\n' + input.skillsIndex : '', 'revisioned');
@@ -82,7 +81,7 @@ export function composeBaseSystemPrompt(options: BasePromptOptions): {system: st
   if (!persona) throw new Error('Actor has no valid persona: ' + options.ownerId);
   const environment = options.environmentBaseline ?? [workingDirectory(options.cwd),
     ...(options.scratchpadDir ? [getScratchpadPromptSection(options.scratchpadDir)] : [])].join('\n\n');
-  return composeActorSystemPrompt({persona, execution: options.execution, collaboration: options.collaboration,
+  return composeActorSystemPrompt({ownerId: options.ownerId, persona, execution: options.execution, collaboration: options.collaboration,
     memoryFocus: options.memoryFocus,
     guidelines: options.guidelines ?? (options.rulesContext ? [{path: 'request', text: options.rulesContext}] : []),
     toolsIndex: options.toolsIndex ?? '', skillsIndex: options.skillsIndex ?? '', environmentBaseline: environment,
