@@ -47,7 +47,8 @@ test('折叠只命中实际图标标题，展开灰底优先，露出背景命�
   const row = folded.find(row => row.messageId === id)!;
   assert.equal(actionAt(row, row.gutterCols)?.foldId, id);
   assert.equal(actionAt(row, row.gutterCols - 1)?.foldId, 'actor');
-  assert.equal(actionAt(row, row.gutterCols + stringWidth('▮ read README.md'))?.foldId, 'actor', '耗时与行尾空白不扩大标题命中');
+  assert.equal(actionAt(row, row.gutterCols + stringWidth('▮ read README.md'))?.foldId, id, 'the elapsed time is part of the hover region');
+  assert.equal(actionAt(row, row.gutterCols + stringWidth(row.text.trimEnd()))?.foldId, 'actor', 'trailing blanks do not widen the region');
   const open = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true, [id]: true}, null);
   const body = open.find(row => row.text === '完整结果')!;
   assert.equal(body.bg, '#242B3A'); assert.equal(actionAt(body, 76)?.foldId, id);

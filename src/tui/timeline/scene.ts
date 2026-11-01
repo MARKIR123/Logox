@@ -11,12 +11,17 @@ import type {ContentCell} from './selection.js';
 import {layoutMarkdown} from './markdown.js';
 import {stepStatus, stepIcon, thinkingDuration} from '../appearance/animation.js';
 
+/** Separator between row parts; always its own muted segment. */
+export const SEPARATOR = ' · ';
+
 export interface SceneSegment {
   readonly text: string;
   readonly color?: string;
   readonly bg?: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
+  /** Marks a ` · ` separator so adjacent segments never merge into it. */
+  readonly separator?: true;
   readonly selectionKey?: string;
   readonly selectionOffset?: number;
 }
@@ -69,6 +74,16 @@ function whoLabel(who: string, roles: ActorStyles = cast): string {
 }
 
 
+/** Removes trailing newlines and whitespace-only lines; the indentation of the last real line is kept. */
+export function trimTrailingBlankLines(text: string): string {
+  return text.replace(/(?:\r?\n[ \t]*)+$/, '').replace(/^[ \t\r\n]+$/, '');
+}
+
+/** Reasoning keeps its paragraphs on separate lines but never shows empty rows, at the edges or between paragraphs. */
+export function compactParagraphs(text: string): string {
+  return text.split(/\r?\n/).filter(line => line.trim()).join('\n');
+}
+
 function statusColor(status: string, actorColor = palette.accent): string {
   if (/Awaiting|Waiting/.test(status)) return actorColor;
   if (/Pending review/.test(status)) return palette.dreamText;
@@ -82,6 +97,8 @@ export interface FrameWrap {
   readonly rightCols: number;
   readonly innerWidth: number;
   readonly bg?: string;
+  /** Color of the surface owner (the actor whose card hosts these rows, Logox on the timeline); row hover highlights use it. */
+  readonly surfaceColor?: string;
 }
 
 export interface RowBuilder {
@@ -145,6 +162,7 @@ export function insetFrame(parent: FrameWrap, bg: string | undefined, left = 2, 
     rightCols: parent.rightCols + right,
     innerWidth: Math.max(1, parent.innerWidth - left - right),
     ...(bg ? {bg} : {}),
+    ...(parent.surfaceColor ? {surfaceColor: parent.surfaceColor} : {}),
   };
 }
 
@@ -158,6 +176,7 @@ export function insetRailFrame(parent: FrameWrap, railColor: string, bg?: string
     rightCols: parent.rightCols,
     innerWidth: Math.max(1, parent.innerWidth - left),
     ...(frameBg ? {bg: frameBg} : {}),
+    ...(parent.surfaceColor ? {surfaceColor: parent.surfaceColor} : {}),
   };
 }
 
@@ -178,7 +197,7 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
       const last = line.at(-1);
       const value = {...segment, text: part, selectionOffset: offset};
       offset += part.length;
-      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic && last.selectionKey === value.selectionKey) {
+      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic && last.separator === value.separator && last.selectionKey === value.selectionKey) {
         line[line.length - 1] = {...last, text: last.text + part};
       } else line.push(value);
       used += stringWidth(part);
@@ -187,11 +206,12 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
   return lines;
 }
 
-export function createBuilder(width: number, hoveredFoldId: string | null, roles: ActorStyles = cast): RowBuilder {
+/** `surfaceColor` is the owner of the surface being drawn (Logox on the timeline, the actor in its own window); hover highlights use it. */
+export function createBuilder(width: number, hoveredFoldId: string | null, roles: ActorStyles = cast, surfaceColor: string = palette.accent): RowBuilder {
   const rows: SceneRow[] = [];
   const baseGutterCols = width >= 6 ? 2 : 0;
   const contentWidth = Math.max(1, width - baseGutterCols);
-  const topFrame = (): FrameWrap => ({leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: contentWidth});
+  const topFrame = (): FrameWrap => ({leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: contentWidth, surfaceColor});
 
   const pushBlank = (railColor = '', frame?: FrameWrap, action?: SceneAction) => {
     const f = frame ?? topFrame();
@@ -252,7 +272,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const f = frame ?? topFrame();
     let line = 0;
     let sourceStart = 0;
-    for (const paragraph of safeText(text).split('\n')) {
+    const body = text.trim() ? trimTrailingBlankLines(safeText(text)) : safeText(text); // a trailing newline in tool output or notices is not a row; an explicit empty line stays one
+    for (const paragraph of body.split('\n')) {
       const wrapped = wrapAnsi(paragraph, f.innerWidth, {hard: true, trim: false}).split('\n');
       for (let index = 0; index < wrapped.length; index++) {
         const value = wrapped[index]!;
@@ -277,6 +298,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
 
   const pushMarkdown: RowBuilder['pushMarkdown'] = (id, text, railColor, frame) => {
     const f = frame ?? topFrame();
+    text = trimTrailingBlankLines(text.replace(/^(?:[ \t]*\r?\n)+/, '')); // leading and trailing blank lines are never content
+    if (!text.trim()) return;
     for (const [line, value] of layoutMarkdown(text, f.innerWidth).entries()) {
       rows.push({messageId: id, line, text: value.text, displayText: f.leftSegments.map(s => s.text).join('') + value.text + (f.bg || f.rightCols ? ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text))) + f.rightSegments.map(s => s.text).join('') : ''), railColor, gutterCols: baseGutterCols + f.leftCols,
         softWrap: value.softWrap, noSelect: Boolean(value.noSelect), tone: 'body', sourceText: text,
@@ -345,11 +368,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     if (isDream) {
       pushCardCap(opts.id + '-top', 'top', cardBg, opts.railColor, pf, action);
     }
-    const highlightColor = isDream
-      ? palette.dreamText
-      : opts.ownerId && roles[opts.ownerId]
-        ? ownerColor(opts.ownerId, roles)
-        : opts.railColor || palette.accent;
+    // Hover highlights belong to the surface that hosts the row, never to the card's sender or tool owner.
+    const highlightColor = isDream ? palette.dreamText : pf.surfaceColor ?? palette.accent;
     const labelColor = opts.toneColor ?? (isDream ? palette.dreamText : bright ? highlightColor : palette.muted);
     const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
     if (simple) {
@@ -361,22 +381,44 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       const fault = opts.step?.disposition === 'denied' ? 'Denied' : opts.step?.disposition === 'error' || opts.step?.state === 'failed' ? 'Error' : '';
       const isTool = !thinking;
       const statusText = isTool && status ? status.trim() : status;
-      const statusSep = status ? thinking ? terminal ? ' ' : ' · ' : ' · ' : '';
+      const statusSepText = status ? thinking && terminal ? ' ' : ' · ' : '';
       const isHovered = hoveredFoldId === opts.id;
       const italic = Boolean(opts.titleSegments?.[0]?.italic); // an italic title row carries its separator and elapsed time in italic too
-      const titlePieces: SceneSegment[] = opts.titleSegments && opts.titleSegments.length > 0
-        ? opts.titleSegments.map(s => (isHovered && (!s.color || s.color === palette.muted || (opts.expandable && opts.step?.state === 'running' && s.color === palette.fg)) ? {...s, color: highlightColor} : s))
-        : [{text: title, color: isHovered ? highlightColor : titleColor, selectionKey: opts.id + ':title', selectionOffset: 0}];
-
-      pushFramedLine(opts.id, opts.railColor, [
+      const italicProp = italic ? {italic: true} : {};
+      const separator = (text: string, key: string): SceneSegment => ({text, color: palette.muted, ...italicProp, separator: true, selectionKey: key, selectionOffset: 0});
+      // Every ` · ` inside a title becomes its own muted segment so the separator never takes the color of its neighbours.
+      const splitSeparators = (s: SceneSegment): SceneSegment[] => {
+        const parts = s.text.split(SEPARATOR);
+        let consumed = 0;
+        return parts.flatMap((text, index): SceneSegment[] => {
+          const at = consumed;
+          consumed += text.length + SEPARATOR.length;
+          const offset = (position: number) => s.selectionOffset === undefined ? {} : {selectionOffset: s.selectionOffset + position};
+          const sep: SceneSegment[] = index > 0 ? [{...s, text: SEPARATOR, color: palette.muted, separator: true, ...offset(at - SEPARATOR.length)}] : [];
+          return text ? [...sep, {...s, text, ...offset(at)}] : sep;
+        });
+      };
+      const titleSource: readonly SceneSegment[] = opts.titleSegments && opts.titleSegments.length > 0
+        ? opts.titleSegments
+        : [{text: title, color: titleColor, selectionKey: opts.id + ':title', selectionOffset: 0}];
+      const titlePieces: SceneSegment[] = titleSource.flatMap(splitSeparators).map(s => {
+        if (s.text === SEPARATOR) return {...s, color: palette.muted};
+        const recolor = isHovered && (!s.color || s.color === palette.muted || s.color === titleColor || (opts.expandable && opts.step?.state === 'running' && s.color === palette.fg));
+        return recolor ? {...s, color: highlightColor} : s;
+      });
+      const tokenText = (opts.tokens ?? 0) > 0 ? opts.tokens + ' Tokens' : '';
+      const waitingText = opts.step?.state === 'waiting' ? opts.step.waiting ?? 'Waiting' : '';
+      const hoverMuted = (color: string) => isHovered && color === palette.muted ? highlightColor : color;
+      const pieces: SceneSegment[] = [
         ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
         ...titlePieces,
-        {text: statusSep, ...(italic ? {italic: true} : {})},
-        {text: statusText, color: palette.muted, ...(italic ? {italic: true} : {}), selectionKey: opts.id + ':status', selectionOffset: 0},
-        ...(thinking ? [{text: ((opts.tokens ?? 0) > 0 ? ' · ' + opts.tokens + ' Tokens' : '') +
-          (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? 'Waiting') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
+        ...(statusSepText ? [separator(statusSepText, opts.id + ':status_sep')] : []),
+        ...(statusText ? [{text: statusText, color: hoverMuted(palette.muted), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
+        ...(thinking && tokenText ? [separator(SEPARATOR, opts.id + ':tokens_sep'), {text: tokenText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
+        ...(thinking && waitingText ? [separator(SEPARATOR, opts.id + ':waiting_sep'), {text: waitingText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':waiting', selectionOffset: 0}] : []),
         ...((opts.faultLabel ?? fault) ? [{text: '  ' + (opts.faultLabel ?? fault), color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
-      ], frame, action);
+      ];
+      pushFramedLine(opts.id, opts.railColor, pieces, frame, action);
       if (opts.step) for (let index = firstRow; index < rows.length; index++) {
         const row = rows[index]!;
         const frames = opts.ownerId && roles[opts.ownerId]?.thinkingAnimation ? roles[opts.ownerId]?.thinkingAnimation : undefined;
@@ -391,7 +433,10 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       opts.title, opts.status ?? '', frame, opts.railColor, action,
       isDream ? palette.dreamMuted : statusColor(opts.status ?? '', highlightColor), titleColor, false);
     if (opts.open) {
-      opts.bodyLines.forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
+      // Interior blank lines are content (command output); the trailing ones are formatting.
+      let bodyEnd = opts.bodyLines.length;
+      while (bodyEnd > 0 && !opts.bodyLines[bodyEnd - 1]!.trim()) bodyEnd--;
+      opts.bodyLines.slice(0, bodyEnd).forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
       opts.renderBody?.(frame);
     }
     if (isDream) {
@@ -404,8 +449,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         continue;
       }
       const startCol = opts.open || isDream ? baseGutterCols + pf.leftCols : row.gutterCols;
-      const titleCells = row.selectionCells?.filter(cell => cell.key.startsWith(opts.id + ':title') || cell.key === opts.id + ':icon' || (opts.expandable && cell.key === opts.id + ':status')) ?? [];
-      const endCol = opts.open || isDream ? width - pf.rightCols : simple ? baseGutterCols + Math.max(startCol - baseGutterCols, ...titleCells.map(cell => cell.column + cell.width)) : row.gutterCols + stringWidth(row.text.trimEnd());
+      // The hover and click region runs from the leading glyph to the last non-blank cell of the row.
+      const endCol = opts.open || isDream ? width - pf.rightCols : row.gutterCols + stringWidth(row.text.trimEnd());
       rows[index] = {...row, hits: [...row.hits ?? [], {startCol, endCol, action}],
         ...(!opts.open ? {hover: {foldId: opts.id, startCol, endCol}} : {})};
     }
@@ -453,7 +498,7 @@ export function appendActorCard(
   const isHovered = builder.hoveredFoldId === opts.id;
   const bright = opts.open || isHovered;
   const cardBg = opts.open ? ownerSurface(opts.owner, true, opts.roles) : undefined;
-  const outerFrame: FrameWrap = {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth};
+  const outerFrame: FrameWrap = {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth, surfaceColor: role.color};
   const frame = insetFrame(outerFrame, cardBg);
   const action: SceneAction = {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
   if (opts.open && cardBg) {
@@ -501,8 +546,11 @@ export function appendActorCard(
   for (let index = firstRow; index < builder.rows.length; index++) {
     const row = builder.rows[index]!;
     const isCardOuter = row.messageId === opts.id || row.messageId === opts.id + '-top' || row.messageId === opts.id + '-bottom';
+    // The card's own header (name, title, status, arrow, stop) highlights in the actor's color, not the hosting surface's.
+    const isHeader = isCardOuter || row.messageId === opts.id + '-status' || row.messageId === opts.id + '-task';
     builder.rows[index] = {
       ...row,
+      ...(isHeader ? {hoverColor: role.color} : {}),
       hits: [...row.hits ?? [], {startCol: builder.baseGutterCols, endCol: builder.width, action}],
       animation: {
         ...row.animation,

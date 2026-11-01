@@ -17,6 +17,8 @@ export interface Row {
   readonly line: number;
   readonly text: string;
   readonly railColor: string;
+  /** Color the muted segments take while the row highlights (hover); defaults to `railColor`. */
+  readonly hoverColor?: string;
   readonly gutterCols: number;
   readonly softWrap: boolean;
   readonly noSelect: boolean;

@@ -14,8 +14,9 @@ export function rowSegments(row: SceneRow, isHovered = false): readonly SceneSeg
     const color = row.color ?? (row.tone === 'header' ? row.railColor : row.tone === 'direction' ? palette.muted : palette.fg);
     segments = [...row.prefixSegments ?? [], {text: row.text, color, ...(row.bg ? {bg: row.bg} : {}), bold: row.tone === 'header', italic: row.tone === 'direction'}, ...row.suffixSegments ?? []];
   }
-  if (isHovered && row.railColor) {
-    return segments.map(s => (!s.color || s.color === palette.muted ? {...s, color: row.railColor} : s));
+  const highlight = row.hoverColor ?? row.railColor;
+  if (isHovered && highlight) {
+    return segments.map(s => (!s.color || s.color === palette.muted ? {...s, color: highlight} : s));
   }
   return segments;
 }

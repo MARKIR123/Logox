@@ -4,7 +4,7 @@ import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
-import {createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
+import {compactParagraphs, createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
 import {getToolUI, isVisibleToolMessage} from '../../tools/ui-registry.js';
 import {messageToolCall, renderDefaultTool} from './tool-ui.js';
 import {clipLine} from '../terminal/text.js';
@@ -87,7 +87,8 @@ export function stageFoldOpen(snapshot: RuntimeSnapshot, id: string, folds: Read
 export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, view: string, width: number,
   folds: Readonly<Record<string, boolean>>, hovered: string | null,
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
-  const builder = createBuilder(width, hovered, roles);
+  const viewColor = view === 'logox' ? palette.accent : ownerColor(view, roles);
+  const builder = createBuilder(width, hovered, roles, viewColor);
   const {messages, candidates, staged, activities, grouped, thinking} = messageProjection(snapshot, sessionId, view);
   const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (view === 'logox' || request.ownerId === view));
   const requests = new Map<string, Interaction[]>();
@@ -104,7 +105,6 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // The rail belongs to the surface, not the subagent: everything shown in the
   // Director's timeline is orchestrated by the Director, so it carries the
   // Director accent. An actor's own window keeps that actor's color.
-  const viewColor = view === 'logox' ? palette.accent : ownerColor(view, roles);
   const railFor = (ownerId: string) => ownerId === 'anamnesis' ? palette.anamnesis : viewColor;
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
@@ -118,8 +118,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         step: request.step, tokens: request.tokens, open: open(request.id), railColor: railFor(message.ownerId),
         ...(frame ? {parentFrame: frame} : {}),
         renderBody(inner) {
-          if (request.step.note) builder.pushProse(message.id + '-note', request.step.note, railFor(message.ownerId), 'body', inner, undefined, palette.muted);
-          if (message.text) builder.pushProse(message.id + '-body-0', message.text, railFor(message.ownerId), 'body', inner);
+          if (request.step.note?.trim()) builder.pushProse(message.id + '-note', compactParagraphs(request.step.note), railFor(message.ownerId), 'body', inner, undefined, palette.muted);
+          if (message.text.trim()) builder.pushProse(message.id + '-body-0', compactParagraphs(message.text), railFor(message.ownerId), 'body', inner);
           if (request.step.state === 'cancelled') builder.pushProse(request.id + '-stopped', 'Stopped', palette.muted, 'body', inner);
           if (request.step.state === 'failed') {
             const finalRequest = message.activityId ? grouped.get(message.activityId)?.findLast(item => item.kind === 'thinking') : undefined;
@@ -134,13 +134,13 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const actorColor = railFor(message.ownerId);
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     const systemError = isTimelineError(message);
-    const frameKey = frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '';
+    const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
     const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
     if (!rows) {
-      const chunk = createBuilder(width, hovered, roles);
+      const chunk = createBuilder(width, hovered, roles, viewColor);
       if (systemError) {
         const innerWidth = Math.max(1, (frame?.innerWidth ?? chunk.contentWidth) - 4);
         const kind = clipLine('Error', innerWidth);
@@ -155,7 +155,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
           ...(frame ? {frame} : {}), open: open(message.id), accent: rail});
       } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
-        title: message.step?.title ?? 'Thinking', bodyLines: [message.text],
+        title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),
         open: open(message.id), railColor: rail, ...(frame ? {parentFrame: frame} : {})});
       else if (message.role === 'assistant' || (message.role === 'user' && (inputKind(message) === 'director' || inputKind(message) === 'collaboration'))) chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame);

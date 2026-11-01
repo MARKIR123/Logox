@@ -32,7 +32,7 @@ function fixture(owner = 'logox') {
   return {store, call, think, rows, groupId};
 }
 const text = (row: SceneRow) => row.displayText ?? row.text;
-const GROUP = /[▸▾] [A-Z][\w' -]* \d+ (?:patterns?|files?|directory|directories|pages?|commands?)/;
+const GROUP = /[▸▾] [A-Z][\w' -]* \d+ (?:patterns?|files?|directory|directories|page actions?|commands?)/;
 const header = (rows: readonly SceneRow[]) => rows.find(row => GROUP.test(text(row)))!;
 
 function standard(f: ReturnType<typeof fixture>) {
@@ -68,7 +68,7 @@ test('whole group title row hovers and toggles, trailing blanks and other rows d
   assert.equal(actionAt(row, titleEnd + 2), undefined, 'trailing blank is not hit');
   assert.equal(hoveredCardAt(row, titleEnd + 2), null);
   const hovered = header(f.rows(100, {}, id));
-  const colors = new Set(hovered.segments!.filter(s => s.selectionKey?.startsWith(id + ':title') && s.text.trim()).map(s => s.color));
+  const colors = new Set(hovered.segments!.filter(s => s.selectionKey?.startsWith(id + ':title') && s.text.trim() && s.text !== ' · ').map(s => s.color));
   assert.equal(colors.size, 1, 'hovering lights the entire title in one role color');
 });
 
@@ -202,7 +202,7 @@ test('too-narrow headers drop list then browse first and mark the loss with one 
   const group = {id: 'x-group', running: false, elapsedMs: 2400, messages: [], counts: {search: 1, read: 1, list: 1, browse: 1, command: 1}} as unknown as ToolGroup;
   const verbs = {search: ['Scouting/Scouted'], read: ['Examining/Examined'], list: ['Mapping/Mapped'], browse: ['Viewing/Viewed'], run: ['Testing/Tested']};
   const at = (width: number) => toolGroupRow(group, {id: 'x-group', open: false, width, verbs});
-  assert.equal(at(200).titleSegments[0]!.text, '▸ Scouted 1 pattern · Examined 1 file · Mapped 1 directory · Viewed 1 page · Tested 1 command');
+  assert.equal(at(200).titleSegments[0]!.text, '▸ Scouted 1 pattern · Examined 1 file · Mapped 1 directory · Viewed 1 page action · Tested 1 command');
   const three = at(76);
   assert.equal(three.titleSegments[0]!.text, '▸ Scouted 1 pattern · Examined 1 file · Tested 1 command · …');
   assert.equal(three.status, '2.4s');
@@ -248,7 +248,7 @@ test('running tool and group titles are white; finished ones are muted', () => {
   assert.equal(tail(toolRow(done), T), palette.muted);
   const g = fixture(); g.call('Grep', {pattern: 'a'}); g.call('Read', {file_path: 'G:/p/a.ts'}); g.call('Shell', {command: 'npm test'}, {run: true});
   const done2 = fixture(); standard(done2);
-  const titles = (row: SceneRow) => row.segments!.filter(s => s.selectionKey?.includes(':title') && !s.selectionKey.includes('hint') && s.text.trim());
+  const titles = (row: SceneRow) => row.segments!.filter(s => s.selectionKey?.includes(':title') && !s.selectionKey.includes('hint') && s.text.trim() && s.text !== ' · ');
   assert.ok(titles(header(g.rows(100))).every(s => s.color === palette.fg && s.italic), 'running group: white italic');
   assert.ok(titles(header(done2.rows(100))).every(s => s.color === palette.muted && s.italic), 'finished group: muted italic');
   assert.ok(header(done2.rows(100)).segments!.filter(s => /ds$/.test(s.text.trim())).every(s => s.italic), 'elapsed time is italic too');

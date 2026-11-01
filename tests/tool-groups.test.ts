@@ -26,9 +26,25 @@ test('categorizeToolMessage covers the collapsible tools', () => {
   assert.equal(categorizeToolMessage(shell('ls')), 'list');
   assert.equal(categorizeToolMessage(shell('npm test')), 'command');
   assert.equal(categorizeToolMessage(tool('mcp', {tool: 'browser_navigate', url: 'https://a.dev/x'})), 'browse');
-  assert.equal(categorizeToolMessage(tool('mcp', {tool: 'browser_click'})), undefined);
+  for (const name of ['browser_click', 'browser_take_screenshot', 'browser_type', 'browser_fill_form', 'browser_press_key', 'browser_hover', 'browser_select_option', 'browser_wait_for', 'browser_snapshot', 'browser_close', 'browser_tabs']) {
+    assert.equal(categorizeToolMessage(tool('mcp', {server: 'playwright', action: 'call', tool: name})), 'browse', name);
+    assert.equal(categorizeToolMessage(tool('mcp', {tool: name})), 'browse', name + ' without a server');
+  }
+  assert.equal(categorizeToolMessage(tool('mcp', {server: 'playwright', action: 'list'})), 'browse', 'listing the Playwright tools');
+  assert.equal(categorizeToolMessage(tool('mcp__playwright__browser_click', {})), 'browse');
+  assert.equal(categorizeToolMessage(tool('mcp', {server: 'github', action: 'call', tool: 'create_issue'})), undefined, 'other servers stay ungrouped');
+  assert.equal(categorizeToolMessage(tool('mcp', {server: 'github', action: 'list'})), undefined);
   assert.equal(categorizeToolMessage(tool('Edit', {file_path: 'a'})), undefined);
   assert.equal(categorizeToolMessage(msg('assistant', 'hi')), undefined);
+});
+
+test('a run of mixed Playwright calls collapses into one browse group', () => {
+  const calls = ['browser_navigate', 'browser_click', 'browser_take_screenshot', 'browser_click', 'browser_take_screenshot', 'browser_close']
+    .map(name => tool('mcp', {server: 'playwright', action: 'call', tool: name}));
+  const [group, ...rest] = groupToolMessages(calls) as ToolGroup[];
+  assert.equal(rest.length, 0);
+  assert.equal(group?.type, 'group');
+  assert.equal(group!.counts.browse, 6);
 });
 
 test('two reads of one file count as 2 calls, not 1 file', () => {

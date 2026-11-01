@@ -22,7 +22,7 @@ export const defaultActivityVerbs: Readonly<Record<VerbCategory, readonly string
 };
 const nouns: Readonly<Record<VerbCategory, readonly [string, string]>> = {
   search: ['pattern', 'patterns'], read: ['file', 'files'], list: ['directory', 'directories'],
-  browse: ['page', 'pages'], run: ['command', 'commands'],
+  browse: ['page action', 'page actions'], run: ['command', 'commands'],
 };
 const order: readonly VerbCategory[] = ['search', 'read', 'list', 'browse', 'run'];
 /** Categories shed first when the header is too wide; search, read and run survive longest. */

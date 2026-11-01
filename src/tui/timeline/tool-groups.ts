@@ -18,7 +18,6 @@ export interface ToolGroup {
 }
 export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup;
 
-const browseKeywords = ['navigate', 'snapshot', 'screenshot', 'console', 'evaluate'];
 const categoryOrder: readonly ToolGroupCategory[] = ['search', 'read', 'list', 'browse', 'command'];
 
 function parseArgs(raw: string): Record<string, unknown> {
@@ -34,19 +33,17 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function isBrowseTool(tool: string): boolean {
-  const name = tool.toLowerCase();
-  return browseKeywords.some(keyword => name.includes(keyword));
-}
+const isPlaywright = (server: string | undefined) => server !== undefined && /playwright/i.test(server);
 
-/** Name and arguments of a browser MCP call, whether it is the generic `mcp` tool or a direct `mcp__server__tool` name. */
+/** Name of a browser MCP call: any Playwright-server tool or any `browser_*` tool, via the generic `mcp` tool or a direct `mcp__server__tool` name. */
 function browseTool(name: string, args: Record<string, unknown>): string | undefined {
   const lower = name.toLowerCase();
   if (lower === 'mcp') {
     const tool = text(args.tool);
-    return tool && isBrowseTool(tool) ? tool : undefined;
+    if (tool) return /^browser_/i.test(tool) || isPlaywright(text(args.server)) ? tool : undefined;
+    return isPlaywright(text(args.server)) ? text(args.action) ?? 'list' : undefined; // e.g. listing the Playwright tools
   }
-  if (lower.startsWith('mcp__') && isBrowseTool(lower)) return lower;
+  if (lower.startsWith('mcp__') && (isPlaywright(lower.split('__')[1]) || lower.includes('__browser_'))) return lower;
   return undefined;
 }
 
