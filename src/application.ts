@@ -141,6 +141,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const toolRegistry = new ToolRegistry(cwd, homeDir);
   await toolRegistry.reloadUserConfigs();
   tools.setRegistry(toolRegistry);
+  tools.setActivityProbe(() => store.getSnapshot().activities);
   const modelPool = new ModelPool(registry, join(homeDir, '.logox', 'models-store.json'));
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(state, 'task-models'));

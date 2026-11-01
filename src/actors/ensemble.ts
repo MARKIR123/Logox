@@ -264,6 +264,7 @@ export class EnsembleRuntime<Id extends string> {
     return {...(parentActivityId ? {parentActivityId} : {}), ...(rootActivityId ? {rootActivityId} : {}), ...(batchId ? {batchId} : {}),
       ...(resumeTaskId ? {resumeTaskId} : {}),
       ...(taskTitle ? {taskTitle} : {}),
+      ...(origin.ownedFiles?.length ? {ownedFiles: [...origin.ownedFiles]} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
       ...(origin.coordinationWake ? {coordinationWake: true} : {}),

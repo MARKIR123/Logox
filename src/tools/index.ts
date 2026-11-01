@@ -1,4 +1,6 @@
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
+import type {Activity} from '../runtime/contracts.js';
+import {overreach, overreachNote} from './ownership.js';
 import {realpath} from 'node:fs/promises';
 import {existsSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
@@ -263,6 +265,22 @@ export class Tools {
 
   private registry: ToolRegistry | undefined;
   setRegistry(registry: ToolRegistry): void {this.registry = registry;}
+  private activities: (() => readonly Activity[]) | undefined;
+  private readonly overreachNotified = new Set<string>();
+  /** Supplies the live activity list so Edit/Write can note edits on files another actor's active assignment owns. */
+  setActivityProbe(probe: () => readonly Activity[]): void {this.activities = probe;}
+  private async withOverreachNote(path: string, context: ActorContext, run: () => Promise<ToolResult>): Promise<ToolResult> {
+    const root = await realpath(this.cwd);
+    const owner = this.activities ? overreach(this.activities(), context.ownerId, path, root) : undefined;
+    const result = await run();
+    if (!owner || result.isError) return result;
+    const key = [context.ownerId, path, owner.activityId].join('\0');
+    if (this.overreachNotified.has(key)) return result;
+    this.overreachNotified.add(key);
+    const file = relative(root, path).replaceAll('\\', '/') || path;
+    const actor = owner.ownerId.charAt(0).toUpperCase() + owner.ownerId.slice(1);
+    return {...result, text: result.text + '\n' + overreachNote(file, owner, actor)};
+  }
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
   private automaRunner?: ((args: AutomaArgs, context: ActorContext) => Promise<ToolResult>) | undefined;
@@ -465,10 +483,10 @@ export class Tools {
         return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.ownerId);
       }
       if (name === 'Write') {
-        return await executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId);
+        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId));
       }
       if (name === 'Edit') {
-        return await executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId);
+        return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId));
       }
       if (name === 'Glob') {
         return await executeGlob(schemas.Glob.parse(parsed), path, originalPath, context.signal);

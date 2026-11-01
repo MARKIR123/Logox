@@ -116,3 +116,48 @@ test('successful tool results pass through byte-identical with zero overhead', (
   );
   assert.equal(result, original);
 });
+
+const mcpCall = (tool: string, extra: Record<string, unknown> = {}) =>
+  ({id: 'm', name: 'mcp', arguments: JSON.stringify({server: 'playwright', action: 'call', tool, arguments: {}, ...extra})});
+
+test('MCP diagnostics: blocked file: protocol prescribes serving over HTTP', () => {
+  const result = diagnoseToolError(mcpCall('browser_navigate'), {isError: true, text: 'Error: Access to "file:" protocol is blocked'});
+  assert.equal(result.isError, true);
+  assert.match(result.text, /^Error: Access to "file:" protocol is blocked\. Serve the folder over HTTP first/);
+  assert.match(result.text, /python -m http\.server <free-port>/);
+  assert.match(result.text, /http:\/\/127\.0\.0\.1:<port>\/<file>/);
+});
+
+test('MCP diagnostics: additionalProperties error names the unexpected property and points at list', () => {
+  const raw = 'MCP arguments do not satisfy the full schema: [{"instancePath":"","schemaPath":"#/additionalProperties","keyword":"additionalProperties","params":{"additionalProperty":"newTab"},"message":"must NOT have additional properties"}]';
+  const result = diagnoseToolError(mcpCall('browser_navigate'), {isError: true, text: raw});
+  assert.match(result.text, /"browser_navigate"/);
+  assert.match(result.text, /unexpected properties: newTab/);
+  assert.match(result.text, /"action":"list"/);
+  assert.match(result.text, /"server":"playwright"/);
+});
+
+test('MCP diagnostics: missing required property is named', () => {
+  const raw = 'MCP arguments do not satisfy the full schema: [{"keyword":"required","params":{"missingProperty":"url"},"message":"must have required property url"}]';
+  const result = diagnoseToolError(mcpCall('browser_navigate'), {isError: true, text: raw});
+  assert.match(result.text, /missing required properties: url/);
+});
+
+test('MCP diagnostics: browser_close errors say the browser is already closed', () => {
+  const first = diagnoseToolError(mcpCall('browser_close'), {isError: true, text: 'Invalid MCP parameters or response content'});
+  assert.match(first.text, /The browser is already closed; do not retry close\.$/);
+  const second = diagnoseToolError(mcpCall('browser_close'), {isError: true, text: 'No open tabs. Navigate to a URL to create one.'});
+  assert.match(second.text, /do not retry close\.$/);
+  const other = diagnoseToolError(mcpCall('browser_click'), {isError: true, text: 'No open tabs. Navigate to a URL to create one.'});
+  assert.match(other.text, /already closed/);
+});
+
+test('MCP diagnostics: direct mcp__ names reuse the same rules and unrelated errors pass through', () => {
+  const direct = diagnoseToolError({id: 'd', name: 'mcp__playwright__browser_navigate', arguments: '{"url":"file:///a.html"}'},
+    {isError: true, text: 'Error: Access to "file:" protocol is blocked'});
+  assert.match(direct.text, /Serve the folder over HTTP/);
+  const close = diagnoseToolError({id: 'd', name: 'mcp__playwright__browser_close', arguments: '{}'}, {isError: true, text: 'boom'});
+  assert.match(close.text, /do not retry close/);
+  const unrelated = diagnoseToolError(mcpCall('browser_click'), {isError: true, text: 'Timeout 5000ms exceeded'});
+  assert.equal(unrelated.text, 'Timeout 5000ms exceeded');
+});

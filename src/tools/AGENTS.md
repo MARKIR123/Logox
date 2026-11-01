@@ -25,6 +25,8 @@ categories:
 | Rename a parameter or keep a legacy name | `<tier>/<Name>Tool/<Name>Tool.ts` schema | `aliases.ts:normalizeAliases()`, `types.ts:toolAliases` |
 | Change a card title, visibility or question UI | `<Name>Tool/UI.ts` | `ui-registry.ts:toolUIs`, `ui-types.ts`, `src/tui/timeline/tool-ui.ts:createToolUI()` |
 | Improve a tool error hint | `diagnostics.ts:diagnosticHandlers` | `<Name>Tool/diagnostic.ts` |
+| Improve an MCP or Playwright error hint (`mcp` and direct `mcp__<server>__<tool>` calls) | `src/extensions/diagnostic.ts:diagnoseMcp` | `diagnostics.ts:diagnoseToolError` (maps `mcp__*` names onto the `mcp` handler) |
+| Change what a repeated `ListActors` call returns | `coordination/ListActorsTool/ListActorsTool.ts:executeListActors` | `ListActorsTool.ts:rosterFingerprint`, `coordination/ListActorsTool/prompt.ts` |
 | Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/agent.ts`, `src/context/round-memory.ts` |
 | Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
 | Automa (stateless read-only sub-agent) | `orchestration/AutomaTool/AutomaTool.ts:executeAutoma()` | `tool-models.ts:ToolModelStorage` (`~/.logox/tool-models.json`, `/model automa`) |
@@ -69,6 +71,7 @@ categories:
 - **Model-facing fields never use `.default()`**: defaulted fields become `required` in the JSON schema. Partially enforced: `tests/tool-parameter-alignment.test.ts` asserts the `required` list of the core tools; other tools are *Unenforced*.
 - **Legacy parameter names only through `normalizeAliases()`**: `path`, `old_text`, `new_text`, Grep `limit` are accepted but not exposed to the model, and are scheduled for removal. Enforced by `tests/tool-parameter-alignment.test.ts`.
 - **Built-in names are PascalCase and resolve through `toolAliases`**: Enforced by `tests/tools-claude-alignment.test.ts`.
+- **Edit/Write overreach note is advisory**: `index.ts:Tools.withOverreachNote()` still runs the edit and appends one line when `ownership.ts:overreach()` finds another actor's active `ownedFiles`; wired by `Tools.setActivityProbe()` in `application.ts`. Enforced by `tests/tool-ownership.test.ts`.
 - **Automa is read-only and stateless**: only Read, Glob, Grep, WebFetch; Write, Edit and Shell are refused. Enforced by `tests/automa-tool.test.ts`. Its model lives in `ToolModelStorage`, not `ActorCatalog` (storage covered by `tests/tool-models.test.ts`; the decoupling itself is *Unenforced*).
 - **`_FinishRound` is mandatory**: always eager, silent and available to all roles; user overrides that defer, hide or restrict it are rejected. Enforced by `tests/tool-disclosure.test.ts`, `tests/tools-registry.test.ts`, `tests/tool-ui.test.ts`.
 - **`loading` is independent of `roles` and `terminalVisibility`**: Enforced by `tests/tool-disclosure-registry.test.ts`.
@@ -80,6 +83,8 @@ categories:
 - **`runProcess()` reclaims children within 1.5 s of a kill**, even if `taskkill` fails. Enforced by `tests/agent.test.ts`.
 - **Every built-in owns a `UI.ts`; hidden tools have no visible surface**: Enforced by `tests/tool-ui.test.ts`. Execution code must not import `ui-registry.ts`: *Unenforced*.
 - **Titles name the decision-relevant parameter first and stay on one line**: Enforced by `tests/tool-ui.test.ts`.
+- **MCP diagnostics keep the server error and append one prescription**: blocked `file:` navigation, schema or `additionalProperties` errors (naming parsed properties) and `browser_close` or "No open tabs" errors are covered; unmatched errors pass through unchanged. Enforced by `tests/tool-diagnostics.test.ts`.
+- **`ListActors` answers an unchanged roster with a one-line no-change result, tracked per caller**: volatile counters (`toolElapsed`, `elapsedMs`) are excluded from the fingerprint, any other change returns the full roster. Enforced by `tests/list-actors-nochange.test.ts`.
 - **Tool descriptions live in the tool's `prompt.ts`, not under `src/prompts/`**: *Unenforced*.
 
 ## 5. Dependencies

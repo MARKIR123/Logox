@@ -73,7 +73,9 @@ export function activeEnsembleRoster(
     const observed = toolFacts(snapshot, peer.activityId);
     const files = observed.recentFiles?.join(', ');
     const running = observed.currentTool;
+    const owns = peer.ownedFiles?.slice(0, 4).join(', ');
     return `- ${peer.ownerId} (${peer.status}): ${title}` +
+      (owns ? ` | owns: ${owns}${peer.ownedFiles!.length > 4 ? ', ...' : ''}` : '') +
       (files ? ` | files: ${files}` : '') +
       (running ? ` | running: ${running}` : '');
   });

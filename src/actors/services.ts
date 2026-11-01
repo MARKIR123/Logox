@@ -36,6 +36,7 @@ import {
   executeCancelActor,
   canonicalToolName,
 } from '../tools/index.js';
+import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts} from './facts.js';
@@ -85,6 +86,8 @@ export class ActorServices {
   private readonly origins = new Map<string, TaskOrigin>();
   private readonly stoppedActors = new Set<string>();
   private readonly pendingHandoffs = new Map<string, Delivery>();
+  /** Per-caller ListActors fingerprints, owned by this ensemble so no-change replies never depend on function identity. */
+  private readonly listActorsMemo: ListActorsMemo = {fingerprints: new Map()};
   private wakeTask: TaskHandle | undefined;
   private releaseTask: Promise<void> = Promise.resolve();
   private readonly continuedTasks = new Set<string>();
@@ -238,13 +241,15 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
-        const grouped = new Map<string, {prompts: string[]; skills: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
+        const grouped = new Map<string, {prompts: string[]; skills: Set<string>; files: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), files: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
-          group.prompts.push(task.prompt); for (const skill of task.skills ?? []) group.skills.add(skill); grouped.set(task.ownerId, group);
+          group.prompts.push(task.prompt); for (const skill of task.skills ?? []) group.skills.add(skill);
+          for (const file of task.files ?? []) group.files.add(file);
+          grouped.set(task.ownerId, group);
         }
         if (resumeBatch) {
           const group = [...this.groups.values()].find(group => group.batchId === resumeBatch);
@@ -262,7 +267,8 @@ export class ActorServices {
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const handles = [...grouped].map(([owner, task]) => {
-          const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {})};
+          const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
+            ...(task.files.size ? {ownedFiles: [...task.files]} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth); this.borrowed.set(handle.activityId, task.skills);
@@ -307,6 +313,7 @@ export class ActorServices {
           caller: context.ownerId,
           getSnapshot: this.options.getSnapshot ?? (() => ({revision: 0, activities: [], interactions: [], messages: []})),
           roles,
+          memo: this.listActorsMemo,
         });
       }
       if (canonical === 'CancelActor') {

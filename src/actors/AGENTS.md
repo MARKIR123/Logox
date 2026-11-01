@@ -61,6 +61,7 @@ Follow "Add a built-in tool" in [`src/tools/AGENTS.md`](../tools/AGENTS.md), ste
 - **Model bindings are user-scoped** in `~/.logox/actor-models.json` and survive project changes; a missing main model must not hide saved bindings. Enforced by `tests/fresh-directory-models.test.ts`.
 - **Profiles seed missing-only**: `seedActorProfiles()` and `--install-profiles` never overwrite user files; only `npm run sync:profiles` forces. Enforced by `tests/prompt-architecture.test.ts`. Builtin colors come from shipped YAML, never RGB tables or themes: `tests/actor-color-source.test.ts`.
 - **Shipped `compression.md` refresh is exact-match only**: custom focus, persona, config and bindings stay byte-identical. Enforced by `tests/actor-compression-contracts.test.ts`.
+- **File ownership is a nudge, not a lock**: `Actor` tasks may carry `files`; `services.ts:ActorServices.execute()` stores them as `ownedFiles` on the activity (via `TaskOrigin`), live while it is queued, running, waiting or paused. `../tools/ownership.ts:overreach()` finds another actor's owner and `../tools/index.ts:Tools.withOverreachNote()` appends one note per (editor, file, activity); `facts.ts:activeEnsembleRoster()` shows `owns:` per peer. Edits are never blocked. Enforced by `tests/tool-ownership.test.ts`.
 - **Dispatch briefing**: Director supplies a concise `title` and a natural colleague `prompt`, with no task-book headers or file/build quotas. Partially enforced by `tests/director-facts.test.ts` (no headers); the quota rule is *Unenforced* (prompt text only).
 
 ## 5. Dependencies

@@ -12,8 +12,18 @@ export interface ActorStatusReport {
 }
 const DEFAULT_NAMES: Record<string, string> = {logox: 'Logox', techne: 'Techne', aletheia: 'Aletheia', kalon: 'Kalon'};
 
+export interface ListActorsMemo {fingerprints: Map<string, {fingerprint: string; at: number}>}
+// Per-ensemble memory keyed by the snapshot reader, which lives as long as the session's services.
+const memos = new WeakMap<object, ListActorsMemo>();
+// Volatile counters change on every call and are not a roster change.
+const VOLATILE_KEYS = new Set(['toolElapsed', 'elapsedMs']);
+export function rosterFingerprint(actors: readonly ActorStatusReport[]): string {
+  return JSON.stringify(actors, (key, value) => VOLATILE_KEYS.has(key) ? undefined : value);
+}
+
 export function executeListActors(_args: ListActorsArgs, context: {
   caller: string; getSnapshot: () => RuntimeSnapshot; roles?: Record<string, {name: string; title?: string}>;
+  memo?: ListActorsMemo; now?: () => number;
 }): ToolResult {
   const isDirector = context.caller === 'logox' || context.caller === 'director';
   const snapshot = context.getSnapshot();
@@ -35,6 +45,15 @@ export function executeListActors(_args: ListActorsArgs, context: {
     return {...state, activityId: active.activityId, queuedCount: activities.filter(activity => activity.status === 'queued').length,
       ...toolFacts(snapshot, active.activityId)};
   });
+  const memo = context.memo ?? (memos.get(context.getSnapshot) ?? memos.set(context.getSnapshot, {fingerprints: new Map()}).get(context.getSnapshot)!);
+  const now = (context.now ?? Date.now)();
+  const fingerprint = rosterFingerprint(actors);
+  const previous = memo.fingerprints.get(context.caller);
+  memo.fingerprints.set(context.caller, {fingerprint, at: now});
+  if (previous?.fingerprint === fingerprint) {
+    const seconds = Math.max(0, Math.round((now - previous.at) / 1000));
+    return {text: `No change since your last check (${seconds}s ago). Peer messages arrive automatically; you do not need to poll.`, isError: false};
+  }
   return {text: JSON.stringify({actors}, null, 2), isError: false};
 }
 

@@ -8,6 +8,7 @@ import {diagnoseShell} from './ShellTool/diagnostic.js';
 import {diagnoseGrep} from './GrepTool/diagnostic.js';
 import {diagnoseGlob} from './GlobTool/diagnostic.js';
 import {diagnoseUpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/diagnostic.js';
+import {diagnoseMcp} from '../extensions/diagnostic.js';
 import {diagnoseSendMessage} from './coordination/SendMessageTool/diagnostic.js';
 
 export type DiagnosticFn = (args: Record<string, unknown>, rawError: string) => string | undefined;
@@ -21,6 +22,7 @@ export const diagnosticHandlers: Record<string, DiagnosticFn> = {
   Glob: diagnoseGlob,
   UpdateTaskProgress: diagnoseUpdateTaskProgress,
   SendMessage: diagnoseSendMessage,
+  mcp: diagnoseMcp,
 };
 
 /**
@@ -36,7 +38,10 @@ export function diagnoseToolError(call: ToolCall, result: ToolResult): ToolResul
     if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>;
   } catch {}
 
-  const canonical = canonicalToolName(call.name) ?? call.name;
+  // Direct MCP names (mcp__<server>__<tool>) share the generic `mcp` handler.
+  const direct = /^mcp__(.+?)__(.+)$/.exec(call.name);
+  if (direct) args = {...args, __server: direct[1], __tool: direct[2]};
+  const canonical = direct ? 'mcp' : canonicalToolName(call.name) ?? call.name;
   const handler = diagnosticHandlers[canonical];
 
   // 1. Tool-specific diagnostic recipe
