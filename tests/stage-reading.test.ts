@@ -23,10 +23,10 @@ test('运行中不追加模型过程块，行动消息和 Actor 状态保留，�
       store.activities.update('s', activityId, {status: 'running', stage, detail: '第 2 次往返'});
       for (const view of ['logox', ownerId] as const) {
         const rows = buildStageRows(store.getSnapshot(), 's', view, 80, {[activityId]: true, [thinking]: true}, null);
-        assert.ok(!rows.some(row => row.text.includes('第 2 次往返') || row.text.includes('处理中 · ') && !row.controls?.length), '过程诊断不进入对话，Actor状态与停止按钮保留');
+        assert.ok(!rows.some(row => row.text.includes('第 2 次往返') || row.text.includes('Running · ') && !row.controls?.length), '过程诊断不进入对话，Actor状态与停止按钮保留');
         assert.ok(rows.some(row => row.text.includes('先了解项目结构')), '思考消息保留');
         assert.ok(rows.some(row => row.text.includes('read README.md')), '工具消息保留');
-        if (view === 'logox' && ownerId === 'techne') assert.ok(rows.some(row => row.text.includes('处理中')), 'Actor 任务卡仍显示真实运行状态');
+        if (view === 'logox' && ownerId === 'techne') assert.ok(rows.some(row => row.text.includes('Running')), 'Actor 任务卡仍显示真实运行状态');
       }
       assert.equal(store.activities.get('s', activityId)?.detail, '第 2 次往返', '内部诊断保留');
     }
@@ -123,7 +123,7 @@ test('表格按中文字形分配列宽、对齐和换行，整表复制可见�
     const body = buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).filter(row => row.messageId === id);
     assert.ok(body.every(row => stringWidth(row.text) <= width - 2), '每行都在窗口内');
     assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 1000, y: body.length - 1}}), displayedCopy(body));
-    assert.ok(body.some(row => row.text.includes('│') || row.text.includes('：')));
+    assert.ok(body.some(row => row.text.includes('│') || row.text.includes(': ')));
     assert.ok(!body.some(row => row.text.includes('\\|')));
     assert.equal(body.map(row => row.text).join('').match(/👩‍💻/g)?.length, 1);
   }

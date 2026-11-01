@@ -154,7 +154,7 @@ test('MCP 同 $id 按工具和服务隔离，目录刷新释放旧校验并应�
       for (let iteration = 0; iteration < 3; iteration++) {
         assert.equal((await refresh()).isError, false);
         const before = approvals;
-        assert.match((await mcp.execute(invokeAt('first', 'echo', 'old'), context())).text, /参数不符合完整 schema/);
+        assert.match((await mcp.execute(invokeAt('first', 'echo', 'old'), context())).text, /do not satisfy the full schema/);
         assert.equal(approvals, before);
         assert.deepEqual(await mcp.execute(invokeAt('first', 'echo', 'new'), context()), {text: 'echo:new', isError: false});
       }
@@ -184,7 +184,7 @@ test('MCP 取消、超时、坏消息回收进程，下一次调用重新连接'
       const operation = mcp.execute(invoke({value: 1, mode: mode === 'bad' ? 'bad' : 'wait'}), context(controller.signal));
       await waitForCall(f);
       if (mode === 'cancel') controller.abort();
-      const result = await operation; assert.equal(result.isError, true); assert.match(result.text, /取消|超时|坏消息/);
+      const result = await operation; assert.equal(result.isError, true); assert.match(result.text, /cancelled|timed out|invalid|malformed/i);
       const pid = (await f.events())[0]?.pid; assert.ok(pid); assert.throws(() => process.kill(pid, 0));
       assert.equal((await mcp.execute(invoke({value: 1}), context())).isError, false);
     } finally {await mcp.close(); await f.cleanup();}
@@ -196,15 +196,15 @@ test('MCP 启动取消、并行惰性连接、坏初始化、分页重复与不�
     try {
       const controller = new AbortController();
       const first = client.request('tools/list', {}, controller.signal);
-      if (mode === 'wait-init') {await delay(80); controller.abort(); await assert.rejects(first, /取消/);}
-      else if (mode === 'bad-init') await assert.rejects(first, /坏消息/);
+      if (mode === 'wait-init') {await delay(80); controller.abort(); await assert.rejects(first, /cancelled/);}
+      else if (mode === 'bad-init') await assert.rejects(first, /malformed message/);
       else if (mode === 'normal') {
         const second = client.request('tools/list', {}, controller.signal); await Promise.all([first, second]);
         assert.equal((await f.events()).filter(event => event.pid).length, 1);
       } else {
         await first;
         const mcp = new Mcp(f.cwd, {fixture: f.config});
-        try {assert.match((await mcp.execute(call({server: 'fixture', action: 'list'}), context())).text, /cursor 重复/);}
+        try {assert.match((await mcp.execute(call({server: 'fixture', action: 'list'}), context())).text, /Duplicate MCP pagination cursor/);}
         finally {await mcp.close();}
       }
     } finally {await Promise.all([client.close(), client.close()]); await f.cleanup();}
@@ -212,7 +212,7 @@ test('MCP 启动取消、并行惰性连接、坏初始化、分页重复与不�
   const f = await fixture();
   for (const config of [{...f.config, transport: 'http' as const}, {...f.config, command: join(f.cwd, 'missing.exe')}]) {
     const client = new McpClient(config, f.cwd);
-    try {await assert.rejects(client.request('tools/list', {}, new AbortController().signal), /stdio|启动失败/);}
+    try {await assert.rejects(client.request('tools/list', {}, new AbortController().signal), /stdio|failed to start/);}
     finally {await client.close();}
   }
   await f.cleanup();
@@ -275,7 +275,7 @@ test('观察 hooks 接收 JSON、筛选工具、限制输出与历史；非零�
     const execute = observeTasks(hooks, async () => {throw new Error('合成失败');});
     await assert.rejects(execute('x', context()), /合成失败/); await hooks.drain();
     assert.equal(hooks.history()[1]?.ok, false); assert.equal(hooks.history()[1]?.output.length, 8192);
-    assert.match(diagnostics[0]!, /退出码 3/);
+    assert.match(diagnostics[0]!, /exit code 3/);
   } finally {await hooks.close(); await rm(cwd, {recursive: true, force: true});}
 });
 test('hooks 超时与关闭等待子进程回收，失败可诊断', async () => {
@@ -287,11 +287,11 @@ test('hooks 超时与关闭等待子进程回收，失败可诊断', async () =>
       ]}));
       hooks.emit('notification', {source: 'synthetic'});
       if (close) {await delay(80); await hooks.close();} else await hooks.drain();
-      const result = hooks.history()[0]!; assert.equal(result.ok, false); assert.equal(result.reason, close ? '已取消' : '超时');
+      const result = hooks.history()[0]!; assert.equal(result.ok, false); assert.equal(result.reason, close ? 'cancelled' : 'timed out');
       const pid = Number(result.output.trim()); assert.ok(pid); assert.throws(() => process.kill(pid, 0)); await hooks.close();
     }
     const hooks = new Hooks(cwd, hooksSchema.parse({enabled: true, entries: [{event: 'stop', command: join(cwd, 'missing.exe'), args: ['--version']}]}));
-    hooks.emit('stop', {ok: true}); await hooks.drain(); assert.equal(hooks.history()[0]?.reason, '启动失败'); await hooks.close();
+    hooks.emit('stop', {ok: true}); await hooks.drain(); assert.equal(hooks.history()[0]?.reason, 'failed to start'); await hooks.close();
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 test('用户与项目目录 hooks 发现、Shell 命令兼容与 notification 明确触发', async () => {

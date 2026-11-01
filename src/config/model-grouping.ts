@@ -1,7 +1,7 @@
 /**
- * 模型目录智能折叠与档位合并
- * 将反代或提供商返回的大量按思考强度后缀命名的同族模型（如 *-low, *-medium, *-high, *-tiered, *-thinking）
- * 折叠合并为单一基准模型，支持通过 ← → 方向键直接切换底层思考档位与对应真实模型。
+ * Smart model catalog folding and tier merging
+ * Folds the many same-family models that proxies or providers return with thinking-effort suffixes (e.g. *-low, *-medium, *-high, *-tiered, *-thinking)
+ * into a single base model, so the left/right arrow keys switch the underlying thinking level and the matching real model.
  */
 
 import {isOpenAiReasoningModel} from './model-preferences.js';
@@ -9,13 +9,13 @@ import {isOpenAiReasoningModel} from './model-preferences.js';
 const SUFFIX_REGEX = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/;
 
 export interface GroupedModelVariant {
-  readonly id: string; // 实际模型 ID，例如 gemini-3.8-flash-high
-  readonly effort: string; // 对应的档位，例如 high
+  readonly id: string; // Actual model ID, e.g. gemini-3.8-flash-high
+  readonly effort: string; // Matching level, e.g. high
 }
 
 export interface GroupedModel {
-  readonly id: string; // 选择器中的选项 ID
-  readonly baseModel: string; // 折叠后的显示基准名，例如 gemini-3.8-flash
+  readonly id: string; // Option ID in the picker
+  readonly baseModel: string; // Base display name after folding, e.g. gemini-3.8-flash
   readonly provider: string;
   readonly isCurrent: boolean;
   readonly effortLevels: readonly string[];
@@ -24,7 +24,7 @@ export interface GroupedModel {
 }
 
 /**
- * 规整化模型名称后缀为标准思考档位
+ * Normalize model name suffixes to standard thinking levels
  */
 function normalizeTier(suffix: string): string {
   if (suffix === 'thinking') return 'high';
@@ -36,7 +36,7 @@ function normalizeTier(suffix: string): string {
 export const STANDARD_THINKING_LEVELS: readonly string[] = ['auto', 'off', 'low', 'medium', 'high', 'max'];
 
 /**
- * 探测模型和提供商支持的统一思考档位
+ * Detect the unified thinking levels supported by the model and provider
  */
 export function detectEffortLevels(modelId: string, provider: string): readonly string[] {
   const cleanModel = modelId.toLowerCase();
@@ -95,14 +95,14 @@ export function detectEffortLevels(modelId: string, provider: string): readonly 
 }
 
 /**
- * 将同提供商的模型列表按族群折叠合并
+ * Fold and merge a provider's model list by family
  */
 export function groupModelsForProvider(
   models: readonly string[],
   provider: string,
   currentModel: string
 ): GroupedModel[] {
-  // 1. 扫描候选并按 baseModel 归组
+  // 1. Scan candidates and group by baseModel
   const groups = new Map<string, Array<{modelId: string; tier?: string}>>();
 
   for (const modelId of models) {
@@ -123,7 +123,7 @@ export function groupModelsForProvider(
   const result: GroupedModel[] = [];
 
   for (const [base, items] of groups.entries()) {
-    // 只有组内存在多个同族变体时，才进行折叠合并
+    // Fold only when a group has multiple variants of the same family
     const hasVariants = items.length > 1;
 
     if (hasVariants) {
@@ -138,18 +138,18 @@ export function groupModelsForProvider(
         tiersSet.add(tier);
       }
 
-      // 如果没有显式的 auto，指向基础名或默认项
+      // Without an explicit auto, point to the base name or default entry
       if (!variantMap['auto']) {
         const fallback = items.find(i => i.modelId === base)?.modelId ?? items[0]!.modelId;
         variantMap['auto'] = fallback;
         tiersSet.add('auto');
       }
 
-      // 按照标准顺序排序展示档位
+      // Sort levels for display in the standard order
       const order = ['off', 'low', 'medium', 'high', 'max', 'auto'];
       const effortLevels = order.filter(t => tiersSet.has(t));
 
-      // 判断当前是否在使用本族模型
+      // Check whether the current model belongs to this family
       const matchingCurrent = items.find(i => i.modelId === currentModel);
       const isCurrent = Boolean(matchingCurrent || base === currentModel);
       const currentEffort = matchingCurrent?.tier ?? 'high';
@@ -164,7 +164,7 @@ export function groupModelsForProvider(
         variantMap,
       });
     } else {
-      // 独立模型，无后缀族群
+      // Standalone model, no suffix family
       const single = items[0]!;
       const isCurrent = single.modelId === currentModel;
       const detectedLevels = detectEffortLevels(single.modelId, provider);
@@ -184,7 +184,7 @@ export function groupModelsForProvider(
 }
 
 /**
- * 根据选定的基准模型与用户调节的思考档位，解析出实际请求的模型 ID
+ * Resolve the model ID to request from the selected base model and the user-adjusted thinking level
  */
 export function resolveActualModel(
   grouped: GroupedModel,
@@ -193,4 +193,77 @@ export function resolveActualModel(
   const effort = chosenEffort ?? grouped.currentEffort;
   const actualModel = grouped.variantMap[effort] ?? grouped.variantMap['auto'] ?? grouped.baseModel;
   return {modelId: actualModel, effort};
+}
+
+/**
+ * Filter out noise such as non-chat, embedding, speech, image generation and obsolete models
+ */
+export function isConversationalModel(modelId: string): boolean {
+  const clean = modelId.toLowerCase();
+  return !(
+    clean.startsWith('text-embedding') ||
+    clean.includes('embedding') ||
+    clean.startsWith('dall-e') ||
+    clean.startsWith('tts') ||
+    clean.startsWith('whisper') ||
+    clean.startsWith('babbage') ||
+    clean.startsWith('davinci') ||
+    clean.includes('moderation') ||
+    clean.startsWith('canary') ||
+    clean.startsWith('embed-')
+  );
+}
+
+export interface ModelFamilyGroup {
+  readonly baseModel: string;
+  readonly variants: readonly string[];
+  readonly effortLevels: readonly string[];
+  readonly description: string;
+}
+
+/**
+ * Merge a flat model ID list by family base name (extracting -low/-medium/-high/-thinking variants)
+ */
+export function groupModelFamilies(
+  models: readonly string[],
+  provider = ''
+): ModelFamilyGroup[] {
+  const filtered = models.filter(isConversationalModel);
+  const pool = filtered.length ? filtered : models;
+  const groups = new Map<string, Array<{modelId: string; tier?: string}>>();
+
+  for (const modelId of pool) {
+    const match = SUFFIX_REGEX.exec(modelId);
+    if (match) {
+      const base = match[1]!;
+      const tier = normalizeTier(match[2]!);
+      const list = groups.get(base) ?? [];
+      list.push({modelId, tier});
+      groups.set(base, list);
+    } else {
+      const list = groups.get(modelId) ?? [];
+      list.push({modelId, tier: 'auto'});
+      groups.set(modelId, list);
+    }
+  }
+
+  const order = ['off', 'low', 'medium', 'high', 'max'];
+  const result: ModelFamilyGroup[] = [];
+
+  for (const [base, items] of groups.entries()) {
+    const variants = [...new Set(items.map(i => i.modelId))];
+    const tiers = order.filter(t => items.some(i => i.tier === t));
+    const description =
+      variants.length > 1 || tiers.length > 0
+        ? `✦ ${tiers.length ? tiers.join(' / ') : 'default'} (${variants.length} variant${variants.length > 1 ? 's' : ''})`
+        : '';
+    result.push({
+      baseModel: base,
+      variants,
+      effortLevels: tiers,
+      description,
+    });
+  }
+
+  return result;
 }

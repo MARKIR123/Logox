@@ -35,10 +35,10 @@ test('Actor 状态显示当前实际任务模型；后续排队不遮住运行�
     app.store.interactions.respond(answerEnvelope(request, {kind: 'question', answers: {task_model: {type: 'option', optionId: 'switch'}}}));
     await waitForSnapshot(app.store, snapshot => snapshot.activities.some(activity => activity.taskModel?.actual.model === 'main' && activity.taskModel.phase === 'ready'));
     await app.submit('@scout 排队核查');
-    assert.equal(app.status('scout').state, '运行中');
+    assert.equal(app.status('scout').state, 'Running');
     assert.equal(app.status('scout').model?.model, 'main');
     assert.equal(app.status('scout').effort, 'high');
-    assert.equal(app.status('logox').state, '就绪');
+    assert.equal(app.status('logox').state, 'Ready');
     for (const activity of app.store.getSnapshot().activities) app.cancel(activity.activityId);
     await waitForSnapshot(app.store, snapshot => snapshot.activities.every(activity => activity.status === 'cancelled'));
     assert.equal(app.status('scout').model?.model, 'special');

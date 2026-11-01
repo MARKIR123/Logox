@@ -6,8 +6,8 @@ import {tmpdir} from 'node:os';
 import {createDemo} from '../src/demo.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import {waitForSnapshot as waitFor} from './runtime-fixture.js';
-import {initialDemoSceneState, buildDemoSceneRows} from '../src/tui/timeline/scene.js';
-import {projectPortfolioScene} from '../src/tui/timeline/scene-state.js';
+import {initialDemoSceneState, buildDemoSceneRows} from '../src/demo/scene.js';
+import {projectPortfolioScene} from '../src/demo/scene-state.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'logox-demo-test-'));
@@ -31,7 +31,7 @@ for (const decision of ['allow_once', 'deny'] as const) {
       assert.equal(store.activities.get('s', user.activityId)!.status, 'queued');
       assert.ok(!store.getSnapshot().messages.some(message => message.activityId === user.activityId && message.role === 'assistant'));
       const queued = projectPortfolioScene(initialDemoSceneState, store.getSnapshot(), 's', scenario);
-      assert.equal(queued.events.at(-1)!.status, '排队中');
+      assert.equal(queued.events.at(-1)!.status, 'Queued');
       assert.equal(store.interactions.respond(answerEnvelope(permission, {kind: 'permission', decision})).ok, true);
       assert.equal(store.interactions.respond(answerEnvelope(permission, {kind: 'permission', decision})).ok, false, '重复回答被拒绝');
       await waitFor(store, snapshot => snapshot.interactions.some(item => item.activityId === scenario.kalon && item.status === 'pending'));
@@ -45,8 +45,8 @@ for (const decision of ['allow_once', 'deny'] as const) {
       assert.equal(main.style, own.style);
       assert.equal(main.style, '像独立杂志，但不要复古装饰');
       assert.equal(main.events.at(-1)!.activityId, own.events.at(-1)!.activityId);
-      assert.equal(main.events.at(-1)!.status, '已完成');
-      assert.match(main.events.at(-1)!.reply!, /行，先不动文件/);
+      assert.equal(main.events.at(-1)!.status, 'Completed');
+      assert.match(main.events.at(-1)!.reply!, /no file changes yet/);
       const text = buildDemoSceneRows({...main, folds: {'main-techne': true}}, 99).map(row => row.text).join('\n');
       assert.doesNotMatch(text, /已完成 · 修改 2 个文件|网格断言通过/);
       assert.equal(store.getSnapshot().messages.filter(message => message.activityId === user.activityId && message.role === 'user').length, 1);
@@ -69,7 +69,7 @@ test('作品集取消：取消请求不伪造裁决，角色继续登场；关�
     const cancelledPermission = projectPortfolioScene(initialDemoSceneState, store.getSnapshot(), 's', scenario);
     assert.equal(cancelledPermission.permission, null);
     assert.equal(cancelledPermission.runtime!.permissionRequest!.status, 'cancelled');
-    assert.match(buildDemoSceneRows({...cancelledPermission, folds: {'main-techne': true}}, 99).map(row => row.text).join('\n'), /许可已取消/);
+    assert.match(buildDemoSceneRows({...cancelledPermission, folds: {'main-techne': true}}, 99).map(row => row.text).join('\n'), /Permission cancelled/);
     await runtime.submit('@techne 后续任务');
     await runtime.close();
     assert.ok(store.interactions.list().every(item => item.status !== 'pending'));
@@ -77,8 +77,8 @@ test('作品集取消：取消请求不伪造裁决，角色继续登场；关�
     const closed = projectPortfolioScene(initialDemoSceneState, store.getSnapshot(), 's', scenario);
     assert.equal(closed.style, null);
     assert.ok(!store.getSnapshot().messages.some(item => item.activityId === accepted.activityId && item.role === 'assistant'));
-    await assert.rejects(runtime.submit('@unknown 工作'), /已知角色/);
-    await assert.rejects(runtime.submit('@kalon 关闭后'), /剧团已关闭/);
+    await assert.rejects(runtime.submit('@unknown 工作'), /known role/);
+    await assert.rejects(runtime.submit('@kalon 关闭后'), /Ensemble is closed/);
   } finally {await runtime.cleanup();}
 });
 
@@ -98,8 +98,8 @@ test('入梦命令接入场景：同一活动暂停、续做和关闭，白底�
     assert.equal(runtime.store.activities.get('s', activity.activityId)!.status, 'paused');
     const scene = projectPortfolioScene(initialDemoSceneState, runtime.store.getSnapshot(), 's', runtime.scenario);
     const rows = buildDemoSceneRows({...scene, folds: {[activity.activityId]: true}}, 99);
-    assert.ok(rows.some(row => row.messageId === activity.activityId && row.text.includes('已暂停')));
-    assert.ok(rows.some(row => row.text.includes('等待续做')));
+    assert.ok(rows.some(row => row.messageId === activity.activityId && row.text.includes('Paused')));
+    assert.ok(rows.some(row => row.text.includes('Waiting to resume')));
     await runtime.submit('/anamnesis start');
     assert.equal(runtime.store.activities.list().filter(item => item.kind === 'anamnesis').length, 1);
     await runtime.close();

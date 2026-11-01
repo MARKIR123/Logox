@@ -2,7 +2,7 @@ import {appendFile, mkdir, writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {join, dirname} from 'node:path';
 
-const INITIAL_BULLETIN_TEMPLATE = `# LOGOX Project Bulletin (知识黑板)
+const INITIAL_BULLETIN_TEMPLATE = `# LOGOX Project Bulletin (Knowledge Board)
 
 This bulletin board is a persistent, shared collaboration and experience-sharing space for all actors (Logox, Techne, Kalon, Aletheia) and developers.
 Before executing heavy, frontend, or visual tasks, check this board for tested solutions and environment pitfalls.

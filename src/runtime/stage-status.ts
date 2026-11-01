@@ -1,4 +1,4 @@
-/** 展示快照仅携带公开值，不携带凭据、模型客户端或业务回调。 */
+/** Display snapshots carry public values only: no credentials, model clients or business callbacks. */
 export interface StageStatus {
   readonly ownerId: string;
   readonly name: string;

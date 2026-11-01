@@ -37,7 +37,7 @@ test('Actor 完成卡片复用运行时摘要，收起显示标题、展开保�
   assert.ok(!techneView.includes(summary.title), 'Actor 独立视口不渲染自引用的完成状态卡片');
   assert.ok(techneView.includes('检查原始任务'), 'Actor 独立视口直接展示派工原任务');
   assert.ok(techneView.includes('工作流程原文'), 'Actor 独立视口直接展示工作流正文');
-  assert.throws(() => store.activities.update('s', 'a', {summary: {...summary, title: '不能改终态'}}), /已结束/);
+  assert.throws(() => store.activities.update('s', 'a', {summary: {...summary, title: '不能改终态'}}), /finished activity/);
 });
 
 test('Actor 失败卡片在两个窗口直接显示原因，完整报告仍折叠在原任务内', () => {
@@ -74,7 +74,7 @@ test('动态角色真实 Ink：自定义身份与卡片、独立草稿、切换�
     assert.match(output.lines.join('\n'), /已查清调用链/);
     for (let i = 0; i < 4; i++) await key('\x07');
     await key('独立草稿');
-    assert.match(output.lines.join('\n'), /侦察助手 · 独立对话/);
+    assert.match(output.lines.join('\n'), /侦察助手 · Own thread/);
     await key('\x1b');
     assert.doesNotMatch(output.lines.join('\n'), /独立草稿/);
     for (let i = 0; i < 4; i++) await key('\x07');
@@ -134,7 +134,7 @@ test('Actor 卡片主副标题联动：运行中渲染 Main Title · SubTitle，
     activityId: 'a-title',
     ownerId: 'techne',
     kind: 'actor',
-    title: 'Techne · 精工 · 构建匠人',
+    title: 'Techne · 构建匠人',
     taskTitle: 'Refactor collaboration roster',
     progress: {label: 'Wiring active peer snapshot'},
     status: 'running',
@@ -146,13 +146,17 @@ test('Actor 卡片主副标题联动：运行中渲染 Main Title · SubTitle，
   const runningClosed = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': false}, null).map(row => row.text).join('\n');
   assert.match(runningClosed, /Refactor collaboration roster · Wiring active peer snapshot/);
 
-  // Incoming queue SendMessage (inputKind: 'collaboration') renders inside the expanded recipient card.
-  store.message('s', 'techne', 'user', '[Message from kalon · Shell ready]\nindex.html and styles.css are on disk.', {
+  // Incoming queue SendMessage (inputKind: 'collaboration') renders inside the expanded recipient card as a collapsible 1-line row, and expands to Markdown on click.
+  const msgId = store.message('s', 'techne', 'user', '[Message from kalon · Shell ready]\n`index.html` and `styles.css` are on disk.', {
     activityId: 'a-title', source: 'kalon', inputKind: 'collaboration',
   });
   const runningOpen = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': true}, null).map(row => row.text).join('\n');
-  assert.match(runningOpen, /\[Message from kalon · Shell ready\]/);
-  assert.match(runningOpen, /index\.html and styles\.css are on disk\./);
+  assert.match(runningOpen, /Message from .*Kalon · Shell ready · 1 line/);
+  assert.doesNotMatch(runningOpen, /\[Message from kalon/);
+  assert.doesNotMatch(runningOpen, /index\.html and styles\.css are on disk\./);
+
+  const runningExpandedMsg = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': true, [msgId]: true}, null).map(row => row.text).join('\n');
+  assert.match(runningExpandedMsg, /index\.html and styles\.css are on disk\./);
 
   store.activities.update('s', 'a-title', {
     status: 'completed',

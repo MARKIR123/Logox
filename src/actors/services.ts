@@ -72,7 +72,7 @@ export interface ActorServicesOptions {
   modelPool?: ModelPool;
   notice?(text: string): void;
 }
-/** 角色配置、单次技能借阅与摘要交接；执行队列仍由 Ensemble 拥有。 */
+/** Actor configuration, one-off skill borrowing, and summary handoff; the execution queue is still owned by the Ensemble. */
 export class ActorServices {
   readonly management: ActorManagement;
   readonly collaboration: Collaboration;
@@ -130,6 +130,16 @@ export class ActorServices {
         options.recordPeerMessage?.(target, completedPeer.activityId, fullText, source);
         return true;
       },
+      hasOnStageActivity: (target, context) => {
+        const snapshot = options.getSnapshot?.();
+        if (!snapshot) return false;
+        const root = context.rootActivityId ?? context.activityId;
+        return snapshot.activities.some(activity =>
+          activity.sessionId === options.sessionId &&
+          activity.ownerId === target &&
+          (activity.rootActivityId === root || activity.parentActivityId === root || activity.activityId === root)
+        );
+      },
       projectDir: options.projectDir,
     });
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
@@ -140,7 +150,7 @@ export class ActorServices {
     let definition = this.definitions.get(context.activityId);
     if (!definition) {
       definition = this.options.catalog.find(context.ownerId);
-      if (!definition) throw new Error('角色已不可用：' + context.ownerId);
+      if (!definition) throw new Error('Actor is no longer available: ' + context.ownerId);
       this.definitions.set(context.activityId, definition); this.active.set(context.ownerId, definition);
     }
     return definition;
@@ -173,13 +183,13 @@ export class ActorServices {
         tool.name.toLowerCase() === call.name.toLowerCase() ||
         canonicalToolName(tool.name) === canonical
       );
-      if (!matchedTool) throw new Error('角色无权执行此工具');
+      if (!matchedTool) throw new Error('Actor is not allowed to run this tool');
       const input: unknown = JSON.parse(call.arguments);
       z.fromJSONSchema(matchedTool.parameters).parse(input);
-      if (canonical !== 'CraftActor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: '角色操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
+      if (canonical !== 'CraftActor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: 'Actor action was not permitted; find another approach.', isError: true, disposition: 'denied'};
       if (canonical !== 'CraftActor') context.startTool?.();
       if (canonical === 'Actor') {
-        if (context.recovery?.exhausted) throw new Error('同一故障已补救两次，需要用户决定下一步，不能继续自动派工');
+        if (context.recovery?.exhausted) throw new Error('The same failure has been remediated twice; the user must decide the next step and work cannot be auto-dispatched further');
         let parsedInput: z.infer<typeof actorSchema>;
         if (input && typeof input === 'object' && 'actor' in input && typeof (input as {actor: unknown}).actor === 'string') {
           const single = input as {actor: string; prompt: string; title?: string; description?: string; goal?: string};
@@ -193,27 +203,27 @@ export class ActorServices {
         for (const task of tasks) {
           const explicitTitle = (task.title ?? task.description ?? task.goal)?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
-          if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('角色无效：' + task.ownerId);
-          for (const name of task.skills ?? []) if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('技能不存在：' + name);
+          if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
+          for (const name of task.skills ?? []) if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('Skill not found: ' + name);
           if (task.resumeTask) {
             const previous = saved.find(previous => previous.activityId === task.resumeTask);
-            if (!previous) throw new Error('续做活动不存在或不在当前会话有效历史中：' + task.resumeTask);
-            if (previous.ownerId !== task.ownerId) throw new Error('续做角色不匹配：原活动属于 ' + previous.ownerId);
-            if (previous.stopReason === 'user') throw new Error('该活动由用户主动停止，不能自动续做');
-            if (previous.status !== 'failed') throw new Error('只能续做失败活动；该活动当前状态：' + previous.status);
+            if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
+            if (previous.ownerId !== task.ownerId) throw new Error('Resume actor mismatch: the original activity belongs to ' + previous.ownerId);
+            if (previous.stopReason === 'user') throw new Error('This activity was stopped by the user and cannot be resumed automatically');
+            if (previous.status !== 'failed') throw new Error('Only failed activities can be resumed; current status: ' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
             if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) &&
               !this.deliveries.snapshot().some(item => item.recipientActivityId === context.activityId && item.rootActivityId === root)) {
-              throw new Error('续做目标未交接到当前任务，不能续做其它根目标');
+              throw new Error('The resume target was not handed off to the current task; other root goals cannot be resumed');
             }
-            if (resumed.has(task.resumeTask) || this.continuedTasks.has(task.resumeTask)) throw new Error('该失败活动已经安排续做，不能重复派发：' + task.resumeTask);
+            if (resumed.has(task.resumeTask) || this.continuedTasks.has(task.resumeTask)) throw new Error('This failed activity is already scheduled to resume and cannot be dispatched again: ' + task.resumeTask);
             roots.add(root);
             resumed.add(task.resumeTask);
-            task.prompt = '【原 Actor 任务断点续做】\n原活动：' + previous.activityId + '\n原目标：' + previous.prompt +
-              '\n继续要求：' + task.prompt + '\n先核对自身历史摘要和已完成工具结果，只做未完成部分。保留已有输出，不重新执行已成功的写入或命令；未完整生成的工具调用没有执行，审批拒绝仍有效。';
+            task.prompt = '[Resuming interrupted Actor task]\nOriginal activity: ' + previous.activityId + '\nOriginal goal: ' + previous.prompt +
+              '\nContinuation request: ' + task.prompt + '\nFirst check your own history summary and completed tool results, and do only the unfinished part. Keep existing output and do not re-run writes or commands that already succeeded; tool calls that were not fully generated were not executed, and approval denials still stand.';
           }
         }
-        if (roots.size > 1) throw new Error('一次派发不能混合不同根目标的续做，请分别安排');
+        if (roots.size > 1) throw new Error('A single dispatch cannot mix resumes of different root goals; schedule them separately');
         const rootActivityId = roots.values().next().value ?? context.rootActivityId ?? context.activityId;
         const recovery = this.deliveries.recoveryFor(context.activityId, rootActivityId,
           rootActivityId === (context.rootActivityId ?? context.activityId) ? context.recovery : undefined);
@@ -226,12 +236,12 @@ export class ActorServices {
           .map(item => item.origin?.dispatchDepth ?? 0));
         const baseDepth = hasProgress ? 0 : Math.max(this.depths.get(context.activityId) ?? 0, receivedDepth);
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
-          throw new Error('已达到三次无新进展的角色调度，请根据已有结果收束任务');
+          throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
         const grouped = new Map<string, {prompts: string[]; skills: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
           const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
-          if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('同一角色一次只能续做一个原活动，不能合并不同断点');
+          if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
           group.prompts.push(task.prompt); for (const skill of task.skills ?? []) group.skills.add(skill); grouped.set(task.ownerId, group);
@@ -241,10 +251,10 @@ export class ActorServices {
           const finishedBatch = !group && saved.some(previous => previous.batchId === resumeBatch && resumed.has(previous.activityId)) &&
             !saved.some(previous => previous.batchId === resumeBatch && !['completed', 'failed', 'cancelled'].includes(previous.status));
           if (!finishedBatch && (!group || (group.origin.rootActivityId !== rootActivityId && !this.resumableBatches.has(resumeBatch)))) {
-            throw new Error('不能恢复其它任务或不存在的批次');
+            throw new Error('Cannot resume a batch from another task or a batch that does not exist');
           }
           if (group) {this.resumableBatches.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);}
-          if (!tasks.length) return {text: '已恢复原批次：' + resumeBatch, isError: false};
+          if (!tasks.length) return {text: 'Resumed original batch: ' + resumeBatch, isError: false};
         }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
@@ -260,14 +270,18 @@ export class ActorServices {
           return handle;
         });
         for (const activityId of resumed) this.continuedTasks.add(activityId);
-        return {text: '角色任务已排队（批次 ' + group.batchId + '）：' + handles.map(handle => handle.activityId).join('、'), isError: false};
+        const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
+        return {
+          text: `Tasks dispatched to ${targets} (Batch ${group.batchId}). Companions run asynchronously; the runtime will automatically deliver their completion reports and wake you. Conclude your current round or proceed with independent steps.`,
+          isError: false,
+        };
       }
       if (canonical === 'CraftActor') {
         const {content} = craftActorSchema.parse(input);
         const result = await this.management.craftActor(content, async review => {
           const allowed = await this.options.approve(context, review); if (allowed) context.startTool?.(); return allowed;
         }, context.signal);
-        return {text: (result.status === 'saved' ? '已保存并重载：' : '用户拒绝，未写入：') + result.path, isError: result.status === 'denied', ...(result.status === 'denied' ? {disposition: 'denied' as const} : {})};
+        return {text: (result.status === 'saved' ? 'Saved and reloaded: ' : 'Denied by user, not written: ') + result.path, isError: result.status === 'denied', ...(result.status === 'denied' ? {disposition: 'denied' as const} : {})};
       }
       if (canonical === 'ReadActor') {
         const {ownerId, activityId} = readActorSchema.parse(input);
@@ -313,13 +327,13 @@ export class ActorServices {
       }
       if (canonical === 'BorrowSkill') {
         const {name} = borrowSkillSchema.parse(input);
-        if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('技能不存在');
+        if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('Skill not found');
         const borrowed = this.borrowed.get(context.activityId) ?? new Set<string>(); borrowed.add(name); this.borrowed.set(context.activityId, borrowed);
-        return {text: '本任务已借阅 ' + name + '；请读取技能正文后使用。', isError: false};
+        return {text: 'This task has borrowed ' + name + '; read the skill body before using it.', isError: false};
       }
       const collab = await this.collaboration.execute(call, context);
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
-    } catch (error) {return {text: error instanceof Error ? error.message : '角色操作失败', isError: true};}
+    } catch (error) {return {text: error instanceof Error ? error.message : 'Actor operation failed', isError: true};}
   }
   async grantExecution(context: ActorContext): Promise<void> {
     if (context.inputKind !== 'human' || !context.grantExecution) return;
@@ -344,7 +358,7 @@ export class ActorServices {
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
     if (activityId) for (const batch of batches) this.resumableBatches.add(batch);
-    return [report, batches.length ? '此前依赖任务仍暂停。先根据用户新指示判断；需要续做时用 dispatch_role({resumeBatch: "批次ID"}) 恢复已有队列，不重复派发。批次：' + batches.join('、') : ''].filter(Boolean).join('\n');
+    return [report, batches.length ? 'Earlier dependent tasks are still paused. Decide based on the new user instructions first; to resume, use dispatch_role({resumeBatch: "<batch id>"}) to restore the existing queue instead of dispatching again. Batches: ' + batches.join(', ') : ''].filter(Boolean).join('\n');
   }
   async recover(validActivities?: ReadonlySet<string>): Promise<void> {
     await this.recovery.recover(validActivities);
@@ -442,7 +456,7 @@ export class ActorServices {
     const pending = this.pendingHandoffs.get(activityId);
     if (pending) await this.admitHandoff(pending);
     else if (this.groups.has(activityId)) await this.handoff({ownerId: this.definitions.get(activityId)?.id ?? 'actor', activityId,
-      source: 'logox', status, summary: {title: '任务未正常交接', report: '任务在排队或记录阶段结束，请核对状态。', source: 'local'},
+      source: 'logox', status, summary: {title: 'Task not handed off normally', report: 'The task ended during queueing or recording; please verify its state.', source: 'local'},
       ...(status === 'cancelled' ? {stopReason: 'shutdown'} : {})});
     const definition = this.definitions.get(activityId);
     if (definition && this.active.get(definition.id) === definition) this.active.delete(definition.id);

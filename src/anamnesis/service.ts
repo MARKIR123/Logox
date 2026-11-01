@@ -32,15 +32,15 @@ export class Anamnesis {
     this.start();
   }
   start(): {runId: string; done: Promise<void>} {
-    if (this.closed || this.current || this.foregroundBusy()) throw new Error('当前不能开始入梦');
+    if (this.closed || this.current || this.foregroundBusy()) throw new Error('Cannot start dreaming right now');
     const runId = this.resumeId ?? randomUUID();
     this.resumeId = undefined;
     const controller = new AbortController();
     if (this.store.activities.get(this.sessionId, runId)) {
-      this.store.activities.update(this.sessionId, runId, {status: 'running', stage: '继续入梦', detail: ''});
+      this.store.activities.update(this.sessionId, runId, {status: 'running', stage: 'Resuming dream', detail: ''});
     } else this.store.activities.create({
       sessionId: this.sessionId, activityId: runId, ownerId: 'anamnesis', kind: 'anamnesis',
-      title: 'Anamnesis · 入梦', status: 'running', stage: '准备回顾', detail: '',
+      title: 'Anamnesis', status: 'running', stage: 'Preparing review', detail: '',
     });
     // Deferring the runner ensures current is installed even when it fails synchronously.
     const done = Promise.resolve().then(() => this.run(runId, controller));
@@ -72,13 +72,13 @@ export class Anamnesis {
         },
       });
       signal.throwIfAborted();
-      this.store.activities.update(this.sessionId, runId, {status: 'completed', stage: '本次完成'});
+      this.store.activities.update(this.sessionId, runId, {status: 'completed', stage: 'Run complete'});
     } catch (error) {
       const paused = signal.aborted && signal.reason === 'pause';
       if (paused) this.resumeId = runId;
       this.store.activities.update(this.sessionId, runId, {
         status: signal.aborted ? (paused ? 'paused' : 'cancelled') : 'failed',
-        stage: paused ? '等待续做' : signal.aborted ? '已关闭' : '入梦失败',
+        stage: paused ? 'Waiting to resume' : signal.aborted ? 'Closed' : 'Dream failed',
         detail: error instanceof Error ? error.message : String(error),
       });
     } finally { this.current = undefined; }

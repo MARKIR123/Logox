@@ -7,7 +7,7 @@ import {palette} from '../appearance/theme.js';
 import {ownerColor, ownerSurface} from '../appearance/actor-style.js';
 import {safeText} from '../terminal/text.js';
 
-const labels = {queued: '排队', running: '运行中', waiting_input: '等待回答', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消'};
+const labels = {queued: 'Queued', running: 'Running', waiting_input: 'Awaiting answer', paused: 'Paused', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled'};
 export const ActivityCard = memo(function ActivityCard({activity, expanded = false, hovered = false}: {activity: Activity; expanded?: boolean; hovered?: boolean}) {
   const isDream = activity.kind === 'anamnesis' || activity.ownerId === 'anamnesis', bright = expanded || hovered;
   const color = isDream ? palette.dreamText : ownerColor(activity.ownerId);

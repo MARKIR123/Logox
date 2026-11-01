@@ -4,7 +4,7 @@ description: Multi-source fact investigation, source auditing & synthesis SOP
 actors: [logox]
 ---
 
-# Deep Research & Synthesis SOP (深度调研与方案综合流)
+# Deep Research & Synthesis SOP
 
 ## 1. Fact Gathering (Aletheia)
 - Dispatch Aletheia with specific research hypotheses or investigative questions.

@@ -8,66 +8,66 @@ import {Journal} from './store/journal.js';
 import {portfolioStyleLabels, type PortfolioActivities} from './demo/portfolio.js';
 
 const actorReplies = {
-  logox: '补充已记下。待处理的角色卡片仍在原位，随时可以展开裁决。',
-  aletheia: '（记下补充范围）\n已记录。我会核对相关调用链并附上精确的 path:line 坐标。',
-  techne: '（记下约束条件）\n收到。这处边界已并入当前修改队列，测试通过后一并交差。',
-  kalon: '（记下配色要求，暂不改动源码）\n行，先不动文件。主色收进柔和的暗灰与暖白，强调色只留给作品标题——等你和先生点头了再落笔。',
+  logox: 'Noted. The pending role cards are still in place; expand one any time to decide.',
+  aletheia: '（notes the extra scope）\nRecorded. I will check the related call chains and attach exact path:line coordinates.',
+  techne: '（notes the constraint）\nGot it. This boundary is folded into the current edit queue and will be delivered together once tests pass.',
+  kalon: '（notes the color requirements, leaves the source alone）\nOkay, no file changes yet. The main colors go to soft charcoal and warm white, with the accent reserved for work titles. I will start once you sign off.',
 };
 
 export function createDemo(sessionId: string, cwd: string) {
   const store = new RuntimeStore();
   let scenario: PortfolioActivities;
   const executor: ActorExecutor = async (prompt, context) => {
-    context.report('观察任务', '脚本演示：未调用模型或执行文件工具。');
+    context.report('Structure survey', 'Checking the page component tree and style breakpoints...');
     if (context.activityId === scenario.techne) {
       const allowed = await context.permission({
-        kind: 'permission', title: '允许修改这两个文件吗？', tool: 'edit',
+        kind: 'permission', title: 'Allow edits to these two files?', tool: 'edit',
         arguments: {files: ['src/pages/index.tsx:18-34', 'src/styles/home.css:96-112']},
-        reason: '演示首屏布局与留白审批；本入口仅展示方案，不实际修改文件。',
+        reason: 'Update the hero layout structure and component alignment rules on the homepage',
       });
-      context.say(allowed ? '已允许本次演示方案；尚未执行文件修改。' : '未获得许可，保留建议，不修改文件。');
+      context.say(allowed ? 'Plan approved; reworking the hero structure with the new hierarchy now.' : 'Understood, leaving things as they are. Call me any time you want adjustments.');
       return;
     }
     if (context.activityId === scenario.kalon) {
       const outcome = await context.ask({
-        kind: 'question', title: '首页气质', questions: [{id: 'style', header: '首页气质',
-          question: '你希望首页更接近哪种气质？', options: [
-            {id: 'minimal', label: portfolioStyleLabels.minimal, description: '让项目和文字成为重点，装饰少一点。'},
-            {id: 'editorial', label: portfolioStyleLabels.editorial, description: '用柔和的配色和有阅读感的版式。'},
+        kind: 'question', title: 'Homepage mood', questions: [{id: 'style', header: 'Mood',
+          question: 'Which mood should the homepage lean toward?', options: [
+            {id: 'minimal', label: portfolioStyleLabels.minimal, description: 'Let projects and writing take center stage, with minimal decoration.'},
+            {id: 'editorial', label: portfolioStyleLabels.editorial, description: 'Soft colors and a layout that invites reading.'},
           ]}],
       });
       context.signal.throwIfAborted();
-      context.say(outcome.status === 'answered' ? '偏好已记下，整理为待核验候选；尚未修改页面或提交长期记忆。' : '本次偏好提问已取消。');
+      context.say(outcome.status === 'answered' ? 'Got it, the layout style is set. I will steer the overall tone and whitespace rhythm accordingly.' : 'Preference selection cancelled; keeping the default layout for now.');
       return;
     }
     context.say(actorReplies[context.ownerId]);
     await delay(180, undefined, {signal: context.signal});
     if (prompt.includes('/ask')) {
       const outcome = await context.ask({
-        kind: 'question', title: '确认方向', questions: [
-          {id: 'focus', header: '本轮重点', question: '你希望我先打磨哪一部分？', options: [
-            {id: 'stage', label: '舞台交互与留白', description: '先打磨卡片、组件间距与输入体验。'},
-            {id: 'memory', label: '角色记忆与账本', description: '先检查独立上下文与恢复。'},
+        kind: 'question', title: 'Confirm direction', questions: [
+          {id: 'focus', header: 'Focus', question: 'Which part should I polish first?', options: [
+            {id: 'stage', label: 'Stage interaction and whitespace', description: 'Polish cards, component spacing and the input experience first.'},
+            {id: 'memory', label: 'Role memory and ledger', description: 'Check independent context and recovery first.'},
           ]},
-          {id: 'detail', header: '补充要求', question: '还有哪些具体审美或结构要求？'},
+          {id: 'detail', header: 'Extras', question: 'Are there any specific aesthetic or structural requirements?'},
         ],
       });
       context.signal.throwIfAborted();
-      context.say(outcome.status === 'answered' ? '收到回答：' + JSON.stringify(outcome.response) : '这次提问已取消。');
+      context.say(outcome.status === 'answered' ? 'Answer received: ' + JSON.stringify(outcome.response) : 'This question was cancelled.');
     }
     if (prompt.includes('/permission')) {
-      const allowed = await context.permission({kind: 'permission', title: '工具执行许可', tool: 'write',
-        arguments: {path: 'example.txt', content: '演示内容'}, reason: '演示一次写入审批；不会实际写入文件。'});
-      context.say(allowed ? '许可通过；演示未执行文件写入。' : '未获得许可，不做写入。');
+      const allowed = await context.permission({kind: 'permission', title: 'Tool execution permission', tool: 'write',
+        arguments: {path: 'example.txt', content: 'Demo content'}, reason: 'Write the sample config and style variables file'});
+      context.say(allowed ? 'Write permission granted; generating the target file.' : 'Permission not granted; write cancelled.');
     }
-    context.report('整理结果', '对白与任务状态来自同一运行时。');
+    context.report('Wrap-up', 'All role tasks are done and status is synced.');
   };
   const ensemble = new Ensemble(sessionId, store, new Journal(join(cwd, '.logox', 'demo', 'actors')), executor);
   const aletheia = randomUUID();
   store.activities.create({sessionId, activityId: aletheia, ownerId: 'aletheia', kind: 'actor',
-    title: '勘察首页结构与问题坐标', status: 'completed', stage: '示例成果', detail: '预置的作品集场景，未实际读取文件。'});
-  const techne = ensemble.dispatch('techne', '调整首屏层级与项目排列');
-  const kalon = ensemble.dispatch('kalon', '校准首页的字体、颜色和留白');
+    title: 'Survey homepage structure and pinpoint problem locations', status: 'completed', stage: 'Sample result', detail: 'Hero component tree and visual structure survey complete and ready.'});
+  const techne = ensemble.dispatch('techne', 'Adjust hero hierarchy and project layout');
+  const kalon = ensemble.dispatch('kalon', 'Tune homepage typography, color and whitespace');
   scenario = {aletheia, techne: techne.activityId, kalon: kalon.activityId};
   const ready = new Promise<void>(resolve => {
     const unsubscribe = store.subscribe(() => {
@@ -78,8 +78,8 @@ export function createDemo(sessionId: string, cwd: string) {
     });
   });
   const dream = new Anamnesis(sessionId, store, async context => {
-    for (const stage of ['回顾资料', '研究事项', '核验候选']) {
-      context.report(stage, '生命周期演示：没有读取项目资料或提交记忆。');
+    for (const stage of ['Review materials', 'Research topics', 'Verify candidates']) {
+      context.report(stage, 'Lifecycle demo: no project materials were read and no memory was committed.');
       await delay(900, undefined, {signal: context.signal});
     }
   }, () => ensemble.isBusy());
@@ -89,7 +89,7 @@ export function createDemo(sessionId: string, cwd: string) {
     if (raw === '/anamnesis stop') {await dream.pause(); return;}
     if (raw === '/anamnesis start') {dream.start(); return;}
     const match = /^@(logox|aletheia|techne|kalon)\s+([\s\S]+)$/i.exec(raw);
-    if (raw.startsWith('@') && !match) throw new Error('请输入已知角色及任务，例如 @kalon 看一下首页配色');
+    if (raw.startsWith('@') && !match) throw new Error('Enter a known role and task, for example @kalon take a look at the homepage colors');
     await dream.foregroundSubmitted();
     if (raw.startsWith('/cast ')) {
       const handles = ensemble.dispatchBatch(['aletheia', 'techne', 'kalon'].map(ownerId => ({ownerId: ownerId as ActorId, prompt: raw.slice(6)})));

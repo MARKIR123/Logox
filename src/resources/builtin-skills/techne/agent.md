@@ -18,5 +18,5 @@ Specialized engineering SOPs reside in categorized subdirectories. Inspect domai
 ## 3. Skill Promotion & Storage
 To internalize new external skills or persist reusable engineering patterns:
 1. Follow the public SOP `skills/public/skill-internalization.md`.
-2. Write newly internalized skills to the appropriate category directory in either `~/.logox-ts/skills/techne/` (user global) or `.logox/skills/techne/` (project private).
+2. Write newly internalized skills to the appropriate category directory in either `~/.logox/skills/techne/` (user global) or `.logox/skills/techne/` (project private).
 3. If introducing an entirely new category, register it under `categories` in this `agent.md`.

@@ -203,7 +203,7 @@ test('valid Actor identity overrides decorative schemes but malformed colors nev
       assert.equal(invalid[0]?.color, palette.accent);
     }
   }
-  assert.match(statusbarText({...status, effort: '不支持'}, 80, [{id: 'effort', enabled: true}]), /Thinking unsupported/);
+  assert.match(statusbarText({...status, effort: 'Unsupported'}, 80, [{id: 'effort', enabled: true}]), /Thinking unsupported/);
 });
 
 test('context never loses its usage gauge or USED label when compacted', () => {

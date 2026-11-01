@@ -122,8 +122,6 @@ export class ContextManager {
         if (canonicalToolName(result.name) === 'LoadTools') continue;
         const path = journal.archivePath(identity.sessionId, identity.ownerId, archive.hash);
         raw[archive.resultIndex] = {...result, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.')};
-        raw[archive.callIndex] = {...assistant, toolCalls: assistant.toolCalls?.map(call => call.id === result.callId
-          ? {...call, arguments: JSON.stringify({archived_arguments: path})} : call)};
       }
       const output: ModelMessage[] = [];
       const retain = (start: number, end: number, recent = false) => {

@@ -2,7 +2,7 @@ import type {SystemPresentation} from './system-events.js';
 import type {StatusbarAppearance} from '../config/statusbar-preferences.js';
 import type {StageStatus} from './stage-status.js';
 
-/** 命令界面只传公开数据；认证与业务回调不进入快照。 */
+/** The command surface carries public data only; credentials and business callbacks never enter the snapshot. */
 export interface PickerItem {readonly id: string; readonly label: string; readonly description?: string | undefined; readonly disabled?: boolean | undefined; readonly deletable?: boolean | undefined; readonly color?: string | undefined; readonly effort?: string | undefined; readonly effortLevels?: readonly string[] | undefined; readonly group?: string | undefined}
 export interface CommandToggle {readonly id: string; readonly label?: string | undefined; readonly enabled: boolean; readonly value?: string | undefined; readonly options?: readonly string[] | undefined}
 export interface CommandTab {readonly id: string; readonly title: string; readonly lines: readonly string[]; readonly toggles?: readonly CommandToggle[] | undefined; readonly color?: string | undefined; readonly statusbar?: {readonly appearance: StatusbarAppearance; readonly status: StageStatus} | undefined}

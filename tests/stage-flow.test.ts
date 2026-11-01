@@ -85,7 +85,7 @@ test('runtime dispositions control Denied and Error styling without marking succ
 
 test('recovery uses runtime status and terminal titles use reports without inventing legacy stages', () => {
   const f = fixture();
-  for (const stage of ['接续中', '调整中']) {
+  for (const stage of ['Resuming', 'Adjusting']) {
     f.store.activities.update('s', 'a', {stage});
     const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {}, null);
     assert.ok(rows.find(row => row.messageId === 'a')!.text.includes(stage));
@@ -172,16 +172,17 @@ test('historical failed requests do not borrow later details; only the final fai
 
 test('actor resume follows same-owner links to the complete original goal', () => {
   const store = new RuntimeStore(), goal = '创建独立的鹈鹕骑车 SVG 动画。\n' + '保持车轮、踏板与地面运动同步，并保留细节。'.repeat(12);
-  store.activities.create({sessionId: 's', activityId: 'original', ownerId: 'techne', kind: 'actor', title: '精工 · 构建匠人', status: 'failed', stage: '失败', detail: '输出耗尽'});
+  store.activities.create({sessionId: 's', activityId: 'original', ownerId: 'techne', kind: 'actor', title: '构建匠人', status: 'failed', stage: '失败', detail: '输出耗尽'});
   store.message('s', 'techne', 'user', goal, {activityId: 'original', inputKind: 'director'});
   for (const [activityId, resumeTaskId] of [['resume', 'original'], ['resume-again', 'resume']] as const) {
-    store.activities.create({sessionId: 's', activityId, resumeTaskId, ownerId: 'techne', kind: 'actor', title: '精工 · 构建匠人', status: 'running', stage: '调整中', detail: ''});
+    store.activities.create({sessionId: 's', activityId, resumeTaskId, ownerId: 'techne', kind: 'actor', title: '构建匠人', status: 'running', stage: '调整中', detail: ''});
     store.message('s', 'techne', 'user', '继续', {activityId, inputKind: 'human'});
   }
   for (const view of ['logox', 'techne']) {
-    const rows = buildStageRows(store.getSnapshot(), 's', view, 40, {'resume-again': true}, null);
-    const goalRows = rows.filter(row => row.messageId === 'resume-again-goal');
-    assert.equal(goalRows.map((row, index) => row.text + (index < goalRows.length - 1 && !row.softWrap ? '\n' : '')).join(''), 'Goal: ' + goal);
+    const rows = buildStageRows(store.getSnapshot(), 's', view, 40, {'resume-again': true, 'resume-again-goal': true}, null);
+    assert.ok(rows.some(row => row.text.includes('Task from ◈ Logox')));
+    const goalRows = rows.filter(row => row.messageId === 'resume-again-goal-body');
+    assert.equal(goalRows.map((row, index) => row.text + (index < goalRows.length - 1 && !row.softWrap ? '\n' : '')).join(''), goal);
     assert.ok(goalRows.length > 2, 'The full goal wraps without truncation');
   }
 });
@@ -196,8 +197,12 @@ test('actor goal lookup safely handles foreign owners, broken links, missing inp
   }
   store.message('s', 'techne', 'user', '自己的正式目标', {activityId: 'foreign-link'});
   store.message('s', 'techne', 'user', '断链后的正式目标', {activityId: 'broken-link'});
-  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {'foreign-link': true, 'broken-link': true, 'cycle-a': true}, null);
-  assert.equal(rows.find(row => row.messageId === 'foreign-link-goal')!.text, 'Goal: 自己的正式目标');
-  assert.equal(rows.find(row => row.messageId === 'broken-link-goal')!.text, 'Goal: 断链后的正式目标');
-  assert.equal(rows.find(row => row.messageId === 'cycle-a-goal')!.text, 'Goal: 目标信息缺失');
+  const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {
+    'foreign-link': true, 'foreign-link-goal': true,
+    'broken-link': true, 'broken-link-goal': true,
+    'cycle-a': true, 'cycle-a-goal': true,
+  }, null);
+  assert.equal(rows.find(row => row.messageId === 'foreign-link-goal-body')!.text, '自己的正式目标');
+  assert.equal(rows.find(row => row.messageId === 'broken-link-goal-body')!.text, '断链后的正式目标');
+  assert.equal(rows.find(row => row.messageId === 'cycle-a-goal-body')!.text, '目标信息缺失');
 });

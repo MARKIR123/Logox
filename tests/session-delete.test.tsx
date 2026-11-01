@@ -63,7 +63,7 @@ test('删除备份动态角色、所有分支/归档/用量/系统和协作状�
     assert.equal(await readFile(f.journal.path('other', 'logox'), 'utf8'), other);
     assert.deepEqual((await f.manager.list()).sessions.map(item => item.id), ['other']);
     assert.equal(await f.manager.recent(), 'other'); assert.equal(await f.manager.hasContent('victim'), false);
-    await assert.rejects(f.manager.acquire('victim'), /已删除/); await assert.rejects(f.manager.info('victim'), /已删除/);
+    await assert.rejects(f.manager.acquire('victim'), /was deleted/); await assert.rejects(f.manager.info('victim'), /was deleted/);
     // 用户退出应用后的手动恢复步骤：按清单原相对路径放回，最后去掉删除标记。
     await cp(join(result.archive, 'files'), f.manager.directory, {recursive: true});
     await rm(join(f.manager.directory, 'deleted', key('victim') + '.json'));
@@ -78,12 +78,12 @@ test('活跃租约拒绝删除；坏尾行完整备份；拷贝或标记失败�
     await f.seed('victim'); const path = f.journal.path('victim', 'logox');
     await writeFile(path, (await readFile(path, 'utf8')) + '{bad-tail'); const original = await readFile(path, 'utf8');
     const live = await f.manager.acquire('victim');
-    await assert.rejects(f.manager.remove('victim'), /占用/); assert.equal(await readFile(path, 'utf8'), original); await live.release();
+    await assert.rejects(f.manager.remove('victim'), /in use by another process/); assert.equal(await readFile(path, 'utf8'), original); await live.release();
     const relativePath = relative(f.manager.directory, path);
     class FailingTrash extends SessionTrash {protected override async publishRemoval(): Promise<void> {throw new Error('磁盘保存失败');}}
     await assert.rejects(new FailingTrash(f.manager.directory, f.cwd).remove('victim', [relativePath]), /磁盘保存失败/);
     assert.equal(await readFile(path, 'utf8'), original); assert.ok((await f.manager.list()).sessions.some(item => item.id === 'victim'));
-    await assert.rejects(new SessionTrash(f.manager.directory, f.cwd).remove('victim', ['../changed.txt']), /超出/);
+    await assert.rejects(new SessionTrash(f.manager.directory, f.cwd).remove('victim', ['../changed.txt']), /escapes the state directory/);
     class ChangingTrash extends SessionTrash {
       protected override async publishRemoval(id: string, archive: string): Promise<void> {await super.publishRemoval(id, archive); await writeFile(path, original + '\n外部变化');}
     }
@@ -100,7 +100,7 @@ test('回收路径不跟随目录链接，备份失败不提交删除', async ()
     await f.seed('victim'); const outside = join(f.cwd, 'outside'); await mkdir(outside); await writeFile(join(outside, 'keep.txt'), '保留');
     const directory = f.journal.path('victim', 'logox') + '.tools';
     await symlink(outside, directory, process.platform === 'win32' ? 'junction' : 'dir');
-    await assert.rejects(f.manager.remove('victim'), /链接/);
+    await assert.rejects(f.manager.remove('victim'), /symbolic links/);
     assert.equal(await readFile(join(outside, 'keep.txt'), 'utf8'), '保留'); assert.ok(await f.manager.info('victim'));
     assert.equal(await new SessionTrash(f.manager.directory, f.cwd).isDeleted('victim'), false);
   } finally {await f.cleanup();}
@@ -120,12 +120,12 @@ test('/resume 删除默认取消、确认刷新、当前/新建项保护、活�
     let confirm = await openDelete(app, 'victim'); assert.equal(confirm.current, 'cancel');
     await app.surfaces.choose(confirm.id, 'cancel'); assert.ok(await f.manager.info('victim')); assert.equal(app.sessionId, 'current');
     confirm = await openDelete(app, 'victim'); const live = await f.manager.acquire('victim');
-    await app.surfaces.choose(confirm.id, 'delete'); assert.match(picker(app).error, /占用/); await live.release();
+    await app.surfaces.choose(confirm.id, 'delete'); assert.match(picker(app).error, /in use by another process/); await live.release();
     await Promise.all([app.surfaces.choose(confirm.id, 'delete'), app.surfaces.choose(confirm.id, 'delete')]);
-    assert.equal(picker(app).title, '恢复会话'); assert.ok(!picker(app).items.some(item => JSON.parse(item.id)[0] === 'victim'));
+    assert.equal(picker(app).title, 'Resume Session'); assert.ok(!picker(app).items.some(item => JSON.parse(item.id)[0] === 'victim'));
     assert.equal((await readdir(join(f.manager.directory, 'trash'))).filter(file => !file.endsWith('.preparing')).length, 1);
     assert.equal(app.sessionId, 'current'); app.surfaces.cancel();
-    await assert.rejects(app.submit('/resume victim'), /已删除/); assert.equal(app.sessionId, 'current');
+    await assert.rejects(app.submit('/resume victim'), /was deleted/); assert.equal(app.sessionId, 'current');
   } finally {await app?.close(); await f.cleanup();}
 });
 
@@ -142,13 +142,13 @@ test('实际Ink：恢复列表Ctrl+X进入确认，默认取消；明确确认�
     assert.ok(instance);
     const press = async (text: string) => {await act(async () => {input.write(text); await delay(text === '\x1b' ? 45 : 15);}); await instance!.waitUntilRenderFlush();};
     await press('保留的草稿'); await act(async () => {await app!.submit('/resume');}); await instance!.waitUntilRenderFlush();
-    assert.ok(output.lines.some(line => line.includes('Ctrl+X 删除会话')));
-    await press('\x18'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== '删除会话'; index++) await delay(10);}); assert.equal(picker(app).title, '删除会话'); assert.equal(picker(app).current, 'cancel');
-    await press('\r'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== '恢复会话'; index++) await delay(10);}); assert.equal(picker(app).title, '恢复会话'); assert.ok(await f.manager.info('victim'));
-    await press('\x18'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== '删除会话'; index++) await delay(10);}); await press('\x1b'); assert.ok(output.lines.some(line => line.includes('保留的草稿')));
+    assert.ok(output.lines.some(line => line.includes('Ctrl+X Delete session')));
+    await press('\x18'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== 'Delete Session'; index++) await delay(10);}); assert.equal(picker(app).title, 'Delete Session'); assert.equal(picker(app).current, 'cancel');
+    await press('\r'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== 'Resume Session'; index++) await delay(10);}); assert.equal(picker(app).title, 'Resume Session'); assert.ok(await f.manager.info('victim'));
+    await press('\x18'); await act(async () => {for (let index = 0; index < 100 && picker(app!).title !== 'Delete Session'; index++) await delay(10);}); await press('\x1b'); assert.ok(output.lines.some(line => line.includes('保留的草稿')));
     await act(async () => {await app!.submit('/resume');}); await press('\x18'); await act(async () => {for (let index = 0; index < 100 && picker(app!).status !== 'ready'; index++) await delay(10);}); await press('\x1b[B'); await press('\r');
-    for (let index = 0; index < 100 && picker(app).title !== '恢复会话'; index++) await act(async () => {await delay(10);});
-    assert.equal(picker(app).title, '恢复会话'); assert.ok(!picker(app).items.some(item => JSON.parse(item.id)[0] === 'victim'));
+    for (let index = 0; index < 100 && picker(app).title !== 'Resume Session'; index++) await act(async () => {await delay(10);});
+    assert.equal(picker(app).title, 'Resume Session'); assert.ok(!picker(app).items.some(item => JSON.parse(item.id)[0] === 'victim'));
     await press('\x1b'); assert.ok(output.lines.some(line => line.includes('保留的草稿')));
     assert.equal(app.sessionId, 'current');
   } finally {

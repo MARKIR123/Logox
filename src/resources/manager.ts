@@ -108,10 +108,10 @@ export class Resources {
   private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: []});
   constructor(readonly cwd: string, readonly options: ResourceOptions = {}) {}
   snapshot(): ResourceSnapshot {return this.value;}
-  /** 显式分配只改变此 Resources 实例；借阅由单次任务输入提供，不写分配表。 */
+  /** Explicit assignment changes only this Resources instance; borrowing is supplied by one-off task input and never written to the assignment table. */
   assignSkill(name: string, actorId: string, assigned = true): void {
     actorIdSchema.parse(actorId);
-    if (!this.value.skills.some(skill => skill.name === name)) throw new Error('技能不存在');
+    if (!this.value.skills.some(skill => skill.name === name)) throw new Error('Skill not found');
     const actors = this.assignments.get(name) ?? new Set<string>();
     if (assigned) actors.add(actorId); else actors.delete(actorId);
     if (actors.size) this.assignments.set(name, actors); else this.assignments.delete(name);
@@ -195,10 +195,10 @@ export class Resources {
   expand(name: string, args: string): string | undefined {
     const command = this.value.commands.find(item => item.name === name.toLowerCase());
     if (!command) return undefined;
-    if (Buffer.byteLength(args) > 16 * 1024 || args.includes('\0')) throw new Error('命令参数超过 16 KiB 或含无效字符');
-    // 一次替换，参数中的占位符和 $& 等字符不会再次展开。
+    if (Buffer.byteLength(args) > 16 * 1024 || args.includes('\0')) throw new Error('Command arguments exceed 16 KiB or contain invalid characters');
+    // Single-pass replacement; placeholders and characters such as $& inside arguments are not expanded again.
     const expanded = command.template.replace(/\{\{\s*args\s*\}\}|\$ARGUMENTS\b|\$args\b/gi, () => args.trim()).trim();
-    if (!expanded || Buffer.byteLength(expanded) > maxBytes) throw new Error('命令展开为空或超过 64 KiB');
+    if (!expanded || Buffer.byteLength(expanded) > maxBytes) throw new Error('Command expansion is empty or exceeds 64 KiB');
     return expanded;
   }
   async reload(): Promise<ResourceSnapshot> {
@@ -206,21 +206,21 @@ export class Resources {
     const issue = (kind: ResourceKind, path: string, reason: string) => {issues.push(Object.freeze({kind, path, reason}));};
     const read = async (path: string, kind: ResourceKind): Promise<TextResource | undefined> => {
       try {
-        if (forbidden(path)) throw new Error('legacy 材料不加载');
+        if (forbidden(path)) throw new Error('legacy material is not loaded');
         const canonical = await realpath(path);
-        if (forbidden(canonical)) throw new Error('legacy 材料不加载');
+        if (forbidden(canonical)) throw new Error('legacy material is not loaded');
         if (seen.has(key(canonical))) return undefined;
         const handle = await open(canonical, 'r');
         let bytes: Buffer;
         try {
-          if (!(await handle.stat()).isFile()) throw new Error('不是普通文件');
+          if (!(await handle.stat()).isFile()) throw new Error('Not a regular file');
           const buffer = Buffer.alloc(maxBytes + 1);
           let count = 0;
           while (count < buffer.length) {
             const next = await handle.read(buffer, count, buffer.length - count, null);
             if (!next.bytesRead) break; count += next.bytesRead;
           }
-          if (count > maxBytes) throw new Error('超过 64 KiB，整份跳过');
+          if (count > maxBytes) throw new Error('Exceeds 64 KiB; skipped entirely');
           bytes = buffer.subarray(0, count);
         } finally {await handle.close();}
         const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes).trim();
@@ -228,13 +228,13 @@ export class Resources {
         seen.add(key(canonical));
         return Object.freeze({path: canonical, text});
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issue(kind, path, error instanceof Error ? error.message : '读取失败');
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issue(kind, path, error instanceof Error ? error.message : 'Read failed');
         return undefined;
       }
     };
-    // 角色人设由角色档案维护；用户目录只提供人工规范、技能与模板。
+    // Actor personas are maintained by actor profiles; user directories supply only manual guidelines, skills, and templates.
     const home = this.options.home ?? homedir();
-    const userDirs = [join(home, '.logox'), join(home, '.logox-ts')];
+    const userDirs = [join(home, '.logox')];
     const guidelines: TextResource[] = [];
     let total = 0;
     for (const directory of [join(home, '.logox'), ...await ancestors(this.cwd, this.options.boundary)]) {
@@ -242,18 +242,18 @@ export class Resources {
       for (const name of isUser ? ['AGENTS.md', 'CLAUDE.md'] : ['LOGOX.md', 'AGENTS.md', 'CLAUDE.md']) {
         let selected = false;
         const candidatePaths = isUser
-          ? [join(home, '.logox', name), join(home, '.logox-ts', name)]
-          : [join(directory, name), join(directory, '.logox', name), join(directory, '.logox-ts', name)];
+          ? [join(home, '.logox', name)]
+          : [join(directory, name), join(directory, '.logox', name)];
         for (const path of candidatePaths) {
           try {await lstat(path); selected = true;} catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {issue('guidelines', path, '无法检查规范文件'); selected = true;}
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {issue('guidelines', path, 'Cannot inspect guideline file'); selected = true;}
           }
           if (!selected) continue;
           const resource = await read(path, 'guidelines');
           if (resource) {
             const size = Buffer.byteLength(resource.text);
             if (total + size <= 128 * 1024) {guidelines.push(resource); total += size;}
-            else issue('guidelines', path, '项目规范总量超过 128 KiB，整份跳过');
+            else issue('guidelines', path, 'Project guidelines exceed 128 KiB in total; skipped entirely');
           }
           break;
         }
@@ -272,15 +272,13 @@ export class Resources {
     const userSkillsDir = join(home, '.logox', 'skills');
     if (allowBuiltin) {
       await ensureUserSkillsSeeded(userSkillsDir, builtinSkillsDir);
-      await ensureUserSkillsSeeded(join(home, '.logox-ts', 'skills'), builtinSkillsDir, false);
     }
     const skillRoots = [...new Set([
       ...(allowBuiltin ? [builtinSkillsDir] : []),
       ...userDirs.map(d => join(d, 'skills')),
       join(this.cwd, '.logox', 'skills'),
-      join(this.cwd, '.logox-ts', 'skills'),
     ])];
-    const commandRoots = [...new Set([...userDirs.map(d => join(d, 'commands')), join(this.cwd, '.logox', 'commands'), join(this.cwd, '.logox-ts', 'commands')])];
+    const commandRoots = [...new Set([...userDirs.map(d => join(d, 'commands')), join(this.cwd, '.logox', 'commands')])];
 
     this.categoriesMap.clear();
 
@@ -329,7 +327,7 @@ export class Resources {
           : basename(filePath, '.md'));
         const name = rawName.toLowerCase();
         if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
-          issue('skills', filePath, '名称无效');
+          issue('skills', filePath, 'Invalid name');
           continue;
         }
 
@@ -359,12 +357,12 @@ export class Resources {
           const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
           if (header) {
             const document = parseDocument(header[1]!, {uniqueKeys: true});
-            if (document.errors.length) throw new Error('技能 Frontmatter 无效');
+            if (document.errors.length) throw new Error('Invalid skill frontmatter');
             const fields: unknown = document.toJS({maxAliasCount: 0});
             if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'actors')) {
               publicSkill = false;
               const raw: unknown = (fields as Record<string, unknown>).actors;
-              if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors 必须是角色 ID 列表');
+              if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors must be a list of actor IDs');
               actors = Object.freeze([...new Set(raw.map(value => actorIdSchema.parse(String(value))))]);
             }
           }
@@ -380,7 +378,7 @@ export class Resources {
           };
           skills.set(name, Object.freeze(item));
         } catch (error) {
-          issue('skills', filePath, error instanceof Error ? error.message : '技能角色声明无效');
+          issue('skills', filePath, error instanceof Error ? error.message : 'Invalid skill actor declaration');
         }
       }
     }
@@ -401,11 +399,11 @@ export class Resources {
         const meta = metadata(resource.text);
         const name = (meta.fields.name || entry.name.slice(0, -3)).toLowerCase();
         if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
-          issue('commands', path, '名称无效');
+          issue('commands', path, 'Invalid name');
           continue;
         }
         if (builtins.has(name)) {
-          issue('commands', path, '与内置命令重名，未加载');
+          issue('commands', path, 'Duplicates a built-in command; not loaded');
           continue;
         }
         commands.set(name, Object.freeze({name, description: meta.description || name, path: resource.path, template: meta.body}));

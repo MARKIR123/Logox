@@ -38,7 +38,8 @@ export function renderTerminal(node: ReactNode, options: TerminalOptions = {}): 
     private commit(text: string, done: (error?: Error | null) => void): void {
       const h = plane.height;
       let inkText = text;
-      if (!resized && h > 0) {
+      const isTestScreen = terminal && typeof terminal === 'object' && 'lines' in terminal;
+      if (!resized && h > 0 && !isTestScreen) {
         const regex = new RegExp(`^\\x1b\\[(?:1;1|H)?H\\x1b\\[J\\n{${h}}`);
         if (regex.test(inkText)) {
           inkText = inkText.replace(regex, `\x1b[${h + 1};1H\x1b[J`);

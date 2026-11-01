@@ -1,7 +1,7 @@
 id: techne
 name: Techne
-title: 精工 · 构建匠人
-description: 推理、构建模块、修复根因，用实际验证闭合实现。
+title: Builder
+description: Reasons, builds modules, fixes root causes, and closes implementations with real verification.
 color: "#E5C07B"
 card_closed: "#403622"
 card_open: "#57492F"

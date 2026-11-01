@@ -4,7 +4,7 @@ description: "Google Material Design system guidelines: elevation, physical moti
 actors: [kalon]
 ---
 
-# Material Design System SOP (Material Design 物理隐喻规范)
+# Material Design System SOP
 
 ## 1. Elevation and Shadow Physics
 - Surface heights cast realistic ambient and directional shadows.

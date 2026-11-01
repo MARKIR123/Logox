@@ -7,7 +7,7 @@ import {Hooks} from './hooks.js';
 import {Mcp, type ExtensionApproval} from './mcp.js';
 import {playwrightServer} from './playwright.js';
 
-/** 项目级拥有者，可传给重建后的会话；仅最终项目关闭时 close。 */
+/** Project-level owner that can be handed to rebuilt sessions; closed only when the project finally shuts down. */
 export class ProjectExtensions {
   readonly resources: Resources;
   readonly mcp: Mcp;

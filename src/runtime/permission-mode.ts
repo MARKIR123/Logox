@@ -1,4 +1,4 @@
-/** 模式提示同时保留名称；颜色只用于呈现，不参与裁决。 */
+/** Mode hints keep the name alongside; color is for presentation only and takes no part in adjudication. */
 export const permissionModes = {
   default: {colorToken: 'permissionDefault', description: 'Normal reads allowed; other actions require human approval per rules'},
   auto: {colorToken: 'permissionAuto', description: 'Uncertain operations reviewed by the session model; dangerous actions need human confirmation'},

@@ -6,7 +6,8 @@ import {act} from 'react';
 import {setTimeout as delay} from 'node:timers/promises';
 import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import chalk from 'chalk';
-import {buildDemoSceneRows, initialDemoSceneState} from '../src/tui/timeline/scene.js';
+import {buildDemoSceneRows, initialDemoSceneState} from '../src/demo/scene.js';
+import {ownerSurface} from '../src/tui/appearance/actor-style.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {createDemo} from '../src/demo.js';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -84,8 +85,8 @@ test('全屏真实 Ink 接线：主草稿在提问期间可编辑，稍后回答
     const oscMatch = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(output.text);
     assert.ok(oscMatch, 'SGR 鼠标拖拽释放后写出 OSC 52 剪贴板序列');
     const copied = Buffer.from(oscMatch![1]!, 'base64').toString('utf8');
-    assert.equal(copied, '✧ Kalon · 台词\n我的大哲学家，这段正文的左侧轨道不会被复制进去。\n');
-    assert.ok(!copied.includes('▎'), '复制结果不含左轨字符');
+    assert.equal(copied, '✧ Kalon · Lines\n我的大哲学家，这段正文的左侧轨道不会被复制进去。\n');
+    assert.ok(!copied.includes('▎') && !copied.includes('│'), '复制结果不含左轨字符');
     output.rows = 12; output.columns = 30;
     await act(async () => { output.emit('resize'); });
     await flushRender(instance);
@@ -121,21 +122,21 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
     await flushRender(instance);
   };
   try {
-    assert.match(output.text, /保留项目内容，让它更像一个有审美的开发者作品/);
+    assert.match(output.text, /Keep the project content, but make it feel like a developer's work with taste/);
     assert.match(output.text, /(?:◇|◎).*?Aletheia/);
     assert.match(output.text, /⊞.*?Techne/);
-    assert.match(output.text, /允许修改这两个文件吗？/);
+    assert.match(output.text, /Allow edits to these two files?/);
     await key('\x1b[6~'); // 较低的终端滚动后可见排队中的 Kalon
     assert.match(output.text, /✧.*?Kalon/);
     await key('\x1b[5~');
-    assert.match(output.text, /@kalon 看一下首页配色。只给建议，先别改文件。/);
-    assert.match(output.text, /◈ Logox · Techne 等待授权/);
+    assert.match(output.text, /@kalon Take a look at the homepage colors/);
+    assert.match(output.text, /◈ Logox · Techne awaiting approval/);
 
     // 1. Enter 发送预填的 @kalon 快速派发草稿（仍留在 Logox 主窗口）
     await key('\r');
-    assert.match(output.text, /在 Logox 中指派/);
-    assert.doesNotMatch(output.text, /行，先不动文件/, '未轮到 Kalon 时不能提前生成回复');
-    const accepted = store.getSnapshot().messages.find(message => message.text.includes('看一下首页配色'));
+    assert.match(output.text, /Assigned in Logox/);
+    assert.doesNotMatch(output.text, /no file changes yet/, '未轮到 Kalon 时不能提前生成回复');
+    const accepted = store.getSnapshot().messages.find(message => message.text.includes('Take a look at the homepage colors'));
     assert.ok(accepted?.activityId);
     assert.equal(store.activities.get('demo', accepted.activityId)!.status, 'queued');
 
@@ -155,24 +156,24 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
     await flushRender(instance);
     await key('\x1b'); // 返回主窗口，同一请求已同步
     await key('\t'); // 聚焦实际提问，并定位到对应卡片
-    assert.match(output.text, /你希望首页更接近哪种气质？/);
-    assert.match(output.text, /◈ Logox · Kalon 等待回答/);
+    assert.match(output.text, /Which mood should the homepage lean toward?/);
+    assert.match(output.text, /◈ Logox · Kalon awaiting answer/);
 
     // 3. 确认 Kalon 审美提问 -> 浮现 Anamnesis 入梦候选卡与收尾结语
     await key('\r');
-    assert.match(output.text, /Anamnesis · 偏好候选/);
+    assert.match(output.text, /Anamnesis · Preference candidate/);
     await act(async () => {await waitForSnapshot(store, snapshot => snapshot.activities.some(activity => activity.activityId === accepted.activityId && activity.status === 'completed'));});
     await flushRender(instance);
-    assert.match(output.text, /结构与审美校准均已收束完毕/);
+    assert.match(output.text, /Structure and aesthetic tuning are both wrapped up/);
     assert.equal(store.activities.get('demo', accepted.activityId)!.status, 'completed');
-    assert.match(output.text, /行，先不动文件/);
+    assert.match(output.text, /no file changes yet/);
     assert.equal(store.getSnapshot().messages.filter(message => message.activityId === accepted.activityId && message.role === 'user').length, 1, '切换与重绘不重复提交');
 
     // 4. Ctrl+G 切换角色独立历史窗口，Esc 返回 Logox
     await key('\x07');
-    assert.match(output.text, /(?:◇|◎) Aletheia · 澄明 · 侦察者 · 独立对话/);
+    assert.match(output.text, /(?:◇|◎) Aletheia · Scout · Own thread/);
     await key('\x1b');
-    assert.match(output.text, /◈ Logox · 本轮完成 · Anamnesis 整理候选/);
+    assert.match(output.text, /◈ Logox · Round complete · Anamnesis sorting candidates/);
   } finally {
     await act(async () => {await runtime.close(); instance.unmount();});
     await rm(directory, {recursive: true, force: true});
@@ -259,17 +260,18 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
     });
     await flushRender(instance);
     assert.ok(output.text.includes('\x1b[?1003h'));
-    assert.ok(line().includes('#2c473d'), '收起使用透亮主题色 #2c473d');
+    const closedBg = ownerSurface('aletheia', false)!;
+    const openBg = ownerSurface('aletheia', true)!;
+    assert.ok(!line().includes(closedBg), '折叠状态彻底透明零底色');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('#395c4f'), '悬停使用展开透亮色 #395c4f');
-    assert.doesNotMatch(output.lines.join('\n'), /翻看刚读完的三份源码/);
+    assert.doesNotMatch(output.lines.join('\n'), /flips through the three files just read/);
     await key('\x1b[<35;1;' + (rowIndex + 1) + 'M');
-    assert.ok(line().includes('#2c473d'), '移到轨道恢复收起色');
+    assert.ok(!line().includes(closedBg), '移到轨道保持透明');
     await key('\x1b[<35;8;' + (rowIndex + 1) + 'M');
     await key('\x1b[<0;8;' + (rowIndex + 1) + 'M\x1b[<0;8;' + (rowIndex + 1) + 'm');
     await act(async () => { await delay(200); });
     await flushRender(instance);
-    assert.match(output.text, /翻看刚读完的三份源码/);
+    assert.match(output.text, /flips through the three files just read/);
   } finally {
     if (instance) {await act(async () => { instance.unmount(); }); await instance.waitUntilExit();}
     assert.ok(output.text.includes('\x1b[?1003l'));
@@ -361,7 +363,7 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
     await key('@techne 写文件'); await key('\r');
     await act(async () => {await waitForSnapshot(runtime.store, snapshot => snapshot.interactions.some(item => item.status === 'pending'));});
     await flushRender(instance);
-    assert.match(output.text, /允许执行 write/);
+    assert.match(output.text, /Allow write\?/);
     assert.ok(!output.text.includes('首屏布局'));
     await key('保留的主草稿');
     await key('\t'); await key('\x1b');

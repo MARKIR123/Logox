@@ -26,6 +26,13 @@ import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
 import {runLoginWizard, type WizardProviderRow} from './providers/login-wizard.js';
 import {presets} from './config/config.js';
+import {
+  readOnboardingPrefs,
+  markOnboardingDone,
+  markOnboardingSkipped,
+  shouldOfferOnboarding,
+  ONBOARDING_VERSION,
+} from './config/onboarding-preferences.js';
 import {ModelPool} from './providers/model-pool.js';
 import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
@@ -92,8 +99,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const deliveries = new DeliveryQueue(session, journal);
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
-  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'),
-    options.statusbarPath ? undefined : join(options.resourceOptions?.home ?? homedir(), '.logox-ts', 'statusbar.json'));
+  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
   let commandOwner = 'logox';
   let loginOwner = 'logox';
   const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = commandOwner, activityId?: string,
@@ -120,7 +126,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     }
   };
   await systems.restore();
-  try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : '状态栏配置无法读取，使用默认布局。', 'command_error');}
+  try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : 'Could not read statusbar preferences; using default layout.', 'command_error');}
   const scratchpad = getScratchpadDir(cwd, session);
   void ensureScratchpadDir(cwd, session);
   permissions.setScratchpadDir(scratchpad);
@@ -200,7 +206,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     anchors: async identity => identity.ownerId === 'logox'
       ? (await journal.activeTasks(session)).filter(task => task.source === 'direct' && task.ownerId !== 'logox' &&
           ['completed', 'failed', 'cancelled'].includes(task.status)).slice(-16).map(task => ({role: 'user',
-          text: `【角色直接对话索引】${task.ownerId} · ${task.activityId} · ${task.status}；需要详情时使用 read_actor。`})) : [],
+          text: `[Direct conversation] ${task.ownerId} (${task.activityId}) · ${task.status}. Use ReadActor for details if needed.`})) : [],
     report: (identity, text) => notice(text, 'task_notice', identity.ownerId, identity.activityId),
     beforeCompact: (identity, tokens) => extensions.hooks.emit('pre_compact', {session_id: identity.sessionId, owner_id: identity.ownerId, tokens}),
   });
@@ -232,7 +238,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   /**
    * Local provider form: project wizard questions into the private UI form channel.
-   * 提问不挂活动，因此只出现在底部停靠区，不进时间线也不进账本。
+   * Questions are not attached to an activity, so they appear only in the bottom dock, not in the timeline or ledger.
    */
   const loginWizard = async (source: string) => {
     if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
@@ -286,7 +292,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           throw error;
         }
         await registry.syncCustom();
-        await syncCredential(record.name, source);
+        await syncCredential(record.name, source, record.models?.[0]);
       },
       saveKey: async (name, key) => {
         await registry.auth.save(name, key, commands.signal);
@@ -296,7 +302,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         const previous = await registry.customStorage.get(record.name);
         await registry.customStorage.save({...previous, ...record, api: record.api});
         await registry.syncCustom().catch(() => {});
-        await syncCredential(record.name, source);
+        await syncCredential(record.name, source, record.models?.[0]);
       },
       removeCustom: async name => {
         await registry.unregister(name);
@@ -307,8 +313,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       browserLogin: async name => name === 'openai' ? authentication.browserLogin(name) : 'unsupported',
     });
   };
-  const syncCredential = async (name: string, owner: string) => {
-    try {await saveSelection(registry.candidate(name));}
+  const syncCredential = async (name: string, owner: string, defaultModel?: string) => {
+    try {await saveSelection(registry.candidate(name, defaultModel));}
     catch {notice('Credential saved; model preference was not updated.', 'command_error', owner);}
     await modelPool.syncProvider(name).catch(() => {});
   };
@@ -410,7 +416,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     taskEnd: async context => {await contexts.taskEnd(context, await requestBase(context), context.signal);},
     handoff: result => closed ? Promise.resolve() : actorServices.handoff(result),
     directAnchor: async result => {
-      const text = `直接对话 ${result.ownerId} · ${result.activityId} · ${result.status}；详情按需使用 read_actor 查阅。`;
+      const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;
       notice(text, 'task_notice', 'logox');
     },
     settled: async (activityId, status) => {directorReports.delete(activityId); await actorServices.settled(activityId, status);},
@@ -428,7 +434,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   let selecting = false;
   let selectionDone: Promise<void> | undefined;
   const busy = () => ensemble.isBusy() || !!compactTask || selecting || !!reloadTask || !!permissionTask;
-  const requireIdle = () => {if (busy()) throw new Error('任务处理中，请先取消或等待完成，再切换模型或提供商');};
+  const requireIdle = () => {if (busy()) throw new Error('Tasks are running. Please wait for completion or cancel before switching models or providers.');};
   const saveSelection = async (next: ProviderRegistry) => {
     requireIdle(); selecting = true;
     selectionDone = (async () => {
@@ -649,8 +655,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const stopPermissionPolicy = permissions.subscribe(() => {
     for (const request of store.interactions.list()) if (request.status === 'pending' &&
-      (request.kind === 'permission' || request.kind === 'question' && request.title === '审批失败，操作已暂停')) {
-      store.interactions.cancel(request.requestId, '权限已变化，重新裁决待执行操作');
+      (request.kind === 'permission' || request.kind === 'question' && request.title === 'Approval failed; action paused')) {
+      store.interactions.cancel(request.requestId, 'Permissions changed; pending actions will be re-evaluated');
     }
     if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();
   });
@@ -664,6 +670,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       return match ? match[1]! : settings.model;
     })();
     // 1. Immediately read from local model store (0ms, zero network)
+    modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
     for (const provider of new Set(poolModels.map(item => item.provider))) {
       modelCandidates.set(provider, poolModels.filter(item => item.provider === provider).map(item => item.id));
@@ -779,6 +786,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       });
   };
   const openAutomaModel = async () => {
+    modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
     const choices = new Map<string, {provider: string; model: string} | undefined>([['inherit', undefined]]);
     for (const item of poolModels) {
@@ -847,7 +855,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'silent'};
     });
   };
-  // 恢复实际模型消息；旧 TS 演示账本也能读取，工具不会重新执行。
+  // Restore the actual model messages; legacy TS demo ledgers remain readable, and tools are not re-executed.
   const savedRounds = new Map<string, Awaited<ReturnType<Journal['rounds']>>[number]>();
   for (const task of checkpoints) {
     if (['queued', 'running', 'waiting_input', 'paused'].includes(task.status)) {
@@ -858,7 +866,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const restored = (await Promise.all(owners.map(async owner => {
     const entries = await journal.load(session, owner);
     try {for (const round of await journal.rounds(session, owner, entries)) savedRounds.set(round.activityId, round);}
-    catch {notice(owner + ' 的轮次摘要无法读取，保留原始消息。');}
+    catch {notice(`Could not load round summary for ${owner}; preserving raw messages.`);}
     return entries;
   }))).flat().sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   for (const entry of restored) {
@@ -871,10 +879,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       const savedModel = savedModels.find(item => item.activityId === activityId);
       store.activities.create({sessionId: session, activityId, ownerId: entry.ownerId, kind: entry.ownerId === 'logox' ? 'director' : 'actor',
         title: checkpoint?.taskTitle ?? (entry.text.slice(0, 80) || entry.ownerId), status: round?.status ?? checkpoint?.status ?? 'completed',
-        stage: round ? '恢复的' + ({completed: '完成', failed: '失败', cancelled: '取消'}[round.status])
-          : checkpoint ? checkpoint.status === 'completed' ? '恢复的完成' : checkpoint.status === 'failed' ? '恢复的失败' : '已中断' : '历史记录',
-        detail: checkpoint?.error ? '失败原因：' + checkpoint.error + '\n' + (round?.summary.report ?? '')
-          : round?.summary.report ?? (checkpoint ? '恢复任务检查点；工具不会重放' : '历史记录未保存终态；工具不会重放'),
+        stage: round ? ({completed: 'Completed', failed: 'Failed', cancelled: 'Interrupted'}[round.status] ?? 'Completed')
+          : checkpoint ? checkpoint.status === 'completed' ? 'Completed' : checkpoint.status === 'failed' ? 'Failed' : 'Interrupted' : 'History',
+        detail: checkpoint?.error ? 'Failure reason: ' + checkpoint.error + '\n' + (round?.summary.report ?? '')
+          : round?.summary.report ?? (checkpoint ? 'Loaded checkpoint from a previous session' : 'Historical session record'),
         inputKind: inputKind(checkpoint ?? entry),
         ...(checkpoint?.taskTitle ? {taskTitle: checkpoint.taskTitle} : {}),
         ...(round ? {summary: round.summary} : {}),
@@ -899,8 +907,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (store.activities.get(session, task.activityId)) continue;
     store.activities.create({sessionId: session, activityId: task.activityId, ownerId: task.ownerId,
       kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.taskTitle ?? task.prompt.slice(0, 80),
-      status: task.status, stage: task.status === 'cancelled' ? '已中断' : '恢复的任务',
-      detail: task.error ? '失败原因：' + task.error : '恢复检查点，不自动执行',
+      status: task.status, stage: task.status === 'cancelled' ? 'Interrupted' : 'Checkpoint loaded',
+      detail: task.error ? 'Failure reason: ' + task.error : 'Loaded checkpoint from a previous session',
       inputKind: inputKind(task),
       ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
       ...(task.parentActivityId ? {parentActivityId: task.parentActivityId} : {}), ...(task.batchId ? {batchId: task.batchId} : {}),
@@ -910,7 +918,11 @@ export async function createSessionApplication(options: SessionApplicationOption
     store.message(session, task.ownerId, 'user', task.prompt, {activityId: task.activityId, source: task.source,
       inputKind: inputKind(task), time: task.time});
   }
-  systems.emit('Session ' + session + '\n' + (settings.model ? settings.model : 'No model set, use /model <name>') + ' · Run /help for assistance', 'task_notice', 'logox', undefined, false, {presentation: 'welcome'});
+  const welcomeTitle = 'Session ' + session;
+  const welcomeBody = settings.model
+    ? `${settings.provider}/${settings.model} · Type /help for assistance`
+    : 'Welcome to Logox Ensemble! No model configured yet.\n\nQuick setup:\n  • Run /login to connect providers (DeepSeek, OpenAI, Anthropic, or local)\n  • Or add your API key to .env in your project\n  • Type /doctor to diagnose environment readiness';
+  systems.emit(welcomeTitle + '\n' + welcomeBody, 'task_notice', 'logox', undefined, false, {presentation: 'welcome'});
   for (const issue of resources.snapshot().issues) notice('Resource failed to load: ' + issue.path + ' · ' + issue.reason, 'command_error');
   const terminal = new Set(checkpoints.filter(task => ['failed', 'cancelled'].includes(task.status)).map(task => task.activityId));
   const stopSystemUpdates = store.subscribe(() => {
@@ -942,7 +954,27 @@ export async function createSessionApplication(options: SessionApplicationOption
       notice(error instanceof Error ? error.message : String(error), 'command_error', owner);
       await systems.flush();
     },
-    activate() {extensions.hooks.emit('session_start', {session_id: session, model: settings.model});},
+    activate() {
+      extensions.hooks.emit('session_start', {session_id: session, model: settings.model});
+      const isTest = typeof (globalThis as any).IS_REACT_ACT_ENVIRONMENT !== 'undefined' ||
+        process.execArgv.some(arg => arg.startsWith('--test'));
+      const onboardingPrefs = readOnboardingPrefs(homeDir);
+      if (shouldOfferOnboarding(onboardingPrefs) && !settings.model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
+        void (async () => {
+          if (!ensemble.isBusy() && !authentication.getSnapshot()) {
+            loginOwner = 'logox';
+            const outcome = await loginWizard('logox');
+            if (outcome === 'added' || outcome === 'signed-in') {
+              markOnboardingDone(ONBOARDING_VERSION, homeDir);
+              receipt('Setup complete! Model preference activated.', 'status', undefined, 'logox');
+            } else if (outcome === 'cancelled') {
+              markOnboardingSkipped(ONBOARDING_VERSION, homeDir);
+              notice('Setup skipped — run /setup anytime to re-launch.', 'command_result', 'logox', undefined, {presentation: 'silent'});
+            }
+          }
+        })().catch(() => {});
+      }
+    },
     commandContext(): CommandContext {
       const knownPresets: Record<string, string[]> = {
         openai: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini', 'gpt-4-turbo'],
@@ -1000,14 +1032,19 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (/^\/(new|resume|clear|rewind)(?:\s|$)/.test(text) && await options.sessionCommand(text)) return;
-      if (text === '/login' || text.startsWith('/login ')) {
+      if (text === '/setup' || text === '/login' || text.startsWith('/login ')) {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');
         loginOwner = source;
-        const target = text === '/login' ? '' : text.slice(7).trim();
+        const target = text.startsWith('/login ') ? text.slice(7).trim() : '';
         if (target) {await authentication.begin(target); return;}
         const outcome = await loginWizard(source);
-        if (outcome === 'cancelled') notice('Login wizard closed without changes.', 'command_result', source, undefined, {presentation: 'silent'});
-        else if (outcome !== 'failed') receipt('Provider changes saved.', 'status', undefined, source);
+        if (outcome === 'cancelled') {
+          if (text === '/setup') markOnboardingSkipped(ONBOARDING_VERSION, homeDir);
+          notice(text === '/setup' ? 'Setup closed without changes.' : 'Login wizard closed without changes.', 'command_result', source, undefined, {presentation: 'silent'});
+        } else if (outcome !== 'failed') {
+          markOnboardingDone(ONBOARDING_VERSION, homeDir);
+          receipt(text === '/setup' ? 'Setup complete! Model preference activated.' : 'Provider changes saved.', 'status', undefined, source);
+        }
         return;
       }
       if (text === '/permissions mode') {
@@ -1285,6 +1322,14 @@ export async function createSessionApplication(options: SessionApplicationOption
           return 'Undone:\n' + paths.join('\n');
         }); return;
       }
+      if (text === '/doctor') {
+        const {runDoctorChecks, formatDoctorReport} = await import('./doctor.js');
+        await queryResult(source, 'Logox Doctor', async () => {
+          const report = runDoctorChecks(cwd);
+          return formatDoctorReport(report);
+        });
+        return;
+      }
       if (text.startsWith('/cast ')) {
         const prompt = text.slice(6).trim();
         if (!prompt) throw new Error('Please specify a task prompt for actors');
@@ -1299,7 +1344,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await dispatchInput(source, expanded, source === 'logox' ? source : 'direct'); return;
       }
       const mention = /^@([a-z][a-z0-9_-]*)\s+([\s\S]+)$/.exec(text);
-      if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('角色名称无效：使用 /actors 查看角色，再用 @角色 后接任务');
+      if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /actors to view available members, then dispatch tasks with @<actor> <task>.');
       const owner = mention ? mention[1]! : source;
       await beginTask();
       await dispatchInput(owner, mention ? mention[2]! : text, owner === 'logox' ? source : 'direct');

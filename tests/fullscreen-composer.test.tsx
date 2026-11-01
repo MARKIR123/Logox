@@ -336,7 +336,7 @@ test('question answer editing has no expand entry and does not share the normal 
 
 test('local authentication keeps secret drafts outside the fullscreen composer and runtime streams', {timeout: 10000}, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-test-fullscreen-login-'));
-  const authentication = new LoginFlow(new AuthStorage(join(directory, 'auth.json'), []), () => [], () => {},
+  const authentication = new LoginFlow(new AuthStorage(join(directory, 'auth.json')), () => [], () => {},
     new CustomProviderStorage(join(directory, 'custom.json')), async () => {throw new Error('Network must not be used');}, undefined, async () => []);
   const f = await appFixture({authentication});
   let answer: ReturnType<LoginFlow['ask']> | undefined;

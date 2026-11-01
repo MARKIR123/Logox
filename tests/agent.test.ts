@@ -177,7 +177,7 @@ test('精确编辑保留 UTF-8 BOM、CRLF 和字面替换符；撤销不覆盖�
     approve(f.app, 'allow_once'); await handle.done;
     assert.equal(await readFile(join(f.cwd, 'file.txt'), 'utf8'), '\uFEFF$&\r\n新行\r\n');
     await writeFile(join(f.cwd, 'file.txt'), '用户修改');
-    await assert.rejects(f.app.submit('/undo'), /后续修改/);
+    await assert.rejects(f.app.submit('/undo'), /later modifications/);
     assert.equal(await readFile(join(f.cwd, 'file.txt'), 'utf8'), '用户修改');
   } finally {await f.cleanup();}
 });
@@ -324,7 +324,7 @@ test('进程退出前留下的未配对调用恢复为失败结果，下一轮�
   const provider = scripted([request => {
     const messages = request.messages.filter(message => message.role !== 'context');
     assert.equal(messages.at(-2)?.role, 'tool');
-    assert.match(messages.at(-2)!.text, /中断/);
+    assert.match(messages.at(-2)!.text, /interrupted/);
     return assistant('恢复成功');
   }]);
   const f = await fixture(provider);
@@ -409,7 +409,7 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     assert.match(status.tabs[0]!.lines.join('\n'), /deepseek[\s\S]*cloud-fixture/);
     f.app.surfaces.cancel();
     const task = f.app.ensemble.dispatch('aletheia', 'wait', 'direct', {inputKind: 'human'});
-    await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === '模型处理中'));
+    await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(a => a.stage === 'Model processing'));
     await f.app.submit('/model');
     assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker');
     f.app.surfaces.cancel();

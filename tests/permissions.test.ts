@@ -145,7 +145,7 @@ test('项目规则持久、撤销、项目身份隔离与保存失败不生效',
 
     const next = new PermissionEngine(f.cwd); await next.load(); assert.equal(next.snapshot().length, 0);
 
-    await assert.rejects(new PermissionEngine(tmpdir(), 'default', join(f.cwd, '.logox', 'permissions.json')).load(), /身份/);
+    await assert.rejects(new PermissionEngine(tmpdir(), 'default', join(f.cwd, '.logox', 'permissions.json')).load(), /identity mismatch/);
 
     const blocker = join(f.cwd, 'block'); await writeFile(blocker, 'file');
 
@@ -428,7 +428,7 @@ test('真实持锁进程中断后两实例竞争恢复，不抢占活锁、不�
   const child = worker(f.cwd, 'hold');
   try {
     await event(child, 'ready'); const locked = event(child, 'locked'); child.send('start'); await locked;
-    await assert.rejects(f.permissions.add({scope: 'project', decision: 'deny', tool: 'read', pattern: '*'}), /另一个进程/);
+    await assert.rejects(f.permissions.add({scope: 'project', decision: 'deny', tool: 'read', pattern: '*'}), /Another process is saving state/);
     assert.equal(f.permissions.snapshot().length, 0);
     await stop(child);
     const other = new PermissionEngine(f.cwd);

@@ -19,7 +19,7 @@ export function LoginDialog({flow, state, width, height, y, onCursor, onClose, n
   const displayText = isMasked
     ? '•'.repeat(Math.min(inputWidth, [...draft.text].length - start))
     : draft.text.slice(start, start + inputWidth);
-  // 编辑既有自定义 provider 时，地址输入框以当前值起步；换阶段才重置，避免打断输入。
+  // When editing an existing custom provider, the URL input starts from the current value; it resets only on phase change so typing is not interrupted.
   useEffect(() => {
     const seed = state.phase === 'custom_url' ? state.customUrl ?? '' : '';
     draftRef.current = seed ? {text: seed, cursor: graphemes(seed).length} : emptyDraft;

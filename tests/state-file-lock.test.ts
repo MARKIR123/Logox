@@ -55,7 +55,7 @@ test('真实活进程锁即使等待超时仍保留，死亡后才允许恢复',
   const held = await heldState(path), lock = path + '.lock-v2';
   try {
     const before = await readdir(lock); assert.equal(before.length, 1); assert.match(before[0]!, new RegExp('^owner-' + held.child.pid + '-'));
-    await assert.rejects(file.save({...preference, model: 'must-not-write'}), /另一个进程/);
+    await assert.rejects(file.save({...preference, model: 'must-not-write'}), /Another process is saving state/);
     assert.deepEqual(await readdir(lock), before);
     assert.equal(JSON.parse(await readFile(path, 'utf8')).model, 'first');
     assert.equal(held.child.exitCode, null); assert.equal(held.child.signalCode, null);
@@ -107,12 +107,12 @@ test('空v2锁可完成中断清理；无身份旧锁、损坏身份均保留且
   const root = await mkdtemp(join(tmpdir(), 'logox-invalid-state-lock-')), path = join(root, 'state.json');
   try {
     await mkdir(path + '.lock-v2'); const release = await acquireFileLock(path); await release();
-    await mkdir(path + '.lock'); await assert.rejects(acquireFileLock(path), /旧版状态锁/);
+    await mkdir(path + '.lock'); await assert.rejects(acquireFileLock(path), /Legacy state lock/);
     assert.deepEqual(await readdir(path + '.lock'), []);
     await rm(path + '.lock', {recursive: true});
     await mkdir(path + '.lock-v2');
     await writeFile(join(path + '.lock-v2', 'owner-broken.json'), 'broken');
-    await assert.rejects(acquireFileLock(path), /身份无法读取/);
+    await assert.rejects(acquireFileLock(path), /identity unreadable/);
     assert.equal(await readFile(join(path + '.lock-v2', 'owner-broken.json'), 'utf8'), 'broken');
   } finally {await rm(root, {recursive: true, force: true});}
 });

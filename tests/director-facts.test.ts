@@ -131,7 +131,7 @@ test('activeEnsembleRoster returns empty string when solo and formats peer mainT
       activityId: 'kalon-active',
       ownerId: 'kalon',
       kind: 'actor',
-      title: 'Kalon · 雅正 · 审美官',
+      title: 'Kalon · 审美官',
       taskTitle: 'Refine palette tokens',
       progress: {label: 'Auditing contrast'},
       status: 'running',

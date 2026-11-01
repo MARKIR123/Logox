@@ -1,6 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 
-/** 等待 close，确保取消和关闭不会遗留扩展进程。 */
+/** Wait for close so cancellation and shutdown never leave extension processes behind. */
 export async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
   const closed = new Promise<void>(resolve => child.once('close', () => resolve()));

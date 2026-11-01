@@ -18,17 +18,17 @@ import {ProjectExtensions, observeTools} from './extensions/runtime.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
 import type {createSessionApplication, ApplicationOptions, SubmitDelivery} from './application.js';
 
-/** 项目服务保持稳定；会话运行时在候选加载成功后整体替换。 */
+/** Project services stay stable; the session runtime is replaced as a whole once the candidate loads successfully. */
 export async function createManagedApplication(options: ApplicationOptions, createSession: typeof createSessionApplication) {
   const manager = await SessionManager.open(options.cwd), cwd = manager.project;
-  if (options.sessionId !== undefined && !options.sessionId.trim()) throw new Error('会话 ID 不能为空');
+  if (options.sessionId !== undefined && !options.sessionId.trim()) throw new Error('Session ID must not be empty');
   const recent = options.sessionId === undefined ? await manager.recent() : undefined;
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
-  if (!sessionId) throw new Error('没有可恢复的会话');
+  if (!sessionId) throw new Error('No session to resume');
   const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
   const home = options.resourceOptions?.home ?? homedir();
   const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher,
-    new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json'), options.resourceOptions?.home ? [] : undefined),
+    new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json')),
     new CustomProviderStorage(join(home, '.logox', 'custom-providers.json')));
   await registry.syncCustom();
   const journal = new Journal(join(manager.directory, 'sessions'));
@@ -57,9 +57,9 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const publish = () => {snapshot = Object.freeze({revision: snapshot.revision + 1, sessionId: current.sessionId}); for (const listener of listeners) listener();};
   const notice = (text: string) => current.systemNotice(text);
   const requireIdle = () => {
-    if (closed) throw new Error('应用已关闭');
-    if (transition || current.isBusy()) throw new Error('任务处理中，请先取消或等待完成，再切换会话或回退');
-    if (current.authentication.getSnapshot()) throw new Error('请先完成或取消登录');
+    if (closed) throw new Error('Application is closed');
+    if (transition || current.isBusy()) throw new Error('Tasks are running. Cancel or wait for completion before switching sessions or rewinding.');
+    if (current.authentication.getSnapshot()) throw new Error('Complete or cancel the login first');
   };
   const persistence = new WeakMap<Awaited<ReturnType<typeof createSession>>, {saved: boolean; save(): Promise<void>}>();
   const create = async (id: string) => {
@@ -83,7 +83,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     const operation = (async () => {
       if (!fresh && !await manager.info(id)) {
         const entries = (await Promise.all((await owners(id)).map(owner => journal.load(id, owner)))).flat();
-        if (!entries.length && !(await journal.activeTasks(id)).length) throw new Error('没有此项目的会话：' + id);
+        if (!entries.length && !(await journal.activeTasks(id)).length) throw new Error('No session for this project: ' + id);
       }
       const same = id === current.sessionId;
       let nextLease: SessionLease | undefined, next: typeof current | undefined;
@@ -102,7 +102,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       permissions.clearSession();
       current = next; lease = nextLease;
       current.activate(); publish();
-      if (await journal.pending(id)) notice('此会话有未完成回退。使用 /rewind 重试相同目标，完成前不会发起新模型任务。');
+      if (await journal.pending(id)) notice('This session has an unfinished rewind. Use /rewind to retry the same target; no new model tasks start until it completes.');
     })();
     transition = operation;
     return operation.finally(() => {transition = undefined;});
@@ -119,19 +119,19 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     requireIdle();
     const operation = (async () => {
       const id = current.sessionId, pending = await journal.pending(id), rounds = await turns();
-      if (pending && pending.target !== target) throw new Error('先重试未完成的回退目标：' + pending.target);
+      if (pending && pending.target !== target) throw new Error('Retry the unfinished rewind target first: ' + pending.target);
       const index = rounds.findIndex(round => round.id === target);
-      if (!pending && index < 0) throw new Error('回退轮次已失效，请重新选择');
+      if (!pending && index < 0) throw new Error('The rewind round is no longer valid. Select again.');
       const activities = pending?.activities ?? rounds.slice(index).map(round => round.id);
       await journal.savePending(id, {target, activities});
       const result = await tools.snapshots.restore(activities);
-      if (!result.success) throw new Error('回退未完成，对话分支未推进。已恢复：' + (result.restored.join(', ') || '无') + '\n失败：' + result.failed.join(', ') + '\n' + result.error + '\n修复后使用 /rewind 重试相同目标；Shell/MCP 外部副作用不恢复。');
+      if (!result.success) throw new Error('Rewind incomplete; the conversation branch did not advance. Restored: ' + (result.restored.join(', ') || 'none') + '\nFailed: ' + result.failed.join(', ') + '\n' + result.error + '\nFix the cause and use /rewind to retry the same target. Shell/MCP side effects are not restored.');
       await journal.fork(id, await owners(id), activities);
       await usage.flush();
       const next = await create(id);
       try {await journal.savePending(id, null);} catch (error) {await next.close(); throw error;}
       await current.close(); permissions.clearSession(); current = next; current.activate(); publish();
-      notice('已回退所选轮次及之后的对话和文件修改。\n' + (result.restored.join('\n') || '该区间没有文件工具修改') + '\nShell/MCP 外部副作用不由文件回退恢复。');
+      notice('Rewound the selected round and everything after it, including file changes.\n' + (result.restored.join('\n') || 'No file tool changes in this range') + '\nShell/MCP side effects are not restored by a file rewind.');
     })();
     transition = operation;
     return operation.finally(() => {transition = undefined;});
@@ -143,9 +143,9 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       const id = randomUUID();
       let nextLease: SessionLease | undefined, next: typeof current | undefined;
       try {
-        if (await journal.pending(sourceId)) throw new Error('源会话有未完成文件回退，先修复原账本并完成回退，再恢复分支');
+        if (await journal.pending(sourceId)) throw new Error('The source session has an unfinished file rewind. Repair the original ledger and finish the rewind before recovering a branch.');
         const inspected = await Promise.all((await owners(sourceId)).map(async owner => ({owner, ...await journal.inspect(sourceId, owner)})));
-        if (!inspected.some(item => item.issue)) throw new Error('源账本已完整，请使用普通恢复');
+        if (!inspected.some(item => item.issue)) throw new Error('The source ledger is intact. Use a normal resume.');
         nextLease = await manager.acquire(id);
         for (const {owner, entries} of inspected) {
           let activity: string | undefined;
@@ -160,19 +160,19 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         await usage.flush();
         next = await create(id);
         await persistence.get(next)!.save();
-        await manager.touch(id, '恢复分支：' + sourceId);
+        await manager.touch(id, 'Recovered branch: ' + sourceId);
         await manager.remember(id);
       } catch (error) {await next?.close(); await nextLease?.release(); throw error;}
       finally {await sourceLease?.release();}
       await current.close(); await lease.release();
       permissions.clearSession(); current = next; lease = nextLease; current.activate(); publish();
-      notice('已将完整有效前缀恢复为新会话。源账本保留；损坏行及其后续未进入新分支，任务不会自动续跑。');
+      notice('Recovered the intact valid prefix as a new session. The source ledger is preserved; damaged lines and everything after them are not in the new branch, and tasks will not resume automatically.');
     })();
     transition = operation;
     return operation.finally(() => {transition = undefined;});
   };
   async function openResume(): Promise<void> {
-    await current.surfaces.replacePicker({title: '恢复会话', description: '当前项目历史 · 搜索标题或 ID · Ctrl+X 删除选中的历史', current: JSON.stringify([current.sessionId, false])},
+    await current.surfaces.replacePicker({title: 'Resume Session', description: 'Current project history · search by title or ID · Ctrl+X deletes the selected entry', current: JSON.stringify([current.sessionId, false])},
       async () => {
         const {sessions, issues} = await manager.list();
         const items = await Promise.all(sessions.map(async info => {
@@ -180,29 +180,29 @@ export async function createManagedApplication(options: ApplicationOptions, crea
             const reports = await Promise.all((await owners(info.id)).map(owner => journal.inspect(info.id, owner)));
             const issue = reports.find(report => report.issue)?.issue;
             const count = reports.reduce((sum, report) => sum + report.entries.filter(entry => entry.role === 'user').length, 0);
-            return {id: JSON.stringify([info.id, !!issue]), deletable: info.id !== current.sessionId, label: issue ? '恢复完整前缀：' + info.title : info.title,
-              description: info.id + ' · ' + count + ' 轮 · ' + (issue ?? new Date(info.updated).toLocaleString('zh-CN'))};
-          } catch (error) {return {id: JSON.stringify([info.id, false]), label: info.title, description: error instanceof Error ? error.message : '会话诊断失败', deletable: info.id !== current.sessionId};}
+            return {id: JSON.stringify([info.id, !!issue]), deletable: info.id !== current.sessionId, label: issue ? 'Recover intact prefix: ' + info.title : info.title,
+              description: info.id + ' · ' + count + ' rounds · ' + (issue ?? new Date(info.updated).toLocaleString('en-US'))};
+          } catch (error) {return {id: JSON.stringify([info.id, false]), label: info.title, description: error instanceof Error ? error.message : 'Session diagnosis failed', deletable: info.id !== current.sessionId};}
         }));
-        return {items: [...items, {id: JSON.stringify([randomUUID(), 'new']), label: '新建临时会话', description: '首次正式任务才保存'}], warning: issues.join('\n')};
+        return {items: [...items, {id: JSON.stringify([randomUUID(), 'new']), label: 'New temporary session', description: 'Saved only after the first real task'}], warning: issues.join('\n')};
       }, async value => {
         const [id, mode] = z.tuple([z.string(), z.union([z.boolean(), z.literal('new')])]).parse(JSON.parse(value));
         if (mode === 'new') await change(id, true); else if (mode) await recover(id); else await change(id);
         return {};
-      }, {deleteLabel: '删除会话', onDelete: async value => {
+      }, {deleteLabel: 'Delete session', onDelete: async value => {
       requireIdle();
       const [id] = z.tuple([z.string(), z.boolean()]).parse(JSON.parse(value));
-      if (id === current.sessionId) throw new Error('当前会话不能删除，请先使用 /new');
+      if (id === current.sessionId) throw new Error('The current session cannot be deleted. Use /new first.');
       const info = await manager.info(id), title = info?.title ?? id;
-      await current.surfaces.replacePicker({title: '删除会话', description: title + ' · ' + id + '；记录移入本地回收目录，项目文件保持原样', current: 'cancel'},
-        async () => ({items: [{id: 'cancel', label: '取消'}, {id: 'delete', label: '移到回收目录'}]}), async choice => {
+      await current.surfaces.replacePicker({title: 'Delete Session', description: title + ' · ' + id + '; the record moves to the local recycle folder and project files are untouched', current: 'cancel'},
+        async () => ({items: [{id: 'cancel', label: 'Cancel'}, {id: 'delete', label: 'Move to recycle folder'}]}), async choice => {
           if (choice === 'delete') {
             requireIdle();
-            if (id === current.sessionId) throw new Error('当前会话不能删除，请先使用 /new');
+            if (id === current.sessionId) throw new Error('The current session cannot be deleted. Use /new first.');
             const operation = (async () => {
               await usage.flush();
               const result = await manager.remove(id, actors.list().map(actor => actor.id));
-              notice('会话已移到回收目录：' + result.archive + (result.remaining.length ? '\n活动目录有未清理记录：' + result.remaining.join('、') : ''));
+              notice('Session moved to the recycle folder: ' + result.archive + (result.remaining.length ? '\nUncleaned records remain in the active directory: ' + result.remaining.join(', ') : ''));
             })();
             transition = operation;
             try {await operation;} finally {transition = undefined;}
@@ -215,7 +215,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     if (text === '/new') {await change(randomUUID(), true); return true;}
     if (text === '/clear') {
       requireIdle();
-      if (await journal.pending(current.sessionId)) throw new Error('请先完成未结束的回退');
+      if (await journal.pending(current.sessionId)) throw new Error('Finish the unfinished rewind first');
       requireIdle();
       current.store.clearTimeline(current.sessionId); publish();
       current.systemNotice('Conversation view cleared. Model context, history and files are unchanged.', 'command_result', 'logox', undefined, {presentation: 'status'});
@@ -223,27 +223,27 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     }
     if (text === '/resume') {requireIdle(); await openResume(); return true;}
     if (text.startsWith('/resume ')) {
-      const id = text.slice(8).trim(); if (!id) throw new Error('用法：/resume [会话 ID]');
+      const id = text.slice(8).trim(); if (!id) throw new Error('Usage: /resume [session ID]');
       await manager.info(id);
       const reports = await Promise.all((await owners(id)).map(owner => journal.inspect(id, owner)));
       const issue = reports.find(report => report.issue)?.issue;
       if (issue) {
         requireIdle();
-        await current.surfaces.openPicker({title: '账本诊断', description: id + ' · ' + issue + '。源账本保留，取消不切换。', current: ''},
-          async () => ({items: [{id, label: '将完整有效前缀恢复为新会话'}]}), async selected => {await recover(selected); return {};});
+        await current.surfaces.openPicker({title: 'Ledger Diagnosis', description: id + ' · ' + issue + '. The source ledger is preserved; cancelling does not switch.', current: ''},
+          async () => ({items: [{id, label: 'Recover the intact valid prefix as a new session'}]}), async selected => {await recover(selected); return {};});
       } else await change(id);
       return true;
     }
     if (text === '/rewind') {
       requireIdle();
-      await current.surfaces.openPicker({title: '回退到轮次之前', description: '撤销所选轮次及之后的对话和文件工具修改；Shell/MCP 外部副作用不恢复', current: ''},
+      await current.surfaces.openPicker({title: 'Rewind to Before Round', description: 'Undo the selected round and later conversation and file tool changes; Shell/MCP side effects are not restored', current: ''},
         async () => {
           const rounds = await turns(), pending = await journal.pending(current.sessionId);
-          return {items: pending ? [{id: pending.target, label: '重试未完成回退', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + round.text.slice(0, 100), description: round.owner})).reverse()};
+          return {items: pending ? [{id: pending.target, label: 'Retry unfinished rewind', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + round.text.slice(0, 100), description: round.owner})).reverse()};
         }, async id => {await rewind(id); return {};});
       return true;
     }
-    throw new Error('用法：/new、/resume [会话 ID]、/clear 或 /rewind');
+    throw new Error('Usage: /new, /resume [session ID], /clear or /rewind');
   }
   let initial: typeof current | undefined;
   let startupIssue: string | undefined;
@@ -257,7 +257,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     } catch (error) {
       await initial?.close(); await lease!?.release();
       if (options.sessionId !== undefined || options.resume || !recent) throw error;
-      startupIssue = '最近会话无法进入：' + recent + '\n' + (error instanceof Error ? error.message : '加载失败') + '\n请选择其它会话，或新建临时会话。';
+      startupIssue = 'Cannot open the recent session: ' + recent + '\n' + (error instanceof Error ? error.message : 'Load failed') + '\nSelect another session or start a new temporary session.';
       sessionId = randomUUID(); lease = await manager.acquire(sessionId); initial = await create(sessionId);
     }
     current = initial;
@@ -265,7 +265,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     if (persistence.get(current)!.saved) {await manager.touch(sessionId); await manager.remember(sessionId);}
     current.activate();
     for (const message of earlyNotices.splice(0)) diagnose(message);
-    if (await journal.pending(sessionId)) notice('上次回退未完成。使用 /rewind 重试，完成前禁止新模型任务。');
+    if (await journal.pending(sessionId)) notice('The last rewind did not finish. Use /rewind to retry; new model tasks are blocked until it completes.');
     if (startupIssue) {notice(startupIssue); await sessionCommand('/resume');}
   } catch (error) {try {await initial?.close();} finally {try {await lease!?.release(); if (!options.extensions) await extensions.close();} finally {await registry.close();}} throw error;}
   let closeTask: Promise<void> | undefined;
@@ -294,8 +294,8 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     getInputQueue: (ownerId?: string) => current.getInputQueue(ownerId),
     cancel: (activityId: string) => current.cancel(activityId),
     async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
-      // 只串行入口检查和调用开始，长任务仍由各模块的忙碌状态保护。
-      // pending 的异步读取不能让后来 /new 抢在前一项设置保存之前。
+      // Serialize only the entry checks and call start; long tasks stay protected by each module's busy state.
+      // The async pending read must not let a later /new overtake the previous setting save.
       const previous = entry;
       let release!: () => void;
       entry = new Promise<void>(resolve => {release = resolve;});
@@ -304,10 +304,10 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       let operation: Promise<void>;
       try {
         if (closed) return;
-        if (transition) throw new Error('会话正在切换或回退，请等待完成');
-        if (text.startsWith('/permissions ') && await journal.pending(active.sessionId)) throw new Error('会话回退未完成，请先使用 /rewind 重试');
-        if (text && !/^\/(new|resume|rewind|status|config|help|usage|permissions|commands|skills)(?:\s|$)/.test(text) && await journal.pending(active.sessionId)) throw new Error('会话回退未完成，请先使用 /rewind 重试');
-        if (transition || active !== current || closed) throw new Error('会话正在切换或关闭，请等待完成');
+        if (transition) throw new Error('The session is switching or rewinding. Wait for it to finish.');
+        if (text.startsWith('/permissions ') && await journal.pending(active.sessionId)) throw new Error('Session rewind is unfinished. Use /rewind to retry first.');
+        if (text && !/^\/(new|resume|rewind|status|config|help|usage|permissions|commands|skills)(?:\s|$)/.test(text) && await journal.pending(active.sessionId)) throw new Error('Session rewind is unfinished. Use /rewind to retry first.');
+        if (transition || active !== current || closed) throw new Error('The session is switching or closing. Wait for it to finish.');
         operation = active.submit(raw, source, delivery);
       } catch (error) {await active.recordError(error, source); throw error;}
       finally {release();}
@@ -315,7 +315,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         await operation;
       } catch (error) {await active.recordError(error, source); throw error;}
       if (delivery.mode === 'queue' && text && !text.startsWith('/') && persistence.get(active)!.saved) {
-        // 首次登记已经在派发前完成；标题更新失败不能把已接受的任务变成一次提交失败。
+        // Initial registration completed before dispatch; a title update failure must not turn an accepted task into a failed submission.
         try {await manager.touch(active.sessionId, text);}
         catch (error) {await active.recordError(error, source);}
       }

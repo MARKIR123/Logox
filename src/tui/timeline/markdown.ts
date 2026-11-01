@@ -112,7 +112,7 @@ export function layoutMarkdown(source: string, width: number): readonly Markdown
       fence = closing ? undefined : {marker: marker[1]![0]!, length: marker[1]!.length};
       // Keep the fence on one full-width row, even when its language label is long.
       let label = '', used = 0;
-      if (!closing) for (const {segment} of graphemes.segment('── ' + (marker[2]!.trim() || '代码'))) {
+      if (!closing) for (const {segment} of graphemes.segment('── ' + (marker[2]!.trim() || 'code'))) {
         const size = glyphWidth(segment);
         if (used + size > width) break;
         label += segment; used += size;

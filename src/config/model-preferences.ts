@@ -19,15 +19,15 @@ export function isOpenAiReasoningModel(id: string): boolean {
 export const preferenceSchema = z.strictObject({version: z.literal(1),
   provider: z.string().min(1).max(256), model: z.string().max(1024), effort: effortSchema});
 export type ModelPreference = z.infer<typeof preferenceSchema>;
-/** 独立状态文件；锁内重读，损坏时不覆盖。 */
+/** Standalone state file; re-read under lock and never overwritten when corrupted. */
 export class StateFile<T> {
   constructor(readonly path: string, private readonly schema: z.ZodType<T>) {}
   async read(): Promise<T | undefined> {
     let content: string;
     try {content = await readFile(this.path, 'utf8');}
-    catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw new Error('无法读取状态文件：' + this.path);}
+    catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw new Error('Cannot read state file: ' + this.path);}
     try {return this.schema.parse(JSON.parse(content));}
-    catch {throw new Error('状态文件格式无效，原文件保留：' + this.path);}
+    catch {throw new Error('State file format is invalid; original file preserved: ' + this.path);}
   }
   async save(value: T): Promise<void> {
     await this.update(() => value);
@@ -40,7 +40,7 @@ export class StateFile<T> {
         await writeFile(temporary, JSON.stringify(parsed) + '\n', {flag: 'wx', mode: 0o600});
         await replaceFile(temporary, this.path);
       } catch (error) {
-        throw new Error('保存状态失败，当前选择及原文件保留：' + this.path, {cause: error});
+        throw new Error('Failed to save state; current selection and original file preserved: ' + this.path, {cause: error});
       } finally {await rm(temporary, {force: true}).catch(() => {}); }
     });
   }

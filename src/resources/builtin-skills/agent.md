@@ -1,11 +1,11 @@
-# LOGOX Skill Directory Signpost (技能库路标地图)
+# LOGOX Skill Directory Signpost
 
-Welcome to the LOGOX Semantic Skill Library. This directory is organized hierarchically as **Path as Prompt / Semantic Signposts (文件夹即路标)**.
+Welcome to the LOGOX Semantic Skill Library. This directory is organized hierarchically as **Path as Prompt / Semantic Signposts**.
 You do NOT need to read all skills into memory. Use directory paths to locate the exact domain knowledge and read only the target SOP file.
 
 ---
 
-## 1. Directory Tree (技能地图全景)
+## 1. Directory Tree
 
 ```
 skills/
@@ -45,20 +45,20 @@ skills/
 
 ---
 
-## 2. Navigation Protocol (如何检索与使用)
+## 2. Navigation Protocol
 
-1. **Step 1: Path Navigation (按路径下钻)**:
+1. **Step 1: Path Navigation**:
    - Identify your role and domain. For example, if Kalon needs color rules: `skills/kalon/color/`.
    - If unsure which file exists in a domain, use `Glob("skills/<role>/**/*")` to list available file signposts.
-2. **Step 2: On-Demand Read (单文件读取)**:
+2. **Step 2: On-Demand Read**:
    - Once the target SOP is identified, call `Read` on that specific `.md` file path.
    - Do NOT load multiple unrelated SOPs into context at once.
-3. **Step 3: Execute Checkpoints (按检查清单执行)**:
+3. **Step 3: Execute Checkpoints**:
    - Follow the numbered checkpoints in the SOP to ensure systematic, disciplined delivery.
 
 ---
 
-## 3. Knowledge Promotion (从临时经验到正式 SOP)
+## 3. Knowledge Promotion
 
 - **Temporary Quirks & Scratchpad**: When encountering new environment quirks or temporary bash recipes during a task, first record them in the project bulletin board (`.logox/bulletin.md`) or session scratchpad.
 - **Formal Skill Promotion**: Once an operational procedure proves stable and reusable across multiple tasks, distill it into a structured Markdown SOP under `skills/<domain>/<name>.md` to permanently expand the ensemble's library.

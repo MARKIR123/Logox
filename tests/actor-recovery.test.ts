@@ -208,7 +208,7 @@ test('stream resets preserve the original Actor continuation target and shared D
         await context.record({role: 'tool', callId: 'read-before-reset', name: 'read', text: '已完成读取', isError: false});
         throw disconnected();
       }
-      assert.match(prompt, /原目标：打磨原文件/);
+      assert.match(prompt, /Original goal: 打磨原文件/);
       assert.ok(context.history.some(entry => entry.message?.role === 'tool' && entry.message.callId === 'read-before-reset'));
       context.say('使用已有读取结果完成打磨'); return;
     }
@@ -242,7 +242,7 @@ test('timeouts preserve Actor continuation targets across Director failures', {t
         await context.record({role: 'tool', callId: 'written', name: 'write', text: '文件已写入', isError: false});
         throw providerTimeout();
       }
-      assert.match(prompt, /原目标：写文件并报告/);
+      assert.match(prompt, /Original goal: 写文件并报告/);
       assert.ok(context.history.some(entry => entry.message?.role === 'tool' && entry.message.callId === 'written'));
       context.say('根据已有写入结果完成报告'); return;
     }
@@ -384,7 +384,7 @@ test('application quota failures stop after one request and preserve provider di
     await app.submit('@techne 继续剩余报告'); await idle(app.ensemble);
     const tasks = app.store.getSnapshot().activities;
     assert.equal(requests, 1); assert.equal(tasks.length, 1); assert.equal(tasks[0]?.ownerId, 'techne');
-    assert.equal(tasks[0]?.status, 'failed'); assert.match(tasks[0]?.detail ?? '', /Insufficient Balance.*余额不足/);
+    assert.equal(tasks[0]?.status, 'failed'); assert.match(tasks[0]?.detail ?? '', /Insufficient Balance.*Top up/);
     assert.ok(!tasks[0]?.detail.includes('格式无效'));
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
@@ -417,7 +417,7 @@ test('application timeout continuation preserves real writes and interrupted out
   const app = await createApplication({cwd, config, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd},
     env: {}, authPath: join(cwd, 'auth.json'), provider: {async respond(request, delta) {
       seen.push(request);
-      const messages = request.messages.filter(message => !message.text.startsWith('【角色直接对话索引】'));
+      const messages = request.messages.filter(message => !message.text.startsWith('[Direct conversation]'));
       const input = messages.findLast(message => message.role === 'user')?.text ?? '';
       const last = messages.at(-1);
       if (request.tools.length === 1 && request.tools[0]?.name === '_FinishRound') {
@@ -430,7 +430,7 @@ test('application timeout continuation preserves real writes and interrupted out
         const match = /Actor\((\{[^\n]+\})\)/.exec(input); assert.ok(match);
         return {message: {role: 'assistant', text: '', toolCalls: [{id: 'resume', name: 'dispatch_role', arguments: match[1]!}]}, stop: 'tools'};
       }
-      if (input.includes('【原 Actor 任务断点续做】')) {
+      if (input.includes('[Resuming interrupted Actor task]')) {
         resumes++;
         if (repeatFailure) {delta({kind: 'reasoning', text: '续做仍停滞'}); throw providerTimeout();}
         assert.match(JSON.stringify(request.messages), /result\.txt/);

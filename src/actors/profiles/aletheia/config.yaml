@@ -1,7 +1,7 @@
 id: aletheia
 name: Aletheia
-title: 澄明 · 侦察者
-description: 调查代码、日志与资料，追踪调用链、核实来源，交付可查证的事实地图。
+title: Scout
+description: Investigates code, logs, and sources; traces call chains, verifies origins, and delivers a verifiable fact map.
 color: "#7FAE99"
 card_closed: "#232E2E"
 card_open: "#2C3A39"

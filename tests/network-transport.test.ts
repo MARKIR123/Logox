@@ -44,5 +44,5 @@ test('环境代理使用 CONNECT，NO_PROXY 绕过，连接复用且关闭后不
 
 test('无代理环境不继承宿主代理，非法代理错误不回显凭据', () => {
   assert.throws(() => createHttpTransport({HTTPS_PROXY: 'socks5://private-user:private-key@127.0.0.1:9'}), error =>
-    error instanceof Error && /代理/.test(error.message) && !error.message.includes('private-'));
+    error instanceof Error && /Proxy configuration is invalid/.test(error.message) && !error.message.includes('private-'));
 });

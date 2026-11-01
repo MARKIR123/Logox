@@ -1,15 +1,15 @@
-import type {PortfolioActivities} from '../../demo/portfolio.js';
-import {portfolioStyleLabels} from '../../demo/portfolio.js';
-import type {ActorId} from '../../actors/ensemble.js';
-import type {ActivityStatus, RuntimeSnapshot} from '../../runtime/contracts.js';
+import type {PortfolioActivities} from './portfolio.js';
+import {portfolioStyleLabels} from './portfolio.js';
+import type {ActorId} from '../actors/ensemble.js';
+import type {ActivityStatus, RuntimeSnapshot} from '../runtime/contracts.js';
 import type {DemoEvent, DemoSceneState, DemoSceneUi} from './scene.js';
 
 const statusLabels: Record<ActivityStatus, string> = {
-  queued: '排队中', running: '处理中', waiting_input: '等待回答', paused: '已暂停',
-  completed: '已完成', failed: '执行失败', cancelled: '已取消',
+  queued: 'Queued', running: 'Running', waiting_input: 'Awaiting answer', paused: 'Paused',
+  completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled',
 };
 
-// 仅从快照读取业务结果；窗口、草稿选择与折叠仍由界面拥有。
+// Read business outcomes from the snapshot only; the UI still owns windows, draft selection and folding.
 export function projectPortfolioScene(ui: DemoSceneUi, snapshot: RuntimeSnapshot, sessionId: string, ids: PortfolioActivities): DemoSceneState {
   const activities = snapshot.activities.filter(item => item.sessionId === sessionId);
   const interactions = snapshot.interactions.filter(item => item.sessionId === sessionId);

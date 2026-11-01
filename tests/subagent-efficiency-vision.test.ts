@@ -184,7 +184,7 @@ test('参数校验错误原位返回 ToolResult 且不扣截断预算，整批�
       assert.equal(requests.length, 2);
       const toolResults = requests[1]!.messages.filter(m => m.role === 'tool');
       assert.ok(toolResults.length === 2);
-      assert.ok(toolResults.some(m => m.text.includes('参数校验失败')));
+      assert.ok(toolResults.some(m => m.text.includes('Parameter validation failed')));
 
       // 3. 验证未触发截断恢复惩罚（truncation 预算未被消耗）
       const recoveryState = (app.ensemble as unknown as {options: {recovery?: ActorRecovery}}).options;

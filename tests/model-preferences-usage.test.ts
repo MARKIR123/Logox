@@ -58,15 +58,15 @@ test('思考及提供商 picker 确认才写入；取消、无效档位、坏文
     let picker = app.surfaces.getSnapshot(); assert.ok(picker?.kind === 'picker'); assert.ok(picker.items.some(item => item.id === 'max')); assert.ok(!picker.items.some(item => item.id === 'medium'));
     app.surfaces.cancel(); await assert.rejects(readFile(f.file), {code: 'ENOENT'});
     await app.submit('/think low'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).effort, 'low');
-    await assert.rejects(app.submit('/effort medium'), /未声明支持/);
+    await assert.rejects(app.submit('/effort medium'), /does not declare support/);
     await app.submit('/providers antigravity'); assert.equal(JSON.parse(await readFile(f.file, 'utf8')).provider, 'antigravity');
     await app.submit('/providers local first');
-    await writeFile(f.file, '{broken'); await assert.rejects(app.submit('/model second'), /保存状态失败/);
+    await writeFile(f.file, '{broken'); await assert.rejects(app.submit('/model second'), /Failed to save state/);
     assert.equal(await readFile(f.file, 'utf8'), '{broken');
     await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); app.surfaces.cancel();
     const diagnostics: string[] = [];
     assert.equal((await loadConfig(f.cwd, {}, {}, f.cwd, f.cwd, text => diagnostics.push(text))).provider.model, 'first'); assert.equal(diagnostics.length, 1);
-    await rm(f.file); await mkdir(f.file); await assert.rejects(app.submit('/model second'), /保存状态失败/);
+    await rm(f.file); await mkdir(f.file); await assert.rejects(app.submit('/model second'), /Failed to save state/);
     await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )first/); app.surfaces.cancel();
   } finally {await app.close(); await f.cleanup();}
 });
@@ -130,7 +130,7 @@ test('唯一计量器按模型与任务/汇总保存，恢复不重算、会话�
     meter.observe({system: '', messages: [], tools: []}, {message: {role: 'assistant', text: 'ok'}, stop: 'complete', usage: {input: 3, output: 1}}, {identity: JSON.stringify(['local', 'second']), window: 8192});
     assert.deepEqual(meter.spent, {input: 123, output: 13, cacheRead: 60, cacheWrite: 10});
     const lines = usageLines(meter.usageRecords(), config).join('\n');
-    assert.match(lines, /0.000160 USD/); assert.match(lines, /汇总/); assert.match(lines, /未知/);
+    assert.match(lines, /0.000160 USD/); assert.match(lines, /summary/); assert.match(lines, /unknown/);
     await ledger.flush(); const restored = await ledger.read('session', 'logox'); assert.equal(restored.length, 3);
     const second = new TokenMeter(); second.configureUsage(() => identity, () => {}, restored); assert.deepEqual(second.spent, meter.spent);
     assert.deepEqual(await ledger.read('other', 'logox'), []); assert.deepEqual(await ledger.read('session', 'techne'), []); assert.deepEqual(messages, []);
@@ -184,7 +184,7 @@ test('已知官方模型与显式能力控制可用档位，协议不匹配明�
     const provider = createProvider({...settings, thinkingEffort: 'max'}, fetcher);
     await provider.respond(request, () => {}, signal); assert.deepEqual(bodies[0]!.thinking, {type: 'adaptive'}); assert.deepEqual(bodies[0]!.output_config, {effort: 'max'});
     await provider.respond({...request, thinking: false}, () => {}, signal); assert.deepEqual(bodies[1]!.thinking, {type: 'disabled'}); assert.ok(!Object.hasOwn(bodies[1]!, 'output_config'));
-    const bad = await f.load({models: {'local/first': {thinking_protocol: 'anthropic-budget'}}}); assert.throws(() => modelSettings(bad, {}), /不匹配/);
+    const bad = await f.load({models: {'local/first': {thinking_protocol: 'anthropic-budget'}}}); assert.throws(() => modelSettings(bad, {}), /does not match/);
     const deepseek = await f.load({provider: {name: 'deepseek', model: 'deepseek-flash'}}); assert.deepEqual(modelSettings(deepseek, {}).thinkingLevels, ['auto', 'off', 'low', 'high', 'max']);
     const plain = await f.load({models: {'local/first': {thinking_protocol: undefined}}}); assert.equal(modelSettings(plain, {}).thinkingProtocol, undefined);
   } finally {await f.cleanup();}

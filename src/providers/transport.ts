@@ -9,7 +9,7 @@ import {formatNetworkError} from './error-format.js';
 
 const ignoreDispatcherError = () => {};
 function guarded<T extends Dispatcher>(dispatcher: T): T {
-  // 流读取仍会抛出原故障；拦住 Undici 内部的未订阅 error，避免进程退出。
+  // Stream reads still throw the original failure; swallow Undici's unsubscribed internal error so the process does not exit.
   if (dispatcher instanceof EventEmitter) EventEmitter.prototype.on.call(dispatcher, 'error', ignoreDispatcherError);
   return dispatcher;
 }
@@ -38,7 +38,6 @@ function loadConfiguredProxy(env: NodeJS.ProcessEnv): string {
   const envProxy = env.https_proxy || env.HTTPS_PROXY || env.http_proxy || env.HTTP_PROXY || env.all_proxy || env.ALL_PROXY;
   if (envProxy) return envProxy;
   const settingsPaths = [
-    join(homedir(), '.logox-ts', 'settings.json'),
     join(homedir(), '.logox', 'settings.json'),
   ];
   for (const p of settingsPaths) {
@@ -52,7 +51,7 @@ function loadConfiguredProxy(env: NodeJS.ProcessEnv): string {
   return '';
 }
 
-/** 应用拥有连接，模型候选与会话共享；不修改全局 fetch、dispatcher 或环境。 */
+/** The application owns the connections, shared by model candidates and sessions; never modifies global fetch, dispatcher or environment. */
 export function createHttpTransport(env: NodeJS.ProcessEnv = process.env) {
   let configured = loadConfiguredProxy(env);
   let httpProxy = env.http_proxy || env.HTTP_PROXY || configured || '';
@@ -86,7 +85,7 @@ export function createHttpTransport(env: NodeJS.ProcessEnv = process.env) {
     }
     dispatcher = buildDispatcher(httpProxy);
   } catch (err) {
-    throw new ProviderError('网络代理配置无效；请检查 HTTP_PROXY / HTTPS_PROXY，仅支持 HTTP(S) 代理。');
+    throw new ProviderError('[Network] Proxy configuration is invalid; check HTTP_PROXY / HTTPS_PROXY (only HTTP(S) proxies are supported).');
   }
 
   const request = undiciFetch as unknown as (input: Parameters<typeof fetch>[0], init?: RequestInit & {dispatcher: Dispatcher}) => Promise<Response>;

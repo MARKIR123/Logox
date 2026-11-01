@@ -4,7 +4,7 @@ description: Rigorous academic paper & technical research report drafting standa
 actors: [aletheia]
 ---
 
-# Academic Paper Writing SOP (学术论文与研究报告严谨撰写 SOP)
+# Academic Paper Writing SOP
 
 ## 1. Abstract & Introduction Formula
 - State the concrete problem and why existing approaches fall short in 2 sentences.

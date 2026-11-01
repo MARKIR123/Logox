@@ -33,40 +33,11 @@ export type OAuthToken = Omit<z.infer<typeof oauthCredentialSchema>, 'type'>;
 const schema = z.record(z.string(), credentialSchema);
 type Credentials = z.infer<typeof schema>;
 
-/** 用户凭据独立保存，既不属于项目配置，也不属于会话账本。 */
+/** User credentials are stored separately, belonging to neither project config nor session ledgers. */
 export class AuthStorage {
-  readonly fallbackPaths: readonly string[];
-  constructor(
-    readonly path = join(homedir(), '.logox', 'auth.json'),
-    fallbackPaths?: string | readonly string[],
-  ) {
-    if (typeof fallbackPaths === 'string') {
-      this.fallbackPaths = [fallbackPaths];
-    } else if (fallbackPaths !== undefined) {
-      this.fallbackPaths = fallbackPaths;
-    } else if (path === join(homedir(), '.logox', 'auth.json')) {
-      this.fallbackPaths = [
-        join(homedir(), '.logox-ts', 'auth.json'),
-      ];
-    } else {
-      this.fallbackPaths = [];
-    }
-  }
+  constructor(readonly path = join(homedir(), '.logox', 'auth.json')) {}
   private async read(): Promise<Credentials> {
     const merged: Credentials = {};
-    for (const fb of this.fallbackPaths) {
-      try {
-        const raw = JSON.parse((await readFile(fb, 'utf8')).replace(/^﻿/, ''));
-        if (raw && typeof raw === 'object') {
-          for (const [provider, val] of Object.entries(raw)) {
-            const parsed = credentialSchema.safeParse(val);
-            if (parsed.success) {
-              merged[provider] = parsed.data;
-            }
-          }
-        }
-      } catch {}
-    }
     try {
       const content = await readFile(this.path, 'utf8');
       const parsed = schema.parse(JSON.parse(content.replace(/^﻿/, '')));
@@ -75,7 +46,7 @@ export class AuthStorage {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return merged;
       }
-      throw new Error('LOGOX 认证文件格式无效；保留原文件，请检查后重试');
+      throw new Error('LOGOX auth file format is invalid; the original file is preserved. Check it and retry.');
     }
     return merged;
   }
@@ -94,17 +65,17 @@ export class AuthStorage {
 
   private async withLock<T>(signal: AbortSignal, action: () => Promise<T>): Promise<T> {
     const lock = this.path + '.lock';
-    await mkdir(dirname(this.path), {recursive: true, mode: 0o700}).catch(() => {throw new Error('无法创建 LOGOX 认证目录');});
+    await mkdir(dirname(this.path), {recursive: true, mode: 0o700}).catch(() => {throw new Error('Cannot create the LOGOX auth directory');});
     let locked = false;
     for (let attempt = 0; attempt < 80; attempt++) {
       signal.throwIfAborted();
       try {await mkdir(lock, {mode: 0o700}); locked = true; break;}
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('无法锁定 LOGOX 认证文件');
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('Cannot lock the LOGOX auth file');
         await delay(25, undefined, {signal});
       }
     }
-    if (!locked) throw new Error('另一个进程正在保存认证，请稍后重试');
+    if (!locked) throw new Error('Another process is saving credentials. Try again shortly.');
     try {
       return await action();
     } finally {
@@ -125,8 +96,8 @@ export class AuthStorage {
 
   async save(provider: string, input: string, signal: AbortSignal): Promise<void> {
     const key = input.trim();
-    if (!key || key.length > 16384 || /[\x00-\x20\x7f]/.test(key)) throw new Error('请输入有效的 API key，不能包含空格或控制字符');
-    if (!provider || ['__proto__', 'constructor', 'prototype'].includes(provider)) throw new Error('提供商名称无效');
+    if (!key || key.length > 16384 || /[\x00-\x20\x7f]/.test(key)) throw new Error('Enter a valid API key without spaces or control characters');
+    if (!provider || ['__proto__', 'constructor', 'prototype'].includes(provider)) throw new Error('Invalid provider name');
     signal.throwIfAborted();
     await this.withLock(signal, async () => {
       const credentials = await this.read();
@@ -137,7 +108,7 @@ export class AuthStorage {
   }
 
   async saveOAuth(provider: string, token: OAuthToken, signal: AbortSignal): Promise<void> {
-    if (!provider || ['__proto__', 'constructor', 'prototype'].includes(provider)) throw new Error('提供商名称无效');
+    if (!provider || ['__proto__', 'constructor', 'prototype'].includes(provider)) throw new Error('Invalid provider name');
     signal.throwIfAborted();
     await this.withLock(signal, async () => {
       const credentials = await this.read();

@@ -47,7 +47,7 @@ export function timelineRows(messages: readonly Message[], width: number): reado
     const gutterCols = width >= 6 ? 2 : 0;
     const contentWidth = Math.max(1, width - gutterCols);
     const railColor = message.role === 'user' ? palette.user : ownerColor(message.ownerId);
-    const roleLabel = message.role === 'user' ? '收到任务' : message.role === 'assistant' ? '台词' : '记录';
+    const roleLabel = message.role === 'user' ? 'Task received' : message.role === 'assistant' ? 'Lines' : 'Record';
     const headerText = safeText(`${ownerHeader(message.ownerId)} · ${roleLabel}`);
     const headerLines = wrapAnsi(headerText, contentWidth, {hard: true, trim: false}).split('\n');
     const built: Row[] = [];

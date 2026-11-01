@@ -33,14 +33,14 @@ async function reclaim(directory: string): Promise<void> {
     }
     return;
   }
-  if (entries.length !== 1) throw new Error('状态锁身份无效，原锁保留：' + directory);
+  if (entries.length !== 1) throw new Error('Invalid state lock identity; lock preserved: ' + directory);
   let owner: Owner;
   try {owner = ownerSchema.parse(JSON.parse(await readFile(join(directory, entries[0]!), 'utf8')));}
   catch (error) {
     if (code(error) === 'ENOENT') return;
-    throw new Error('状态锁身份无法读取，原锁保留：' + directory);
+    throw new Error('State lock identity unreadable; lock preserved: ' + directory);
   }
-  if (entries[0] !== marker(owner)) throw new Error('状态锁身份不匹配，原锁保留：' + directory);
+  if (entries[0] !== marker(owner)) throw new Error('State lock identity mismatch; lock preserved: ' + directory);
   if (dead(owner.pid)) {
     try {await removeOwner(directory, owner);}
     catch (error) {
@@ -50,12 +50,12 @@ async function reclaim(directory: string): Promise<void> {
     }
   }
 }
-/** 完整身份原子发布；仅确认死亡时回收，释放只作用于自己的身份。 */
+/** Publish the full identity atomically; reclaim only when the owner is confirmed dead, and release only your own identity. */
 export async function acquireFileLock(path: string): Promise<() => Promise<void>> {
   await mkdir(dirname(path), {recursive: true});
   try {
     await readdir(path + '.lock');
-    throw new Error('旧版状态锁没有持有者身份；请确认旧进程已停止后移除：' + path + '.lock');
+    throw new Error('Legacy state lock has no owner identity; confirm the old process has stopped, then remove: ' + path + '.lock');
   } catch (error) {if (code(error) !== 'ENOENT') throw error;}
   const directory = path + '.lock-v2', owner = {pid: process.pid, token: randomUUID()};
   const candidate = directory + '.' + owner.token;
@@ -72,7 +72,7 @@ export async function acquireFileLock(path: string): Promise<() => Promise<void>
         await delay(25);
       }
     }
-    throw new Error('另一个进程正在保存状态，请稍后重试');
+    throw new Error('Another process is saving state; retry shortly');
   } finally {
     await removeOwner(candidate, owner);
   }

@@ -23,13 +23,12 @@ export class ToolModelStorage {
 
   constructor(
     readonly path = join(homedir(), '.logox', 'tool-models.json'),
-    readonly fallbackPath = join(homedir(), '.logox-ts', 'tool-models.json'),
   ) {
     this.loadSync();
   }
 
   loadSync(): ToolModelMap {
-    for (const p of [this.path, this.fallbackPath]) {
+    for (const p of [this.path]) {
       try {
         const raw = readFileSync(p, 'utf8').replace(/^﻿/, '');
         const parsed = toolModelStorageSchema.parse(JSON.parse(raw));
@@ -42,7 +41,7 @@ export class ToolModelStorage {
 
   async read(): Promise<ToolModelMap> {
     const merged: ToolModelMap = {};
-    for (const p of [this.fallbackPath, this.path]) {
+    for (const p of [this.path]) {
       try {
         const raw = (await readFile(p, 'utf8')).replace(/^﻿/, '');
         const parsed = toolModelStorageSchema.parse(JSON.parse(raw));

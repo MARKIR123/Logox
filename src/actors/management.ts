@@ -7,7 +7,7 @@ import {immutable} from '../runtime/contracts.js';
 import {ActorCatalog, assertActorPath} from './catalog.js';
 import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './definitions.js';
 import type {ContextPolicy} from '../config/config.js';
-import {detectEffortLevels} from '../config/model-grouping.js';
+import {detectEffortLevels, groupModelsForProvider, resolveActualModel, type GroupedModel} from '../config/model-grouping.js';
 
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
 export interface CraftResult {readonly status: 'saved' | 'denied'; readonly path: string; readonly revision: number}
@@ -53,12 +53,14 @@ export class ActorManagement {
     try {return await readFile(path, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error;}
   }
   async saveDefaultModel(id: string, model: ActorModel | undefined, signal: AbortSignal): Promise<string> {
-    if (id === 'logox') throw new Error('Logox 使用当前会话模型，请通过 /model 设置');
-    const actor = this.catalog.find(id); if (!actor) throw new Error('角色不存在');
+    if (id === 'logox') throw new Error('Logox uses the current session model; set it with /model');
+    const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
     if (model) {
       const selected = actorModelSchema.parse(model); model = selected;
+      this.modelPool?.loadCacheSync();
       const poolModels = this.modelPool?.snapshot() ?? [];
-      const foundInPool = poolModels.some(item => item.provider === selected.provider && item.id === selected.model);
+      const foundInPool = poolModels.some(item => item.provider === selected.provider &&
+        (item.id === selected.model || item.id.startsWith(selected.model + '-') || selected.model.startsWith(item.id + '-')));
       if (!foundInPool) {
         const result = await this.registry.modelCatalog(signal);
         if (!result.models.some(item => item.provider === selected.provider && item.id === selected.model)) {
@@ -75,33 +77,58 @@ export class ActorManagement {
   }
   async openDefaultModel(id: string, surfaces: CommandSurfaces): Promise<void> {
     const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
+    this.modelPool?.loadCacheSync();
     const poolModels = this.modelPool?.snapshot() ?? [];
+    const groupedMap = new Map<string, GroupedModel>();
     const choices = new Map<string, ActorModel | undefined>([['inherit', undefined]]);
-    for (const item of poolModels) {
-      choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-    }
-    const initialItems = [
-      {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-      ...poolModels.map(item => {
-        const choiceId = JSON.stringify({provider: item.provider, model: item.id});
-        const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
-        const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
-        const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
-        return {
-          id: choiceId,
-          label: item.id,
-          description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
-          effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-          effortLevels: levels.length > 0 ? levels : undefined,
-          group: item.provider,
-        };
-      }),
-    ];
+
+    const buildItems = (models: readonly {provider: string; id: string; window?: number | undefined; thinkingLevels?: readonly string[] | undefined; isOffline?: boolean | undefined}[]) => {
+      const items: any[] = [
+        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
+      ];
+      const providers = [...new Set(models.map(m => m.provider))];
+      for (const provider of providers) {
+        const providerModels = models.filter(m => m.provider === provider).map(m => m.id);
+        const currentModel = actor.defaultModel?.provider === provider ? actor.defaultModel.model : '';
+        const groupedList = groupModelsForProvider(providerModels, provider, currentModel);
+        for (const grouped of groupedList) {
+          const choiceId = JSON.stringify({provider: grouped.provider, model: grouped.baseModel});
+          groupedMap.set(choiceId, grouped);
+          groupedMap.set(grouped.id, grouped);
+          choices.set(choiceId, {provider: grouped.provider, model: grouped.baseModel});
+          choices.set(grouped.id, {provider: grouped.provider, model: grouped.baseModel});
+          for (const [tier, variantId] of Object.entries(grouped.variantMap)) {
+            choices.set(JSON.stringify({provider: grouped.provider, model: variantId}), {provider: grouped.provider, model: variantId});
+          }
+
+          const recorded = models.find(m => m.provider === provider && m.id === grouped.baseModel)
+            ?? models.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
+          const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
+          const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
+          const eff = effortLevels && effortLevels.length > 0 ? '✦ ' + effortLevels.filter(l => l !== 'auto').join('/') : '-';
+          items.push({
+            id: choiceId,
+            label: grouped.baseModel,
+            description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
+            effort: grouped.currentEffort,
+            effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
+            group: grouped.provider,
+          });
+        }
+      }
+      return items;
+    };
+
+    const initialItems = poolModels.length > 0 ? buildItems(poolModels) : [];
+    const currentKey = actor.defaultModel
+      ? JSON.stringify({provider: actor.defaultModel.provider, model: actor.defaultModel.model})
+      : 'inherit';
+
     await surfaces.openPicker({
       title: 'Select Model for ' + actor.name,
       description: 'Confirm to apply to this actor only; Esc to cancel',
-      current: actor.defaultModel ? JSON.stringify(actor.defaultModel) : 'inherit',
-      ...(poolModels.length > 0 ? {items: initialItems} : {}),
+      current: currentKey,
+      ...(initialItems.length > 0 ? {items: initialItems} : {}),
     }, async signal => {
       let models = poolModels;
       let warning: string | undefined;
@@ -114,30 +141,30 @@ export class ActorManagement {
           thinkingLevels: [...detectEffortLevels(m.id, m.provider)],
         }));
       }
-      for (const item of models) {
-        choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-      }
-      const loadedItems = [
-        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-        ...models.map(item => {
-          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
-          const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
-          const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
-          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
-          return {
-            id: choiceId,
-            label: item.id,
-            description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
-            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-            effortLevels: levels.length > 0 ? levels : undefined,
-            group: item.provider,
-          };
-        }),
-      ];
+      const loadedItems = buildItems(models);
       return {items: loadedItems, ...(warning ? {warning} : {})};
-    }, async choice => {
-      if (!choices.has(choice)) throw new Error('Invalid model selection');
-      await this.saveDefaultModel(id, choices.get(choice), new AbortController().signal);
+    }, async (choice, chosenEffort) => {
+      let selectedModel: ActorModel | undefined;
+      if (choice === 'inherit') {
+        selectedModel = undefined;
+      } else if (groupedMap.has(choice)) {
+        const grouped = groupedMap.get(choice)!;
+        const resolved = resolveActualModel(grouped, chosenEffort);
+        selectedModel = {provider: grouped.provider, model: resolved.modelId};
+      } else if (choices.has(choice)) {
+        selectedModel = choices.get(choice);
+      } else {
+        try {
+          const parsed = JSON.parse(choice);
+          if (Array.isArray(parsed) && parsed.length >= 2) {
+            selectedModel = {provider: parsed[0], model: parsed[1]};
+          } else if (parsed && typeof parsed === 'object') {
+            selectedModel = {provider: parsed.provider, model: parsed.model};
+          }
+        } catch {}
+      }
+      if (choice !== 'inherit' && !selectedModel) throw new Error('Invalid model selection');
+      await this.saveDefaultModel(id, selectedModel, new AbortController().signal);
       return {message: actor.name + ' default model saved', presentation: 'silent'};
     });
   }
@@ -146,7 +173,7 @@ export class ActorManagement {
     const accepted = await approve(immutable({path, content, previous, operation: 'craft_actor'})); signal.throwIfAborted();
     if (!accepted) return {status: 'denied', path, revision: this.catalog.snapshot().revision};
     await this.catalog.writeProject(actor.id, content, previous);
-    const state = await this.catalog.reload(); if (state.issues.length) throw new Error('文件已保存，热载失败：' + state.issues.map(item => item.reason).join('；'));
+    const state = await this.catalog.reload(); if (state.issues.length) throw new Error('File saved, but hot reload failed: ' + state.issues.map(item => item.reason).join('; '));
     return {status: 'saved', path, revision: state.revision};
   }
 }

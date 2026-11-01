@@ -4,7 +4,7 @@ description: Accessible UI contrast (WCAG AA/AAA), semantic role tokens & dark m
 actors: [kalon]
 ---
 
-# Semantic Palette System SOP (语义化 UI 调色与无障碍对比度)
+# Semantic Palette System SOP
 
 ## 1. Functional Color Roles
 Define colors by function, not by hue:

@@ -68,8 +68,8 @@ export class Steps {
     const {runningSince: _, ...step} = previous;
     this.store.updateMessage(id, {step: {...step, state: 'waiting', elapsedMs: stepElapsed(previous, this.now()), waiting: reason}});
     const r = reason.toLowerCase();
-    this.phase(reason.includes('许可') || reason.includes('审批') || r.includes('approval') || r.includes('permission') ? 'approval'
-      : reason.includes('重试') || r.includes('retry') ? 'retry'
+    this.phase(r.includes('approval') || r.includes('permission') ? 'approval'
+      : r.includes('retry') ? 'retry'
       : 'question');
     let restored = false;
     return () => {

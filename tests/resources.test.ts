@@ -71,7 +71,7 @@ test('技能仅披露元数据、模板近者优先且占位符单次展开，�
     assert.equal(resources.expand('review', '$& {{args}}'), '项目 $& {{args}} / $& {{args}} / $& {{args}}');
     assert.equal(resources.expand('help', ''), undefined);
     assert.throws(() => resources.expand('review', 'x'.repeat(16385)), /16 KiB/);
-    assert.ok(state.issues.some(item => item.reason.includes('内置')));
+    assert.ok(state.issues.some(item => item.reason.includes('built-in')));
     const base = await agentRequestBase(f.cwd, 'logox', [], resources);
     assert.ok(base.system.includes('audit')); assert.ok(!base.system.includes('秘密标记'));
     assert.ok(!base.tools.some(item => item.name === 'audit'));
@@ -123,7 +123,7 @@ test('处理中拒绝 reload；项目扩展由外层拥有，可跨会话重用'
     const extensions = new ProjectExtensions(f.cwd, config, {home: f.home, boundary: f.root}); await extensions.initialize();
     const app = await createApplication({cwd: f.cwd, config, provider, extensions, authPath: join(f.root, 'auth.json')});
     const handle = app.ensemble.dispatch('logox', '测试');
-    await assert.rejects(app.submit('/reload'), /任务处理中/);
+    await assert.rejects(app.submit('/reload'), /Tasks are running/);
     while (!release) await new Promise<void>(resolve => setImmediate(resolve));
     release(); await handle.done; await app.close();
     assert.equal(app.extensions, extensions);

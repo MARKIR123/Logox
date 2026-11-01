@@ -40,7 +40,7 @@ test('fresh projects without a main model can open all tabs and retain user acto
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-test('new project config reads canonical global preferences before legacy fallback', async () => {
+test('new project config reads canonical global preferences and ignores the retired .logox-ts directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'logox-global-selection-')), home = join(root, 'home'), cwd = join(root, 'new-project');
   try {
     await mkdir(join(home, '.logox'), {recursive: true}); await mkdir(join(home, '.logox-ts')); await mkdir(cwd);
@@ -52,7 +52,7 @@ test('new project config reads canonical global preferences before legacy fallba
     assert.equal((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'project-model');
     await rm(join(cwd, '.logox', 'state', 'model-preferences.json'));
     await rm(join(home, '.logox', 'model-preferences.json'));
-    assert.equal((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'old-model');
+    assert.notEqual((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'old-model');
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

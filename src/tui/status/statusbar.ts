@@ -49,9 +49,9 @@ function shorten(value: string, width: number): string {
 }
 
 const stateLabels: Readonly<Record<string, string>> = {
-  '就绪': 'ready', '运行中': 'running', '执行中': 'running', '排队中': 'queued', '排队': 'queued',
-  '待回答': 'waiting', '等待回答': 'waiting', '已暂停': 'paused', '已完成': 'completed',
-  '失败': 'failed', '已停止': 'cancelled', '已取消': 'cancelled',
+  'Ready': 'ready', 'Running': 'running', 'Queued': 'queued',
+  'Awaiting answer': 'waiting', 'Awaiting permission': 'waiting', 'Paused': 'paused', 'Completed': 'completed',
+  'Failed': 'failed', 'Stopped': 'cancelled', 'Interrupted': 'cancelled',
 };
 const effortTokens: Readonly<Record<string, ThemeColorKey>> = {
   off: 'effortOff', low: 'effortLow', medium: 'effortMedium', high: 'effortHigh', max: 'effortMax', auto: 'effortAuto',
@@ -90,7 +90,7 @@ const registry: Readonly<Record<StatusbarId, Descriptor>> = {
   }},
   effort: {icon: '\uf0eb', token: status => effortTokens[status.effort ?? ''] ?? 'muted',
     variants: status => {
-      const effort = status.effort === '不支持' ? 'unsupported' : status.effort ?? 'unsupported';
+      const effort = status.effort === 'Unsupported' ? 'unsupported' : status.effort ?? 'unsupported';
       return ['Thinking ' + effort, effort];
     }},
   permission: {icon: '\uf023', token: status => {

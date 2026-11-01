@@ -53,14 +53,14 @@ export function summarizeRound(messages: readonly ModelMessage[], status: RoundS
   if (status === 'completed' && parsed?.success) return parsed.data;
   const goal = messages.find(message => message.role === 'user')?.text ?? '';
   const tools = messages.filter(message => message.role === 'tool').slice(-4)
-    .map(message => message.role === 'tool' ? message.name + '：' + (message.isError ? '失败/未执行；' : '') + message.text.slice(0, 140) : '');
-  const label = status === 'completed' ? '完成' : status === 'cancelled' ? '已中断，需核对后续工作' : '执行失败，需继续处理';
+    .map(message => message.role === 'tool' ? message.name + ': ' + (message.isError ? 'failed/not executed; ' : '') + message.text.slice(0, 140) : '');
+  const label = status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Interrupted; follow-up work needs checking' : 'Failed; needs further handling';
   return {title: (status === 'completed' ? final.split('\n')[0]?.trim() || label : label).slice(0, 100),
-    report: ['目标：' + goal.slice(0, 350), '状态：' + label, final ? '回复：' + final.slice(-850) : '没有完整助手回复。',
+    report: ['Goal: ' + goal.slice(0, 350), 'Status: ' + label, final ? 'Reply: ' + final.slice(-850) : 'No complete assistant reply.',
       ...tools].join('\n').slice(0, 2000), source: 'local'};
 }
 
-/** 供 Agent 的 requestBase 与历史归并共用角色契约。 */
+/** Shares the role contract between the Agent's requestBase and history consolidation. */
 export function roleSummaryInstruction(contract?: string): string {
   return summaryInstruction + memoryFocusInstruction(contract);
 }

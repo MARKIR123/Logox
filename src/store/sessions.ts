@@ -36,7 +36,7 @@ export class SessionManager {
     const raw = await readOptional(this.metadataPath(id));
     if (raw === undefined) return undefined;
     const info = metadataSchema.parse(JSON.parse(raw));
-    if (info.id !== id || info.project !== this.project) throw new Error('会话元数据的项目或 ID 不匹配');
+    if (info.id !== id || info.project !== this.project) throw new Error('Session metadata project or ID mismatch');
     return info;
   }
   async list(): Promise<{sessions: SessionInfo[]; issues: string[]}> {
@@ -47,9 +47,9 @@ export class SessionManager {
     for (const file of files.filter(file => /^[a-f0-9]{64}\.json$/.test(file))) {
       try {
         const info = metadataSchema.parse(JSON.parse(await readFile(join(this.directory, 'catalog', file), 'utf8')));
-        if (info.project !== this.project || file !== key(info.id) + '.json') throw new Error('项目或 ID 不匹配');
+        if (info.project !== this.project || file !== key(info.id) + '.json') throw new Error('Project or ID mismatch');
         if (!await this.trash.isDeleted(info.id)) sessions.push(info);
-      } catch {issues.push('会话索引损坏：' + file);}
+      } catch {issues.push('Session index corrupt: ' + file);}
     }
     const records = await this.journals(issues);
     for (const record of records) {
@@ -57,17 +57,17 @@ export class SessionManager {
       const existing = sessions.find(session => session.id === record.sessionId);
       if (existing) {
         existing.updated = Math.max(existing.updated, record.updated);
-        if (existing.title === '新会话' && record.title) existing.title = record.title;
+        if (existing.title === 'New session' && record.title) existing.title = record.title;
         continue;
       }
       if (record.submitted || record.uncertain) sessions.push({version: 1, id: record.sessionId, project: this.project,
-        created: record.created, updated: record.updated, title: record.title ?? '历史会话'});
+        created: record.created, updated: record.updated, title: record.title ?? 'Previous session'});
     }
     const visible: SessionInfo[] = [];
     for (const info of sessions) {
       if (await this.submitted(info.id, records, issues)) visible.push(info);
       else {
-        // 正在首次提交的进程可能已登记元数据、尚未写检查点；只清理无人持有的空白索引。
+        // A process doing its first commit may have registered metadata but not yet written a checkpoint; clean up only unheld blank indexes.
         const lock = join(this.directory, 'locks', key(info.id) + '.lock');
         await withFileLock(lock + '.claim', async () => {
           if (await readOptional(lock) !== undefined) return;
@@ -92,17 +92,17 @@ export class SessionManager {
         const info = await stat(path);
         stream = createReadStream(path, {encoding: 'utf8'});
         lines = createInterface({input: stream, crlfDelay: Infinity});
-        // readline 创建后立即订阅，避免其它 await 期间错过 line/close。
+        // Subscribe immediately after creating readline so line/close are not missed during other awaits.
         for await (const line of lines) {
           const entry = indexEntrySchema.parse(JSON.parse(line));
-          if (file !== createHash('sha256').update(JSON.stringify([entry.sessionId, entry.ownerId])).digest('hex') + '.jsonl') throw new Error('账本身份不匹配');
+          if (file !== createHash('sha256').update(JSON.stringify([entry.sessionId, entry.ownerId])).digest('hex') + '.jsonl') throw new Error('Ledger identity mismatch');
           record ??= {sessionId: entry.sessionId, ownerId: entry.ownerId, created: entry.time ?? info.birthtimeMs,
             updated: info.mtimeMs, submitted: false, uncertain: false};
           if (entry.role === 'user') {
             record.submitted = true; record.title = entry.text.replace(/\s+/g, ' ').slice(0, 100); break;
           }
         }
-      } catch {if (record) record.uncertain = true; issues.push('会话账本无法建立完整索引：' + file);}
+      } catch {if (record) record.uncertain = true; issues.push('Session ledger could not be fully indexed: ' + file);}
       finally {lines?.close(); stream?.destroy();}
       if (record) records.push(record);
     }
@@ -112,8 +112,8 @@ export class SessionManager {
     if (records.some(record => record.sessionId === id && (record.submitted || record.uncertain))) return true;
     const journal = new Journal(join(this.directory, 'sessions'));
     try {if ((await journal.tasks(id)).length) return true;}
-    catch {issues.push('会话任务记录损坏：' + id); return true;}
-    // 无法确认损坏记录为空白时保留索引，让恢复流程报告原因。
+    catch {issues.push('Session task record corrupt: ' + id); return true;}
+    // Keep the index when a corrupt record cannot be confirmed blank, so recovery can report why.
     for (const owner of ['logox', 'aletheia', 'techne', 'kalon']) {
       const file = journal.path(id, owner);
       if (!records.some(record => record.sessionId === id && record.ownerId === owner)) {
@@ -138,14 +138,14 @@ export class SessionManager {
     const previous = await this.info(id), now = Date.now();
     const summary = title?.replace(/\s+/g, ' ').slice(0, 100);
     await atomicWrite(this.metadataPath(id), Buffer.from(JSON.stringify({version: 1, id, project: this.project,
-      created: previous?.created ?? now, updated: now, title: previous?.title && (previous.title !== '新会话' || !summary) ? previous.title : summary || '新会话'})));
+      created: previous?.created ?? now, updated: now, title: previous?.title && (previous.title !== 'New session' || !summary) ? previous.title : summary || 'New session'})));
   }
-  /** 租约保护全部备份/提交/清理，活跃会话无法被删除。 */
+  /** A lease guards all backup/commit/cleanup steps; active sessions cannot be deleted. */
   async remove(id: string, ownerHints: readonly string[] = []): Promise<SessionRemoval> {
     const lease = await this.acquire(id);
     try {
       const info = await this.info(id);
-      if (!info && !await this.hasContent(id)) throw new Error('没有此项目的会话：' + id);
+      if (!info && !await this.hasContent(id)) throw new Error('No session for this project: ' + id);
       const records = await this.journals(), journal = new Journal(join(this.directory, 'sessions'));
       const tasks = await journal.tasks(id).catch(() => []);
       const owners = new Set(['logox', 'aletheia', 'techne', 'kalon', '$session', '$system', '$collaboration', ...ownerHints,
@@ -161,7 +161,7 @@ export class SessionManager {
     } finally {await lease.release();}
   }
   async acquire(id: string): Promise<SessionLease> {
-    if (!id.trim()) throw new Error('会话 ID 不能为空');
+    if (!id.trim()) throw new Error('Session ID must not be empty');
     const directory = join(this.directory, 'locks');
     await mkdir(directory, {recursive: true});
     const file = join(directory, key(id) + '.lock'), token = randomUUID();
@@ -172,12 +172,12 @@ export class SessionManager {
       const raw = await readOptional(file);
       if (raw !== undefined) {
         let lock: z.infer<typeof lockSchema>;
-        try {lock = lockSchema.parse(JSON.parse(raw));} catch {throw new Error('会话锁损坏，请检查锁拥有者后手动恢复：' + file);}
+        try {lock = lockSchema.parse(JSON.parse(raw));} catch {throw new Error('Session lock corrupt; check the lock owner and recover manually: ' + file);}
         let dead = false;
         if (lock.host === hostname()) {
           try {process.kill(lock.pid, 0);} catch (failure) {dead = (failure as NodeJS.ErrnoException).code === 'ESRCH';}
         }
-        if (!dead) throw new Error('会话已被其他进程占用：' + id);
+        if (!dead) throw new Error('Session is in use by another process: ' + id);
       }
       await atomicWrite(file, Buffer.from(JSON.stringify(record)));
     });
@@ -185,7 +185,7 @@ export class SessionManager {
     return {async release() {
       await withFileLock(claim, async () => {
         if (released) return;
-        if (await readOptional(file) !== JSON.stringify(record)) throw new Error('会话锁拥有者发生变化，未释放他人锁');
+        if (await readOptional(file) !== JSON.stringify(record)) throw new Error("Session lock owner changed; not releasing another process's lock");
         await unlink(file); released = true;
       });
     }};

@@ -44,8 +44,8 @@ export class PermissionEngine {
     const samePath = process.platform === 'win32'
       ? saved.root.toLowerCase() === currentRoot.toLowerCase()
       : saved.root === currentRoot;
-    if (!samePath || saved.rules.some(rule => rule.scope !== 'project')) throw new Error('权限文件项目身份不符');
-    if (new Set(saved.rules.map(rule => rule.id)).size !== saved.rules.length) throw new Error('权限规则 ID 重复，原文件保留');
+    if (!samePath || saved.rules.some(rule => rule.scope !== 'project')) throw new Error('Permission file project identity mismatch');
+    if (new Set(saved.rules.map(rule => rule.id)).size !== saved.rules.length) throw new Error('Duplicate permission rule ID; original file preserved');
     return saved;
   }
   async load(): Promise<void> {
@@ -82,7 +82,7 @@ export class PermissionEngine {
     const rule = permissionRuleSchema.parse({...input, id: randomUUID()});
     if (rule.tool === 'shell' && rule.pattern !== '*') {
       const parsed = shellWords(rule.pattern);
-      if (parsed.compound || parsed.dynamic) throw new Error('Shell 规则必须是静态词元前缀');
+      if (parsed.compound || parsed.dynamic) throw new Error('Shell rules must be static token prefixes');
     }
     await this.update(rules => [...rules, rule], rule.scope === 'project');
     return rule;
@@ -92,7 +92,7 @@ export class PermissionEngine {
   }
   clearSession(): void {this.rules = this.rules.filter(rule => rule.scope !== 'session');}
   async revoke(id: string): Promise<void> {
-    await this.update(rules => {if (!rules.some(rule => rule.id === id)) throw new Error('权限规则不存在'); return rules.filter(rule => rule.id !== id);}, !this.rules.some(rule => rule.id === id && rule.scope === 'session'));
+    await this.update(rules => {if (!rules.some(rule => rule.id === id)) throw new Error('Permission rule not found'); return rules.filter(rule => rule.id !== id);}, !this.rules.some(rule => rule.id === id && rule.scope === 'session'));
   }
   evaluate(target: PermissionTarget): {decision: 'allow' | 'deny' | 'ask' | 'review'; reason: string} {
     const shell = target.command === undefined ? undefined : shellWords(target.command);
@@ -107,7 +107,7 @@ export class PermissionEngine {
           return prefix.every((word, i) => word.toLowerCase() === words[i]?.toLowerCase());});
       })()
       : target.paths.some(path => globMatch(rule.pattern, path))));
-    if (this.rules.some(rule => rule.decision === 'deny' && matches(rule))) return {decision: 'deny', reason: '命中显式拒绝规则'};
+    if (this.rules.some(rule => rule.decision === 'deny' && matches(rule))) return {decision: 'deny', reason: 'Matched an explicit deny rule'};
     if (this.scratchpadDir && target.paths.length > 0 && target.paths.every(p => isScratchpadPath(p, this.scratchpadDir!))) {
       return {decision: 'allow', reason: 'Scratchpad directory is allowed for temporary operations'};
     }
@@ -115,17 +115,17 @@ export class PermissionEngine {
     // Development mode (creative) may write its own runtime tree — skills, prompts,
     // journals. Credential and VCS-internal protection are separate dangers and stay.
     if (danger === RUNTIME_WRITE_DANGER && this.mode === 'creative') {
-      return {decision: 'allow', reason: 'creative：开发模式允许写入运行目录（凭据与版本库仍受保护）'};
+      return {decision: 'allow', reason: 'creative: development mode allows writes to the runtime directory (credentials and repositories remain protected)'};
     }
     if (danger) return {decision: this.mode === 'creative' ? 'deny' : 'ask', reason: danger};
-    if (this.rules.some(rule => rule.decision === 'allow' && matches(rule))) return {decision: 'allow', reason: '命中允许规则'};
-    if (this.mode === 'creative') return {decision: 'allow', reason: 'creative：危险过滤后默认允许'};
+    if (this.rules.some(rule => rule.decision === 'allow' && matches(rule))) return {decision: 'allow', reason: 'Matched an allow rule'};
+    if (this.mode === 'creative') return {decision: 'allow', reason: 'creative: allowed by default after danger filtering'};
     const read = target.effect === 'read' || ['read', 'glob', 'grep', 'ask_user', 'askuserquestion', 'webfetch', 'web_fetch'].includes(toolLower) || impact?.kind === 'safe';
-    if (!target.risky && read) return {decision: 'allow', reason: '普通只读操作'};
+    if (!target.risky && read) return {decision: 'allow', reason: 'Ordinary read-only operation'};
     if (this.mode === 'auto') {
-      if (!target.risky && ['write', 'edit'].includes(toolLower)) return {decision: 'allow', reason: 'auto：项目内常规文件编辑'};
-      return {decision: 'review', reason: 'auto：需要独立模型判断实际影响'};
+      if (!target.risky && ['write', 'edit'].includes(toolLower)) return {decision: 'allow', reason: 'auto: routine file edit inside the project'};
+      return {decision: 'review', reason: 'auto: an independent model must assess the actual impact'};
     }
-    return {decision: 'ask', reason: target.risky ? '敏感或越界目标需要授权' : 'default：操作尚未授权'};
+    return {decision: 'ask', reason: target.risky ? 'Sensitive or out-of-scope target requires authorization' : 'default: operation not yet authorized'};
   }
 }

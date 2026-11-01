@@ -77,7 +77,7 @@ export function layoutTable(input: readonly TableInputLine[], index: number, wid
         const content = render(value.text, value.start, width, record.header);
         if (!record.header) {
           // Labels occupy their own wrapped lines; they are presentation, not copied content.
-          for (const label of render(header[column]!.text + '：', header[column]!.start, width, true))
+          for (const label of render(header[column]!.text + ': ', header[column]!.start, width, true))
             rows.push({...label, cells: [], start: sourceBlock.start, end: sourceBlock.start, noSelect: true});
         }
         for (const line of content) rows.push({...line, sourceBlock, softWrap: false});

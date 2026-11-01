@@ -216,3 +216,34 @@ test('application /login uses local form, never runtime interactions or external
     } finally {await app.close();}
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
+
+test('login wizard groups models by family and expands toggled families to full tier variants', async () => {
+  const script = scripted(['add', 'url', 'tier-proxy', '', '8045', 'completions', 'gemini-4-argon', 'write']);
+  let committedRecord: any;
+  const fixture = deps(script.ask, {
+    discoverModels: async () => [
+      'gemini-4-argon-low',
+      'gemini-4-argon-medium',
+      'gemini-4-argon-high',
+      'text-embedding-3-small',
+    ],
+    saveCustom: async record => { committedRecord = record; },
+  });
+
+  const outcome = await runLoginWizard(fixture.deps);
+  assert.equal(outcome, 'added');
+
+  // Question 7 is model selection (0: root, 1: source, 2: name, 3: key, 4: url, 5: protocol, 6: models, 7: confirm):
+  const modelQuestion = script.questions[6]!;
+  assert.ok(modelQuestion.options?.some(opt => opt.id === 'gemini-4-argon'));
+  assert.ok(!modelQuestion.options?.some(opt => opt.id.includes('text-embedding')));
+
+  // Committed record has all 3 variants expanded:
+  assert.ok(committedRecord);
+  assert.deepEqual(committedRecord.models, [
+    'gemini-4-argon-low',
+    'gemini-4-argon-medium',
+    'gemini-4-argon-high',
+  ]);
+  assert.equal(committedRecord.default_model, 'gemini-4-argon-low');
+});

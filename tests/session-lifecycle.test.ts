@@ -160,10 +160,10 @@ test('最近正式会话占用时打开列表与临时空白；不悄悄进入�
     assert.notEqual(fallback.sessionId, 'older');
     assert.equal(fallback.isSessionPersistent(), false);
     assert.equal(fallback.surfaces.getSnapshot()?.kind, 'picker');
-    assert.ok(fallback.store.getSnapshot().messages.some(message => message.text.includes('其他进程占用')));
+    assert.ok(fallback.store.getSnapshot().messages.some(message => message.text.includes('in use by another process')));
     assert.equal((await fallback.sessions.list()).sessions.length, 2);
-    await assert.rejects(f.open({sessionId: 'latest'}), /占用/);
-    await assert.rejects(f.open({resume: true}), /占用/);
+    await assert.rejects(f.open({sessionId: 'latest'}), /in use by another process/);
+    await assert.rejects(f.open({resume: true}), /in use by another process/);
   } finally {await f.close();}
 });
 
@@ -175,8 +175,8 @@ test('最近坏账本保留原文并打开列表；显式 ID 不隐藏错误；�
     await writeFile(file, bytes);
     const fallback = await f.open();
     assert.equal(fallback.isSessionPersistent(), false);
-    assert.ok(fallback.store.getSnapshot().messages.some(message => message.text.includes('最近会话无法进入')));
-    await assert.rejects(f.open({sessionId: 'damaged'}), /末行未完整/);
+    assert.ok(fallback.store.getSnapshot().messages.some(message => message.text.includes('Cannot open the recent session')));
+    await assert.rejects(f.open({sessionId: 'damaged'}), /not fully committed/);
     const surface = fallback.surfaces.getSnapshot();
     assert.ok(surface?.kind === 'picker');
     const fresh = surface.items.find(item => JSON.parse(item.id)[1] === 'new');

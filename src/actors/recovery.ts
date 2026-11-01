@@ -17,7 +17,7 @@ const stateSchema = z.strictObject({version: z.literal(1), sessionId: z.string()
   assigned: z.array(reportSchema.extend({activityId: z.string()})).max(128).default([])});
 type RecoveryState = z.infer<typeof stateSchema>;
 
-/** 主循环接续门、待交接报告与跨执行者的故障预算；关闭和重启不会重新派工。 */
+/** Main-loop continuation gate, pending handoff reports, and cross-executor failure budget; closing and restarting never re-dispatch work. */
 export class ActorRecovery {
   private state: RecoveryState;
   private readonly file: StateFile<RecoveryState> | undefined;
@@ -28,7 +28,7 @@ export class ActorRecovery {
   }
   async recover(validActivities?: ReadonlySet<string>): Promise<void> {
     const saved = await this.file?.read();
-    if (saved && saved.sessionId !== this.state.sessionId) throw new Error('角色协调状态的会话身份不一致');
+    if (saved && saved.sessionId !== this.state.sessionId) throw new Error('Actor coordination state session identity mismatch');
     if (saved) this.state = saved;
     if (saved) {
       const before = JSON.stringify(this.state);
@@ -38,7 +38,7 @@ export class ActorRecovery {
         this.state.pending = this.state.pending.filter(result => validActivities.has(result.rootActivityId));
         this.state.assigned = this.state.assigned.filter(result => validActivities.has(result.rootActivityId));
       }
-      // 协调保存可能先于接收任务的排队检查点完成；按原结果的根身份恢复，不能因接收方缺记录而丢失。
+      // Coordination saves may finish before the receiving task's queue checkpoint; restore by the original result's root identity so it is not lost when the receiver has no record.
       this.state.pending.push(...this.state.assigned.map(({rootActivityId, report}) => ({rootActivityId, report})));
       this.state.pending = this.state.pending.slice(-128); this.state.assigned = [];
       if (JSON.stringify(this.state) !== before) await this.persist();
@@ -74,12 +74,12 @@ export class ActorRecovery {
   }
   private report(items: readonly {report: string}[]): string {
     const reports = items.map(result => result.report);
-    return reports.length ? '此前角色任务的待处理结果（用户新指示优先）：\n' + reports.join('\n\n') : '';
+    return reports.length ? 'Pending results from earlier actor tasks (new user instructions take priority):\n' + reports.join('\n\n') : '';
   }
   async next(root: string, error: unknown, inherited?: TaskOrigin['recovery']): Promise<NonNullable<TaskOrigin['recovery']>> {
     const key = faultKey(error);
     const counts = this.state.roots[root] ?? {};
-    // 提供商按类别/诊断码归一；相同故障换执行者不重置，不同故障独立计数。
+    // Providers are normalized by category/diagnostic code; the same failure does not reset on a new executor, and distinct failures count independently.
     const fault = error === undefined && inherited ? inherited.key : key;
     const count = counts[fault] ?? (inherited?.key === fault ? inherited.attempt : 0);
     const exhausted = count >= 2;
@@ -117,7 +117,7 @@ export class ActorRecovery {
     state.noDelivery.used = 0;
     state.truncation.used = 0;
     state.truncationReviewed = false;
-    // 取得真实进展后，清空此前已解决的瞬态网络故障计数，防止历史抖动永久锁死后续正常请求
+    // After real progress, clear earlier resolved transient network failure counts so past flakiness cannot permanently block later normal requests
     delete this.state.roots[root];
     this.executionEvent(state, 'progress', 'execution', state.noDelivery.total + state.truncation.total);
     await this.persist();

@@ -61,7 +61,7 @@ export class Snapshots {
   }
   async apply(path: string, before: Buffer | null, after: Buffer, activityId: string, signal: AbortSignal, ownerId?: string): Promise<void> {
     signal.throwIfAborted();
-    if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('文件已被其他操作修改，请重新读取后再编辑');
+    if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('The file was modified by another operation; re-read it before editing');
     this.lastTime = Math.max(Date.now(), this.lastTime + 1);
     const afterHash = hash(after);
     const snapshot: Snapshot = {id: randomUUID(), activityId, path, time: this.lastTime,
@@ -71,7 +71,7 @@ export class Snapshots {
     await writeFile(file, JSON.stringify(snapshot), {flag: 'wx'});
     try {
       signal.throwIfAborted();
-      if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('备份期间文件发生变化，未执行修改');
+      if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('The file changed during backup; modification not performed');
       await atomicWrite(path, after);
       if (ownerId) {
         this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime});
@@ -95,7 +95,7 @@ export class Snapshots {
     if (!latest) return [];
     const batch = snapshots.filter(item => item.entry.activityId === latest);
     const result = await this.restore([latest]);
-    if (!result.success) throw new Error('撤销未完成；已恢复：' + (result.restored.join(', ') || '无') + '；失败：' + result.failed.join(', ') + '；' + result.error);
+    if (!result.success) throw new Error('Undo incomplete; restored: ' + (result.restored.join(', ') || 'none') + '; failed: ' + result.failed.join(', ') + '; ' + result.error);
     for (const {file} of batch) await unlink(file);
     return result.restored;
   }
@@ -104,13 +104,13 @@ export class Snapshots {
     const planned = new Map<string, Buffer | null>();
     const originals = new Map<string, Buffer | null>();
     const expected = new Map<string, string>();
-    // 倒序验证快照链，最终目标是区间最早 before；所有路径预检后才改文件。
+    // Verify the snapshot chain in reverse; the final target is the earliest before-state in the range; files change only after all paths pass pre-checks.
     try {
       for (const {entry} of batch) {
         if (!expected.has(entry.path)) expected.set(entry.path, entry.afterHash);
         else {
           const next = planned.get(entry.path);
-          if (!next || hash(next) !== entry.afterHash) throw new Error('文件快照链不连续：' + entry.path);
+          if (!next || hash(next) !== entry.afterHash) throw new Error('File snapshot chain is not contiguous: ' + entry.path);
         }
         planned.set(entry.path, entry.before === null ? null : Buffer.from(entry.before, 'base64'));
       }
@@ -118,7 +118,7 @@ export class Snapshots {
         await this.validatePath(path);
         const current = await bytesOrMissing(path);
         originals.set(path, current);
-        if (!sameBytes(current, target) && (current === null || hash(current) !== expected.get(path))) throw new Error('文件已有后续修改：' + path);
+        if (!sameBytes(current, target) && (current === null || hash(current) !== expected.get(path))) throw new Error('File has later modifications: ' + path);
       }
     } catch (error) {return {success: false, restored: [], failed: [...planned.keys()], error: error instanceof Error ? error.message : String(error)};}
     const restored: string[] = [], failed: string[] = [];
@@ -127,7 +127,7 @@ export class Snapshots {
       try {
         await this.validatePath(path);
         const current = await bytesOrMissing(path);
-        if (!sameBytes(current, originals.get(path)!)) throw new Error('回退期间文件发生变化：' + path);
+        if (!sameBytes(current, originals.get(path)!)) throw new Error('File changed during rewind: ' + path);
         if (!sameBytes(current, bytes)) await this.writeRestored(path, bytes);
         restored.push(path);
       } catch (failure) {failed.push(path); error = failure instanceof Error ? failure.message : String(failure);}
@@ -138,11 +138,11 @@ export class Snapshots {
     if (bytes === null) await unlink(path); else await atomicWrite(path, bytes);
   }
   private async validatePath(path: string): Promise<void> {
-    if (resolve(path) !== path || path.split(/[\\/]/).some(part => ['.logox', '.git', 'legacy'].includes(part.toLowerCase()))) throw new Error('回退路径无效：' + path);
+    if (resolve(path) !== path || path.split(/[\\/]/).some(part => ['.logox', '.git', 'legacy'].includes(part.toLowerCase()))) throw new Error('Invalid rewind path: ' + path);
     let candidate = path;
     for (;;) {
       try {
-        if ((await realpath(candidate)).toLowerCase() !== candidate.toLowerCase()) throw new Error('回退路径被链接改写：' + path);
+        if ((await realpath(candidate)).toLowerCase() !== candidate.toLowerCase()) throw new Error('Rewind path was rewritten by a link: ' + path);
         return;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

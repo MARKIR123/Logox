@@ -65,7 +65,7 @@ test('truncated batches execute no effects and preserve valid history across bou
       'Valid text survives removal of truncated tool calls');
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.equal(history.filter(entry => entry.role === 'tool').length, 6, 'All unexecuted batch results remain recorded');
-    assert.match(f.app.store.activities.get('task-flow', handle.activityId)!.detail, /截断/);
+    assert.match(f.app.store.activities.get('task-flow', handle.activityId)!.detail, /truncated/);
   } finally {await f.close();}
 });
 

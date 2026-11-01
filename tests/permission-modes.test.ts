@@ -183,7 +183,7 @@ test('正式应用：Actor使用会话审批模型、当前授权上下文、审
   await mkdir(join(f.cwd, '.logox', 'actors'), {recursive: true});
   await writeFile(join(f.cwd, '.logox', 'actors', 'scout.md'), serializeActor({...builtinActors[1]!, id: 'scout', name: '审批测试角色', defaultModel: {provider: 'local', model: 'actor-model'}}));
   const provider: Provider = {respond: async request => {
-    if (request.system.startsWith('你是独立的工具权限审查者')) {
+    if (request.system.startsWith('You are an independent tool permission reviewer')) {
       reviews++; assert.match(request.messages[0]!.text, /输出测试标记/); return turn();
     }
     if (request.tools.length && taskCalls++ === 0) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: process.platform === 'win32' ? 'Write-Output ready' : 'echo ready'})]}};
@@ -244,7 +244,7 @@ test('审批等待中切creative释放旧请求并重新执行；真实应用模
     config.permissions.mode = mode; let calls = 0, reviews = 0;
     const outside = join(f.cwd, '..', 'logox-outside-' + f.cwd.split(/[\\/]/).at(-1) + '.txt');
     const app = await createApplication({cwd: f.cwd, config, provider: {respond: async request => {
-      if (request.system.startsWith('你是独立的工具权限审查者')) {reviews++; throw new Error('offline');}
+      if (request.system.startsWith('You are an independent tool permission reviewer')) {reviews++; throw new Error('offline');}
       return calls++ === 0 ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: mode === 'auto' ? outside : 'result.txt', content: 'once'})]}}
         : {stop: 'complete', message: {role: 'assistant', text: '完成'}};
     }}, resourceOptions: {home: f.cwd, boundary: f.cwd}, statusbarPath: join(f.cwd, 'statusbar.json')});

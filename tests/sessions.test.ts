@@ -78,17 +78,17 @@ test('任务等待期间拒绝切换；目标加载失败保留旧运行时和�
   }});
   try {
     await f.app.submit('等待');
-    await assert.rejects(f.app.submit('/new'), /任务处理中/);
-    await assert.rejects(f.app.submit('/resume first'), /任务处理中/);
-    await assert.rejects(f.app.submit('/clear'), /任务处理中/);
-    await assert.rejects(f.app.submit('/rewind'), /任务处理中/);
+    await assert.rejects(f.app.submit('/new'), /Tasks are running/);
+    await assert.rejects(f.app.submit('/resume first'), /Tasks are running/);
+    await assert.rejects(f.app.submit('/clear'), /Tasks are running/);
+    await assert.rejects(f.app.submit('/rewind'), /Tasks are running/);
     const task = f.app.store.getSnapshot().activities[0]!; f.app.cancel(task.activityId);
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities[0]?.status === 'cancelled');
     await new Promise<void>(resolve => setImmediate(resolve));
     const store = f.app.store;
-    await assert.rejects(f.app.submit('/resume missing'), /没有此项目的会话/);
+    await assert.rejects(f.app.submit('/resume missing'), /No session for this project/);
     assert.equal(f.app.store, store); assert.equal(f.app.sessionId, 'first');
-    await assert.rejects(f.app.sessions.acquire('first'), /占用/);
+    await assert.rejects(f.app.sessions.acquire('first'), /in use by another process/);
   } finally {await f.cleanup();}
 });
 
@@ -158,11 +158,11 @@ test('回退保留用户漂移，失败不推进分支；未完成操作重启�
     assert.equal(await readFile(file, 'utf8'), 'user-edit');
     assert.equal((await f.app.journal.load('first', 'logox')).length, 2);
     assert.ok(f.app.surfaces.getSnapshot()?.kind === 'picker'); f.app.surfaces.cancel();
-    await assert.rejects(f.app.submit('不能开始'), /回退未完成/);
+    await assert.rejects(f.app.submit('不能开始'), /rewind is unfinished/);
     await f.app.close();
     const app = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, env: {}, authPath: join(f.cwd, "auth.json"), resume: true, config: f.config, provider: f.provider});
     try {
-      await assert.rejects(app.submit('/compact'), /回退未完成/);
+      await assert.rejects(app.submit('/compact'), /rewind is unfinished/);
       await writeFile(file, 'after');
       await app.submit('/rewind'); await choose(app);
       assert.equal(await readFile(file, 'utf8'), 'before');
@@ -204,7 +204,7 @@ test('坏尾行阻止追加；恢复 picker 创建完整前缀的新会话，源
     await f.app.sessions.touch('damaged', '坏账本');
     const file = j.path('damaged', 'logox'), broken = (await readFile(file, 'utf8')) + '{"partial":';
     await writeFile(file, broken);
-    await assert.rejects(j.append({version: 1, sessionId: 'damaged', ownerId: 'logox', role: 'user', text: '不能覆盖'}), /末行未完整/);
+    await assert.rejects(j.append({version: 1, sessionId: 'damaged', ownerId: 'logox', role: 'user', text: '不能覆盖'}), /not fully committed/);
     await f.app.submit('/resume damaged');
     assert.equal(f.app.sessionId, 'first'); f.app.surfaces.cancel(); assert.equal(await readFile(file, 'utf8'), broken);
     await f.app.submit('/resume'); await choose(f.app, value => JSON.parse(value)[0] === 'damaged');
@@ -320,7 +320,7 @@ test('跨进程会话锁竞争、退出释放和死亡锁恢复；损坏锁不�
   try {
     await new Promise<void>((resolve, reject) => {child.stdout.once('data', () => resolve()); child.once('error', reject); child.once('exit', code => {if (code) reject(new Error('锁测试子进程失败'));});});
     const manager = await SessionManager.open(cwd);
-    await assert.rejects(manager.acquire('shared'), /占用/);
+    await assert.rejects(manager.acquire('shared'), /in use by another process/);
     const exit = new Promise<void>(resolve => child.once('exit', () => resolve())); child.stdin.write('release'); await exit;
     const lease = await manager.acquire('shared'); await lease.release();
     await lease.release();
@@ -333,8 +333,8 @@ test('跨进程会话锁竞争、退出释放和死亡锁恢复；损坏锁不�
     const corruptLease = await manager.acquire('bad');
     const lock = (await import('node:fs/promises').then(fs => fs.readdir(directory))).find(file => file.endsWith('.lock'))!;
     await writeFile(join(directory, lock), 'broken');
-    await assert.rejects(manager.acquire('bad'), /锁损坏/);
-    await assert.rejects(corruptLease.release(), /拥有者发生变化/);
+    await assert.rejects(manager.acquire('bad'), /lock corrupt/);
+    await assert.rejects(corruptLease.release(), /lock owner changed/);
     assert.equal(await readFile(join(directory, lock), 'utf8'), 'broken');
   } finally {child.kill(); await rm(cwd, {recursive: true, force: true});}
 });

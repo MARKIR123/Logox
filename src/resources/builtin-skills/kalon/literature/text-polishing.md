@@ -4,7 +4,7 @@ description: Narrative rhythm, literary copy polishing, voice calibration & tone
 actors: [kalon]
 ---
 
-# Text & Narrative Polishing SOP (文学文案润色与叙事语气塑造)
+# Text & Narrative Polishing SOP
 
 ## 1. Cadence and Sentence Economy
 - Cut hollow adjectives, AI throat-clearing, and verbose filler words.

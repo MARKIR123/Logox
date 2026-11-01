@@ -67,7 +67,7 @@ test('塑造拒绝和取消不写，审批原文明确，审批间修改受保�
     await assert.rejects(management.craftActor(content, async () => {abort.abort(); return true;}, abort.signal));
     assert.equal((await management.craftActor(content, async () => true, signal)).status, 'saved');
     assert.ok(f.catalog.find('scout'));
-    await assert.rejects(management.craftActor(content, async () => {await writeFile(f.catalog.projectPath('scout'), '用户编辑'); return true;}, signal), /改变/);
+    await assert.rejects(management.craftActor(content, async () => {await writeFile(f.catalog.projectPath('scout'), '用户编辑'); return true;}, signal), /has changed/);
     assert.equal(await readFile(f.catalog.projectPath('scout'), 'utf8'), '用户编辑');
   } finally {await f.close();}
 });
@@ -123,9 +123,9 @@ test('技能双向声明、显式分配与一次任务借阅不永久扩权', as
   } finally {await f.close();}
 });
 
-test('三文件角色档案（config.yaml/persona.md/compression.md）正确解析，并从 ~/.logox-ts/actors 加载', async () => {
+test('三文件角色档案（config.yaml/persona.md/compression.md）正确解析，并从 ~/.logox/actors 加载', async () => {
   const f = await fixture(); try {
-    const actorDir = join(f.home, '.logox-ts', 'actors', 'custom');
+    const actorDir = join(f.home, '.logox', 'actors', 'custom');
     await f.put(join(actorDir, 'config.yaml'), `id: custom
 name: 自定义角色
 title: 自定义专家

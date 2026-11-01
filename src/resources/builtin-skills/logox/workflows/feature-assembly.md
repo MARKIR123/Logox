@@ -4,7 +4,7 @@ description: End-to-end agile feature assembly & multi-actor coordination workfl
 actors: [logox]
 ---
 
-# Feature Assembly Workflow SOP (全功能敏捷装配流)
+# Feature Assembly Workflow SOP
 
 This SOP governs how Director Logox coordinates Kalon, Techne, and Aletheia to build end-to-end features rapidly with zero deadlocks and zero duplicate card fragmentation.
 

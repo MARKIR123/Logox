@@ -37,7 +37,7 @@ Available to all ensemble actors and Director Logox. Use this procedure whenever
    - Use the designated location directly.
 2. **If the user did not specify scope**:
    - Invoke `AskUserQuestion` asking whether to store in:
-     - **User Global (`~/.logox-ts/skills/`)**: Available across all projects for this user (Recommended for general SOPs).
+     - **User Global (`~/.logox/skills/`)**: Available across all projects for this user (Recommended for general SOPs).
      - **Project Private (`<cwd>/.logox/skills/`)**: Isolated to this specific repository.
 
 ### Step 4: Standardized SOP Rewrite (Strict 100% English)

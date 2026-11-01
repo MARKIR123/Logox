@@ -3,7 +3,7 @@ import type {RuntimeStore} from '../runtime/store.js';
 import type {SystemEvent, SystemPresentation} from '../runtime/system-events.js';
 import type {Journal} from './journal.js';
 
-/** 界面和持久历史共享事件身份；临时会话先缓冲，正式提交后保存。 */
+/** The UI and persistent history share event identity; temporary sessions buffer first and save after the formal commit. */
 export class SystemHistory {
   private readonly pending: SystemEvent[] = [];
   private tail: Promise<void> = Promise.resolve();
@@ -20,7 +20,7 @@ export class SystemHistory {
     if (!persist) return;
     this.pending.push(event);
     if (this.isPersistent()) void this.flush().catch(() => {
-      this.emit('系统记录保存失败，界面记录保留；下次保存时重试。', 'task_notice', ownerId, undefined, false);
+      this.emit('System history save failed; the UI record is kept and will be retried on the next save.', 'task_notice', ownerId, undefined, false);
     });
   }
   flush(): Promise<void> {

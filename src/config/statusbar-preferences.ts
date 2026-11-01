@@ -29,20 +29,17 @@ export interface StatusbarSnapshot extends StatusbarAppearance {readonly revisio
 /** User layout and appearance are persisted together before becoming visible. */
 export class StatusbarPreferences {
   private readonly file: StateFile<z.infer<typeof schema>>;
-  private readonly fallbackFile?: StateFile<z.infer<typeof schema>>;
   private state: StatusbarSnapshot = immutable({revision: 0, modules: defaultStatusbar, motion: true, style: 'pipes', colorScheme: 'theme'});
   private listeners = new Set<() => void>();
   private pending: Promise<void> = Promise.resolve();
-  constructor(path = join(homedir(), '.logox', 'statusbar.json'), fallbackPath?: string) {
+  constructor(path = join(homedir(), '.logox', 'statusbar.json')) {
     this.file = new StateFile(path, schema);
-    const effectiveFallback = fallbackPath ?? (path === join(homedir(), '.logox', 'statusbar.json') ? join(homedir(), '.logox-ts', 'statusbar.json') : undefined);
-    if (effectiveFallback) this.fallbackFile = new StateFile(effectiveFallback, schema);
   }
   getSnapshot = (): StatusbarSnapshot => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
   load(): Promise<void> {
     return this.enqueue(async () => {
-      const saved = await this.file.read() ?? await this.fallbackFile?.read();
+      const saved = await this.file.read();
       if (saved) this.publish(saved.modules, saved.motion ?? true, {style: saved.style ?? 'pipes', colorScheme: saved.colorScheme ?? 'theme'});
     });
   }

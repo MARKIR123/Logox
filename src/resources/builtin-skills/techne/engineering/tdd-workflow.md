@@ -4,7 +4,7 @@ description: Strict red-green-refactor test-driven development cycle and regress
 actors: [techne]
 ---
 
-# TDD Workflow SOP (严格红绿测试驱动开发流)
+# TDD Workflow SOP
 
 ## 1. Phase 1: Red (Failing Test First)
 - Write the minimal test that specifies the expected behavior.

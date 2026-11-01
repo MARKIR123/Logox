@@ -85,7 +85,7 @@ test('App result owns copy/back, restores draft/history/focus, and preserves glo
     await key('keep this chat draft'); await key('\x1b[5~');
     const before = screen(output).match(/history row \d+/g); assert.ok(before?.length);
     await key('\t');
-    const approvalComposer = output.lines.find(line => line.startsWith('许可：'));
+    const approvalComposer = output.lines.find(line => line.startsWith('Permission: '));
     assert.ok(approvalComposer, 'The approval owns the composer before opening a result');
     const focusedBefore = screen(output).match(/history row \d+/g);
     const result = Array.from({length: 100}, (_, index) => 'query-only row ' + index).join('\n');

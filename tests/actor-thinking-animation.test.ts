@@ -53,11 +53,11 @@ test('Actor card when active reuses thinking animation and breathing title wave'
   assert.equal(iconEarly, '▖');
   assert.equal(iconMid, '▘');
 
-  // Title shimmers with breathing luster
+  // Title stays stable without breathing distraction
   const titleEarly = decEarly.segments?.filter(s => s.selectionKey === 'techne-task:title');
   const titleMid = decMid.segments?.filter(s => s.selectionKey === 'techne-task:title');
   assert.ok(titleEarly && titleEarly.length > 0);
-  assert.notDeepEqual(titleEarly, titleMid, 'Title color breathes across animation frames');
+  assert.deepEqual(titleEarly, titleMid, 'Title text color stays stable without visual distraction');
 
   // 2. Inactive card (completed): restores static symbol and clean title
   const b2 = createBuilder(80, null, roles);

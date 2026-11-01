@@ -34,7 +34,7 @@ import {extractNarration, stripNarration} from '../runtime/narration.js';
 
 export class UserCancelledError extends Error {
   readonly stopReason = 'user' as const;
-  constructor(message = '已达到本轮执行额度，用户选择停止') {
+  constructor(message = 'Reached this round\'s execution limit; user chose to stop') {
     super(message);
     this.name = 'UserCancelledError';
   }
@@ -68,7 +68,7 @@ export interface AgentOptions {
   resources?: Resources;
   extraRegistrations?: readonly ToolRegistration[];
   extraTools?: readonly ToolDefinition[];
-  /** 仅可信装配配置：这些扩展在执行器完整校验参数后自行调用 authorizeExtension。 */
+  /** Trusted assembly config only: these extensions call authorizeExtension themselves after the executor fully validates arguments. */
   extraApprovalHandled?: readonly string[];
   executeExtra?(call: ToolCall, context: Parameters<ActorExecutor<string>>[1]): Promise<ToolResult>;
 }
@@ -110,9 +110,9 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const localRecoveries = new Map<string, ActorRecovery>();
   const approvalHandled = new Set(options.extraApprovalHandled ?? []);
-  for (const name of approvalHandled) if (!options.executeExtra || !options.extraTools?.some(tool => tool.name === name)) throw new Error('审批交接必须指向已装配扩展：' + name);
+  for (const name of approvalHandled) if (!options.executeExtra || !options.extraTools?.some(tool => tool.name === name)) throw new Error('Approval handoff must point to an assembled extension: ' + name);
   const concurrency = options.readonlyConcurrency ?? 4;
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('只读并发必须为 1–8');
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('Read-only concurrency must be 1-8');
   return async (prompt, context) => {
     if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
     const progress = new TaskProgress(options.store, context);
@@ -127,7 +127,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const messages: ModelMessage[] = normalizeMessages(omitInternalToolPairs(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
         : storedMessage(entry))));
       messages.push(inputMessage(prompt, context));
-      // 请求修复可能把未配对工具记录转换成 user；审批授权只取原始用户记录。
+      // Request repair may convert unpaired tool records into user messages; approval authorization uses only original user records.
       const humanTexts = context.authorization ?? [...context.history.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
         ...(inputKind(context) === 'human' ? [prompt] : [])];
       const userRequests: ModelMessage[] = [...new Set(humanTexts)].slice(-8).map(text => ({role: 'user', text}));
@@ -158,12 +158,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         context.signal.throwIfAborted();
         const decision = await (options.recoverExecution?.(context, kind) ?? localRecovery.execution(root, kind, context.ownerId));
         context.signal.throwIfAborted();
-        const note = kind === 'no_delivery' ? '本次只有思考，缩小当前步骤并先交付可核对成果。'
-          : kind === 'truncated_tools' ? '工具参数不完整，此批未执行，改为更小的完整调用。' : '输出已满，保留已有内容后从断点接续。';
+        const note = kind === 'no_delivery' ? 'This turn produced only thinking; narrow the current step and deliver verifiable output first.'
+          : kind === 'truncated_tools' ? 'Tool arguments were incomplete and this batch was not executed; switch to smaller, complete calls.' : 'Output limit reached; keep the existing content and continue from the breakpoint.';
         options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note}});
         options.executionNotice?.(context, note);
         if (decision !== 'retry') throw new ExecutionRecoveryError(kind, decision);
-        context.report(kind === 'no_delivery' ? '调整中' : '接续中', note);
+        context.report(kind === 'no_delivery' ? 'Adjusting' : 'Resuming', note);
         recovery = executionRecoveryInstruction(kind, context.ownerId, adjustments++ > 0);
         recoveringKind = kind;
       };
@@ -177,8 +177,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           : await agentRequestBase(options.cwd, context.ownerId, options.extraRegistrations ?? options.extraTools, options.resources,
             undefined, true, undefined, undefined, undefined, assembly);
         if (!memoryRepair && options.iterations > 0 && iteration >= options.iterations) {
-          const outcome = await context.ask({kind: 'question', title: 'Continue this task? (继续这轮任务？)', questions: [{
-            id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue? (已达到 ' + options.iterations + ' 次模型往返。是否继续？)',
+          const outcome = await context.ask({kind: 'question', title: 'Continue this task?', questions: [{
+            id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue?',
             options: [{id: 'yes', label: 'Continue', description: 'Add another budget quota of round trips.'}, {id: 'no', label: 'Stop', description: 'Keep current results and end task.'}],
           }]});
           if (outcome.status !== 'answered' || outcome.response.kind !== 'question' ||
@@ -208,24 +208,24 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (memoryRepair) await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
         const base = {system: instruction.system,
           ...(!memoryRepair && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
-          // 工具字段与校验不变；省去每份 schema 重复的草案版本 URL。
+          // Tool fields and validation are unchanged; omits the draft-version URL repeated in every schema.
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
         const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
         if (await drainInbox()) continue requestLoop;
         if (taskModel && prepared && prepared.model.identity !== taskModel.model().identity) {
-          throw new ProviderError('任务模型与上下文预算身份不一致；请将 ContextManager.model 接入 TaskModels.model');
+          throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');
         }
         const initialProjection = prepared?.request ?? {...base, messages};
         const projected = {...initialProjection, messages: normalizeMessages(omitInternalToolPairs(initialProjection.messages, correctionCalls))
           .filter(message => message.role !== 'context' || message.kind !== 'finalizer' || memoryRepair && message.data?.activityId === context.activityId)};
-        // 签名只属于生成它的模型；保留完整账本与工具配对，转用请求不回放旧签名思考。
+        // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
         let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
             ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled};
         if (!memoryRepair) iteration++;
         const metadataOnly = memoryRepair && !!finalText;
-        context.report(recoveringKind ? recoveringKind === 'no_delivery' ? '调整中' : '接续中' : '模型处理中',
-          recoveringKind ? recovery : '第 ' + iteration + ' 次往返');
+        context.report(recoveringKind ? recoveringKind === 'no_delivery' ? 'Adjusting' : 'Resuming' : 'Model processing',
+          recoveringKind ? recovery : 'Round trip ' + iteration);
         let emitted = false, textId: string | undefined;
         let thinkingId = steps.thinking();
         let turn;
@@ -286,13 +286,13 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
               const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
               const step = steps.finish(thinkingId, 'failed'); steps.endGroup('failed');
-              // 失败尝试只留作历史阅读。重试复用原请求，不拼接半段回复或执行半截工具参数。
+              // A failed attempt is kept for history reading only. Retries reuse the original request and never splice partial replies or run half-received tool arguments.
               if (emitted) await context.record({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), contextExcluded: true}, step);
               thinkingId = steps.thinking(); textId = undefined; emitted = false;
               context.report('Network retry', 'Connection interrupted. Retrying (' + (attempt + 1) + '/' + options.retries + ')...');
               const resume = steps.wait(thinkingId, 'Waiting for retry');
               try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: context.signal});} finally {resume();}
-              // 对齐 Claude Code：流式长连接被代理或中间网关重置后，重试自动降级为非流式请求，彻底规避长流超时
+              // Aligned with Claude Code: after a long streaming connection is reset by a proxy or intermediate gateway, retries downgrade to non-streaming requests to avoid long-stream timeouts entirely
               request = {...request, stream: false};
               continue;
             }
@@ -302,7 +302,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: context.signal});} finally {resume();}
               continue;
             }
-            // 已显示的增量也保存，下一轮能看见中断前输出。
+            // Already displayed increments are saved too, so the next round can see output from before the interruption.
             const snapshot = options.store.getSnapshot();
             const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
             const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
@@ -429,7 +429,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 (canonical && canonicalToolName(tool.name) === canonical)
               );
               if (!toolMatch) {
-                schemaError = {callId: call.id, name: call.name, error: '未知工具：' + call.name + '。可用工具：' + base.tools.map(t => t.name).join('、')};
+                schemaError = {callId: call.id, name: call.name, error: 'Unknown tool: ' + call.name + '. Available tools: ' + base.tools.map(t => t.name).join(', ')};
                 break;
               }
               const extra = (call.name.toLowerCase() === taskProgressTool.name.toLowerCase() || canonical === 'UpdateTaskProgress')
@@ -443,7 +443,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 if (extra) {
                   const check = z.fromJSONSchema(extra.parameters).safeParse(args);
                   if (!check.success) {
-                    schemaError = {callId: call.id, name: call.name, error: check.error.issues.map(i => `${i.path.join('.') || '参数'}: ${i.message}`).join('; ') + ' (参数校验失败)'};
+                    schemaError = {callId: call.id, name: call.name, error: check.error.issues.map(i => `${i.path.join('.') || 'arguments'}: ${i.message}`).join('; ') + ' (argument validation failed)'};
                     break;
                   }
                 } else {
@@ -459,8 +459,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               }
             }
           }
-          if (truncated) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: '工具参数不完整，此批未执行，改为更小的完整调用。'}});
-          else if (schemaError) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: '工具参数校验未通过，整批未执行：' + schemaError.error}});
+          if (truncated) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: 'Tool arguments were incomplete and this batch was not executed; switch to smaller, complete calls.'}});
+          else if (schemaError) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: 'Tool argument validation failed; the whole batch was not executed: ' + schemaError.error}});
           const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
           await persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, steps.get(thinkingId));
           if (prepared) options.context?.observe(context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
@@ -470,23 +470,23 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             instruction.pool?.find(item => item.definition.name === (canonicalToolName(call.name) ?? call.name))?.metadata.terminalVisibility)]));
           try {
             const execute = async (call: ToolCall): Promise<ToolResult> => {
-              if (truncated) return {text: '此批工具未执行：响应未正常结束或参数不完整。请重新发出完整工具调用。', isError: true};
+              if (truncated) return {text: 'This batch of tools was not executed: the response did not end normally or the arguments were incomplete. Reissue complete tool calls.', isError: true};
               if (schemaError) {
                 if (call.id === schemaError.callId) {
-                  return {text: '工具 ' + call.name + ' 参数校验失败：' + schemaError.error + '。为防止部分副作用落盘，整批工具未执行。请修正后重新发出。', isError: true, disposition: 'error'};
+                  return {text: 'Parameter validation failed for tool `' + call.name + '`: ' + schemaError.error + '. To prevent partial side effects, the whole batch was not executed. Fix the arguments and reissue.', isError: true, disposition: 'error'};
                 }
-                return {text: '同批工具参数校验失败，为防止部分副作用落盘，此工具未执行。请修正后重新发出完整调用。', isError: true, disposition: 'error'};
+                return {text: 'Parameter validation failed for another tool in the same batch; to prevent partial side effects, this tool was not executed. Fix the arguments and reissue complete calls.', isError: true, disposition: 'error'};
               }
               context.signal.throwIfAborted();
-              context.report('工具执行', call.name);
+              context.report('Running tool', call.name);
               const canonical = canonicalToolName(call.name);
               const id = toolIds.get(call.id)!;
               const waiting = async <T>(reason: string, operation: () => Promise<T>): Promise<T> => {
                 const resume = steps.wait(id, reason); try {return await operation();} finally {resume();}
               };
               const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
-                permission: (input: Parameters<typeof context.permission>[0]) => waiting('等待许可', () => context.permission(input)),
-                ask: (input: Parameters<typeof context.ask>[0]) => waiting('等待回答', () => context.ask(input))};
+                permission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.permission(input)),
+                ask: (input: Parameters<typeof context.ask>[0]) => waiting('Awaiting answer', () => context.ask(input))};
               if (canonical === 'LoadTools') {
                 const result = resolveToolLoad(loadToolsSchema.parse(JSON.parse(call.arguments)), instruction.pool ?? [], extractDiscoveredToolNames(messages));
                 return {text: JSON.stringify(result), isError: false, discoveredTools: [...result.loaded, ...result.alreadyLoaded]};
@@ -501,7 +501,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               );
               if (matchedExtra && options.executeExtra) {
                 if (!approvalHandled.has(call.name) && !approvalHandled.has(matchedExtra.name)) {
-                  if (!await options.tools.authorizeExtension(call, toolContext)) return {text: '扩展工具操作未获许可，请寻找其他方案。', isError: true, disposition: 'denied'};
+                  if (!await options.tools.authorizeExtension(call, toolContext)) return {text: 'Extension tool action was not permitted; find another approach.', isError: true, disposition: 'denied'};
                   toolContext.startTool();
                 }
                 return options.executeExtra(call, toolContext);
@@ -518,7 +518,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               for (let offset = start; offset < end; offset += concurrency) {
                 context.signal.throwIfAborted();
                 const group = calls.slice(offset, Math.min(end, offset + concurrency));
-                // 等所有已启动工具收尾，之后按模型序保存，取消也不会留下后台进程。
+                // Wait for all started tools to finish, then save in model order; cancellation will not leave background processes.
                 const results = await Promise.allSettled(group.map(async call => {
                   const id = toolIds.get(call.id)!;
                   try {
@@ -528,15 +528,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                       result.isError ? result.disposition ?? 'error' : undefined);
                     return result;
                   } catch (error) {
-                    const rawErr: ToolResult = {text: context.signal.aborted ? '工具已取消。' : String(error), isError: true};
+                    const rawErr: ToolResult = {text: context.signal.aborted ? 'Tool cancelled.' : String(error), isError: true};
                     const result = diagnoseToolError(call, rawErr);
-                    steps.finish(id, context.signal.aborted ? 'cancelled' : 'failed', call.name + '\n' + (context.signal.aborted ? '工具已取消。' : result.text));
+                    steps.finish(id, context.signal.aborted ? 'cancelled' : 'failed', call.name + '\n' + (context.signal.aborted ? 'Tool cancelled.' : result.text));
                     throw error;
                   }
                 }));
                 for (let index = 0; index < group.length; index++) {
                   const call = group[index]!, settled = results[index]!;
-                  const result: ToolResult = settled.status === 'fulfilled' ? settled.value : diagnoseToolError(call, {text: context.signal.aborted ? '工具已取消。' : String(settled.reason), isError: true});
+                  const result: ToolResult = settled.status === 'fulfilled' ? settled.value : diagnoseToolError(call, {text: context.signal.aborted ? 'Tool cancelled.' : String(settled.reason), isError: true});
                   const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId);
                   const step = steps.get(toolIds.get(call.id)!);
                   const toolMessage: ModelMessage = {
@@ -556,8 +556,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             }
           } finally {
             for (const call of calls) if (!completed.has(call.id)) {
-              const step = steps.finish(toolIds.get(call.id)!, 'cancelled', call.name + '\n工具执行已中断，未取得完整结果。');
-              await persist({role: 'tool', callId: call.id, name: call.name, text: '工具执行已中断，未取得完整结果。', isError: true}, step);
+              const step = steps.finish(toolIds.get(call.id)!, 'cancelled', call.name + '\nTool execution was interrupted before a complete result was obtained.');
+              await persist({role: 'tool', callId: call.id, name: call.name, text: 'Tool execution was interrupted before a complete result was obtained.', isError: true}, step);
             }
           }
           if (truncated) await recoverOutput('truncated_tools', thinkingId);
@@ -600,7 +600,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           outcome = 'completed';
           return;
         }
-        if (turn.stop === 'other' || turn.stop === 'tools') throw new Error('模型未正常完成这一轮（缺少有效结束原因或工具调用）');
+        if (turn.stop === 'other' || turn.stop === 'tools') throw new Error('The model did not finish this turn normally (missing a valid stop reason or tool calls)');
       }
     } finally {steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}
   };

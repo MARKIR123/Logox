@@ -1,5 +1,6 @@
 import {structuredPatch} from 'diff';
 import type {ToolCall} from '../runtime/messages.js';
+import {cast} from '../actors/ensemble.js';
 
 export function formatToolTitle(call: ToolCall, keys: readonly string[]): string {
   try {
@@ -105,20 +106,17 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
       if (match) rawPath = match[1]!;
     }
     const displayPath = truncateDisplayPath(rawPath);
-    const desc = typeof args.description === 'string' && args.description.trim() ? args.description.trim() : '';
     const offset = typeof args.offset === 'number' ? args.offset : undefined;
     const limit = typeof args.limit === 'number' ? args.limit : undefined;
 
     if (isImageFile(rawPath, cleanResult)) {
       const meta = cleanResult ? parseImageMetadata(cleanResult, rawPath) : undefined;
       const sizePart = meta && meta.sizeStr !== 'Image' ? ` · ${meta.sizeStr} ${meta.formatStr}` : ` · ${rawPath.slice(rawPath.lastIndexOf('.') + 1).toUpperCase() || 'PNG'}`;
-      if (desc) return `Read · ${desc} (${displayPath})${sizePart}`;
       return `Read(${displayPath})${sizePart}`;
     }
 
     if (offset !== undefined) {
       const end = limit !== undefined ? offset + limit - 1 : offset;
-      if (desc) return `Read · ${desc} (${displayPath}, lines ${offset}-${end})`;
       return `Read(${displayPath}, lines ${offset}-${end})`;
     }
 
@@ -131,7 +129,6 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
       }
     }
 
-    if (desc) return `Read · ${desc} (${displayPath})${linePart}`;
     return rawPath ? `Read(${displayPath})${linePart}` : call.name;
   }
 
@@ -235,6 +232,8 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
 
   if (name === 'sendmessage') {
     const target = String(args.to ?? '').toLowerCase();
+    const role = (cast as any)[target];
+    const targetLabel = role ? `${role.symbol} ${role.name}` : target;
     const desc = typeof args.description === 'string' && args.description.trim()
       ? args.description.trim()
       : typeof args.summary === 'string' && args.summary.trim()
@@ -242,7 +241,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
         : '';
     const mode = args.mode === 'interrupt' || cleanResult.includes('interrupt') ? 'interrupt' : 'queued';
     const descStr = desc ? ` · ${desc}` : '';
-    return `SendMessage to ${target}${descStr} · ${mode}`;
+    return `SendMessage to ${targetLabel}${descStr} · ${mode}`;
   }
 
   return fallbackTitle ?? legacyToolTitle(call);

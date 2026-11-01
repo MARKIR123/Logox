@@ -4,7 +4,7 @@ description: Deep repository architecture audit, dependency topology mapping & t
 actors: [aletheia]
 ---
 
-# Repository Audit SOP (工程目录审查与技术债透视 SOP)
+# Repository Audit SOP
 
 ## 1. Top-Level Architectural Survey
 - Run `Glob("**/*")` to map the high-level tree; identify build systems (`package.json`, `Cargo.toml`), entrypoints, and test folders.

@@ -125,7 +125,7 @@ test('HTTP 400 显示可识别的原因和字段，不泄漏服务端回显的�
     assert.equal(error.retryable, false);
   }
   const unknown = providerFailure(400, {error: {code: 'private-key', param: 'private-user-text', message: 'private-user-text'}});
-  assert.equal(unknown.message, '模型请求失败（HTTP 400）');
+  assert.equal(unknown.message, 'Model request failed (HTTP 400)');
   assert.ok(!JSON.stringify(unknown).includes('private-'));
 });
 
@@ -133,7 +133,7 @@ test('HTTP 402 优先识别余额不足，保留公开API信息，不被invalid_
   const error = providerFailure(402, {error: {type: 'unknown_error', code: 'invalid_request_error', message: 'Insufficient Balance'}});
   assert.equal(error.category, 'quota'); assert.equal(error.retryable, false);
   assert.match(error.message, /HTTP 402/); assert.match(error.message, /Insufficient Balance/);
-  assert.match(error.message, /余额不足/); assert.match(error.message, /充值.*\/model/);
+  assert.match(error.message, /Insufficient Balance/); assert.match(error.message, /Top up.*\/model/);
   assert.ok(!error.message.includes('格式无效'));
   assert.equal(providerFailure(402).category, 'quota', '缺少错误正文也不误判');
   const echoed = providerFailure(402, {error: {code: 'private-key', message: 'private-user-text private-key'}});
@@ -164,12 +164,12 @@ test('完整回复的思考字段经上下文投影和 HTTP 回传，格式失�
     const third = app.ensemble.dispatch('logox', '第三轮'); await third.done;
     const activity = app.store.activities.get('thinking', third.activityId);
     assert.equal(activity?.status, 'failed');
-    assert.match(activity?.detail ?? '', /HTTP 400.*助手消息/);
+    assert.match(activity?.detail ?? '', /HTTP 400.*Assistant message/);
     assert.ok(!activity?.detail?.includes('private-echo'));
     assert.equal(calls, 3, '协议错误不重试同一请求');
     await app.close(); app = await createApplication(options);
     const restored = app.store.activities.get('thinking', third.activityId);
-    assert.match(restored?.detail ?? '', /失败原因：.*HTTP 400.*助手消息/);
+    assert.match(restored?.detail ?? '', /Failure reason: .*HTTP 400.*Assistant message/);
     const rows = buildStageRows(app.store.getSnapshot(), 'thinking', 'logox', 100, {}, null);
     assert.equal(rows.filter(row => /HTTP 400/.test(row.text)).length, 1, '恢复后的折叠卡直接显示简短原因，不追加整块详情');
     assert.ok(!rows.some(row => /失败原因：/.test(row.text)), '详情正文仍折叠');

@@ -9,7 +9,7 @@ const deletedSchema = z.strictObject({version: z.literal(1), id: z.string(), pro
   archive: z.string().regex(/^[a-f0-9]{64}-[a-f0-9-]{36}$/)});
 export interface SessionRemoval {archive: string; remaining: readonly string[]}
 
-/** 完整副本先准备，deleted 标记是删除提交点；原文清理失败不会失去可恢复副本。 */
+/** Prepare a full copy first; the deleted marker is the deletion commit point, so a failed cleanup of the originals never loses the recoverable copy. */
 export class SessionTrash {
   constructor(private readonly directory: string, private readonly project: string) {}
   private marker(id: string): string {return join(this.directory, 'deleted', key(id) + '.json');}
@@ -18,24 +18,24 @@ export class SessionTrash {
     try {raw = await readFile(this.marker(id), 'utf8');}
     catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error;}
     const record = deletedSchema.parse(JSON.parse(raw));
-    if (record.id !== id || record.project !== this.project || !record.archive.startsWith(key(id) + '-')) throw new Error('已删除会话身份不匹配，原记录保留');
+    if (record.id !== id || record.project !== this.project || !record.archive.startsWith(key(id) + '-')) throw new Error('Deleted session identity mismatch; original record preserved');
     return true;
   }
-  async assertAvailable(id: string): Promise<void> {if (await this.isDeleted(id)) throw new Error('此会话已删除；恢复副本位于 .logox/state/trash：' + id);}
+  async assertAvailable(id: string): Promise<void> {if (await this.isDeleted(id)) throw new Error('This session was deleted; the recoverable copy is in .logox/state/trash: ' + id);}
   protected async publishRemoval(id: string, archive: string): Promise<void> {
     await this.safe(this.marker(id));
     await atomicWrite(this.marker(id), Buffer.from(JSON.stringify({version: 1, id, project: this.project, time: Date.now(), archive})));
   }
   private async safe(path: string): Promise<void> {
     const root = resolve(this.directory), target = resolve(path), rel = relative(root, target);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/'))) throw new Error('会话回收路径超出状态目录');
-    // 不跟随状态目录内部或父目录指向外部的链接。
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/'))) throw new Error('Session trash path escapes the state directory');
+    // Do not follow links inside the state directory or in parent directories that point outside it.
     const canonicalRoot = await realpath(root);
     const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-    if (normalize(canonicalRoot) !== normalize(root)) throw new Error('状态目录链接不能用于回收');
+    if (normalize(canonicalRoot) !== normalize(root)) throw new Error('State directory links cannot be used for trash');
     let current = target;
     for (;;) {
-      try {if ((await lstat(current)).isSymbolicLink()) throw new Error('会话回收不接受符号链接：' + current);}
+      try {if ((await lstat(current)).isSymbolicLink()) throw new Error('Session trash does not accept symbolic links: ' + current);}
       catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
       if (current === root) break;
       current = dirname(current);
@@ -49,7 +49,7 @@ export class SessionTrash {
       hash.update(JSON.stringify([name, info.isDirectory() ? 'directory' : 'file']));
       if (info.isDirectory()) for (const child of (await readdir(target)).sort()) await visit(join(target, child), name + '/' + child);
       else if (info.isFile()) {const bytes = await readFile(target); hash.update(String(bytes.length) + ':'); hash.update(bytes);}
-      else throw new Error('会话回收只支持普通文件与目录');
+      else throw new Error('Session trash supports only regular files and directories');
     };
     await visit(path, ''); return hash.digest('hex');
   }
@@ -65,7 +65,7 @@ export class SessionTrash {
       const hash = await this.fingerprint(source);
       await mkdir(dirname(destination), {recursive: true});
       await cp(source, destination, {recursive: true, errorOnExist: true, force: false});
-      if (hash !== await this.fingerprint(source) || hash !== await this.fingerprint(destination)) throw new Error('备份期间会话记录变化，未删除：' + path);
+      if (hash !== await this.fingerprint(source) || hash !== await this.fingerprint(destination)) throw new Error('Session record changed during backup; not deleted: ' + path);
       files.push({path, hash});
     }
     await atomicWrite(join(preparing, 'manifest.json'), Buffer.from(JSON.stringify({version: 1, id, project: this.project, time: Date.now(), files}, null, 2) + '\n'));
@@ -75,7 +75,7 @@ export class SessionTrash {
     for (const file of files) {
       const source = join(this.directory, file.path);
       try {
-        // 只有仍与完整副本一致的原文件才能清理，外部改变的内容保留。
+        // Clean up only originals that still match the full copy; externally changed content is preserved.
         if (await this.fingerprint(source) !== file.hash) {remaining.push(file.path); continue;}
         await this.safe(source); await rm(source, {recursive: true});
       } catch {remaining.push(file.path);}

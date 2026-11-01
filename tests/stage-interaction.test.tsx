@@ -53,7 +53,7 @@ test('折叠只命中实际图标标题，展开灰底优先，露出背景命�
   assert.equal(body.bg, '#242B3A'); assert.equal(actionAt(body, 76)?.foldId, id);
   assert.equal(actionAt(body, 2)?.foldId, 'actor');
   const header = open.findIndex(row => row.messageId === 'actor');
-  assert.match(extractSelection(open, {anchor: {x: 2, y: header}, focus: {x: 78, y: header}}), /Techne.*整理布局.*停止/);
+  assert.match(extractSelection(open, {anchor: {x: 2, y: header}, focus: {x: 78, y: header}}), /Techne.*整理布局.*Stop/);
   const cap = open.findIndex(row => row.messageId === 'actor-top');
   assert.match(extractSelection(open, {anchor: {x: 2, y: cap}, focus: {x: 78, y: cap}}), /^▄+$/);
   for (const [index, row] of open.entries()) assert.equal(strip(encodeRow(row, index, {anchor: {x: 3, y: index}, focus: {x: 23, y: index}})), strip(encodeRow(row, index, null)), '选中不改变字符、内边距和字距');
@@ -110,9 +110,9 @@ test('真实 Ink 鼠标松开才折叠，拖选标题和停止文字不会操作
     await ui.mouse(32, titleX + 3, line); await ui.mouse(0, titleX + 3, line, true);
     assert.equal(clipboard(ui.output), 'read'); assert.deepEqual(ui.stopped, []);
     assert.ok(!ui.output.lines.some(line => line.includes('可选择的工具结果')));
-    const stopLine = ui.output.lines.findIndex(line => line.includes('■ 停止')), stopX = stringWidth(ui.output.lines[stopLine]!.split('■')[0]!);
+    const stopLine = ui.output.lines.findIndex(line => line.includes('■ Stop')), stopX = stringWidth(ui.output.lines[stopLine]!.split('■')[0]!);
     await ui.mouse(0, stopX, stopLine); await ui.mouse(32, stopX + 5, stopLine); await ui.mouse(0, stopX + 5, stopLine, true);
-    assert.equal(clipboard(ui.output), '■ 停止'); assert.deepEqual(ui.stopped, []);
+    assert.equal(clipboard(ui.output), '■ Stop'); assert.deepEqual(ui.stopped, []);
     await ui.mouse(0, titleX, line); await ui.mouse(0, titleX, line, true);
     const resultLine = ui.output.lines.findIndex(line => line.includes('可选择的工具结果')); assert.ok(resultLine >= 0);
     await ui.mouse(0, 70, resultLine); await ui.mouse(0, 70, resultLine, true);

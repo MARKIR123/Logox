@@ -33,10 +33,10 @@ export interface ExtensionApprovalRequest {
   readonly inputSchema: Record<string, z.infer<ReturnType<typeof z.json>>>;
 }
 export type ExtensionApproval = (request: ExtensionApprovalRequest, context: ActorContext) => Promise<boolean>;
-/** 唯一审批入口；调用方注入策略后不会再调用 context.permission。 */
+/** Single approval entry point; once the caller injects a policy, context.permission is no longer called. */
 export const askExtensionPermission: ExtensionApproval = (request, context) => request.action === 'list' ? Promise.resolve(true) : context.permission({
-  kind: 'permission', title: '允许调用 MCP 工具吗？', tool: 'mcp:' + request.server + ':' + request.tool,
-  arguments: request.arguments, reason: '远端工具可能修改文件或访问外部服务。',
+  kind: 'permission', title: 'Allow this MCP tool call?', tool: 'mcp:' + request.server + ':' + request.tool,
+  arguments: request.arguments, reason: 'Remote tools may modify files or access external services.',
 });
 export class Mcp {
   private readonly clients = new Map<string, McpClient>();
@@ -72,26 +72,26 @@ export class Mcp {
     for (let page = 0; page < 16; page++) {
       const response = listSchema.parse(await client.request('tools/list', cursor ? {cursor} : {}, signal));
       tools.push(...response.tools);
-      if (tools.length > 256 || new Set(tools.map(tool => tool.name)).size !== tools.length) throw new Error('MCP 工具目录超限或名称重复');
+      if (tools.length > 256 || new Set(tools.map(tool => tool.name)).size !== tools.length) throw new Error('MCP tool catalog too large or has duplicate names');
       if (!response.nextCursor) {this.catalogs.set(server, tools); return tools;}
-      if (cursors.has(response.nextCursor)) throw new Error('MCP 分页 cursor 重复');
+      if (cursors.has(response.nextCursor)) throw new Error('Duplicate MCP pagination cursor');
       cursor = response.nextCursor; cursors.add(cursor);
     }
-    throw new Error('MCP 分页超过 16 页');
+    throw new Error('MCP pagination exceeds 16 pages');
   }
   async execute(call: ToolCall, context: ActorContext): Promise<ToolResult> {
     try {
       context.signal.throwIfAborted();
-      if (call.name !== 'mcp') throw new Error('未知扩展工具');
+      if (call.name !== 'mcp') throw new Error('Unknown extension tool');
       const args = argsSchema.parse(JSON.parse(call.arguments));
       const client = this.clientFor(args.server, context.ownerId);
-      if (!client) throw new Error('MCP 服务不存在或已禁用');
+      if (!client) throw new Error('MCP server does not exist or is disabled');
       if (args.action === 'list') {
         context.startTool?.();
         if (!await this.approve({source: 'mcp', action: 'list', server: args.server, tool: 'list', callId: call.id,
-          arguments: {}, inputSchema: {type: 'object'}}, context)) return {text: 'MCP 目录读取未获许可。', isError: true, disposition: 'denied'};
+          arguments: {}, inputSchema: {type: 'object'}}, context)) return {text: 'MCP catalog read was not permitted.', isError: true, disposition: 'denied'};
         context.signal.throwIfAborted();
-        // 每次显式 list 刷新，避免把服务变化永远藏在缓存后。
+        // Refresh on every explicit list so server changes are never hidden behind the cache.
         const latest = await this.list(args.server, client, context.signal);
         return {text: JSON.stringify(latest.map(tool => ({name: tool.name, description: tool.description?.slice(0, 500) ?? '',
           parameters: tool.inputSchema.properties ?? {}, required: tool.inputSchema.required ?? []}))).slice(0, 64_000), isError: false};
@@ -99,13 +99,13 @@ export class Mcp {
       const tools = client.status() === 'connected' ? this.catalogs.get(args.server) ?? await this.list(args.server, client, context.signal)
         : await this.list(args.server, client, context.signal);
       const tool = tools.find(item => item.name === args.tool);
-      if (!tool) throw new Error('MCP 工具不在目录中，请先 list');
+      if (!tool) throw new Error('MCP tool is not in the catalog; run list first');
       const dialect = tool.inputSchema.$schema;
       if (dialect !== undefined && dialect !== 'http://json-schema.org/draft-07/schema#' && dialect !== 'https://json-schema.org/draft/2020-12/schema') {
-        throw new Error('暂不支持此 JSON Schema 方言');
+        throw new Error('This JSON Schema dialect is not supported yet');
       }
       if (!tool.validator) {
-        // 每份 schema 独立注册 $id；目录刷新替换对象，也替换其校验器。
+        // Register each schema's $id independently; a catalog refresh replaces the objects and their validators.
         const compiler = dialect === 'https://json-schema.org/draft/2020-12/schema'
           ? new Ajv2020({strict: false, allErrors: false, useDefaults: true})
           : new Ajv({strict: false, allErrors: false, useDefaults: true});
@@ -113,11 +113,11 @@ export class Mcp {
         tool.validator = compiler.compile(tool.inputSchema);
       }
       const validator = tool.validator;
-      if (!validator(args.arguments)) throw new Error('MCP 参数不符合完整 schema：' + JSON.stringify(validator.errors));
+      if (!validator(args.arguments)) throw new Error('MCP arguments do not satisfy the full schema: ' + JSON.stringify(validator.errors));
       const allowed = await this.approve({source: 'mcp', action: 'call', server: args.server, tool: args.tool, callId: call.id,
         arguments: args.arguments, inputSchema: tool.inputSchema}, context);
       context.signal.throwIfAborted();
-      if (!allowed) return {text: '用户拒绝了这次 MCP 调用。', isError: true, disposition: 'denied'};
+      if (!allowed) return {text: 'The user denied this MCP call.', isError: true, disposition: 'denied'};
       context.startTool?.();
       const result = resultSchema.parse(await client.request('tools/call', {name: args.tool, arguments: args.arguments}, context.signal));
       const images = result.content.filter(block => block.type === 'image').map(block => imageSchema.parse(block));

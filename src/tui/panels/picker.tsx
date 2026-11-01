@@ -32,7 +32,7 @@ export interface PickerProps {
   effort?: string | undefined; effortLevels?: readonly string[] | undefined;
   onSelect(id: string, effort?: string): void; onCancel(): void;
 }
-/** 带 group 的条目按提供方分页；未分组条目（如 inherit）在每页都可见。 */
+/** Grouped entries are paged by provider; ungrouped entries (such as inherit) show on every page. */
 export function Picker({title, description = '', items, current = '', status = 'ready', error = '',
   emptyText = 'No matching options', width, height, y = 0, notice = '', deleteLabel, onDelete, effort, effortLevels, onSelect, onCancel}: PickerProps) {
   const [search, setSearch] = useState<Draft>(emptyDraft);
@@ -40,7 +40,7 @@ export function Picker({title, description = '', items, current = '', status = '
   const tabs = [...new Set(items.map(item => item.group).filter((group): group is string => Boolean(group)))];
   const tabbed = tabs.length > 1;
   const currentGroup = items.find(item => item.id === current)?.group;
-  // 目录加载后条目会整体替换，因此标签页默认跟随当前项，只有用户按 Tab 才固定。
+  // Entries are replaced wholesale once the catalog loads, so the tab follows the current item by default and is pinned only when the user presses Tab.
   const [pickedTab, setPickedTab] = useState<string | undefined>(undefined);
   const activeTab = pickedTab && tabs.includes(pickedTab) ? pickedTab
     : currentGroup && tabs.includes(currentGroup) ? currentGroup : (tabs[0] ?? '');

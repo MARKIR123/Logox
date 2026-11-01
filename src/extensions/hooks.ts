@@ -21,7 +21,7 @@ export class Hooks {
     if (!this.config.enabled || this.initialized) return;
     this.initialized = true;
     const seen = new Set<string>();
-    for (const directory of [join(this.cwd, '.logox', 'hooks'), join(this.cwd, '.logox-ts', 'hooks'), join(this.home, '.logox', 'hooks'), join(this.home, '.logox-ts', 'hooks')]) {
+    for (const directory of [join(this.cwd, '.logox', 'hooks'), join(this.home, '.logox', 'hooks')]) {
       for (const event of hookEvents) for (const extension of ['', '.sh', '.py', '.ps1', '.cmd', '.bat', '.mjs', '.js']) {
         const path = join(directory, event + extension);
         try {
@@ -37,15 +37,15 @@ export class Hooks {
             this.commands.push({event, command: interpreter[0]!, args: interpreter.slice(1), direct: true});
           }
           break;
-        } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.diagnose('观察 hook 文件无法读取：' + path);}
+        } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.diagnose('Observer hook file unreadable: ' + path);}
       }
     }
   }
   history(): readonly HookResult[] {return this.results.map(item => ({...item}));}
   emit(event: HookEvent, payload: Readonly<Record<string, string | number | boolean>>): void {
     if (!this.config.enabled || this.controller.signal.aborted) return;
-    if (this.pending.size >= 64) {this.diagnose('观察 hook 队列已满，跳过事件：' + event); return;}
-    const operation = this.run(event, payload).catch(() => {this.diagnose('观察 hook 执行失败：' + event);});
+    if (this.pending.size >= 64) {this.diagnose('Observer hook queue full; skipping event: ' + event); return;}
+    const operation = this.run(event, payload).catch(() => {this.diagnose('Observer hook failed: ' + event);});
     this.pending.add(operation);
     void operation.finally(() => this.pending.delete(operation));
   }
@@ -63,22 +63,22 @@ export class Hooks {
         child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
         child.stdout.on('data', append); child.stderr.on('data', append);
         const stop = (why: string) => {reason = why; void terminate(child);};
-        const abort = () => stop('已取消');
-        const timer = setTimeout(() => stop('超时'), this.config.timeout_s * 1000);
+        const abort = () => stop('cancelled');
+        const timer = setTimeout(() => stop('timed out'), this.config.timeout_s * 1000);
         this.controller.signal.addEventListener('abort', abort, {once: true});
         const finish = (code: number) => {
           if (finished) return; finished = true;
           clearTimeout(timer); this.controller.signal.removeEventListener('abort', abort);
           resolve({event, ok: code === 0 && !reason, code, output, reason});
         };
-        child.once('error', () => {reason = '启动失败'; finish(-1);});
+        child.once('error', () => {reason = 'failed to start'; finish(-1);});
         child.once('close', code => finish(code ?? -1));
-        child.stdin.on('error', () => {reason ||= 'stdin 关闭';});
+        child.stdin.on('error', () => {reason ||= 'stdin closed';});
         child.stdin.end(JSON.stringify({event, ...payload}) + '\n');
         if (this.controller.signal.aborted) abort();
       });
       this.results.push(result); if (this.results.length > 64) this.results.shift();
-      if (!result.ok) this.diagnose('观察 hook ' + event + ' 失败：' + (result.reason || '退出码 ' + result.code));
+      if (!result.ok) this.diagnose('Observer hook ' + event + ' failed: ' + (result.reason || 'exit code ' + result.code));
     }
   }
   async drain(): Promise<void> {await Promise.all([...this.pending]);}

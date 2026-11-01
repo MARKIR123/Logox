@@ -39,7 +39,7 @@ export function watermarks(model: ModelCapacity, policy: BudgetPolicy) {
 }
 export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval']),
   input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
-  cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative()}).refine(record => record.cacheRead + record.cacheWrite <= record.input, '缓存用量不能超过总输入');
+  cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative()}).refine(record => record.cacheRead + record.cacheWrite <= record.input, 'Cache usage cannot exceed total input');
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 /** An anchor belongs to the exact model, rules, tool schemas and projected prefix. */
 export class TokenMeter {
@@ -50,7 +50,7 @@ export class TokenMeter {
   private onCharge: (record: UsageRecord) => void = () => {};
   configureUsage(summaryModel: () => string, onCharge: (record: UsageRecord) => void, restored: readonly UsageRecord[] = []): void {
     this.summaryModel = summaryModel; this.onCharge = onCharge;
-    if (this.records.length) throw new Error('用量只能在首次请求前恢复');
+    if (this.records.length) throw new Error('Usage can only be restored before the first request');
     for (const record of restored) {this.records.push({...record}); this.add(record);}
   }
   usageRecords(): readonly UsageRecord[] {return this.records.map(record => ({...record}));}

@@ -15,7 +15,7 @@ export interface PageActions {
 }
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
-/** 拥有命令界面生命周期；回调与查询取消信号留在业务层。 */
+/** Owns the command surface lifecycle; callbacks and query cancellation signals stay in the business layer. */
 export class CommandSurfaces {
   private state: CommandSurface | null = null;
   private listeners = new Set<() => void>();

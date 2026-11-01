@@ -1,5 +1,6 @@
 import {expandPortOrUrl, type CustomProviderKind} from './login.js';
 import type {ImportedCredential} from './credential-import.js';
+import {groupModelFamilies} from '../config/model-grouping.js';
 
 export interface WizardOption {
   readonly id: string;
@@ -26,6 +27,7 @@ export interface WizardProviderRow {
   readonly saved: boolean;
   readonly baseUrl?: string | undefined;
   readonly kind?: string | undefined;
+  readonly default_model?: string | undefined;
   readonly api?: 'completions' | 'responses' | undefined;
   readonly models?: readonly string[] | undefined;
   readonly accountSignedIn?: boolean | undefined;
@@ -34,6 +36,7 @@ export interface WizardProviderRecord {
   name: string;
   base_url: string;
   kind: CustomProviderKind;
+  default_model?: string | undefined;
   api?: 'completions' | 'responses';
   models?: string[];
   catalog?: boolean;
@@ -79,6 +82,7 @@ function withProtocol(record: WizardProviderRecord, value: string): WizardProvid
 function fromRow(row: WizardProviderRow): WizardProviderRecord {
   return {
     name: row.name, base_url: row.baseUrl ?? '', kind: row.kind === 'anthropic' ? 'anthropic' : 'openai_compat',
+    ...(row.default_model ? {default_model: row.default_model} : {}),
     ...(row.api ? {api: row.api} : {}), models: [...row.models ?? []], ...(!row.custom ? {catalog: true} : {}),
   };
 }
@@ -116,15 +120,29 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
       try {discovered = await deps.discoverModels(record, key);}
       catch {deps.notify('Model discovery failed. Enter model names manually.');}
     }
-    const candidates = unique([...discovered, ...record.models ?? []]);
+    const rawCandidates = unique([...discovered, ...record.models ?? []]);
+    const families = groupModelFamilies(rawCandidates, record.name);
+    const activeModelSet = new Set(record.models ?? []);
+    const defaultSelected = families
+      .filter(f => f.variants.some(v => activeModelSet.has(v)) || activeModelSet.has(f.baseModel))
+      .map(f => f.baseModel);
+
     const answer = await ask(field('Select the models to enable', {
-      multiSelect: true, allowEmpty: Boolean(record.catalog), defaultSelected: record.models ?? [],
-      detail: record.catalog ? 'Select models or leave empty to use the whole catalog. You can also enter model names.'
-        : 'Select models or enter model names separated by spaces or commas.',
-      options: candidates.map(name => option(name, name)),
+      multiSelect: true,
+      allowEmpty: Boolean(record.catalog),
+      ...(defaultSelected.length ? {defaultSelected} : {}),
+      detail: record.catalog
+        ? 'Select model families or leave empty to use the whole catalog. Space toggles.'
+        : 'Select model families or enter model names separated by spaces or commas. Space toggles.',
+      options: families.map(f => option(f.baseModel, f.baseModel, f.description)),
     }));
     if (!answer) return null;
-    return unique([...answer.selected ?? [], ...words(answer.value)]);
+    const selectedInputs = [...new Set([...answer.selected ?? [], ...words(answer.value)])];
+    const expanded = selectedInputs.flatMap(item => {
+      const family = families.find(f => f.baseModel === item);
+      return family && family.variants.length ? family.variants : [item];
+    });
+    return unique(expanded);
   };
   const confirm = async (record: WizardProviderRecord, hasKey: boolean): Promise<boolean> => {
     const answer = await ask({...menu('Write this provider configuration?', [option('write', 'Write and enable'), option('cancel', 'Cancel')]),
@@ -187,6 +205,9 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
       const models = await chooseModels(record, key);
       if (models === null || (!record.catalog && !models.length)) return 'cancelled';
       record.models = models;
+      if (models.length > 0 && !record.default_model) {
+        record.default_model = models[0];
+      }
       if (!await confirm(record, Boolean(key))) return 'cancelled';
       await save(record, key);
       return 'added';

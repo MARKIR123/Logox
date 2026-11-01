@@ -25,8 +25,8 @@ export type StepStage = z.infer<typeof stepStageSchema>;
 const taskStageSchema = stepStageSchema.extend({status: z.enum(['pending', 'in_progress', 'completed', 'skipped']),
   result: z.string().trim().min(1).max(2000).optional(), reason: z.string().trim().min(1).max(1000).optional()})
   .superRefine((stage, ctx) => {
-    if (stage.status === 'completed' && !stage.result) ctx.addIssue({code: 'custom', message: '完成阶段必须报告实际成果'});
-    if (stage.status === 'skipped' && !stage.reason) ctx.addIssue({code: 'custom', message: '取消阶段必须说明原因'});
+    if (stage.status === 'completed' && !stage.result) ctx.addIssue({code: 'custom', message: 'A completed stage must report actual results'});
+    if (stage.status === 'skipped' && !stage.reason) ctx.addIssue({code: 'custom', message: 'A skipped stage must state a reason'});
   });
 const legacyTaskProgressSchema = z.strictObject({planned: z.boolean(), revision: z.number().int().nonnegative(),
   stages: z.array(taskStageSchema).max(32), activeStageId: id.optional(),
@@ -34,9 +34,9 @@ const legacyTaskProgressSchema = z.strictObject({planned: z.boolean(), revision:
     activeStageId: id.optional()}))})
   .superRefine((progress, ctx) => {
     const ids = progress.stages.map(stage => stage.id), active = progress.stages.filter(stage => stage.status === 'in_progress');
-    if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: '阶段 ID 必须唯一'});
-    if (active.length > 1 || active[0]?.id !== progress.activeStageId) ctx.addIssue({code: 'custom', message: '一次只能推进一个当前阶段'});
-    if (!progress.planned && progress.stages.length > 0) ctx.addIssue({code: 'custom', message: '未登记计划不能包含阶段'});
+    if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: 'Stage IDs must be unique'});
+    if (active.length > 1 || active[0]?.id !== progress.activeStageId) ctx.addIssue({code: 'custom', message: 'Only one stage can be active at a time'});
+    if (!progress.planned && progress.stages.length > 0) ctx.addIssue({code: 'custom', message: 'Stages cannot exist without a registered plan'});
   });
 export const activityProgressSchema = z.strictObject({
   label: z.string().trim().min(1).max(160).regex(/^[^\r\n]+$/, 'Use a single-line activity label'),
@@ -83,7 +83,7 @@ export const questionSchema = z.strictObject({
   hideCustomInput: z.boolean().optional(),
 }).superRefine((question, ctx) => {
   const ids = question.options?.map(option => option.id) ?? [];
-  if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: '选项 ID 必须唯一'});
+  if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: 'Option IDs must be unique'});
 });
 const identity = {sessionId: id, activityId: id, ownerId: id};
 export const interactionInputSchema = z.discriminatedUnion('kind', [
@@ -92,7 +92,7 @@ export const interactionInputSchema = z.discriminatedUnion('kind', [
     questions: z.array(questionSchema).min(1).max(3),
   }).superRefine((input, ctx) => {
     const ids = input.questions.map(question => question.id);
-    if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: '问题 ID 必须唯一'});
+    if (new Set(ids).size !== ids.length) ctx.addIssue({code: 'custom', message: 'Question IDs must be unique'});
   }),
   z.strictObject({
     ...identity, kind: z.literal('permission'), title: z.string().min(1),

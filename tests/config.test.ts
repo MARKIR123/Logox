@@ -47,11 +47,11 @@ test('配置拒绝明文 api_key、危险键、无效 TOML 和带凭据的地址
     await writeFile(join(root, '.logox', 'config.toml'), '[provider]\napi_key="secret"');
     await assert.rejects(loadConfig(root, {}, {}, root, root), /api_key_env/);
     await writeFile(join(root, '.logox', 'config.toml'), 'broken=[');
-    await assert.rejects(loadConfig(root, {}, {}, root, root), /配置无效/);
+    await assert.rejects(loadConfig(root, {}, {}, root, root), /Invalid config/);
     await writeFile(join(root, '.logox', 'config.toml'), '');
-    await assert.rejects(loadConfig(root, {}, {LOGOX__PROVIDER__CONSTRUCTOR: 'bad'}, root, root), /键无效/);
+    await assert.rejects(loadConfig(root, {}, {LOGOX__PROVIDER__CONSTRUCTOR: 'bad'}, root, root), /Invalid environment config key/);
     const config = await loadConfig(root, {provider: {base_url: 'https://user:secret@example.com/v1'}}, {}, root, root);
-    assert.throws(() => modelSettings(config), /无凭据/);
+    assert.throws(() => modelSettings(config), /without credentials/);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

@@ -46,7 +46,7 @@ export function encodeRow(raw: Row, index: number, selection: SelectionRange | n
   const bounds = rowSelectionBounds(raw, index, selection);
   if (!bounds && !isHovered) {const known = encoded.get(raw); if (known?.width === width && known.revision === themeRevision()) return known.text;}
   const row = raw as SceneRow;
-  const rail = row.gutterCols > 0 ? styled({text: '▎ ', color: row.railColor}) : '';
+  const rail = row.gutterCols > 0 ? styled({text: '│ ', color: row.railColor}) : '';
   const body = presentedSegments(row, index, selection, isHovered).map(segment => styled(segment, palette.fg, row.bg)).join('');
   const result = clipEncoded(rail + body + reset, width);
   if (!bounds && !isHovered) encoded.set(raw, {revision: themeRevision(), width, text: result});

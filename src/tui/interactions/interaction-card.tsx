@@ -16,15 +16,15 @@ export const InteractionCard = memo(function InteractionCard({request, draft, fo
   const title = `${ownerHeader(request.ownerId)} · ${request.title}`;
   if (request.kind === 'permission') return <Card title={title} color={color} bg={bg}>
     <Text color={textColor} backgroundColor={bg}>{safeText(request.reason)}</Text>
-    <Text color={mutedColor} backgroundColor={bg}>工具：{safeText(request.tool)} · {safeText(JSON.stringify(request.arguments))}</Text>
-    {[{label: '仅本次允许', description: '只允许这一次工具执行。'}, {label: '拒绝（默认）', description: '保留建议，不执行该工具。'}].map((option, index) => {
+    <Text color={mutedColor} backgroundColor={bg}>Tool: {safeText(request.tool)} · {safeText(JSON.stringify(request.arguments))}</Text>
+    {[{label: 'Allow once', description: 'Allow this tool run only once.'}, {label: 'Deny (default)', description: 'Keep the suggestion; do not run the tool.'}].map((option, index) => {
       const style = choiceStyle(draft.selected === index, color, textColor, mutedColor);
       return <Box key={option.label} flexDirection="column" backgroundColor={bg} marginTop={1} marginBottom={index === 1 ? 1 : 0}>
         <Text><Text color={style.markerColor}>{style.marker}</Text><Text color={style.color}>{option.label}</Text></Text>
         <Box paddingLeft={style.indent}><Text color={style.descriptionColor}>{option.description}</Text></Box>
       </Box>;
     })}
-    <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ 选择 · Enter 确认许可 · Esc 稍后回答 · Ctrl+X 取消' : 'Tab 聚焦回答 · 主输入仍可编辑'}</Text>
+    <Text color={mutedColor} backgroundColor={bg}>{focused ? '↑↓ Select · Enter Confirm · Esc Answer later · Ctrl+X Cancel' : 'Tab Focus answer · Main input still editable'}</Text>
   </Card>;
   return <QuestionCard request={request} draft={draft} focused={focused}/>;
 });

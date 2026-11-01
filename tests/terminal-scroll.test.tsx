@@ -28,10 +28,10 @@ test('实际会话屏幕中的表格保持内容宽度，代码框线铺满，�
     for (const width of [80, 180, 24]) {
       output.resize(width, 24);
       await delay(65); await instance.waitUntilRenderFlush();
-      const top = output.lines.find(line => line.startsWith('▎ ┌'));
-      const bottom = output.lines.find(line => line.startsWith('▎ └'));
+      const top = output.lines.find(line => line.startsWith('│ ┌') || line.startsWith('▎ ┌'));
+      const bottom = output.lines.find(line => line.startsWith('│ └') || line.startsWith('▎ └'));
       const codeTop = output.lines.find(line => line.includes('── powershell'));
-      const codeBottom = output.lines.find(line => /^▎ ─+$/.test(line));
+      const codeBottom = output.lines.find(line => /^[▎│] ─+$/.test(line));
       assert.ok(top && bottom && codeTop && codeBottom, '上下框线都出现在实际屏幕');
       for (const line of [top, bottom]) assert.equal(stringWidth(line), 23, '宽窗口不拉伸短表格');
       for (const line of [codeTop, codeBottom]) assert.equal(stringWidth(line), width - 1, '代码横线继续铺满可用宽度');
@@ -54,7 +54,7 @@ test('独立滚动画布：实际屏幕正确，纯滚轮不更新 React，输�
     onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/></Profiler>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, incrementalRendering: true, maxFps: 30, patchConsole: false, exitOnCtrlC: false});
   const settle = async () => {await delay(65); await instance.waitUntilRenderFlush();};
-  const topText = () => output.lines[0]!.replace(/^▎ /, '');
+  const topText = () => output.lines[0]!.replace(/^[▎│] /, '');
   try {
     await settle(); input.write('保留草稿'); await settle();
     const footer = output.lines.slice(61);
@@ -92,7 +92,7 @@ test('独立滚动画布：实际屏幕正确，纯滚轮不更新 React，输�
     assert.ok(output.lines.some(line => line.includes('跟随末尾')));
     // Select actual current rows after a scroll; hit testing must not use App's previous viewport.
     input.write('\x1b[<64;5;5M'); await settle();
-    const selected = output.lines[0]!.replace(/^▎ /, '');
+    const selected = output.lines[0]!.replace(/^[▎│] /, '');
     output.text = '';
     input.write('\x1b[<0;3;1M\x1b[<32;80;1M\x1b[<0;80;1m'); await settle();
     const clipboard = /\x1b\]52;c;([^\x07]*)\x07/.exec(output.text);
@@ -131,7 +131,8 @@ test('异步 stdout 的 Ink 与画布写出顺序一致，屏幕阅读器保留 
       store.appendMessage(id, '\n追加'); await settle();
       if (screenReader) assert.ok(output.text.includes('ASYNC-'), '阅读器没有丢失正文');
       else {
-        assert.equal(output.lines[0], '▎ ' + expectedTop);
+        assert.match(output.lines[0]!, /^[▎│] /);
+        assert.ok(output.lines[0]!.includes(expectedTop));
         assert.ok(output.lines.slice(historyHeight).some(line => line.includes('输入保留')));
         assert.ok(!output.lines.some(line => line.includes('追加')), '异步写出期间不抢回底部');
         output.resize(4, 8); await settle();

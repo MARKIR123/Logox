@@ -4,7 +4,7 @@ description: Explicit finite state machine modeling, legal transition matrices &
 actors: [techne]
 ---
 
-# State Machine Pattern SOP (显式状态机与阶段流转模式)
+# State Machine Pattern SOP
 
 ## 1. Explicit State Enums
 - Never model complex lifecycles with loose boolean flags (`isLoading`, `isFailed`, `isDone`).

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import {cursorAt, emptyDraft, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical} from '../src/tui/input/editor.js';
-import {buildDemoSceneRows, demoRoles, hoveredCardAt, initialDemoSceneState, type DemoSceneState} from '../src/tui/timeline/scene.js';
+import {buildDemoSceneRows, demoRoles, initialDemoSceneState, type DemoSceneState} from '../src/demo/scene.js';
+import {hoveredCardAt} from '../src/tui/timeline/scene.js';
 import {ownerSurface} from '../src/tui/appearance/actor-style.js';
 import {palette} from '../src/tui/appearance/theme.js';
 import {cast} from '../src/actors/ensemble.js';
@@ -81,9 +82,9 @@ test('窄屏保留完整任务与状态；嵌套正文复制只过滤左侧轨�
     const descriptionRows = rows.filter(row => row.messageId === 'main-aletheia-reads-body-0');
     assert.ok(descriptionRows.every(row => row.gutterCols >= 4));
     const copied = extractSelection(descriptionRows, {anchor: {x: 0, y: 0}, focus: {x: width, y: descriptionRows.length - 1}});
-    assert.equal(copied, ' '.repeat(descriptionRows[0]!.gutterCols - 2) + 'src/pages/index.tsx:18             首屏标题、标签组与按钮字重同级，焦点分散');
+    assert.equal(copied, ' '.repeat(descriptionRows[0]!.gutterCols - 2) + 'src/pages/index.tsx:18             hero title, tag group and button share one weight; focus is scattered');
     const status = rows.filter(row => row.messageId.startsWith('dispatch-1')).map(row => row.text).join('');
-    assert.ok(status.includes('任务已接收'));
+    assert.ok(status.includes('Task received'));
   }
 });
 
@@ -108,7 +109,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
     const unselected = selected === before ? after : before;
     assert.ok(selected.text.startsWith('❯ '));
     assert.ok(unselected.text.startsWith('  '));
-    assert.equal(selected.segments!.find(s => s.text.includes('允许'))!.color, demoRoles.techne.color);
+    assert.equal(selected.segments!.find(s => s.text.includes(id.endsWith('deny') ? 'Deny' : 'Allow'))!.color, demoRoles.techne.color);
     const description = (id.endsWith('deny') ? denyRows : allowRows).find(r => r.messageId === id + '-description')!;
     assert.equal(description.gutterCols, selected.gutterCols + 6);
     assert.equal(description.color, demoRoles.techne.color);
@@ -116,7 +117,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
   const question = buildDemoSceneRows({...initialDemoSceneState, permission: 'deny'}, 99);
   const kalonSelection = question.find(r => r.messageId === 'main-kalon-style-minimal')!;
   assert.ok(kalonSelection.text.startsWith('❯ '));
-  assert.equal(kalonSelection.segments!.find(s => s.text.includes('克制'))!.color, demoRoles.kalon.color);
+  assert.equal(kalonSelection.segments!.find(s => s.text.includes('Restrained'))!.color, demoRoles.kalon.color);
   const nested = buildDemoSceneRows({...initialDemoSceneState, folds: {'main-aletheia': true}}, 99);
   assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, ownerSurface('aletheia', true), 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
 });
@@ -127,17 +128,15 @@ test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Ac
     const hovered = buildDemoSceneRows(initialDemoSceneState, 40, id);
     assert.deepEqual(hovered.map(r => [r.messageId, r.text, r.gutterCols, r.action]), base.map(r => [r.messageId, r.text, r.gutterCols, r.action]));
     const card = hovered.filter(r => r.hover?.foldId === id);
-    assert.equal(card.length, 4, '40 列下含上下对称 0.5 行封边（▄ / ▀）与两行完整标题');
+    assert.equal(card.length, 2, '40 列下折叠卡片无上下封边，仅两行完整标题');
     const roleKey = id === 'main-aletheia' ? 'aletheia' : 'kalon';
-    const expected = ownerSurface(roleKey, true);
-    assert.equal(card.find(r => r.messageId === id)!.bg, expected);
-    const taskSeg = card.find(r => r.messageId === id + '-task')!.segments!.find(s => s.text.includes('首页'))!;
+    assert.equal(card.find(r => r.messageId === id)!.bg, undefined, '折叠卡片背景完全透明');
+    const taskSeg = card.find(r => r.messageId === id + '-task')!.segments!.find(s => s.text.includes('homepage'))!;
     assert.equal(taskSeg.color, cast[roleKey].color);
     assert.equal(Boolean(taskSeg.bold), false, '标题高亮仅改变为高亮色，不加粗');
     const wideCard = buildDemoSceneRows(initialDemoSceneState, 99, id).filter(r => r.hover?.foldId === id);
-    assert.equal(wideCard.length, 3, '宽屏含上下对称 0.5 行封边（▄ / ▀）与单行标题');
-    assert.ok(wideCard[0]!.text.includes('▄'));
-    assert.ok(wideCard[2]!.text.includes('▀'));
+    assert.equal(wideCard.length, 1, '宽屏折叠卡片无上下封边，仅单行完整标题');
+    assert.equal(wideCard[0]!.bg, undefined, '宽屏折叠卡片背景完全透明');
     for (const row of card) {
       assert.equal(hoveredCardAt(row, 2), id);
       assert.equal(hoveredCardAt(row, 0), null);

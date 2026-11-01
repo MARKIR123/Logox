@@ -45,7 +45,7 @@ export const collaborationSchema = z.strictObject({
 export type CollaborationRecord = z.infer<typeof collaborationSchema>;
 export type TaskCheckpoint = z.infer<typeof taskSchema>;
 const pendingSchema = z.strictObject({sessionId: z.string(), target: z.string(), activities: z.array(z.string())})
-  .refine(value => value.activities.includes(value.target), '回退区间不包含目标');
+  .refine(value => value.activities.includes(value.target), 'Rewind range does not include the target');
 export interface HistoryStore {
   load(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]>;
   append(entry: HistoryEntry): Promise<void>;
@@ -75,7 +75,7 @@ export class Journal implements HistoryStore {
       if (last && last.end + 1 === index) last.end = index;
       else ranges.push({start: index, end: index});
     }
-    return this.path(sessionId, ownerId) + '（原始行 ' + ranges.map(range => range.start === range.end ? String(range.start + 1) : (range.start + 1) + '–' + (range.end + 1)).join('、') + '；只读取这些有效行）';
+    return this.path(sessionId, ownerId) + ' (raw lines ' + ranges.map(range => range.start === range.end ? String(range.start + 1) : (range.start + 1) + '–' + (range.end + 1)).join(', ') + '; read only these valid lines)';
   }
   sourceLines(sessionId: string, ownerId: string, start: number, end: number): {start: number; end: number} {
     const indices = this.lineMaps.get(this.path(sessionId, ownerId));
@@ -91,40 +91,40 @@ export class Journal implements HistoryStore {
     for (let index = 0; index < lines.length - 1; index++) {
       try {
         const entry = entrySchema.parse(JSON.parse(lines[index]!));
-        if (entry.sessionId !== sessionId || entry.ownerId !== ownerId) throw new Error('身份不匹配');
+        if (entry.sessionId !== sessionId || entry.ownerId !== ownerId) throw new Error('Identity mismatch');
         entries.push(entry);
-      } catch {issue = '第 ' + (index + 1) + ' 行损坏，只可恢复此前完整前缀'; break;}
+      } catch {issue = 'Line ' + (index + 1) + ' is corrupt; only the preceding complete prefix is recoverable'; break;}
     }
-    if (!issue && lines.at(-1) !== '') issue = '末行未完整提交，只可恢复此前完整前缀';
+    if (!issue && lines.at(-1) !== '') issue = 'Last line was not fully committed; only the preceding complete prefix is recoverable';
     const branch = await this.branch(sessionId), hidden = new Set(branch.hidden[ownerId] ?? []);
     return {entries: entries.filter((_, index) => !hidden.has(index)), ...(issue ? {issue} : {})};
   }
   async loadRaw(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]> {
     const text = await this.read(this.path(sessionId, ownerId));
     if (text === undefined) return [];
-    if (text && !text.endsWith('\n')) throw new Error('账本末行未完整提交，请检查备份后恢复');
+    if (text && !text.endsWith('\n')) throw new Error('Ledger last line was not fully committed; check backups before restoring');
     const lines = text.split('\n');
     if (lines.at(-1) === '') lines.pop();
-    if (lines.some(line => !line.trim())) throw new Error('账本含空行，无法保证原文回读行号');
+    if (lines.some(line => !line.trim())) throw new Error('Ledger contains blank lines; raw line numbers cannot be guaranteed');
     return lines.map((line, index) => {
       try {
         const entry = entrySchema.parse(JSON.parse(line));
-        if (entry.sessionId !== sessionId || entry.ownerId !== ownerId) throw new Error('角色账本身份不匹配');
+        if (entry.sessionId !== sessionId || entry.ownerId !== ownerId) throw new Error('Actor ledger identity mismatch');
         return Object.freeze(entry);
-      } catch {throw new Error('账本记录损坏：' + this.path(sessionId, ownerId) + '，第 ' + (index + 1) + ' 行；原文未修改');}
+      } catch {throw new Error('Ledger record corrupt: ' + this.path(sessionId, ownerId) + ', line ' + (index + 1) + '; original left unmodified');}
     });
   }
   private branchPath(sessionId: string): string {return this.path(sessionId, '$session') + '.branch.json';}
   private async branch(sessionId: string) {
     const raw = await this.read(this.branchPath(sessionId));
     const branch = raw === undefined ? {version: 1 as const, id: '', sessionId, hidden: {} as Record<string, number[]>, excludedTasks: [] as string[]} : branchSchema.parse(JSON.parse(raw));
-    if (branch.sessionId !== sessionId) throw new Error('分支身份不匹配');
+    if (branch.sessionId !== sessionId) throw new Error('Branch identity mismatch');
     return branch;
   }
   async load(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]> {
     const entries = await this.loadRaw(sessionId, ownerId), branch = await this.branch(sessionId);
     const hidden = new Set(branch.hidden[ownerId] ?? []);
-    if ([...hidden].some(index => index >= entries.length)) throw new Error('分支行号超过原始账本');
+    if ([...hidden].some(index => index >= entries.length)) throw new Error('Branch line number exceeds the raw ledger');
     const indices = entries.flatMap((_, index) => hidden.has(index) ? [] : [index]);
     this.lineMaps.set(this.path(sessionId, ownerId), indices);
     return indices.map(index => entries[index]!);
@@ -156,7 +156,7 @@ export class Journal implements HistoryStore {
       ![item.sourceActivityId, item.rootActivityId, item.targetActivityId, item.recipientActivityId].some(activity => activity && activities.includes(activity))) : [];
     await atomicWrite(this.path(sessionId, '$deliveries') + '.' + id + '.queue.json', Buffer.from(JSON.stringify(deliveries)));
     await atomicWrite(this.path(sessionId, '$collaboration') + '.' + id + '.records.json', Buffer.from(JSON.stringify(collaborations)));
-    // 候选侧文件先落盘；最终一次替换才改变所有角色的有效分支。
+    // Write candidate files first; a single final replace changes every actor's effective branch.
     for (const {owner, rounds, context} of retained) {
       const prefix = this.path(sessionId, owner) + '.' + id;
       await atomicWrite(prefix + '.rounds.json', Buffer.from(JSON.stringify(rounds)));
@@ -169,7 +169,7 @@ export class Journal implements HistoryStore {
     const raw = await this.read(this.path(sessionId, '$session') + '.pending.json');
     if (raw === undefined) return undefined;
     const value = pendingSchema.nullable().parse(JSON.parse(raw));
-    if (value && value.sessionId !== sessionId) throw new Error('回退操作身份不匹配');
+    if (value && value.sessionId !== sessionId) throw new Error('Rewind operation identity mismatch');
     return value ?? undefined;
   }
   async savePending(sessionId: string, value: {target: string; activities: readonly string[]} | null): Promise<void> {
@@ -206,7 +206,7 @@ export class Journal implements HistoryStore {
       const file = this.path(parsed.sessionId, '$system') + '.events.json';
       const raw = await this.read(file);
       const events = raw === undefined ? [] : z.array(systemEventSchema).parse(JSON.parse(raw));
-      if (events.some(item => item.sessionId !== parsed.sessionId)) throw new Error('系统记录会话身份不匹配');
+      if (events.some(item => item.sessionId !== parsed.sessionId)) throw new Error('System record session identity mismatch');
       if (events.some(item => item.id === parsed.id)) return;
       await atomicWrite(file, Buffer.from(JSON.stringify([...events, parsed])));
       try {
@@ -222,7 +222,7 @@ export class Journal implements HistoryStore {
     await this.systemTail;
     const raw = await this.read(this.path(sessionId, '$system') + '.events.json');
     const events = raw === undefined ? [] : z.array(systemEventSchema).parse(JSON.parse(raw));
-    if (events.some(event => event.sessionId !== sessionId)) throw new Error('系统记录会话身份不匹配');
+    if (events.some(event => event.sessionId !== sessionId)) throw new Error('System record session identity mismatch');
     const branch = await this.branch(sessionId), excluded = new Set(branch.excludedTasks);
     return events.filter(event => !event.activityId || !excluded.has(event.activityId));
   }
@@ -259,12 +259,12 @@ export class Journal implements HistoryStore {
     if (raw === undefined) return [];
     const records = z.array(collaborationSchema).parse(JSON.parse(raw)), branch = await this.branch(sessionId);
     if (records.some(record => record.sessionId !== sessionId || record.requester === record.target ||
-      record.messages.some(message => ![record.requester, record.target].includes(message.from)))) throw new Error('协作记录身份无效');
+      record.messages.some(message => ![record.requester, record.target].includes(message.from)))) throw new Error('Invalid collaboration record identity');
     return records.filter(record => !branch.excludedTasks.includes(record.activityId) && !record.messages.some(message => branch.excludedTasks.includes(message.activityId)) && !record.relatedActivities?.some(activity => branch.excludedTasks.includes(activity)));
   }
   async saveCollaborations(sessionId: string, records: readonly CollaborationRecord[]): Promise<void> {
     const parsed = z.array(collaborationSchema).parse(records);
-    if (parsed.some(record => record.sessionId !== sessionId)) throw new Error('协作会话身份无效');
+    if (parsed.some(record => record.sessionId !== sessionId)) throw new Error('Invalid collaboration session identity');
     await atomicWrite(await this.statePath(sessionId, '$collaboration', 'records'), Buffer.from(JSON.stringify(parsed)));
   }
   async append(raw: HistoryEntry): Promise<void> {
@@ -372,13 +372,13 @@ export class Journal implements HistoryStore {
     await atomicWrite(await this.statePath(state.sessionId, state.ownerId, 'context'), Buffer.from(JSON.stringify(state)));
   }
   archivePath(sessionId: string, ownerId: string, hash: string): string {
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('工具归档身份无效');
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('Invalid tool archive identity');
     return join(this.path(sessionId, ownerId) + '.tools', hash + '.json');
   }
   async archive(sessionId: string, ownerId: string, value: unknown): Promise<string> {
     const text = JSON.stringify(value), hash = createHash('sha256').update(text).digest('hex');
     const file = this.archivePath(sessionId, ownerId, hash), existing = await this.read(file);
-    if (existing !== undefined && existing !== text) throw new Error('工具归档内容校验失败');
+    if (existing !== undefined && existing !== text) throw new Error('Tool archive content verification failed');
     if (existing === undefined) await atomicWrite(file, Buffer.from(text));
     return hash;
   }

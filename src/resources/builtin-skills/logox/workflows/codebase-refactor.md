@@ -4,7 +4,7 @@ description: Architecture decoupling, dependency topology mapping & safe refacto
 actors: [logox]
 ---
 
-# Codebase Refactor SOP (安全重构与架构解耦流)
+# Codebase Refactor SOP
 
 ## 1. Topology Mapping
 - Aletheia inspects all inbound and outbound call sites across the target module using `Grep` and `Glob`.

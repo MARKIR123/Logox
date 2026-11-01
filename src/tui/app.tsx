@@ -25,7 +25,16 @@ import {CommandMenu, commandMenuLayout} from './commands/command-menu.js';
 import {ProductionQuestionPanel} from './interactions/production-question.js';
 import type {PortfolioActivities} from '../demo/portfolio.js';
 import {buildStageRows, stageFoldOpen} from './timeline/stage.js';
-import {projectPortfolioScene} from './timeline/scene-state.js';
+import {projectPortfolioScene} from '../demo/scene-state.js';
+import {
+  buildDemoSceneRows,
+  demoRoles,
+  defaultSceneFoldOpen,
+  INITIAL_DEMO_DRAFT,
+  initialDemoSceneState,
+  isFoldOpen,
+  type DemoSceneUi,
+} from '../demo/scene.js';
 import {answerEnvelope} from '../runtime/interactions.js';
 import type {Answer, Interaction} from '../runtime/contracts.js';
 import {cast, type ActorId} from '../actors/ensemble.js';
@@ -37,15 +46,8 @@ import {safeText} from './terminal/text.js';
 import {type QuestionDraft} from './interactions/choice-style.js';
 import {cursorAt, emptyDraft, erase, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './input/editor.js';
 import {
-  buildDemoSceneRows,
   hoveredCardAt,
   actionAt,
-  demoRoles,
-  defaultSceneFoldOpen,
-  INITIAL_DEMO_DRAFT,
-  initialDemoSceneState,
-  isFoldOpen,
-  type DemoSceneUi,
   type SceneRow,
   type SceneAction,
 } from './timeline/scene.js';
@@ -106,7 +108,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (!definitions) return cast;
     const roles: Record<string, ActorStyle> = Object.fromEntries(definitions.map(role => [role.id, role]));
     for (const activity of snapshot.activities) if (activity.kind === 'actor' && !roles[activity.ownerId])
-      roles[activity.ownerId] = {symbol: '◇', name: activity.ownerId, title: '历史角色', color: palette.accent};
+      roles[activity.ownerId] = {symbol: '◇', name: activity.ownerId, title: 'Past role', color: palette.accent};
     return roles;
   }, [definitions, snapshot.activities, themeVersion]);
   const loginState = useSyncExternalStore(authentication?.subscribe ?? noLoginSubscription, authentication?.getSnapshot ?? noLoginSnapshot);
@@ -264,7 +266,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : [], [welcome, width]);
 
   const dockQuestion = !loginState && !surface && !demoScene && request?.kind === 'question' &&
-    (!stage || !Boolean(request.activityId && activities.some(a => a.activityId === request.activityId)));
+    (!stage || stageFoldOpen(deferredSnapshot, request.requestId, sceneUi.folds));
 
   const messageRows: readonly Row[] = useMemo(() => {
     if (demoScene) return buildDemoSceneRows(scene, width, hoveredFoldId);
@@ -295,30 +297,30 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : cachedStageStatus ? statusbarText(cachedStageStatus, width, layout?.modules, layout ?? undefined)
     : demoScene
       ? own
-        ? `${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].symbol} ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].name} · ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].role} · 独立对话`
+        ? `${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].symbol} ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].name} · ${demoRoles[currentView as 'aletheia' | 'techne' | 'kalon'].role} · Own thread`
         : request?.activityId === scenario?.techne && request
-          ? '◈ Logox · Techne 等待授权'
+          ? '◈ Logox · Techne awaiting approval'
           : request?.activityId === scenario?.kalon && request
-            ? '◈ Logox · Kalon 等待回答'
-            : pending.length ? '◈ Logox · ' + pending.length + ' 个待回答'
-              : activities.some(item => item.kind !== 'anamnesis' && ['queued', 'running'].includes(item.status)) ? '◈ Logox · 任务处理中'
-                : scene.style && scene.runtime?.kalon === 'completed' ? '◈ Logox · 本轮完成 · Anamnesis 整理候选' : '◈ Logox · 舞台就绪'
-      : `${own ? `${ownerHeader(currentView, roles)} · 独立对话` : '◈ Logox'} · ${pending.length ? pending.length + ' 个待回答' : '舞台就绪'}`;
+            ? '◈ Logox · Kalon awaiting answer'
+            : pending.length ? '◈ Logox · ' + pending.length + ' pending'
+              : activities.some(item => item.kind !== 'anamnesis' && ['queued', 'running'].includes(item.status)) ? '◈ Logox · Working'
+                : scene.style && scene.runtime?.kalon === 'completed' ? '◈ Logox · Round complete · Anamnesis sorting candidates' : '◈ Logox · Stage ready'
+      : `${own ? `${ownerHeader(currentView, roles)} · Own thread` : '◈ Logox'} · ${pending.length ? pending.length + ' pending' : 'Stage ready'}`;
   const statusLeftColor = notice
     ? palette.accent
     : own
       ? ownerColor(currentView, roles)
       : palette.muted;
-  const backLabel = own ? 'Esc 返回 Logox  ' : '';
+  const backLabel = own ? 'Esc Back to Logox  ' : '';
   const keysLabel = closing
-    ? '正在关闭…'
+    ? 'Closing…'
     : own
-      ? 'Enter 发送'
-      : 'Enter 发送 · Shift+Enter 换行 · @角色 派发';
+      ? 'Enter Send'
+      : 'Enter Send · Shift+Enter Newline · @role Dispatch';
   const footerKeys = width < 32
-    ? own ? 'Esc返回 · Enter发送' : 'Enter发送 · ^J换行'
+    ? own ? 'Esc Back · Enter Send' : 'Enter Send · ^J Newline'
     : width < 60
-      ? own ? 'Esc 返回 Logox · Enter 发送' : 'Enter发送 · Shift+Enter换行'
+      ? own ? 'Esc Back to Logox · Enter Send' : 'Enter Send · Shift+Enter Newline'
       : backLabel + keysLabel;
   const footerHeight = screenRows < 2 ? 0 : 1;
   const hairlineHeight = screenRows >= 4 ? 2 : 0;
@@ -327,7 +329,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const questionPanel = dockQuestion && response ? request : undefined;
   const activeDraft = editingCustom ? customDraft : draft;
   const editableComposer = focus === 'input' || editingCustom;
-  const promptGlyph = editingCustom ? '补充偏好 › ' : '';
+  const promptGlyph = editingCustom ? 'Extra preference › ' : '';
   const promptWidth = stringWidth(promptGlyph);
   const showExpandButton = !closing && !composerExpanded && editableComposer && !editingCustom && !loginState && !surface && width >= 6;
   const expandButtonWidth = showExpandButton ? stringWidth(COMPOSER_EXPAND_LABEL) + COMPOSER_EXPAND_PADDING * 2 : 0;
@@ -340,15 +342,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const inputKey = currentView + ':' + (editingCustom ? 'custom' : freeAnswer ? request?.requestId : 'main');
   const inputView = inputViewport(inputLayout, inputHeight, inputStarts.current.get(inputKey) ?? 0);
   inputStarts.current.set(inputKey, inputView.start);
-  const placeholder = currentView === 'logox' ? '' : '给 ' + (roles[currentView]?.name ?? currentView) + ' 的补充…';
+  const placeholder = currentView === 'logox' ? '' : 'Add to ' + (roles[currentView]?.name ?? currentView) + '…';
   const choiceSummary = demoScene && inlineRequest
-    ? request?.kind === 'permission' ? '许可：' + (scene.permissionChoice === 'allow' ? '仅本次允许' : '拒绝（默认）') + ' · Enter 确认'
-      : '选择：' + (scene.choice === 'minimal' ? '克制的文字作品集' : scene.choice === 'editorial' ? '温暖的编辑部' : '自由回答') + ' · Enter 确认'
+    ? request?.kind === 'permission' ? 'Permission: ' + (scene.permissionChoice === 'allow' ? 'Allow once' : 'Deny (default)') + ' · Enter Confirm'
+      : 'Choice: ' + (scene.choice === 'minimal' ? 'Restrained text portfolio' : scene.choice === 'editorial' ? 'Warm editorial' : 'Free-form answer') + ' · Enter Confirm'
     : request && response
     ? request.kind === 'permission'
-      ? '许可：' + (response.selected === 0 ? '仅本次允许' : '拒绝（默认）') + ' · Enter 确认'
+      ? 'Permission: ' + (response.selected === 0 ? 'Allow once' : 'Deny (default)') + ' · Enter Confirm'
       : getInteractionUI(request)?.describe(interactionState(request, response)).hint ?? ''
-    : '↑↓ 选择 · Enter 确认 · Esc 稍后';
+    : '↑↓ Select · Enter Confirm · Esc Later';
 
   const query = completionQuery(draft, currentView);
   const suggestions = stage && !composerExpanded && !loginState && !surface && focus === 'input' && !editingCustom && !(completion.query === query && completion.dismissed)
@@ -471,10 +473,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const interrupt = () => {
     if (closing || surface?.kind === 'result') return;
     const copied = !composerExpanded && !surface && !loginState ? copySelection() : '';
-    if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('已复制选区'); return;}
+    if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection to clipboard'); return;}
     const now = Date.now();
     if (exitDeadline.current > now) {close(); return;}
-    exitDeadline.current = now + 1500; flash('再次按 Ctrl+C 退出', 1500);
+    exitDeadline.current = now + 1500; flash('Press Ctrl+C again to exit', 1500);
   };
   const interruptRef = useRef(interrupt); interruptRef.current = interrupt;
   useEffect(() => registerInterrupt?.(() => interruptRef.current()), [registerInterrupt]);
@@ -556,9 +558,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (!request || request.kind !== 'question' || request.activityId !== scenario?.kalon) return;
     const custom = scene.custom.trim();
     if (scene.choice === 'custom' && !custom) {setScene(prev => ({...prev, customError: true})); return;}
-    const base = scene.choice === 'minimal' ? '克制的文字作品集' : scene.choice === 'editorial' ? '温暖的编辑部' : custom;
+    const base = scene.choice === 'minimal' ? 'Restrained text portfolio' : scene.choice === 'editorial' ? 'Warm editorial' : custom;
     const answer: Answer = scene.choice === 'custom' || custom
-      ? {type: 'text', text: (base + (scene.choice !== 'custom' && custom ? '，' + custom : '')).slice(0, 500)}
+      ? {type: 'text', text: (base + (scene.choice !== 'custom' && custom ? ', ' + custom : '')).slice(0, 500)}
       : {type: 'option', optionId: scene.choice};
     const result = store.interactions.respond(answerEnvelope(request, {kind: 'question', answers: {style: answer}}));
     if (!result.ok) {setNotice(result.reason); return;}
@@ -868,7 +870,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           if (copied) {
             stdout?.write(osc52Clipboard(copied));
             exitDeadline.current = 0;
-            flash('已复制状态栏内容');
+            flash('Copied statusbar content');
           }
         }
         return;
@@ -883,7 +885,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return;
       }
       const copied = copySelection();
-      if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('已复制选区（不含左侧轨道）');}
+      if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection (excluding rail)');}
     }
   };
 
@@ -1215,7 +1217,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         <Text color={welcome.systemTitle && index === 0 ? palette.accent : palette.muted} wrap="truncate">{clipLine(line.text, width) || ' '}</Text>
       </Box>) : !plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;
-        const rail = row.gutterCols > 0 ? <Text color={row.railColor}>▎ </Text> : null;
+        const rail = row.gutterCols > 0 ? <Text color={row.railColor}>│ </Text> : null;
         return <Box key={index} height={1} flexShrink={0} overflow="hidden">
           {rail}
           <Text wrap="truncate">{presentedSegments(row, index, selection).map((seg, i) =>

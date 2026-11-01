@@ -15,13 +15,12 @@ export class ActorModelStorage {
 
   constructor(
     readonly path = join(homedir(), '.logox', 'actor-models.json'),
-    readonly fallbackPath = join(homedir(), '.logox-ts', 'actor-models.json'),
   ) {
     this.loadSync();
   }
 
   loadSync(): ActorModelMap {
-    for (const p of [this.path, this.fallbackPath]) {
+    for (const p of [this.path]) {
       try {
         const raw = readFileSync(p, 'utf8').replace(/^﻿/, '');
         const parsed = storageSchema.parse(JSON.parse(raw));
@@ -34,7 +33,7 @@ export class ActorModelStorage {
 
   async read(): Promise<ActorModelMap> {
     const merged: ActorModelMap = {};
-    for (const p of [this.fallbackPath, this.path]) {
+    for (const p of [this.path]) {
       try {
         const raw = (await readFile(p, 'utf8')).replace(/^﻿/, '');
         const parsed = storageSchema.parse(JSON.parse(raw));

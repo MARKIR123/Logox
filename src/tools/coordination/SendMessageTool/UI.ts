@@ -9,6 +9,8 @@ function parseSendMessage(call: ToolCall, bodyText = '') {
   let args: Record<string, unknown> = {};
   try { args = JSON.parse(call.arguments); } catch {}
   const target = String(args.to ?? '').toLowerCase();
+  const role = (cast as any)[target];
+  const targetLabel = role ? `${role.symbol} ${role.name}` : target;
   const desc = typeof args.description === 'string' && args.description.trim()
     ? args.description.trim()
     : typeof args.summary === 'string' && args.summary.trim()
@@ -18,8 +20,8 @@ function parseSendMessage(call: ToolCall, bodyText = '') {
   const mode = (args.mode === 'interrupt' || cleanResult.includes('interrupt')) ? 'interrupt' : 'queued';
   const targetColor = (cast as any)[target]?.color ?? palette.accent;
   const descStr = desc ? ` · ${desc}` : '';
-  const title = `SendMessage to ${target}${descStr} · ${mode}`;
-  return {args, target, desc, mode, targetColor, descStr, title};
+  const title = `SendMessage to ${targetLabel}${descStr} · ${mode}`;
+  return {args, target, targetLabel, desc, mode, targetColor, descStr, title};
 }
 
 export const UI: ToolUI = {
@@ -35,11 +37,11 @@ export const UI: ToolUI = {
 
     const [, ...bodyLines] = message.text.split('\n');
     const bodyText = bodyLines.join('\n');
-    const {args, target, desc, mode, targetColor, title} = parseSendMessage(call, bodyText);
+    const {args, target, targetLabel, desc, mode, targetColor, title} = parseSendMessage(call, bodyText);
 
     const titleSegments: SceneSegment[] = [
       {text: 'SendMessage to ', color: palette.muted, selectionKey: message.id + ':title', selectionOffset: 0},
-      {text: target, color: targetColor, bold: true, selectionKey: message.id + ':title_target'},
+      {text: targetLabel, color: targetColor, bold: true, selectionKey: message.id + ':title_target'},
       ...(desc ? [{text: ` · ${desc}`, color: palette.muted, selectionKey: message.id + ':title_desc'}] : []),
       {text: ` · ${mode}`, color: palette.muted, selectionKey: message.id + ':title_mode'},
     ];

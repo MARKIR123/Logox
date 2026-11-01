@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {groupModelsForProvider, resolveActualModel} from '../src/config/model-grouping.js';
+import {groupModelsForProvider, resolveActualModel, isConversationalModel, groupModelFamilies} from '../src/config/model-grouping.js';
 
 test('模型折叠：gemini 同族按思考强度后缀的模型自动折叠合并，左右键切换真实模型', () => {
   const models = [
@@ -67,3 +67,50 @@ test('思考档位探测：DeepSeek 与 Claude 及 OpenAI 推理模型统一支�
   assert.equal(plain.length, 1);
   assert.deepEqual(plain[0]!.effortLevels, []);
 });
+
+test('groupModelFamilies: 过滤非对话模型噪声，合并带思考档位后缀的同族变体', () => {
+  const rawList = [
+    'antigravity/gemini-4-argon-low',
+    'antigravity/gemini-4-argon-medium',
+    'antigravity/gemini-4-argon-high',
+    'antigravity/gemini-3.8-flash-low',
+    'antigravity/gemini-3.8-flash-high',
+    'antigravity/claude-opus-4-6-thinking',
+    'deepseek-chat',
+    'text-embedding-3-small',
+    'tts-1-hd',
+    'whisper-1',
+    'dall-e-3',
+  ];
+
+  assert.equal(isConversationalModel('text-embedding-3-small'), false);
+  assert.equal(isConversationalModel('dall-e-3'), false);
+  assert.equal(isConversationalModel('deepseek-chat'), true);
+
+  const families = groupModelFamilies(rawList, 'antigravity');
+  // 嵌入、生图、语音均被过滤；gemini-4-argon (3合1), gemini-3.8-flash (2合1), claude-opus-4-6 (1), deepseek-chat (1)
+  assert.equal(families.length, 4);
+
+  const argon = families.find(f => f.baseModel === 'antigravity/gemini-4-argon')!;
+  assert.ok(argon);
+  assert.equal(argon.variants.length, 3);
+  assert.deepEqual(argon.variants, [
+    'antigravity/gemini-4-argon-low',
+    'antigravity/gemini-4-argon-medium',
+    'antigravity/gemini-4-argon-high',
+  ]);
+  assert.deepEqual(argon.effortLevels, ['low', 'medium', 'high']);
+  assert.ok(argon.description.includes('low / medium / high'));
+  assert.ok(argon.description.includes('3 variants'));
+
+  const flash = families.find(f => f.baseModel === 'antigravity/gemini-3.8-flash')!;
+  assert.ok(flash);
+  assert.equal(flash.variants.length, 2);
+  assert.deepEqual(flash.effortLevels, ['low', 'high']);
+
+  const deepseek = families.find(f => f.baseModel === 'deepseek-chat')!;
+  assert.ok(deepseek);
+  assert.equal(deepseek.variants.length, 1);
+  assert.deepEqual(deepseek.variants, ['deepseek-chat']);
+});
+

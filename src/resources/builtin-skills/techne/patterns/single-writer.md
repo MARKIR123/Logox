@@ -4,7 +4,7 @@ description: Single-writer isolation pattern, file locking & concurrency safety 
 actors: [techne]
 ---
 
-# Single-Writer Pattern SOP (单一写入者隔离与并发安全模式)
+# Single-Writer Pattern SOP
 
 ## 1. Principle of Single Ownership
 - A state file or core source code artifact must have strictly **one active writer** at any given moment.

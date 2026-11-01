@@ -27,8 +27,8 @@ export function ownerColor(ownerId: string, roles: ActorStyles = cast): string {
   return roles[ownerId]?.color ?? palette.accent;
 }
 export function ownerHeader(ownerId: string, roles: ActorStyles = cast): string {
-  if (ownerId === 'user') return '你';
-  if (ownerId === 'anamnesis') return 'Anamnesis · 入梦';
+  if (ownerId === 'user') return 'You';
+  if (ownerId === 'anamnesis') return 'Anamnesis';
   const actor = roles[ownerId];
   return actor ? `${actor.symbol} ${actor.name}` : ownerId;
 }

@@ -31,23 +31,23 @@ export class ProviderError extends Error {
     readonly diagnostic?: ProviderDiagnostic) {super(message);}
 }
 export function providerTimeout(): ProviderError {
-  return new ProviderError('模型请求超时', true, 'temporary', {status: 408, code: 'idle_timeout'});
+  return new ProviderError('Model request timed out', true, 'temporary', {status: 408, code: 'idle_timeout'});
 }
 export function isProviderTimeout(error: unknown): boolean {
   return error instanceof ProviderError && error.category === 'temporary' &&
-    (error.diagnostic?.code === 'idle_timeout' || error.message === '模型请求超时');
+    (error.diagnostic?.code === 'idle_timeout' || error.message === 'Model request timed out');
 }
 export function isProviderInterruption(error: unknown): boolean {
   return isProviderTimeout(error) || error instanceof ProviderError && error.category === 'temporary' &&
     (error.diagnostic?.phase === 'connection' || error.diagnostic?.phase === 'stream');
 }
 const transportReasons: Record<string, string> = {
-  UND_ERR_SOCKET: '连接被关闭', ECONNRESET: '连接被重置', EPIPE: '连接已断开',
-  ENOTFOUND: '无法解析服务地址', EAI_AGAIN: '服务地址解析暂时失败', ECONNREFUSED: '连接被拒绝',
-  ETIMEDOUT: '网络连接超时', UND_ERR_CONNECT_TIMEOUT: '建立连接超时',
-  UND_ERR_HEADERS_TIMEOUT: '等待响应头超时', UND_ERR_BODY_TIMEOUT: '等待响应数据超时',
+  UND_ERR_SOCKET: 'Connection closed', ECONNRESET: 'Connection reset', EPIPE: 'Connection broken',
+  ENOTFOUND: 'Host not found', EAI_AGAIN: 'Host lookup failed temporarily', ECONNREFUSED: 'Connection refused',
+  ETIMEDOUT: 'Connection timed out', UND_ERR_CONNECT_TIMEOUT: 'Connect timed out',
+  UND_ERR_HEADERS_TIMEOUT: 'Response headers timed out', UND_ERR_BODY_TIMEOUT: 'Response body timed out',
 };
-/** fetch 将传输原因包在 cause 中；只保留公开码，避免异常回显带入请求资料。 */
+/** fetch wraps the transport reason in cause; keep only the public code so error echoes never carry request data. */
 function transportFailure(error: unknown, phase: 'connection' | 'stream', status?: number): ProviderError {
   let code: string | undefined;
   for (let depth = 0; depth < 6; depth++) {
@@ -58,8 +58,8 @@ function transportFailure(error: unknown, phase: 'connection' | 'stream', status
     }
     error = parsed.data.cause;
   }
-  const title = phase === 'stream' ? '模型流连接中断' : '模型连接失败';
-  return new ProviderError(title + '：' + (code ? transportReasons[code] + '（' + code + '）' : '底层未提供可识别的错误码'),
+  const title = phase === 'stream' ? '[Network] Stream interrupted' : '[Network] Connection failed';
+  return new ProviderError(title + ': ' + (code ? transportReasons[code] + ' (' + code + ')' : 'no recognizable error code'),
     true, 'temporary', {phase, ...(status !== undefined ? {status} : {}), ...(code ? {code} : {})});
 }
 function idleDeadline(signal: AbortSignal, milliseconds: number) {
@@ -81,37 +81,37 @@ function idleDeadline(signal: AbortSignal, milliseconds: number) {
         ...(lastDataAt !== undefined ? {transportIdleMs: Math.floor(now - lastDataAt)} : {})};
     }, close: () => clearTimeout(timer)};
 }
-/** 已知公开错误保留 API 用语；未知回显使用结构化诊断，不带入整段响应正文。 */
+/** Known public errors keep API wording; unknown echoes use structured diagnostics and never carry the whole response body. */
 export function providerFailure(status: number, payload?: unknown): ProviderError {
   const parsed = z.object({error: z.object({code: z.string().optional(), type: z.string().optional(),
     message: z.string().optional(), param: z.string().nullable().optional()}).optional()}).safeParse(payload);
   const code = parsed.success ? parsed.data.error?.code ?? parsed.data.error?.type : undefined;
-  if (status === 401 || status === 403) return new ProviderError('模型认证或权限不可用', false, 'authentication');
+  if (status === 401 || status === 403) return new ProviderError('Model authentication or permission unavailable', false, 'authentication');
   if (status === 402 || ['insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached', 'credit_balance_exhausted'].includes(code ?? '')) {
     const message = parsed.success ? parsed.data.error?.message?.trim() ?? '' : '';
-    // 只保留完整匹配的公开余额提示，避免错误正文夹带请求或凭据。
+    // Keep only fully matched public balance hints so error bodies never carry request data or credentials.
     const reason = /^(?:Insufficient Balance|Insufficient credits|Insufficient quota|余额不足|额度不足)[.!。]?$/i.test(message)
-      ? message + '（余额不足）' : '余额或额度不足';
-    return new ProviderError('模型请求失败（HTTP ' + status + '）：' + reason + '；充值后继续，或使用 /model 切换模型。',
+      ? message + ' (insufficient balance)' : 'Insufficient balance or quota';
+    return new ProviderError('Model request failed (HTTP ' + status + '): ' + reason + '. Top up to continue, or use /model to switch models.',
       false, 'quota', {status});
   }
-  if (['authentication_error', 'permission_error'].includes(code ?? '')) return new ProviderError('模型认证或权限不可用', false, 'authentication');
-  if (['model_not_found', 'model_not_exist', 'model_not_available'].includes(code ?? '')) return new ProviderError('所选模型不存在或不可用', false, 'model_missing');
-  if (['rate_limit_error', 'overloaded_error'].includes(code ?? '')) return new ProviderError('模型服务暂时不可用', true, 'temporary');
-  if ([408, 429, 500, 502, 503, 504, 529].includes(status)) return new ProviderError('模型服务暂时不可用', true, 'temporary');
+  if (['authentication_error', 'permission_error'].includes(code ?? '')) return new ProviderError('Model authentication or permission unavailable', false, 'authentication');
+  if (['model_not_found', 'model_not_exist', 'model_not_available'].includes(code ?? '')) return new ProviderError('Selected model does not exist or is unavailable', false, 'model_missing');
+  if (['rate_limit_error', 'overloaded_error'].includes(code ?? '')) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
+  if ([408, 429, 500, 502, 503, 504, 529].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
   const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
     : /tool_call_id|tool_use_id|tool_calls.*(?:follow|response|match)|tool.*(?:preceding|correspond)/i.test(text) ? 'tool_pairing'
     : /assistant.*(?:content|empty)|content.*tool_calls/i.test(text) ? 'empty_assistant'
     : ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? 'invalid_field' : undefined;
   const descriptions: Record<ProtocolIssue, string> = {
-    reasoning: '思考字段未满足接口要求', tool_pairing: '工具调用与结果未正确配对',
-    empty_assistant: '助手消息正文为空或格式无效', invalid_field: '请求字段或消息格式无效',
+    reasoning: 'Thinking field does not meet API requirements', tool_pairing: 'Tool calls and results are not paired correctly',
+    empty_assistant: 'Assistant message is empty or malformed', invalid_field: 'Request field or message format is invalid',
   };
   const parameter = error?.param && /^(?:messages|tools)(?:\[\d{1,6}\]|\.\d{1,6})?(?:\.(?:content|role|reasoning_content|tool_calls|tool_call_id|function|arguments|parameters|name))*$/.test(error.param) ? error.param : undefined;
   const safeCode = ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? code : undefined;
-  return new ProviderError('模型请求失败（HTTP ' + status + '）' + (issue ? '：' + descriptions[issue] : '') +
-    (parameter ? '；字段：' + parameter : ''), false, 'protocol',
+  return new ProviderError('Model request failed (HTTP ' + status + ')' + (issue ? ': ' + descriptions[issue] : '') +
+    (parameter ? '; field: ' + parameter : ''), false, 'protocol',
     {status, ...(safeCode ? {code: safeCode} : {}), ...(parameter ? {parameter} : {}), ...(issue ? {issue} : {})});
 }
 async function errorPayload(response: Response): Promise<unknown> {
@@ -175,7 +175,7 @@ const eventSchema = z.object({
   })).optional(),
 }).passthrough();
 type StreamEvent = z.infer<typeof eventSchema>;
-/** 心跳和空帧不是模型进展；正文、思考、工具参数及协议收尾都能刷新期限。 */
+/** Heartbeats and empty frames are not model progress; text, thinking, tool arguments and protocol terminators all refresh the deadline. */
 function hasProgress(event: StreamEvent): boolean {
   if (['message_start', 'content_block_start', 'content_block_stop', 'message_stop'].includes(event.type ?? '')) return true;
   if (event.type?.startsWith('response.')) return true;
@@ -344,7 +344,7 @@ export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2,
   return result;
 }
 async function* events(response: Response, received: (length: number) => void): AsyncGenerator<StreamEvent> {
-  if (!response.body) throw new ProviderError('模型没有返回响应内容');
+  if (!response.body) throw new ProviderError('Model returned no response body');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -353,17 +353,17 @@ async function* events(response: Response, received: (length: number) => void): 
       const chunk = await reader.read();
       if (chunk.value?.length) received(chunk.value.length);
       buffer = (buffer + decoder.decode(chunk.value, {stream: !chunk.done})).replace(/\r\n/g, '\n');
-      if (buffer.length > 4 * 1024 * 1024) throw new ProviderError('模型事件超过大小限制');
+      if (buffer.length > 4 * 1024 * 1024) throw new ProviderError('Model event exceeds the size limit');
       let boundary: number;
       while ((boundary = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
         const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
         if (!data || data === '[DONE]') continue;
-        try {yield eventSchema.parse(JSON.parse(data));} catch {throw new ProviderError('模型流事件格式无效');}
+        try {yield eventSchema.parse(JSON.parse(data));} catch {throw new ProviderError('Model stream event format is invalid');}
       }
       if (chunk.done) {
-        if (buffer.trim()) throw new ProviderError('模型事件未完整结束');
+        if (buffer.trim()) throw new ProviderError('Model event did not end cleanly');
         return;
       }
     }
@@ -375,7 +375,7 @@ async function* events(response: Response, received: (length: number) => void): 
 export function createProvider(settings: ModelSettings, fetcher: typeof fetch = fetch): Provider {
   const capabilities = resolveProviderCapabilities(settings);
   return {capabilities, async respond(request, onDelta, signal) {
-    if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 名称或 --model 名称');
+    if (!settings.model) throw new ProviderError('No model configured; use /model <name> or --model <name>');
     const native = settings.kind === 'anthropic';
     const oauthResponses = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' &&
       (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
@@ -400,12 +400,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const protocol = settings.thinkingProtocol;
     const thinking: ObjectValue = {};
     if (protocol) {
-      if (effort !== 'auto' && request.thinking !== false && !settings.thinkingLevels?.includes(effort)) throw new ProviderError('模型不支持当前思考档位');
+      if (effort !== 'auto' && request.thinking !== false && !settings.thinkingLevels?.includes(effort)) throw new ProviderError('Model does not support the current thinking level');
       if (protocol === 'anthropic-budget') {
         if (effort === 'off') thinking.thinking = {type: 'disabled'};
         else {
           const budget = Math.min(({low: 1024, medium: 4096, high: 8192, auto: 8192, max: 16384} as Record<string, number>)[effort] ?? 4096, maxTokens - 1);
-          if (budget < 1024) throw new ProviderError('思考模式需要至少 1025 token 输出额度；提高 max_tokens 或关闭思考');
+          if (budget < 1024) throw new ProviderError('Thinking mode needs an output budget of at least 1025 tokens; raise max_tokens or turn thinking off');
           thinking.thinking = {type: 'enabled', budget_tokens: budget};
         }
       } else if (protocol === 'anthropic-adaptive') {
@@ -477,7 +477,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         }
         const parsedRecord = z.record(z.string(), z.unknown()).safeParse(payload);
         if (!parsedRecord.success) {
-          throw new ProviderError('模型返回的非流式响应格式无效', true, 'temporary', {status: response.status});
+          throw new ProviderError('Model returned an invalid non-streaming response', true, 'temporary', {status: response.status});
         }
         const parsed = parsedRecord.data;
         if (native) {
@@ -558,7 +558,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           for await (const event of events(response, deadline.received)) {
           timed.throwIfAborted();
           if (hasProgress(event)) deadline.progress();
-          if (calls.size > 128) throw new ProviderError('单次工具调用数量超过限制');
+          if (calls.size > 128) throw new ProviderError('Too many tool calls in a single response');
           if (isResponsesApi) {
             if (event.type === 'error' || event.error) throw providerFailure(200, {error: event.error ?? event});
             if (event.type === 'response.output_text.delta') {
@@ -678,9 +678,9 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       if (error instanceof ProviderError && (error.diagnostic?.phase || isProviderTimeout(error))) {
         const observed = deadline.observation();
         const seconds = (ms: number) => (ms / 1000).toFixed(1) + 's';
-        const detail = '传输诊断：请求运行 ' + seconds(observed.elapsedMs) + '；距上次模型进展 ' + seconds(observed.progressIdleMs) +
-          '；' + (observed.transportIdleMs === undefined ? '尚未收到响应数据' : '距上次数据 ' + seconds(observed.transportIdleMs)) +
-          '；接收 ' + observed.receivedBytes + ' 字节。';
+        const detail = 'Transport: elapsed ' + seconds(observed.elapsedMs) + '; idle since progress ' + seconds(observed.progressIdleMs) +
+          '; ' + (observed.transportIdleMs === undefined ? 'no data received' : 'idle since data ' + seconds(observed.transportIdleMs)) +
+          '; ' + observed.receivedBytes + ' bytes received.';
         throw new ProviderError(error.message + '\n' + detail, error.retryable, error.category, {...error.diagnostic, ...observed});
       }
       throw error;

@@ -4,7 +4,7 @@ description: Low-saturation Morandi color harmony, muted tonal systems & aesthet
 actors: [kalon]
 ---
 
-# Morandi Palette System SOP (莫兰迪沉静色彩系统)
+# Morandi Palette System SOP
 
 The Morandi color system relies on low-saturation, gray-infused tones that convey understated sophistication, visual calm, and high aesthetic cohesion.
 

@@ -4,7 +4,7 @@ description: Academic literature cross-referencing, claim auditing, citation ver
 actors: [aletheia]
 ---
 
-# Academic Literature Review SOP (学术审稿与文献交叉核验 SOP)
+# Academic Literature Review SOP
 
 ## 1. Primary Source Verification
 - Never accept secondary quotes without verifying the original paper, preprint, or RFC specification.

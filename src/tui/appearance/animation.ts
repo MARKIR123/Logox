@@ -14,6 +14,6 @@ export function stepIcon(step: Step, now: number, motion: boolean, frames?: read
 export function stepStatus(step: Step, now: number): string {
   const seconds = stepElapsed(step, now) / 1000;
   const duration = (seconds < 60 ? seconds.toFixed(1) + 's' : Math.floor(seconds / 60) + 'm' + String(Math.floor(seconds % 60)).padStart(2, '0') + 's').padStart(7).slice(-7);
-  const state = step.state === 'waiting' ? step.waiting ?? '等待中' : step.state === 'queued' ? '排队中' : step.state === 'cancelled' ? '已取消' : '';
+  const state = step.state === 'waiting' ? step.waiting ?? 'Waiting' : step.state === 'queued' ? 'Queued' : step.state === 'cancelled' ? 'Cancelled' : '';
   return duration + (state ? ' ' + state : '');
 }

@@ -4,7 +4,7 @@ description: Modern flat design, negative space rhythm, crisp typography & minim
 actors: [kalon]
 ---
 
-# Modern Flat Design SOP (现代扁平极简风与负空间节奏)
+# Modern Flat Design SOP
 
 ## 1. Principles of Elimination
 - Remove unnecessary bevels, heavy 3D gradients, and decorative noise.

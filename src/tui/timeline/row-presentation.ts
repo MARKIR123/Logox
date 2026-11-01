@@ -32,6 +32,24 @@ function transform(segments: readonly SceneSegment[], fn: (glyph: SceneSegment, 
 }
 const decoratedCache = new WeakMap<Row, {animNow: number; motion: boolean; decorated: SceneRow}>();
 
+function extractToolWordLength(text: string): number {
+  const clean = text.trim();
+  if (clean.startsWith('Thinking')) return clean.startsWith('Thinking...') ? 11 : 8;
+  const match = /^([a-zA-Z0-9_]+)/.exec(clean);
+  return match ? match[1]!.length : clean.length;
+}
+
+function dshShimmerLuster(offset: number, wordLength: number, now: number, stepMs = 60): number {
+  const windowSize = 8;
+  const cycle = Math.max(wordLength + 14, 20);
+  const glimmerStart = (Math.floor(now / stepMs) % cycle) - 7;
+  const inBeam = offset >= glimmerStart && offset < glimmerStart + windowSize;
+  if (!inBeam) return 0;
+  const center = glimmerStart + windowSize / 2;
+  const dist = Math.abs(offset - center) / (windowSize / 2);
+  return Math.max(0, 1 - dist * dist);
+}
+
 /** Color and fixed-size slots only: no layout or runtime publication on a clock tick. */
 export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const row = raw as SceneRow, animation = row.animation;
@@ -52,6 +70,12 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const mappedCells = new Map(row.selectionCells?.map(cell => [cell.column, cell]));
   const actorColor = animation.actorColor ?? palette.accent;
   const isWorking = (running && animation.thinking) || activeActor;
+  const isRunningTool = running && !animation.thinking;
+
+  const titleSegment = base.find(s => s.selectionKey?.endsWith(':title'));
+  const titleText = titleSegment?.text ?? '';
+  const toolWordLen = isRunningTool || (running && animation.thinking) ? extractToolWordLength(titleText) : 0;
+  const highlightColor = mixHex(palette.fg, actorColor, 0.85);
 
   // Gentle, organic breathing rhythm:
   // Slow respiratory envelope cycle (~4.1s) modulated by gentle spatial traveling phase
@@ -65,11 +89,18 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
       if (!activeActor || !animation.open) {
         segment = {...segment, text: stepIcon(animation.step ?? ({state: 'running'} as Step), now, motion, animation.frames), color: actorColor};
       }
+    } else if (isRunningTool && cell?.key.endsWith(':icon') && cell.offset === 0) {
+      segment = {...segment, text: '▮', color: mixHex(actorColor, palette.fg, breath)};
     }
-    if (isWorking && motion && !animation.highlighted && cell?.key.endsWith(':title')) {
-      const wave = (Math.sin(column * 0.35 - now / 450) + 1) / 2;
-      const luster = 0.28 + 0.62 * (0.65 * breath + 0.35 * wave);
-      segment = {...segment, color: mixHex(actorColor, palette.muted, luster)};
+    if (running && (isRunningTool || animation.thinking) && cell?.key.endsWith(':title')) {
+      if (animation.highlighted) {
+        // Keep hover highlight color
+      } else if (motion && cell.offset < toolWordLen) {
+        const luster = dshShimmerLuster(cell.offset, toolWordLen, now);
+        segment = {...segment, color: mixHex(actorColor, palette.fg, luster), bold: luster > 0.35};
+      } else {
+        segment = {...segment, color: palette.fg};
+      }
     }
     return segment;
   });

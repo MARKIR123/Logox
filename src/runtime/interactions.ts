@@ -18,24 +18,24 @@ export class Interactions {
     const requestId = randomUUID();
     let resolve!: Pending['resolve'];
     const result = new Promise<InteractionOutcome>(done => { resolve = done; });
-    const cancel = () => this.cancel(requestId, '任务已取消');
+    const cancel = () => this.cancel(requestId, 'Task cancelled');
     this.records.set(requestId, immutable({...input, requestId, status: 'pending'}));
     this.pending.set(requestId, {resolve, detach: () => signal?.removeEventListener('abort', cancel)});
     signal?.addEventListener('abort', cancel, {once: true});
-    if (this.closed || signal?.aborted) this.cancel(requestId, this.closed ? '运行时已关闭' : '任务已取消');
+    if (this.closed || signal?.aborted) this.cancel(requestId, this.closed ? 'Runtime closed' : 'Task cancelled');
     else this.onChange();
     return {requestId, result};
   }
 
   respond(raw: unknown): {ok: true} | {ok: false; reason: string} {
     const parsed = responseSchema.safeParse(raw);
-    if (!parsed.success) return {ok: false, reason: '回答格式不正确'};
+    if (!parsed.success) return {ok: false, reason: 'Malformed answer'};
     const response = parsed.data;
     const request = this.records.get(response.requestId);
-    if (!request || request.status !== 'pending') return {ok: false, reason: '请求不存在或已结束'};
+    if (!request || request.status !== 'pending') return {ok: false, reason: 'Request not found or already finished'};
     if (request.sessionId !== response.sessionId || request.activityId !== response.activityId ||
         request.ownerId !== response.ownerId || request.kind !== response.kind) {
-      return {ok: false, reason: '回答与请求身份不匹配'};
+      return {ok: false, reason: 'Answer does not match the request identity'};
     }
     if (request.kind === 'question' && response.kind === 'question') {
       const keys = Object.keys(response.answers);
@@ -49,13 +49,13 @@ export class Interactions {
           return answer.optionIds.some(id => !question.options?.some(option => option.id === id));
         }
         return false;
-      })) return {ok: false, reason: '请完整回答每个问题并使用有效选项'};
+      })) return {ok: false, reason: 'Answer every question completely and use valid options'};
     }
     this.settle(request, {status: 'answered', response: immutable(response)});
     return {ok: true};
   }
 
-  cancel(requestId: string, reason = '用户取消'): boolean {
+  cancel(requestId: string, reason = 'Cancelled by user'): boolean {
     const request = this.records.get(requestId);
     if (!request || request.status !== 'pending') return false;
     this.settle(request, {status: 'cancelled', reason});
@@ -63,12 +63,12 @@ export class Interactions {
   }
   cancelActivity(sessionId: string, activityId: string): void {
     for (const request of this.records.values()) {
-      if (request.sessionId === sessionId && request.activityId === activityId) this.cancel(request.requestId, '活动已结束');
+      if (request.sessionId === sessionId && request.activityId === activityId) this.cancel(request.requestId, 'Activity finished');
     }
   }
   close(): void {
     this.closed = true;
-    for (const requestId of this.pending.keys()) this.cancel(requestId, '运行时已关闭');
+    for (const requestId of this.pending.keys()) this.cancel(requestId, 'Runtime closed');
   }
   private settle(request: Interaction, outcome: InteractionOutcome): void {
     const pending = this.pending.get(request.requestId);

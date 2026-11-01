@@ -18,5 +18,5 @@ Specialized reconnaissance SOPs reside in categorized subdirectories. Inspect do
 ## 3. Skill Promotion & Storage
 To internalize new external skills or persist reusable inspection workflows:
 1. Follow the public SOP `skills/public/skill-internalization.md`.
-2. Write newly internalized skills to the appropriate category directory in either `~/.logox-ts/skills/aletheia/` (user global) or `.logox/skills/aletheia/` (project private).
+2. Write newly internalized skills to the appropriate category directory in either `~/.logox/skills/aletheia/` (user global) or `.logox/skills/aletheia/` (project private).
 3. If introducing an entirely new category, register it under `categories` in this `agent.md`.

@@ -4,7 +4,7 @@ description: Surgical root-cause diagnosis, reproduction harness & verification 
 actors: [logox]
 ---
 
-# Bugfix & Root-Cause SOP (根因排查与手术刀修复流)
+# Bugfix & Root-Cause SOP
 
 This SOP defines the disciplined procedure for investigating and fixing bugs without symptom patching or trial-and-error regression.
 

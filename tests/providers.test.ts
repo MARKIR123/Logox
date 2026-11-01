@@ -54,16 +54,16 @@ test('认证在每次请求时读取，环境优先，选择信息不包含密�
 test('认证缺失、损坏、OAuth 和命令值明确失败，不泄漏文件内容', async () => {
   const f = await registryFixture();
   try {
-    await assert.rejects(f.registry.settings(), /无法读取认证文件/);
+    await assert.rejects(f.registry.settings(), /Cannot read the auth file/);
     await writeFile(f.file, '{ private-secret');
-    await assert.rejects(f.registry.settings(), error => error instanceof Error && /无法读取/.test(error.message) && !error.message.includes('private-secret'));
+    await assert.rejects(f.registry.settings(), error => error instanceof Error && /Cannot read the auth file/.test(error.message) && !error.message.includes('private-secret'));
     await writeFile(f.file, '{}');
     assert.equal((await f.registry.settings(false)).key, '');
-    await assert.rejects(f.registry.settings(), /未登录/);
+    await assert.rejects(f.registry.settings(), /not logged in/);
     await writeFile(f.file, JSON.stringify({deepseek: {type: 'oauth', access: 'private-secret'}}));
     await assert.rejects(f.registry.settings(), /OAuth/);
     await writeFile(f.file, JSON.stringify({deepseek: {type: 'api_key', key: '!echo private-secret'}}));
-    await assert.rejects(f.registry.settings(), /认证命令/);
+    await assert.rejects(f.registry.settings(), /Auth commands are not supported/);
     await writeFile(f.file, JSON.stringify({deepseek: {type: 'api_key', key: '${MODEL_KEY}'}}));
     assert.equal((await new ProviderRegistry(f.config, {MODEL_KEY: 'reference-secret'}, fetch, f.auth).settings()).key, 'reference-secret');
   } finally {await f.cleanup();}
@@ -75,7 +75,7 @@ test('切换提供商清除旧模型地址和认证，失败选择不影响当�
     f.registry.select('antigravity');
     assert.deepEqual(f.registry.selection(), {provider: 'antigravity', model: '', kind: 'openai_compat', baseUrl: 'http://127.0.0.1:8045/v1'});
     assert.equal((await f.registry.settings()).key, '');
-    assert.throws(() => f.registry.select('unknown'), /未知/);
+    assert.throws(() => f.registry.select('unknown'), /Unknown provider/);
     assert.equal(f.registry.selection().provider, 'antigravity');
     f.registry.select('cloud');
     assert.equal(f.registry.selection().model, 'fixture');
@@ -102,7 +102,7 @@ test('模型查询与回复复用相同认证，缺认证和取消不发送请�
     await assert.rejects(registry.provider().respond({system: '', messages: [], tools: []}, () => {}, controller.signal));
     assert.equal(requests.length, 2);
     await writeFile(f.file, '{}');
-    await assert.rejects(new ProviderRegistry(f.config, {}, fetcher, f.auth).check(), /未登录/);
+    await assert.rejects(new ProviderRegistry(f.config, {}, fetcher, f.auth).check(), /not logged in/);
     assert.equal(requests.length, 2);
   } finally {await f.cleanup();}
 });
@@ -131,7 +131,7 @@ test('真实模型流断连保留传输阶段和底层错误码，已收到增�
       assert.ok('progressIdleMs' in diagnostic && typeof diagnostic.progressIdleMs === 'number' && diagnostic.progressIdleMs <= diagnostic.elapsedMs);
       assert.ok('transportIdleMs' in diagnostic && typeof diagnostic.transportIdleMs === 'number' && diagnostic.transportIdleMs <= diagnostic.elapsedMs);
       assert.ok('receivedBytes' in diagnostic && diagnostic.receivedBytes === Buffer.byteLength('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
-      assert.match(error.message, /传输诊断：/);
+      assert.match(error.message, /Transport: /);
       return true;
     });
     assert.equal(partial, 'partial');
@@ -148,7 +148,7 @@ test('建立连接失败保留公开原因，不输出未知异常回显；协�
     const provider = createProvider(settings, fetcher);
     await assert.rejects(provider.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal), error => {
       assert.ok(error instanceof ProviderError);
-      assert.match(error.message, /模型连接失败/);
+      assert.match(error.message, /Connection failed/);
       assert.ok(!JSON.stringify(error).includes('private-'));
       assert.equal(error.diagnostic?.code, code === 'private-key' ? undefined : code);
       assert.equal(error.diagnostic?.phase, 'connection');
@@ -159,7 +159,7 @@ test('建立连接失败保留公开原因，不输出未知异常回显；协�
   }
   const malformed = createProvider(settings, async () => new Response('data: {invalid}\n\n'));
   await assert.rejects(malformed.respond({system: '', messages: [], tools: []}, () => {}, new AbortController().signal),
-    error => error instanceof ProviderError && error.category === 'protocol' && error.message === '模型流事件格式无效');
+    error => error instanceof ProviderError && error.category === 'protocol' && error.message === 'Model stream event format is invalid');
 });
 
 test('已收到 HTTP 流头后无进展超时明确报告，用户取消保留原原因', async () => {
@@ -173,7 +173,7 @@ test('已收到 HTTP 流头后无进展超时明确报告，用户取消保留�
   const request = {system: 'fixture', messages: [{role: 'user' as const, text: 'fixture'}], tools: []};
   try {
     let partial = '';
-    await assert.rejects(provider.respond(request, delta => {partial += delta.text;}, new AbortController().signal), /模型请求超时/);
+    await assert.rejects(provider.respond(request, delta => {partial += delta.text;}, new AbortController().signal), /Model request timed out/);
     assert.equal(partial, 'partial');
     const controller = new AbortController();
     const reason = new Error('fixture cancellation');

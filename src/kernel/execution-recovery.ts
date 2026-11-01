@@ -6,11 +6,11 @@ import type {ToolResult} from '../tools/tools.js';
 export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools';
 export type ExecutionRecoveryDecision = 'retry' | 'handoff' | 'stop';
 
-/** 输出结束问题，不属于提供商故障；结束执行后由剧团按原根目标接管。 */
+/** Output-ending problems are not provider failures; after execution ends, the ensemble takes over under the original root goal. */
 export class ExecutionRecoveryError extends Error {
   constructor(readonly kind: ExecutionRecoveryKind, readonly disposition: 'handoff' | 'stop', message?: string) {
-    super(message ?? (kind === 'no_delivery' ? '模型只返回思考或空回复，未交付当前步骤成果'
-      : kind === 'truncated_tools' ? '工具参数连续截断，未执行不完整调用' : '模型输出连续截断，已保留部分成果'));
+    super(message ?? (kind === 'no_delivery' ? 'Model returned only thinking or an empty reply and delivered nothing for the current step'
+      : kind === 'truncated_tools' ? 'Tool arguments were truncated repeatedly; incomplete calls were not executed' : 'Model output was truncated repeatedly; partial results were kept'));
     this.name = 'ExecutionRecoveryError';
   }
 }
@@ -20,7 +20,7 @@ export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress', 'UpdateTaskProgress',
   'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
 
-/** 参数 JSON 的属性顺序和格式差异不算新进展，重复读取同一结果也不刷新预算。 */
+/** Differences in argument JSON key order or formatting do not count as new progress, and re-reading the same result does not refresh the budget. */
 export function toolProgressFingerprint(call: ToolCall, result: ToolResult): string | undefined {
   if (result.isError || coordinationTools.has(call.name) || coordinationTools.has(canonicalToolName(call.name) ?? call.name)) return;
   let argumentsValue: unknown;

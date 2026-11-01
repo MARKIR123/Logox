@@ -4,7 +4,7 @@ description: Industrial-grade defensive programming, error unrolling, resource u
 actors: [techne]
 ---
 
-# Defensive Coding SOP (工业级防御式编程与资源解开)
+# Defensive Coding SOP
 
 ## 1. Resource Unwinding Guarantee
 - Every acquired file descriptor, socket, timer, or child process must be closed in a `finally` block or disposable pattern.

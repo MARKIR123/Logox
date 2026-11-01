@@ -81,7 +81,7 @@ export class ToolRegistry {
   formatExplicitPromptSection(actorId: string): string {return this.formatTieredToolsPrompt(actorId);}
   async reloadUserConfigs(): Promise<void> {
     const overrides = new Map<string, UserToolConfig>();
-    const candidates = [join(this.userHomeDir, '.logox-ts', 'tools.json'), join(this.userHomeDir, '.logox', 'tools.json'), join(this.projectDir, '.logox', 'tools.json')];
+    const candidates = [join(this.userHomeDir, '.logox', 'tools.json'), join(this.projectDir, '.logox', 'tools.json')];
     for (const file of candidates) {
       try {
         const value: unknown = JSON.parse(await readFile(file, 'utf8'));

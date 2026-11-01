@@ -18,7 +18,7 @@ export type TaskModelCheckpoint = z.infer<typeof checkpointSchema>;
 type Identity = {sessionId: string; ownerId: string};
 const same = (a: TaskModelSelection, b: TaskModelSelection) => a.provider === b.provider && a.model === b.model;
 
-/** 独立无凭据账本；调用方提供当前有效分支的活动集合，不恢复等待或自动重放。 */
+/** Standalone credential-free ledger; the caller supplies the activity set of the currently effective branch; waits are not restored and nothing is replayed automatically. */
 export class TaskModelLedger {
   private tail: Promise<void> = Promise.resolve();
   constructor(private readonly directory: string) {}
@@ -37,7 +37,7 @@ export class TaskModelLedger {
     const latest = new Map<string, TaskModelCheckpoint>();
     for (const line of text.split('\n').slice(0, -1)) {
       const value = checkpointSchema.parse(JSON.parse(line));
-      if (value.sessionId !== sessionId) throw new Error('任务模型账本会话不匹配');
+      if (value.sessionId !== sessionId) throw new Error('Task model ledger session mismatch');
       if (validActivities.has(value.activityId)) latest.set(value.activityId, value);
     }
     return [...latest.values()];
@@ -49,7 +49,7 @@ export interface TaskModelsOptions {
   defaultFallbackModel?: TaskModelSelection | (() => TaskModelSelection | undefined);
   ledger?: TaskModelLedger;
   checkpoint?(state: Readonly<TaskModelCheckpoint>): Promise<void>;
-  /** 包装现有 provider（例如观察 hooks），不另行计费。 */
+  /** Wraps an existing provider (e.g. observation hooks) without separate billing. */
   provider?(selection: Readonly<TaskModelSelection>, provider: Provider): Provider;
   summaryModel?(identity: Identity): TaskModelSelection | undefined;
 }
@@ -102,7 +102,7 @@ export class TaskModels {
     const registry = this.options.registry.candidate(selection.provider, selection.model);
     return {model: registry.capacity(), provider: this.options.provider?.(selection, registry.provider()) ?? registry.provider()};
   }
-  /** 恢复展示及后续摘要身份；不会续跑中断任务或沿用未确认候选。 */
+  /** Restores display and later summary identity; does not resume interrupted tasks or reuse unconfirmed candidates. */
   restore(states: readonly TaskModelCheckpoint[]): void {
     this.current.clear();
     for (const raw of states) {
@@ -133,24 +133,24 @@ export class TaskModelScope {
     context.signal.throwIfAborted();
     for (;;) {
       const candidate = selectionSchema.parse(this.options.registry.selection());
-      if (same(candidate, this.state.actual)) {context.report('模型不可用', '当前会话模型与失败模型相同，任务结束。'); return false;}
-      // 在确认前检查窗口；没有窗口时不猜测、更不发替代请求。
+      if (same(candidate, this.state.actual)) {context.report('Model unavailable', 'The current session model is the same as the failed model; the task ends.'); return false;}
+      // Check the window before confirming; with no window, do not guess or send a substitute request.
       const next = this.options.registry.candidate(candidate.provider, candidate.model);
       next.capacity();
       this.state.phase = 'confirming'; this.state.candidate = candidate; this.state.confirmationId = randomUUID(); await this.save();
-      const answer = await context.ask({kind: 'question', title: '本任务转用模型？', questions: [{id: 'task_model', header: '任务模型',
-        question: this.state.actual.provider + '/' + this.state.actual.model + '：' + error.message + '\n是否转用 ' + candidate.provider + '/' + candidate.model + '？已有工具结果保留，仅本任务生效。',
-        options: [{id: 'switch', label: '转用', description: '从下一次模型请求继续。'}, {id: 'stop', label: '不转用', description: '保留当前进展并结束任务。'}]}]});
+      const answer = await context.ask({kind: 'question', title: 'Switch model for this task?', questions: [{id: 'task_model', header: 'Task model',
+        question: this.state.actual.provider + '/' + this.state.actual.model + ': ' + error.message + '\nSwitch to ' + candidate.provider + '/' + candidate.model + '? Existing tool results are kept; applies to this task only.',
+        options: [{id: 'switch', label: 'Switch', description: 'Continue from the next model request.'}, {id: 'stop', label: 'Do not switch', description: 'Keep current progress and end the task.'}]}]});
       context.signal.throwIfAborted();
       if (answer.status !== 'answered' || answer.response.kind !== 'question' || answer.response.answers.task_model?.type !== 'option' ||
         answer.response.answers.task_model.optionId !== 'switch') return false;
-      if (!same(candidate, this.options.registry.selection())) {context.report('候选模型已改变', '请重新确认当前会话模型。'); continue;}
+      if (!same(candidate, this.options.registry.selection())) {context.report('Candidate model changed', 'Please reconfirm the current session model.'); continue;}
       await next.settings(); context.signal.throwIfAborted();
       if (!same(candidate, this.options.registry.selection())) continue;
       this.registry = next; this.state.actual = candidate; this.state.switched = true; this.state.phase = 'ready';
       delete this.state.candidate; delete this.state.confirmationId;
       await this.save();
-      context.report('已转用任务模型', candidate.provider + '/' + candidate.model);
+      context.report('Task model switched', candidate.provider + '/' + candidate.model);
       return true;
     }
   }

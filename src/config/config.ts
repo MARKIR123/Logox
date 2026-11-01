@@ -28,7 +28,7 @@ export const contextPolicySchema = z.object({
   summary_provider: z.string().min(1).optional(),
   summary_model: z.string().min(1).optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
-  'target_budget_tokens 必须小于 max_budget_tokens');
+  'target_budget_tokens must be less than max_budget_tokens');
 export type ContextPolicy = z.infer<typeof contextPolicySchema>;
 const legacyThemeDefaults = {
   user: defaultPalette.user, accent: defaultPalette.accent,
@@ -95,11 +95,11 @@ function pathKey(path: string): string {return process.platform === 'win32' ? pa
 function merge(left: Record<string, unknown>, right: Record<string, unknown>): Record<string, unknown> {
   const result = {...left};
   for (const [key, value] of Object.entries(right)) {
-    if (key === 'api_key') throw new Error('请使用 api_key_env，配置文件不保存密钥');
+    if (key === 'api_key') throw new Error('Use api_key_env; config files do not store keys');
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       let previous = result[key] && typeof result[key] === 'object' ? result[key] as Record<string, unknown> : {};
       const update = value as Record<string, unknown>;
-      // 提供商身份改变时，不继承上一个接口的地址、模型或认证。
+      // When the provider identity changes, do not inherit the previous endpoint's address, model or credentials.
       if (key === 'provider' && typeof update.name === 'string' && typeof previous.name === 'string' && update.name !== previous.name) {
         previous = Object.fromEntries(Object.entries(previous).filter(([field]) => ['temperature', 'max_tokens', 'timeout', 'thinking_effort'].includes(field)));
       } else if (key === 'provider' && typeof update.model === 'string' && typeof previous.model === 'string' && update.model !== previous.model) {
@@ -126,10 +126,8 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   const projectDirectories = (await Promise.all(ancestors.map(path => realpath(path)))).filter(path => pathKey(path) !== actualHome);
   const files = [
     join(home, '.logox', 'config.toml'),
-    join(home, '.logox-ts', 'config.toml'),
     ...projectDirectories.flatMap(path => [
       join(path, '.logox', 'config.toml'),
-      join(path, '.logox-ts', 'config.toml'),
     ]),
   ];
   let raw: Record<string, unknown> = {};
@@ -144,13 +142,12 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
     }
     catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error;}
     try {raw = merge(raw, parse(content, {unsafeKeyBehaviour: 'throw'}));}
-    catch {throw new Error('配置无效：' + file + '（检查 TOML 格式及 api_key_env）');}
+    catch {throw new Error('Invalid config: ' + file + ' (check TOML format and api_key_env)');}
   }
   try {
     const prefPaths = [
       join(cwd, '.logox', 'state', 'model-preferences.json'),
       join(home, '.logox', 'model-preferences.json'),
-      join(home, '.logox-ts', 'model-preferences.json'),
     ];
     let previous: z.infer<typeof preferenceSchema> | undefined;
     for (const p of prefPaths) {
@@ -162,12 +159,12 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
       modelSettings(schema.parse(candidate), env);
       raw = candidate;
     }
-  } catch {diagnostic('上次模型选择无法读取或已无效，使用配置；状态原文件保留。');}
+  } catch {diagnostic('The last model selection is unreadable or invalid; using config instead. The original state file is preserved.');}
   let environment: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(env)) {
     if (!key.startsWith('LOGOX__') || value === undefined) continue;
     const path = key.slice(7).toLowerCase().split('__');
-    if (path.some(part => !part || ['__proto__', 'constructor', 'prototype', 'api_key'].includes(part))) throw new Error('环境配置键无效');
+    if (path.some(part => !part || ['__proto__', 'constructor', 'prototype', 'api_key'].includes(part))) throw new Error('Invalid environment config key');
     const update: Record<string, unknown> = {};
     let cursor = update;
     for (const part of path.slice(0, -1)) {cursor[part] = {}; cursor = cursor[part] as Record<string, unknown>;}
@@ -178,12 +175,12 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
 }
 export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.env): ModelSettings {
   const selected = config.providers[config.provider.name] ?? presets[config.provider.name];
-  if (!selected && !config.provider.base_url) throw new Error('未知 provider：' + config.provider.name);
+  if (!selected && !config.provider.base_url) throw new Error('Unknown provider: ' + config.provider.name);
   const provider = config.provider;
   const baseUrl = provider.base_url ?? selected!.base_url;
   const keyEnv = provider.api_key_env ?? selected?.api_key_env;
   const url = new URL(baseUrl);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('模型地址必须是无凭据的 HTTP(S) 地址');
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Model URL must be an HTTP(S) address without credentials');
   const model = provider.model || (selected && 'default_model' in selected ? selected.default_model ?? '' : '');
   const declared = config.models[provider.name + '/' + model];
   const official = baseUrl.replace(/\/$/, '') === presets[provider.name]?.base_url.replace(/\/$/, '');
@@ -201,7 +198,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : (cleanProvider === 'openai' || cleanProvider === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
     : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
     : undefined);
-  if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol 与提供商 kind 不匹配');
+  if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
   return {kind, baseUrl, toolDiscovery, api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {

@@ -21,10 +21,10 @@ function builtinColor(id: string): string {
   return actor.color;
 }
 export const cast = immutable({
-  logox: {symbol: '◈', name: 'Logox', title: '执导者', color: builtinColor('logox')},
-  aletheia: {symbol: '◎', name: 'Aletheia', title: '澄明 · 侦察者', color: builtinColor('aletheia')},
-  techne: {symbol: '⊞', name: 'Techne', title: '精工 · 构建匠人', color: builtinColor('techne')},
-  kalon: {symbol: '✧', name: 'Kalon', title: '雅正 · 审美官', color: builtinColor('kalon')},
+  logox: {symbol: '◈', name: 'Logox', title: 'Director', color: builtinColor('logox')},
+  aletheia: {symbol: '◎', name: 'Aletheia', title: 'Scout', color: builtinColor('aletheia')},
+  techne: {symbol: '⊞', name: 'Techne', title: 'Builder', color: builtinColor('techne')},
+  kalon: {symbol: '✧', name: 'Kalon', title: 'Aesthete', color: builtinColor('kalon')},
 });
 export type ActorId = keyof typeof cast;
 export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel';
@@ -104,9 +104,9 @@ export class EnsembleRuntime<Id extends string> {
   }
 
   dispatch(ownerId: Id, prompt: string, source: string = 'logox', origin: TaskOrigin = {}): TaskHandle {
-    if (this.closed) throw new Error('剧团已关闭');
+    if (this.closed) throw new Error('Ensemble is closed');
     const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
-    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(ownerId) || !member || !prompt.trim() || !/^(?:direct|[a-z][a-z0-9_-]{0,63})$/.test(source)) throw new Error('角色或任务无效');
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(ownerId) || !member || !prompt.trim() || !/^(?:direct|[a-z][a-z0-9_-]{0,63})$/.test(source)) throw new Error('Invalid actor or task');
     const activityId = randomUUID();
     origin = {...origin, rootActivityId: origin.rootActivityId ?? activityId, inputKind: inputKind({ownerId, source, ...origin})};
     const controller = new AbortController();
@@ -114,7 +114,7 @@ export class EnsembleRuntime<Id extends string> {
     this.store.activities.create({
       sessionId: this.sessionId, activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
       title: origin.taskTitle ?? (member.name + ' · ' + member.title),
-      status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: '等待登场', detail: prompt,
+      status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: 'Waiting to enter', detail: prompt,
       ...this.identityOrigin(origin),
     });
     if (!(ownerId === 'logox' && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
@@ -225,13 +225,13 @@ export class EnsembleRuntime<Id extends string> {
     if (index >= 0) {
       this.queue.splice(index, 1);
       this.controllers.delete(activityId); this.tasks.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: '已中断', detail: '排队任务已取消'});
+      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: 'Queued task cancelled'});
       void this.trackWrite(task.ready.catch(() => {}).then(async () => {
         await this.checkpoint(task, 'cancelled');
         await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId, source: task.source,
-          ...task.origin, status: 'cancelled', stopReason: reason, summary: {title: '排队任务已取消', report: '任务尚未执行。', source: 'local'}});
+          ...task.origin, status: 'cancelled', stopReason: reason, summary: {title: 'Queued task cancelled', report: 'The task had not started.', source: 'local'}});
         await this.options.settled?.(activityId, 'cancelled');
-      })).catch(() => {this.store.message(this.sessionId, task.ownerId, 'notice', '排队取消检查点保存失败；重启不会自动执行此任务', {activityId});});
+      })).catch(() => {this.store.message(this.sessionId, task.ownerId, 'notice', 'Failed to save queued-cancel checkpoint; the task will not run automatically after restart', {activityId});});
       task.resolve();
     }
     return true;
@@ -239,7 +239,7 @@ export class EnsembleRuntime<Id extends string> {
   pauseBatch(batchId: string): void {
     this.pausedBatches.add(batchId);
     for (const task of this.queue.filter(task => task.origin.batchId === batchId)) {
-      this.store.activities.update(this.sessionId, task.activityId, {status: 'paused', stage: '等待后续指示'});
+      this.store.activities.update(this.sessionId, task.activityId, {status: 'paused', stage: 'Waiting for further instructions'});
       task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, 'paused')));
       void task.ready.catch(() => {});
     }
@@ -247,7 +247,7 @@ export class EnsembleRuntime<Id extends string> {
   resumeBatch(batchId: string): void {
     this.pausedBatches.delete(batchId);
     for (const task of this.queue.filter(task => task.origin.batchId === batchId)) {
-      this.store.activities.update(this.sessionId, task.activityId, {status: 'queued', stage: '等待登场'});
+      this.store.activities.update(this.sessionId, task.activityId, {status: 'queued', stage: 'Waiting to enter'});
       task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, 'queued')));
       void task.ready.catch(() => {});
     }
@@ -291,9 +291,9 @@ export class EnsembleRuntime<Id extends string> {
       const execution = (async () => {
         try {await task.ready; await this.run(task);}
         catch (error) {
-          this.store.activities.update(this.sessionId, task.activityId, {status: 'failed', stage: '检查点保存失败', detail: error instanceof Error ? error.message : String(error)});
+          this.store.activities.update(this.sessionId, task.activityId, {status: 'failed', stage: 'Checkpoint save failed', detail: error instanceof Error ? error.message : String(error)});
           await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId: task.activityId, source: task.source,
-            ...task.origin, status: 'failed', error, summary: {title: '任务记录失败', report: '尚未执行任务，检查点保存失败。', source: 'local'}});
+            ...task.origin, status: 'failed', error, summary: {title: 'Task recording failed', report: 'The task has not run; the checkpoint could not be saved.', source: 'local'}});
           await this.options.settled?.(task.activityId, 'failed');
         }
       })().catch(() => {}).finally(() => {
@@ -347,21 +347,21 @@ export class EnsembleRuntime<Id extends string> {
       await this.deliveries.settle(activityId, status);
       if (!this.options.settled) return;
       try {await this.options.settled(activityId, status);}
-      catch {this.store.message(this.sessionId, ownerId, 'notice', '协作收尾检查点保存失败', {activityId});}
+      catch {this.store.message(this.sessionId, ownerId, 'notice', 'Failed to save collaboration wrap-up checkpoint', {activityId});}
     };
     const request = async (input: InteractionInput): Promise<InteractionOutcome> => {
       signal.throwIfAborted();
-      update('waiting_input', input.kind === 'permission' ? '等待许可' : '等待回答');
+      update('waiting_input', input.kind === 'permission' ? 'Awaiting permission' : 'Awaiting answer');
       const waiting = this.store.interactions.open(input, signal);
       try {await checkpoint('waiting_input'); return await waiting.result; }
       finally {
-        if (!signal.aborted) update('running', '继续处理');
+        if (!signal.aborted) update('running', 'Continuing');
       }
     };
     this.inboxes.set(activityId, {pending: new Set(), sealed: false});
     try {
       signal.throwIfAborted();
-      update('running', '已登场');
+      update('running', 'On stage');
       await checkpoint('running');
       const entries = immutable([...await this.history.load(this.sessionId, ownerId)]);
       signal.throwIfAborted();
@@ -428,19 +428,19 @@ export class EnsembleRuntime<Id extends string> {
       signal.throwIfAborted();
       const summary = await finish('completed');
       if (summary) {
-        this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: '收尾中', detail: summary.report});
+        this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: 'Wrapping up', detail: summary.report});
         try {await this.options.taskEnd?.(context, summary, 'completed');}
-        catch {this.store.message(this.sessionId, ownerId, 'notice', '任务已完成，收尾整理未完成；原始账本保留。', {activityId});}
+        catch {this.store.message(this.sessionId, ownerId, 'notice', 'Task completed, but wrap-up did not finish; the raw ledger is preserved.', {activityId});}
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status: 'completed'});
           else await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status: 'completed'});
         }
-        catch {this.store.message(this.sessionId, ownerId, 'notice', '摘要交接未完成；可从角色账本读取。', {activityId});}
+        catch {this.store.message(this.sessionId, ownerId, 'notice', 'Summary handoff did not finish; it can be read from the actor ledger.', {activityId});}
       }
       await checkpoint('completed');
       await settle('completed');
       this.controllers.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: '已完成', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
+      this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: 'Completed', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
       if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
@@ -452,27 +452,27 @@ export class EnsembleRuntime<Id extends string> {
       }
     } catch (error) {
       const isUserCancel = (error instanceof UserCancelledError) ||
-        (error instanceof Error && (error.name === 'UserCancelledError' || error.message.includes('用户选择停止'))) ||
+        (error instanceof Error && (error.name === 'UserCancelledError' || error.message.includes('User chose to stop'))) ||
         task.stopReason === 'user';
       if (isUserCancel) task.stopReason = 'user';
       const status: RoundStatus = signal.aborted || isUserCancel ? 'cancelled' : 'failed';
       const detail = error instanceof Error ? error.message : String(error);
       const summary = await finish(status);
       try {await checkpoint(status, signal.aborted || isUserCancel ? undefined : detail);}
-      catch {this.store.message(this.sessionId, ownerId, 'notice', '活动终态保存失败；重启将标记中断，不会自动执行工具', {activityId});}
+      catch {this.store.message(this.sessionId, ownerId, 'notice', 'Failed to save final activity state; restart will mark it interrupted and will not run tools automatically', {activityId});}
       if (summary) {
-        // 技术终止先交接本地摘要，不再等待出错模型做收尾压缩。
+        // On technical termination, hand off a local summary first instead of waiting for the failing model to compact.
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status});
           await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status, error, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
-        } catch {this.store.message(this.sessionId, ownerId, 'notice', '终态摘要交接未完成', {activityId});}
+        } catch {this.store.message(this.sessionId, ownerId, 'notice', 'Final summary handoff did not finish', {activityId});}
       } else {
         await this.options.handoff?.({...identity, ...origin, source, status, error,
-          summary: {title: '任务未完成', report: detail.slice(0, 2000), source: 'local'}, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
+          summary: {title: 'Task incomplete', report: detail.slice(0, 2000), source: 'local'}, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
       }
       await settle(status);
       this.controllers.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? '已中断' : '执行失败', detail, ...(summary ? {summary, title: summary.title} : {})});
+      this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? 'Interrupted' : 'Failed', detail, ...(summary ? {summary, title: summary.title} : {})});
       if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
@@ -492,6 +492,6 @@ export class EnsembleRuntime<Id extends string> {
   }
 }
 
-/** 内置 demo / 既有装配保留四角色类型。动态目录装配使用 DynamicEnsemble。 */
+/** Built-in demo and existing assemblies keep the four-role type. Dynamic catalog assembly uses DynamicEnsemble. */
 export class Ensemble extends EnsembleRuntime<ActorId> {}
 export class DynamicEnsemble extends EnsembleRuntime<string> {}

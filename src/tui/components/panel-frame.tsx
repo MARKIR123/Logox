@@ -5,7 +5,7 @@ import {safeText} from '../terminal/text.js';
 import {clipLine} from '../terminal/text.js';
 
 export function panePadding(width: number): number {return width >= 8 ? 2 : 0;}
-/** 共享留白与固定视口；内容组件各自拥有键盘行为。 */
+/** Shared whitespace and fixed viewport; content components own their keyboard behavior. */
 export function PanelFrame({title, width, height, footer, children, docked = false}: {
   title: string; width: number; height: number; footer: string; children: ReactNode; docked?: boolean;
 }) {

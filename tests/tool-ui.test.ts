@@ -38,7 +38,7 @@ test('tool-owned titles retain intention and relevant arguments', async () => {
   const title = (name: string, args: unknown) => getToolUI(name).title({id: 'x', name, arguments: JSON.stringify(args)});
   assert.equal(title('Read', {path: 'src/app.ts', description: 'Inspect source'}), 'Read · Inspect source (src/app.ts)');
   assert.equal(title('Shell', {command: 'npm test'}), 'Shell npm test');
-  assert.equal(title('SendMessage', {to: 'techne', summary: 'Check cancellation'}), 'SendMessage to techne · Check cancellation · queued');
+  assert.equal(title('SendMessage', {to: 'techne', summary: 'Check cancellation'}), 'SendMessage to ⊞ Techne · Check cancellation · queued');
   assert.equal(title('Actor', {actor: 'techne', description: 'Fix cleanup'}), 'Actor · Fix cleanup (techne)');
   assert.equal(title('Actor', {tasks: [{ownerId: 'kalon', goal: 'Polish skyline'}]}), 'Actor · kalon (Polish skyline)');
   assert.equal(title('Grep', {pattern: 'needle', path: 'src'}), 'Grep needle');
@@ -133,8 +133,8 @@ test('distribution asset build preserves user profiles and skills', async () => 
     await put(join(root, 'dist', 'src', 'tools', 'bin', 'browser-shot.cmd'), 'retired CLI');
     await put(join(root, 'dist', 'src', 'tools', 'BrowserShot', 'cli.js'), 'retired implementation');
     const home = join(root, 'home');
-    const profile = join(home, '.logox-ts', 'actors', 'techne', 'compression.md');
-    const skill = join(home, '.logox-ts', 'skills', 'public', 'agent.md');
+    const profile = join(home, '.logox', 'actors', 'techne', 'compression.md');
+    const skill = join(home, '.logox', 'skills', 'public', 'agent.md');
     await put(profile, 'custom user focus'); await put(skill, 'custom user skill');
     const result = spawnSync(process.execPath, [script], {encoding: 'utf8', env: {...process.env, HOME: home, USERPROFILE: home}});
     assert.equal(result.status, 0, result.stderr);
@@ -342,14 +342,14 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 90, {}, null);
   const row = rows.find(r => r.messageId === successId);
   assert.ok(row);
-  // Full text contains SendMessage to kalon · Polish skyline · queued
-  assert.ok(row.text.includes('SendMessage to kalon · Polish skyline · queued'));
+  // Full text contains SendMessage to ✧ Kalon · Polish skyline · queued
+  assert.ok(row.text.includes('SendMessage to ✧ Kalon · Polish skyline · queued'));
   // Icon is gray for success
   assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#8D95A6');
   // Actor name kalon is rendered with kalon color (#e8a8dc) and bold
   const targetSeg = row.segments?.find(s => s.selectionKey === successId + ':title_target');
   assert.ok(targetSeg);
-  assert.equal(targetSeg.text, 'kalon');
+  assert.equal(targetSeg.text, '✧ Kalon');
   assert.equal(targetSeg.color, cast.kalon.color);
   assert.equal(targetSeg.bold, true);
 

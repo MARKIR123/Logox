@@ -11,7 +11,7 @@ const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   reserve_tokens: contextPolicySchema.shape.reserve_tokens.removeDefault().optional(),
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
-  'target_budget_tokens 必须小于 max_budget_tokens');
+  'target_budget_tokens must be less than max_budget_tokens');
 export const actorDefinitionSchema = z.strictObject({
   id: actorIdSchema, name: inline(80), title: inline(160), description: inline(1000),
   color: z.string().regex(/^#[\da-fA-F]{6}$/), symbol: text(8).refine(value => !/\s/.test(value) && [...new Intl.Segmenter().segment(value)].length === 1),
@@ -52,13 +52,13 @@ export function deriveActorCardColors(color: string, closed?: string, open?: str
 }
 
 export function parseActor(text: string): ActorDefinition {
-  if (Buffer.byteLength(text) > 64 * 1024) throw new Error('角色定义超过 64 KiB');
+  if (Buffer.byteLength(text) > 64 * 1024) throw new Error('Actor definition exceeds 64 KiB');
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(text);
-  if (!match) throw new Error('角色需要 YAML Frontmatter 和 prompt 正文');
+  if (!match) throw new Error('Actor requires YAML frontmatter and a prompt body');
   const doc = parseDocument(match[1]!, {uniqueKeys: true});
   if (doc.errors.length) throw new Error(doc.errors.map(error => error.message).join('；'));
   const fields: unknown = doc.toJS({maxAliasCount: 0});
-  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('Frontmatter 必须是对象');
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('Frontmatter must be an object');
   const raw = fields as Record<string, unknown>;
   if (Object.hasOwn(raw, 'card_closed')) {
     if (!Object.hasOwn(raw, 'cardClosed')) raw.cardClosed = raw.card_closed;
@@ -72,9 +72,9 @@ export function parseActor(text: string): ActorDefinition {
     if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
     delete raw.thinking_animation;
   }
-  if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt 必须放在 Markdown 正文');
+  if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in the Markdown body');
   if (raw.context && typeof raw.context === 'object') {
-    for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('未知 context 字段：' + field);
+    for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }
   const context = raw.context && typeof raw.context === 'object' && !Array.isArray(raw.context)
     ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}
@@ -95,16 +95,16 @@ export interface ActorProfileFiles {
 }
 
 export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
-  if (Buffer.byteLength(files.config) > 64 * 1024) throw new Error('角色配置文件超过 64 KiB');
-  if (Buffer.byteLength(files.persona) > 64 * 1024) throw new Error('角色人设文件超过 64 KiB');
-  if (files.compression && Buffer.byteLength(files.compression) > 64 * 1024) throw new Error('角色压缩文件超过 64 KiB');
+  if (Buffer.byteLength(files.config) > 64 * 1024) throw new Error('Actor config file exceeds 64 KiB');
+  if (Buffer.byteLength(files.persona) > 64 * 1024) throw new Error('Actor persona file exceeds 64 KiB');
+  if (files.compression && Buffer.byteLength(files.compression) > 64 * 1024) throw new Error('Actor compression file exceeds 64 KiB');
   for (const name of ['execution', 'collaboration'] as const) {
     if (files[name] && Buffer.byteLength(files[name]) > 64 * 1024) throw new Error(name + '.md exceeds 64 KiB.');
   }
   const doc = parseDocument(files.config, {uniqueKeys: true});
   if (doc.errors.length) throw new Error(doc.errors.map(error => error.message).join('；'));
   const fields: unknown = doc.toJS({maxAliasCount: 0});
-  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('配置文件必须是对象');
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('Config file must be an object');
   const raw = fields as Record<string, unknown>;
   if (Object.hasOwn(raw, 'card_closed')) {
     if (!Object.hasOwn(raw, 'cardClosed')) raw.cardClosed = raw.card_closed;
@@ -118,9 +118,9 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
     if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
     delete raw.thinking_animation;
   }
-  if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt 必须放在 persona.md');
+  if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in persona.md');
   if (raw.context && typeof raw.context === 'object') {
-    for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('未知 context 字段：' + field);
+    for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }
   const context = raw.context && typeof raw.context === 'object' && !Array.isArray(raw.context)
     ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}

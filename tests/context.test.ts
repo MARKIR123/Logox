@@ -320,12 +320,12 @@ test('long-running compaction preserves the current goal and latest paired tool 
 test('round summaries retain the real outcome and local fallback makes no model request', async () => {
   assert.equal(summarizeRound([final('verified')], 'completed').source, 'model');
   const cancelled = summarizeRound([final('verified')], 'cancelled');
-  assert.equal(cancelled.source, 'local'); assert.match(cancelled.report, /已中断/);
+  assert.equal(cancelled.source, 'local'); assert.match(cancelled.report, /Interrupted/);
   const f = await fixture();
   try {
     await f.append('failed', {role: 'user', text: '需要继续'});
     const summary = await f.journal.finish('s', 'logox', 'failed', 'failed');
-    assert.match(summary.report, /执行失败/);
+    assert.match(summary.report, /Failed; needs further handling/);
     const records = await f.journal.rounds('s', 'logox', await f.journal.load('s', 'logox'));
     assert.equal(records[0]?.status, 'failed');
   } finally {await f.cleanup();}
@@ -339,7 +339,7 @@ test('model capacity honors explicit configuration and live metadata without lea
     assert.equal(registry.capacity().window, 8192);
     await registry.models(signal);
     registry.select('local', 'second'); assert.equal(registry.capacity().window, 4096); assert.equal(registry.capacity().maxOutput, 500);
-    registry.select('local', 'unknown'); assert.throws(() => registry.capacity(), /窗口未知/);
+    registry.select('local', 'unknown'); assert.throws(() => registry.capacity(), /is unknown/);
     await assert.rejects(loadConfig(cwd, {context: {keep_recent_rounds: -1}}, {}, cwd, cwd));
     await assert.rejects(loadConfig(cwd, {context: {max_budget_tokens: 100, target_budget_tokens: 100}}, {}, cwd, cwd));
   } finally {await rm(cwd, {recursive: true, force: true});}

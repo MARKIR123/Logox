@@ -3,18 +3,18 @@ import {sendMessageSchema, sendMessageTool} from '../tools/coordination/SendMess
 import type {ActorContext, TaskHandle, TaskOrigin} from './ensemble.js';
 import type {ToolCall, ToolDefinition, ModelMessage} from '../runtime/messages.js';
 import type {CollaborationRecord, Journal} from '../store/journal.js';
-import {appendProjectBulletin} from './bulletin.js';
 
 export interface CollaborationOptions {
   sessionId: string;
   journal: Journal;
   member(ownerId: string): boolean;
-  /** 仅登记到 Ensemble；禁止等待返回句柄的 done。 */
+  /** Only registers with the Ensemble; never await the returned handle's done. */
   enqueue(ownerId: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
   getActiveTask?: ((ownerId: string) => { activityId: string } | undefined) | undefined;
   injectMessage?: ((targetOwnerId: string, message: string, source: string, summary?: string, mode?: 'interrupt' | 'queue') => Promise<boolean> | boolean) | undefined;
   interrupt?: ((targetOwnerId: string, message: string, source: string, summary?: string) => boolean) | undefined;
   deliverToCompletedPeer?: ((targetOwnerId: string, message: string, source: string, summary: string | undefined, context: ActorContext) => Promise<boolean> | boolean) | undefined;
+  hasOnStageActivity?: ((targetOwnerId: string, context: ActorContext) => boolean) | undefined;
   projectDir?: string | undefined;
   members?: (() => string[]) | undefined;
   coordinate?(callId: string, message: string, summary: string | undefined, context: ActorContext): Promise<void>;
@@ -57,13 +57,20 @@ export class Collaboration {
             const injected = active && this.options.injectMessage &&
               await this.options.injectMessage(target, sendInput.message, context.ownerId, sendInput.summary, sendInput.mode);
             if (!injected) {
-              this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {inputKind: 'collaboration'});
+              if (this.options.hasOnStageActivity && !this.options.hasOnStageActivity(target, context)) {
+                continue;
+              }
+              if (this.options.deliverToCompletedPeer && await this.options.deliverToCompletedPeer(target, sendInput.message, context.ownerId, sendInput.summary, context)) {
+                continue;
+              }
+              this.options.enqueue(target, `[Broadcast from ${context.ownerId}${sendInput.summary ? ` · ${sendInput.summary}` : ''}]\n${sendInput.message}`, context.ownerId, {
+                rootActivityId: context.rootActivityId ?? context.activityId,
+                parentActivityId: context.activityId,
+                inputKind: 'collaboration',
+              });
             }
           }
-          if (this.options.projectDir) {
-            await appendProjectBulletin(this.options.projectDir, context.ownerId, sendInput.summary || 'Broadcast', sendInput.message);
-          }
-          return {role: 'tool' as const, callId: call.id, name: call.name, text: `Broadcast message sent to: ${targets.join(', ')} and recorded in bulletin.md`, isError: false};
+          return {role: 'tool' as const, callId: call.id, name: call.name, text: `Broadcast message sent to: ${targets.join(', ')}`, isError: false};
         }
 
         // An active recipient receives the message in its running context instead of a queued card.
@@ -88,6 +95,28 @@ export class Collaboration {
           if (interrupted) {
             return {role: 'tool' as const, callId: call.id, name: call.name, text: `Successfully interrupted ${to} and injected message into its active activity without queueing.`, isError: false};
           }
+        }
+
+        // Target is off-stage: peers cannot dispatch an off-stage actor without Director
+        const isOffStage = context.ownerId !== 'logox' && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context);
+        if (isOffStage) {
+          if (this.options.coordinate) {
+            await this.options.coordinate(call.id + ':offstage:' + to, sendInput.message, `Peer message to off-stage ${to}: ${sendInput.summary || ''}`, context);
+            return {
+              role: 'tool' as const,
+              callId: call.id,
+              name: call.name,
+              text: `Recipient ${to} has not been dispatched by Director; message routed to Director Logox for coordination.`,
+              isError: false,
+            };
+          }
+          return {
+            role: 'tool' as const,
+            callId: call.id,
+            name: call.name,
+            text: `Recipient ${to} has not been dispatched by Director and cannot be awakened by a peer.`,
+            isError: true,
+          };
         }
 
         const channelId = randomUUID();
@@ -124,8 +153,14 @@ export class Collaboration {
           }
         }
         try {
-          const handle = this.options.enqueue(delivery.owner, delivery.prompt, delivery.source, {inputKind: 'collaboration',
-            authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? []});
+          const taskTitle = sendInput.summary?.trim() || `Rework from ${context.ownerId}`;
+          const handle = this.options.enqueue(delivery.owner, delivery.prompt, delivery.source, {
+            rootActivityId: context.rootActivityId ?? context.activityId,
+            parentActivityId: context.activityId,
+            inputKind: 'collaboration',
+            taskTitle,
+            authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
+          });
           this.deliveries.set(channelId, [...this.deliveries.get(channelId) ?? [], handle]);
           const remove = () => {
             const remaining = (this.deliveries.get(channelId) ?? []).filter(item => item !== handle);

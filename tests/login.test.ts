@@ -22,33 +22,15 @@ test('持久认证保留其他提供商，跨实例并发不丢失，拒绝坏�
     assert.equal(await new AuthStorage(path).key('anthropic'), 'test-second');
     await a.save('deepseek', 'test-rotated', signal());
     assert.equal(await b.key('deepseek'), 'test-rotated');
-    await assert.rejects(a.save('deepseek', 'bad\nkey', signal()), /有效/);
+    await assert.rejects(a.save('deepseek', 'bad\nkey', signal()), /valid API key/);
     assert.equal(await b.key('deepseek'), 'test-rotated');
     const controller = new AbortController();controller.abort();
     await assert.rejects(a.save('deepseek', 'not-saved', controller.signal));
     assert.equal(await b.key('deepseek'), 'test-rotated');
     await writeFile(path, 'broken private-fixture');
-    await assert.rejects(a.save('deepseek', 'new-secret', signal()), error => error instanceof Error && /格式无效/.test(error.message) && !error.message.includes('private-fixture'));
+    await assert.rejects(a.save('deepseek', 'new-secret', signal()), error => error instanceof Error && /auth file format is invalid/.test(error.message) && !error.message.includes('private-fixture'));
     assert.equal(await readFile(path, 'utf8'), 'broken private-fixture');
     assert.deepEqual(await readdir(cwd), ['auth.json']);
-  } finally {await rm(cwd, {recursive: true, force: true});}
-});
-
-test('默认使用 .logox-ts 并在缺失时只读后备读取旧 .logox，保存写入新路径', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-fallback-'));
-  const legacyPath = join(cwd, 'legacy-auth.json');
-  const tsPath = join(cwd, 'ts-auth.json');
-  await writeFile(legacyPath, JSON.stringify({deepseek: {type: 'api_key', key: 'legacy-key'}}));
-  const storage = new AuthStorage(tsPath, legacyPath);
-  try {
-    assert.equal(await storage.key('deepseek'), 'legacy-key');
-    assert.deepEqual(await storage.providers(), ['deepseek']);
-    await storage.save('anthropic', 'new-key', signal());
-    assert.equal(await storage.key('deepseek'), 'legacy-key');
-    assert.equal(await storage.key('anthropic'), 'new-key');
-    const saved = JSON.parse(await readFile(tsPath, 'utf8'));
-    assert.equal(saved.deepseek.key, 'legacy-key');
-    assert.equal(saved.anthropic.key, 'new-key');
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
@@ -64,7 +46,7 @@ test('登录阶段不保存密钥，取消不落盘，保存失败可以重试',
     flow.choose('deepseek');flow.cancel();
     assert.equal(flow.getSnapshot(), null);assert.equal(await auth.key('deepseek'), '');
     await flow.begin('deepseek');
-    await flow.submit('');assert.equal(flow.getSnapshot()?.phase, 'key');assert.match(flow.getSnapshot()!.error, /有效/);
+    await flow.submit('');assert.equal(flow.getSnapshot()?.phase, 'key');assert.match(flow.getSnapshot()!.error, /valid API key/);
     await flow.submit('synthetic-key');
     assert.equal(flow.getSnapshot(), null);assert.deepEqual(saved, ['deepseek']);
     assert.ok(!snapshots.join('').includes('synthetic-key'));

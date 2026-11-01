@@ -16,4 +16,4 @@ Public specialized utility SOPs reside in categorized subdirectories. Inspect pu
 ## 3. Skill Promotion & Storage
 To internalize new cross-cutting operational SOPs:
 1. Follow the public SOP `skills/public/skill-internalization.md`.
-2. Write public skills to `skills/public/` (for core utilities) or `skills/public/<category>/` (for domain operations) in either `~/.logox-ts/skills/public/` (user global) or `.logox/skills/public/` (project private).
+2. Write public skills to `skills/public/` (for core utilities) or `skills/public/<category>/` (for domain operations) in either `~/.logox/skills/public/` (user global) or `.logox/skills/public/` (project private).

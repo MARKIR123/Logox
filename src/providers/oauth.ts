@@ -32,7 +32,6 @@ function base64url(buffer: Buffer): string {
 
 function loadDeviceId(): string {
   const settingsPaths = [
-    join(homedir(), '.logox-ts', 'settings.json'),
     join(homedir(), '.logox', 'settings.json'),
   ];
   for (const p of settingsPaths) {

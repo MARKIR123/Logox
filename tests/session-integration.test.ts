@@ -76,7 +76,7 @@ test('候选失败保留规则；成功切换和回退清会话许可，项目�
     await f.app.submit('/permissions add session allow write *.txt');
     await submit(f.app, '权限会话正式任务');
     const rules = f.app.permissions.snapshot(), oldStore = f.app.store;
-    await assert.rejects(f.app.submit('/resume missing'), /没有此项目/);
+    await assert.rejects(f.app.submit('/resume missing'), /No session for this project/);
     assert.equal(f.app.store, oldStore); assert.deepEqual(f.app.permissions.snapshot(), rules);
     await f.app.submit('/new'); assert.equal(f.app.permissions.snapshot().length, 1); assert.equal(f.app.permissions.mode, 'creative');
     await f.app.submit('/resume first'); assert.equal(f.app.permissions.snapshot().length, 1);

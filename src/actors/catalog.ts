@@ -14,9 +14,9 @@ export interface ActorSnapshot {readonly definitions: readonly ActorDefinition[]
 export interface ActorCatalogOptions {home?: string}
 export async function assertActorPath(path: string): Promise<void> {
   let current = resolve(path);
-  if (current.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy')) throw new Error('legacy 路径不加载');
+  if (current.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy')) throw new Error('legacy paths are not loaded');
   for (;;) {
-    try {if ((await lstat(current)).isSymbolicLink()) throw new Error('角色路径不允许符号链接');}
+    try {if ((await lstat(current)).isSymbolicLink()) throw new Error('Actor paths must not be symbolic links');}
     catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
     const parent = dirname(current); if (parent === current) break; current = parent;
   }
@@ -38,10 +38,7 @@ export class ActorCatalog {
   readonly modelStorage: ActorModelStorage;
   constructor(readonly cwd: string, readonly options: ActorCatalogOptions = {}) {
     const home = options.home ?? homedir();
-    this.modelStorage = new ActorModelStorage(
-      join(home, '.logox', 'actor-models.json'),
-      join(home, '.logox-ts', 'actor-models.json'),
-    );
+    this.modelStorage = new ActorModelStorage(join(home, '.logox', 'actor-models.json'));
   }
   snapshot(): ActorSnapshot {return this.value;}
   list(): readonly ActorDefinition[] {return this.value.definitions;}
@@ -53,26 +50,24 @@ export class ActorCatalog {
     const home = this.options.home ?? homedir();
     const directories = [
       join(home, '.logox', 'actors'),
-      join(home, '.logox-ts', 'actors'),
       join(this.cwd, '.logox', 'actors'),
-      join(this.cwd, '.logox-ts', 'actors'),
     ];
     for (const directory of [...new Set(directories)]) {
       try {
         await assertActorPath(directory);
         const entries = await readdir(directory, {withFileTypes: true});
-        if (entries.length > 256) throw new Error('角色目录超过 256 项');
+        if (entries.length > 256) throw new Error('Actor directory has more than 256 entries');
         for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
           if (entry.isFile() && entry.name.endsWith('.md')) {
             const path = join(directory, entry.name);
             try {
               await assertActorPath(path);
               const stat = await lstat(path);
-              if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('不是普通文件或超过 64 KiB');
+              if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('Not a regular file or exceeds 64 KiB');
               const actor = parseActor(new TextDecoder('utf-8', {fatal: true}).decode(await readFile(path)));
-              if (basename(path, '.md') !== actor.id) throw new Error('文件名必须与角色 id 相同');
+              if (basename(path, '.md') !== actor.id) throw new Error('File name must match the actor id');
               definitions.set(actor.id, definitions.has(actor.id) ? mergeActorPromptLayer(definitions.get(actor.id)!, actor) : actor);
-            } catch (error) {issues.push({path, reason: error instanceof Error ? error.message : '加载失败'});}
+            } catch (error) {issues.push({path, reason: error instanceof Error ? error.message : 'Load failed'});}
             continue;
           }
           if (entry.isDirectory()) {
@@ -95,11 +90,11 @@ export class ActorCatalog {
                 } else throw e;
               }
               await assertActorPath(configPath);
-              if ((await lstat(configPath)).size > 64 * 1024) throw new Error('config.yaml 超过 64 KiB');
+              if ((await lstat(configPath)).size > 64 * 1024) throw new Error('config.yaml exceeds 64 KiB');
               const personaPath = join(actorDir, 'persona.md');
               await assertActorPath(personaPath);
               const personaStat = await lstat(personaPath);
-              if (!personaStat.isFile() || personaStat.size > 64 * 1024) throw new Error('缺少 persona.md 或超过 64 KiB');
+              if (!personaStat.isFile() || personaStat.size > 64 * 1024) throw new Error('persona.md is missing or exceeds 64 KiB');
               const personaRaw = await readFile(personaPath);
               const compressionPath = join(actorDir, 'compression.md');
               const [compressionRaw, executionRaw, collaborationRaw] = await Promise.all([
@@ -113,7 +108,7 @@ export class ActorCatalog {
               const execution = executionRaw ? decoder.decode(executionRaw) : undefined;
               const collaboration = collaborationRaw ? decoder.decode(collaborationRaw) : undefined;
               let actor = parseActorProfile({config, persona, compression, execution, collaboration});
-              if (entry.name !== actor.id) throw new Error('目录名必须与角色 id 相同');
+              if (entry.name !== actor.id) throw new Error('Directory name must match the actor id');
               if (compression !== undefined) {
                 await refreshShippedCompression(compressionPath, actor.id, compression);
                 await assertActorPath(compressionPath);
@@ -123,11 +118,11 @@ export class ActorCatalog {
               }
               definitions.set(actor.id, definitions.has(actor.id) ? mergeActorPromptLayer(definitions.get(actor.id)!, actor) : actor);
             } catch (error) {
-              issues.push({path: actorDir, reason: error instanceof Error ? error.message : '加载失败'});
+              issues.push({path: actorDir, reason: error instanceof Error ? error.message : 'Load failed'});
             }
           }
         }
-      } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issues.push({path: directory, reason: error instanceof Error ? error.message : '扫描失败'});}
+      } catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') issues.push({path: directory, reason: error instanceof Error ? error.message : 'Scan failed'});}
     }
     const userModels = this.modelStorage.loadSync();
     for (const [id, model] of Object.entries(userModels)) {
@@ -140,18 +135,18 @@ export class ActorCatalog {
       revision: this.value.revision + (issues.length ? 0 : 1)});
     return this.value;
   }
-  /** expected 是审批时看到的原文；并发编辑后拒绝覆盖。undefined 只允许创建。 */
+  /** expected is the original text seen at approval; overwriting after a concurrent edit is rejected. undefined allows creation only. */
   async writeProject(id: string, content: string, expected?: string): Promise<string> {
     const path = this.projectPath(id); await assertActorPath(path);
     return withFileLock(path, () => this.commitProject(id, content, expected));
   }
   private async commitProject(id: string, content: string, expected?: string): Promise<string> {
-    const actor = parseActor(content); if (actor.id !== id) throw new Error('角色 id 不匹配');
+    const actor = parseActor(content); if (actor.id !== id) throw new Error('Actor id mismatch');
     const path = this.projectPath(id); await assertActorPath(path);
     await mkdir(dirname(path), {recursive: true}); await assertActorPath(path);
     let previous: string | undefined;
     try {previous = await readFile(path, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;}
-    if (previous !== expected) throw new Error('角色文件已存在或已改变，请重新审批');
+    if (previous !== expected) throw new Error('Actor file already exists or has changed; please re-approve');
     const temporary = path + '.' + randomUUID() + '.tmp';
     try {
       const handle = await open(temporary, 'wx');
@@ -159,11 +154,11 @@ export class ActorCatalog {
       await assertActorPath(path);
       if (expected === undefined) await link(temporary, path);
       else {
-        if (await readFile(path, 'utf8') !== expected) throw new Error('角色文件已改变，请重新审批');
+        if (await readFile(path, 'utf8') !== expected) throw new Error('Actor file has changed; please re-approve');
         await rename(temporary, path);
       }
     } finally {await unlink(temporary).catch(() => {});}
     return path;
   }
-  render(id: string): string {const actor = this.find(id); if (!actor) throw new Error('角色不存在'); return serializeActor(actor);}
+  render(id: string): string {const actor = this.find(id); if (!actor) throw new Error('Actor not found'); return serializeActor(actor);}
 }

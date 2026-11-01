@@ -51,7 +51,7 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
     await writeFile(path, '{invalid');
     await assert.rejects(prefs.load()); await assert.rejects(prefs.save(defaultStatusbar)); assert.equal(await readFile(path, 'utf8'), '{invalid');
     const status = {ownerId: 'logox', name: 'Logox', model: {provider: 'demo', model: 'flash'}, effort: 'high', permission: '工作区',
-      context: {tokens: 20, window: 100}, state: '执行中'};
+      context: {tokens: 20, window: 100}, state: 'Running'};
     assert.equal(statusbarText(status, 5), '\uf007 Lo…');
     assert.equal(statusbarText(status, 25), '\uf007 Logox | \uf4b8 demo/flash');
     assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*Context \[.*\] 20% USED.*running/);
@@ -115,7 +115,7 @@ test('Actor Esc 始终返回，主窗口 Esc 只停止 Logox，卡片独立鼠�
     await ui.key(`\x1b[<0;${control.startCol + 1};${at + 1}M\x1b[<0;${control.startCol + 1};${at + 1}m`.repeat(2));
     assert.deepEqual(ui.stopped, ['main', 'actor']);
     await ui.key(`\x1b[<0;${control.startCol + 1};${at + 1}M`); assert.deepEqual(ui.stopped, ['main', 'actor'], '停止中不可重复点击');
-    assert.ok(ui.output.lines.join('\n').includes('停止中…'));
+    assert.ok(ui.output.lines.join('\n').includes('Stopping…'));
     store.activities.update('s', 'actor', {status: 'cancelled'}); task(store, 'second'); await delay(80);
     await ui.key('\t'); await ui.key('\r'); assert.deepEqual(ui.stopped, ['main', 'actor', 'second']);
     const terminal = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {}, null);

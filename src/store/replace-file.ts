@@ -1,7 +1,7 @@
 import {rename} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 
-/** Windows 临时共享冲突只重试替换；不删除旧文件，也不重做产生副作用的操作。 */
+/** On transient Windows sharing conflicts, retry only the replace; never delete the old file or redo side-effecting operations. */
 export async function replaceFile(from: string, to: string, replace = rename, windows = process.platform === 'win32'): Promise<void> {
   for (let attempt = 0;; attempt++) {
     try {await replace(from, to); return;}

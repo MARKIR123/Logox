@@ -4,8 +4,8 @@ import {join} from 'node:path';
 import {parse as parseYaml} from 'yaml';
 
 /**
- * 一条可导入的外部凭据。secret 只在导入瞬间使用，绝不进入登录状态快照、
- * 舞台消息或会话账本；label 是可安全展示的描述。
+ * An importable external credential. The secret is used only at the moment of import and never enters login state snapshots,
+ * stage messages or session ledgers; label is a description that is safe to display.
  */
 export interface ImportedCredential {
   readonly id: string;
@@ -21,7 +21,7 @@ export interface ImportRoots {
   readonly dshHome?: string | undefined;
 }
 
-/** 已知的凭据变量名到 Logox 提供商名的映射；未登记的变量只接受 `<NAME>_API_KEY` 形式。 */
+/** Maps known credential variable names to Logox provider names; unregistered variables only accept the `<NAME>_API_KEY` form. */
 const refProviders: Record<string, string> = {
   DEEPSEEK_API_KEY: 'deepseek',
   OPENAI_API_KEY: 'openai',
@@ -76,7 +76,7 @@ async function fromDsh(home: string): Promise<ImportedCredential[]> {
   return found;
 }
 
-/** 只读发现其他 agent 已登录的凭据；任何读取失败都只是“没有可导入项”，不影响登录本身。 */
+/** Read-only discovery of credentials other agents are logged in with; any read failure just means "nothing to import" and does not affect login itself. */
 export async function discoverImportable(roots: ImportRoots = {}): Promise<ImportedCredential[]> {
   const codexHome = roots.codexHome ?? join(homedir(), '.codex');
   const dshHome = roots.dshHome ?? join(homedir(), '.dsh');

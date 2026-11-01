@@ -117,7 +117,7 @@ test('Thinking 点阵在标题前，点阵和流光取角色主题色；失败�
   }
   for (const segment of early.segments!.filter(segment => segment.selectionKey === id + ':title')) {
     const rgb = (hex: string) => hex.slice(1).match(/../g)!.map(value => Number.parseInt(value, 16));
-    assert.ok(rgb(segment.color!).every((channel, index) => channel >= Math.min(rgb(theme)[index]!, rgb(palette.muted)[index]!) && channel <= Math.max(rgb(theme)[index]!, rgb(palette.muted)[index]!)));
+    assert.ok(rgb(segment.color!).every((channel, index) => channel >= Math.min(rgb(theme)[index]!, rgb(palette.fg)[index]!) && channel <= Math.max(rgb(theme)[index]!, rgb(palette.fg)[index]!)));
   }
   const wait = f.steps.wait(id, '等待重试');
   row = buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {}, null, {}, roles).find(row => row.messageId === id)!;
@@ -129,10 +129,10 @@ test('Thinking 点阵在标题前，点阵和流光取角色主题色；失败�
   const stopped = f.steps.thinking(); f.steps.close('cancelled');
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {[stopped]: true}, null);
   assert.equal(rows.find(row => row.messageId === stopped)!.segments!.find(segment => segment.selectionKey === stopped + ':icon')!.color, palette.muted);
-  assert.ok(rows.some(row => row.text === '已停止'));
+  assert.ok(rows.some(row => row.text === 'Stopped'));
 });
 
-test('工具指示始终为灰方块，异常红方块，标题保持浅灰且等待不动画', () => {
+test('工具运行中呈现角色流光动效，完成恢复浅灰，异常红方块', () => {
   const f = fixture('techne');
   const tool = f.steps.tool({id: 'read', name: 'read', arguments: '{"file_path":"README.md"}'});
   const header = (id: string, open = false, hovered: string | null = null) => buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {[id]: open}, hovered).find(row => row.messageId === id)!;
@@ -142,8 +142,8 @@ test('工具指示始终为灰方块，异常红方块，标题保持浅灰且�
   row = header(tool);
   const running = decorateRow(row, f.now());
   assert.match(running.displayText!, /▮\s*read[\s(]README\.md/i);
-  assert.equal(running.segments!.find(segment => segment.selectionKey === tool + ':icon')!.color, palette.muted);
-  assert.equal(running.segments!.find(segment => segment.selectionKey === tool + ':title')!.color, palette.muted);
+  assert.ok(running.segments!.find(segment => segment.selectionKey === tool + ':icon')!.color);
+  assert.notEqual(running.segments!.find(segment => segment.selectionKey === tool + ':title')!.color, palette.muted, '运行中呈现角色流光渐变');
   const later = decorateRow(row, f.now() + 320);
   assert.equal(later.displayText!.length, running.displayText!.length, '工具时钟和点阵不改变布局槽位');
   f.steps.finish(tool, 'completed');
@@ -155,7 +155,7 @@ test('工具指示始终为灰方块，异常红方块，标题保持浅灰且�
       assert.match(row.displayText!, /▮\s*(read|shell)/i);
       assert.ok(!/[✓!×]/.test(row.displayText!));
       assert.equal(row.segments!.find(segment => segment.selectionKey === id + ':icon')!.color, state === 'failed' ? palette.error : palette.muted);
-      assert.equal(row.segments!.find(segment => segment.selectionKey === id + ':title')!.color, palette.muted);
+      assert.equal(row.segments!.find(segment => segment.selectionKey === id + ':title')!.color, palette.muted, '完成恢复浅灰');
       assert.equal(header(id, open, id).segments!.find(segment => segment.selectionKey === id + ':title')!.color, cast.techne!.color, '悬停恢复执行者主题色');
     }
   }

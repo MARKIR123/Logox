@@ -109,6 +109,7 @@ export function ActorPills({
   const [clock, setClock] = React.useState(() => Date.now());
 
   React.useEffect(() => {
+    if (process.execArgv.some(arg => arg.startsWith('--test'))) return;
     const timer = setInterval(() => {
       setClock(Date.now());
     }, 200);

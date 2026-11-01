@@ -67,12 +67,12 @@ test('实际 Ink 和独立画布切换会话：picker 取消保留草稿，切�
     assert.ok(output.lines.some(line => line.includes('protected.txt')), output.lines.join('\n'));
     assert.ok(!output.lines.some(line => line.includes('sample.txt')));
     await key('\x1b'); await key('/usage'); await key('\r');
-    assert.ok(output.lines.some(line => line.includes('合计输入 / 输出：0 / 0')));
+    assert.ok(output.lines.some(line => line.includes('Total input / output: 0 / 0')));
     await key('\x1b');
     await act(async () => {await app.submit('/resume first');}); await delay(25); await instance.waitUntilRenderFlush();
     assert.ok(output.lines.some(line => line.includes('旧会话正文 39')), '恢复会话从底部跟随，没有继承旧阅读锚点');
     await key('/usage'); await key('\r');
-    assert.ok(output.lines.some(line => line.includes('合计输入 / 输出：10 / 2')));
+    assert.ok(output.lines.some(line => line.includes('Total input / output: 10 / 2')));
     await key('\x1b');
     await act(async () => {input.write('\x04'); await instance.waitUntilExit();});
     assert.equal(input.isRaw, false);

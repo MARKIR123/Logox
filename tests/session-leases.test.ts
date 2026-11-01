@@ -22,7 +22,7 @@ async function worker(cwd: string, pauseBeforePublish = false) {
     }
     const manager = await SessionManager.open(process.argv[1]);
     try {await manager.acquire('same'); process.stdout.write('READY\\n'); setInterval(() => {}, 1000);}
-    catch(e) {process.stdout.write('BLOCKED\\n'); if (!e.message.includes('占用')) {console.error(e); process.exitCode=1;}}`;
+    catch(e) {process.stdout.write('BLOCKED\\n'); if (!e.message.includes('in use by another process')) {console.error(e); process.exitCode=1;}}`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, cwd], {stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   const exit = once(child, 'exit');
   let errors = '', output = '';
@@ -54,7 +54,7 @@ test('真实申请在原子发布前强杀：短期锁自动回收，没有半�
     const held = await worker(cwd);
     try {
       assert.equal(await held.ready, 'READY');
-      await assert.rejects(manager.acquire('same'), /占用/);
+      await assert.rejects(manager.acquire('same'), /in use by another process/);
       assert.equal(JSON.parse(await readFile(file, 'utf8')).pid, held.child.pid);
       await held.kill(); const recovered = await manager.acquire('same'); await recovered.release();
     } finally {await held.kill();}
@@ -74,11 +74,11 @@ test('四个真实进程并发申请只有一个持有者；旧释放不删除�
     const previous = await manager.acquire('same');
     await rename(file, file + '.previous');
     const replacement = await manager.acquire('same'), bytes = await readFile(file, 'utf8');
-    await assert.rejects(previous.release(), /拥有者发生变化/);
+    await assert.rejects(previous.release(), /lock owner changed/);
     assert.equal(await readFile(file, 'utf8'), bytes);
     await Promise.all([replacement.release(), replacement.release()]);
     await assert.rejects(readFile(file), {code: 'ENOENT'});
-    await writeFile(file, '{broken'); await assert.rejects(manager.acquire('same'), /损坏/);
+    await writeFile(file, '{broken'); await assert.rejects(manager.acquire('same'), /lock corrupt/);
     assert.equal(await readFile(file, 'utf8'), '{broken');
   } finally {await Promise.all(workers.map(item => item.kill())); await rm(cwd, {recursive: true, force: true});}
 });

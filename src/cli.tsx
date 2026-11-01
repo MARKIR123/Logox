@@ -20,9 +20,16 @@ async function main(): Promise<void> {
     demo: {type: 'boolean'}, help: {type: 'boolean'}, session: {type: 'string'}, resume: {type: 'boolean'},
     model: {type: 'string'}, provider: {type: 'string'}, 'base-url': {type: 'string'}, 'check-config': {type: 'boolean'},
     'check-provider': {type: 'boolean'}, 'list-providers': {type: 'boolean'}, 'list-models': {type: 'boolean'}, 'auth-file': {type: 'string'},
-    'install-profiles': {type: 'boolean'},
+    'install-profiles': {type: 'boolean'}, doctor: {type: 'boolean'},
   }});
 
+  if (values.doctor) {
+    const {runDoctorChecks, formatDoctorReport} = await import('./doctor.js');
+    const report = runDoctorChecks();
+    process.stdout.write(formatDoctorReport(report));
+    if (!report.allPassed) process.exitCode = 1;
+    return;
+  }
   if (values['install-profiles']) {
     const {seedActorProfiles} = await import('./actors/profiles.js');
     const installed = await seedActorProfiles();
@@ -30,7 +37,26 @@ async function main(): Promise<void> {
     return;
   }
   if (values.help) {
-    process.stdout.write('LOGOX TS\n  npm run build && npm start     真实模型与工具，全屏舞台\n  npm run demo                   独立演示\n  --model <名称>                 选择模型\n  --provider <名称>              选择接口预设或自定义 provider\n  --base-url <HTTP(S)地址>       覆盖模型接口地址\n  --session <id>                 指定会话（存在时恢复）\n  --resume                       恢复上次会话\n  --check-config                 检查配置，不显示密钥\n  --auth-file <路径>             只读 pi API key 认证文件\n  --list-providers               列出提供商\n  --list-models                  查询当前提供商模型\n  --check-provider               请求真实模型并检查完整回复\n');
+    process.stdout.write(
+      'LOGOX — Terminal AI Subagent Ensemble\n\n' +
+      'Usage:\n' +
+      '  logox [options]\n\n' +
+      'Options:\n' +
+      '  --demo                         Run interactive offline ensemble demo\n' +
+      '  --doctor                       Diagnose environment, fonts, and credential readiness\n' +
+      '  --model <name>                 Specify active model (e.g. deepseek-chat, gpt-4o)\n' +
+      '  --provider <name>              Specify provider preset or custom provider name\n' +
+      '  --base-url <url>               Override provider API endpoint URL\n' +
+      '  --session <id>                 Open or resume a specific session\n' +
+      '  --resume                       Resume the most recent session\n' +
+      '  --check-config                 Inspect current configuration without exposing secrets\n' +
+      '  --check-provider               Send a live verification request to active provider\n' +
+      '  --list-providers               List all available providers\n' +
+      '  --list-models                  List available models from active provider\n' +
+      '  --auth-file <path>             Specify custom read-only credentials file\n' +
+      '  --install-profiles             Install default actor profiles into ~/.logox/actors/\n' +
+      '  --help                         Show this help message\n'
+    );
     return;
   }
   const overrides: Record<string, unknown> = {provider: {
@@ -52,8 +78,8 @@ async function main(): Promise<void> {
     } finally {await registry.close();}
     return;
   }
-  if (!process.stdout.isTTY || !process.stdin.isTTY) throw new Error('全屏界面需要交互终端。请在 Windows Terminal 中运行 npm start 或 npm run demo。');
-  if (values.session !== undefined && !values.session.trim()) throw new Error('--session 需要有效会话 ID');
+  if (!process.stdout.isTTY || !process.stdin.isTTY) throw new Error('Interactive terminal required. Please run Logox inside Windows Terminal, iTerm2, Alacritty, or Ghostty.');
+  if (values.session !== undefined && !values.session.trim()) throw new Error('--session requires a valid session ID');
   const demo = values.demo ? createDemo(values.session?.trim() ?? 'demo', process.cwd()) : undefined;
   if (demo) await demo.ready;
   const loadedConfig = await loadConfig(process.cwd(), overrides);

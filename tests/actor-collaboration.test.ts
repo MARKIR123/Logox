@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {existsSync} from 'node:fs';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -17,7 +18,7 @@ const context = (overrides: Partial<ActorContext> = {}): ActorContext => ({
   async permission() {return true;}, ...overrides,
 });
 
-test('SendMessage delivers active and idle messages and acknowledges broadcasts only after recording the bulletin', async () => {
+test('SendMessage delivers active and idle messages and acknowledges broadcasts without polluting bulletin', async () => {
   const f = await fixture();
   try {
     const enqueued: {owner: string; prompt: string}[] = [];
@@ -51,11 +52,11 @@ test('SendMessage delivers active and idle messages and acknowledges broadcasts 
     assert.equal(enqueued[0]!.owner, 'aletheia');
     assert.match(enqueued[0]!.prompt, /\[Message from techne · Verify chain\]/);
 
-    // Broadcast: every other member plus the bulletin.
+    // Broadcast: every other member, does NOT write bulletin.md automatically.
     const broadcast = await bridge.execute(call('SendMessage', {to: 'all', message: 'Interface frozen', summary: 'Freeze'}), context());
     assert.equal(broadcast.isError, false);
     assert.deepEqual(enqueued.slice(1).map(item => item.owner).sort(), ['aletheia', 'logox']);
-    assert.match(await readFile(join(f.directory, '.logox', 'bulletin.md'), 'utf8'), /Interface frozen/);
+    assert.equal(existsSync(join(f.directory, '.logox', 'bulletin.md')), false, 'SendMessage broadcast must not pollute bulletin.md');
 
     // Cancelling the sender activity releases pending queued deliveries.
     await bridge.settle('sender', 'cancelled');
@@ -63,16 +64,25 @@ test('SendMessage delivers active and idle messages and acknowledges broadcasts 
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
 
-test('broadcast receipts report bulletin persistence failure instead of claiming it was recorded', async () => {
+test('SendMessage routes off-stage peer messages to Director Logox coordination without arbitrary dispatch', async () => {
   const f = await fixture();
   try {
-    await writeFile(join(f.directory, '.logox'), 'A file blocks the bulletin directory.');
-    const bridge = new Collaboration({sessionId: 's', journal: f.journal, projectDir: f.directory,
-      member: owner => owner === 'techne', members: () => ['techne'],
-      enqueue: () => {throw new Error('No other recipients in this fixture');}});
-    const result = await bridge.execute(call('SendMessage', {to: 'all', message: 'Must be saved before acknowledgment'}), context());
-    assert.equal(result.isError, true, 'An unsuccessful bulletin write must not produce a success receipt');
-    assert.doesNotMatch(result.text, /recorded in bulletin/);
+    const coordinated: {callId: string; message: string; summary?: string | undefined}[] = [];
+    const enqueued: string[] = [];
+    const bridge = new Collaboration({
+      sessionId: 's', journal: f.journal, projectDir: f.directory,
+      member: owner => ['logox', 'techne', 'kalon'].includes(owner),
+      getActiveTask: () => undefined,
+      hasOnStageActivity: () => false, // techne tries to message kalon, but kalon is off-stage!
+      coordinate: async (callId, message, summary) => {coordinated.push({callId, message, summary});},
+      enqueue: (owner) => {enqueued.push(owner); return {activityId: 'x', done: Promise.resolve(), cancel: () => {}};},
+    });
+
+    const result = await bridge.execute(call('SendMessage', {to: 'kalon', message: 'Hey Kalon, start working on art', summary: 'Start art'}), context({ownerId: 'techne'}));
+    assert.equal(result.isError, false);
+    assert.equal(enqueued.length, 0, 'Off-stage peer must NOT be enqueued by a peer');
+    assert.equal(coordinated.length, 1, 'Message must be routed to Director Logox for coordination');
+    assert.match(result.text, /routed to Director Logox/);
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
 

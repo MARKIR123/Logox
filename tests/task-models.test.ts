@@ -146,7 +146,7 @@ test('Actor余额不足的转用卡保留API错误和HTTP状态，用户确认�
   try {
     const task = f.ensemble.dispatch('techne', '继续报告');
     const request = await pending(f); assert.equal(request.kind, 'question');
-    if (request.kind === 'question') assert.match(request.questions[0]?.question ?? '', /HTTP 402.*Insufficient Balance.*余额不足/);
+    if (request.kind === 'question') assert.match(request.questions[0]?.question ?? '', /HTTP 402.*Insufficient Balance.*Top up/);
     assert.equal(f.requests.length, 1); assert.equal(f.models.selection({sessionId: 's', ownerId: 'techne'}).provider, 'actor');
     switchModel(f, request); await task.done;
     assert.equal(f.requests.length, 2); assert.equal(f.store.activities.get('s', task.activityId)?.status, 'completed');

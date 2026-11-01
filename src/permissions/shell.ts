@@ -1,6 +1,6 @@
 import {relative, resolve} from 'node:path';
 import {pathDanger, runtimePath} from './paths.js';
-/** 词元用于权限规则匹配；不把无法解析的语法当成危险本身。 */
+/** Tokens are used for permission rule matching; unparseable syntax is not treated as dangerous by itself. */
 export function shellWords(command: string): {words: string[]; compound: boolean; dynamic: boolean} {
   const words: string[] = [];
   let word = '', quote = '', compound = false, dynamic = false;
@@ -36,17 +36,17 @@ export function shellCommands(command: string): string[] {
 export function shellImpact(command: string, depth = 0, root?: string): ShellImpact {
   const parsed = shellWords(command), words = parsed.words.map(word => word.toLowerCase().replaceAll('\\', '/'));
   const executable = (word: string) => word.split('/').at(-1)?.replace(/\.exe$/, '') ?? '';
-  if (words.some(word => word.split('/').includes('legacy'))) return {kind: 'forbidden', reason: '项目约定禁止 legacy 操作'};
+  if (words.some(word => word.split('/').includes('legacy'))) return {kind: 'forbidden', reason: 'Project convention forbids legacy operations'};
   const removers = new Set(['remove-item', 'ri', 'rm', 'del', 'erase', 'rd', 'rmdir', 'clear-content']);
   for (const segment of shellCommands(command)) {
     const original = shellWords(segment).words, lower = original.map(word => word.toLowerCase().replaceAll('\\', '/'));
     const name = executable(lower[0] ?? '');
     const args = lower.slice(1);
     if (['remove-item', 'ri', 'rm', 'del', 'erase', 'rd', 'rmdir', 'clear-content', 'set-content', 'add-content', 'out-file', 'sc', 'ac', 'tee', 'mv', 'move-item', 'rename-item', 'copy-item', 'cp', 'chmod', 'chown'].includes(name) && args.some(runtimePath)) {
-      return {kind: 'danger', reason: '修改或删除运行状态与历史记录'};
+      return {kind: 'danger', reason: 'Modifies or deletes runtime state and history records'};
     }
-    if (/[>]/.test(segment) && args.some(runtimePath)) return {kind: 'danger', reason: '重定向写入运行状态或历史记录'};
-    if (/^(bcdedit|format|mkfs(?:\..*)?|shutdown)$/.test(name)) return {kind: 'forbidden', reason: '禁止系统自毁命令'};
+    if (/[>]/.test(segment) && args.some(runtimePath)) return {kind: 'danger', reason: 'Redirect writes to runtime state or history records'};
+    if (/^(bcdedit|format|mkfs(?:\..*)?|shutdown)$/.test(name)) return {kind: 'forbidden', reason: 'Self-destructing system commands are forbidden'};
     if (depth < 3 && ['powershell', 'pwsh', 'cmd', 'bash', 'sh'].includes(name)) {
       const at = lower.findIndex(word => ['-command', '-c', '/c'].includes(word));
       if (at >= 0) {
@@ -55,26 +55,26 @@ export function shellImpact(command: string, depth = 0, root?: string): ShellImp
       }
     }
     if (removers.has(name)) {
-      if (args.some(arg => /^(?:[a-z]:\/?|\/|\/\*|~\/?|\*|\$(?:home|env:userprofile|env:systemroot))$/.test(arg))) return {kind: 'forbidden', reason: '禁止删除系统、用户根目录或全部文件'};
+      if (args.some(arg => /^(?:[a-z]:\/?|\/|\/\*|~\/?|\*|\$(?:home|env:userprofile|env:systemroot))$/.test(arg))) return {kind: 'forbidden', reason: 'Deleting system or user root directories or all files is forbidden'};
       if (args.some(arg => {
         const target = root && !arg.startsWith('-') && !arg.startsWith('$') ? relative(root, resolve(root, arg)).replaceAll('\\', '/').toLowerCase() || '.' : arg;
         return /^(?:\.\/?|\.\.\/?|\.\/\*)$/.test(target) || /^(?:\.\/)?(?:src|source|docs|tests|\.git)(?:\/|$)/.test(target);
-      })) return {kind: 'danger', reason: '删除项目工作或版本记录'};
+      })) return {kind: 'danger', reason: 'Deletes project work or version history'};
     }
     const verb = args.find(arg => ['reset', 'clean', 'push', 'branch'].includes(arg));
     if (name === 'git' && (verb === 'reset' && args.includes('--hard') || verb === 'clean' && args.some(arg => /^-[a-z]*f/.test(arg)) ||
       verb === 'push' && args.some(arg => /^(?:--force(?:-with-lease)?(?:=.*)?|-f)$/.test(arg)) || verb === 'branch' && original.includes('-D'))) {
-      return {kind: 'danger', reason: '可能丢弃已有工作或改写远端历史'};
+      return {kind: 'danger', reason: 'May discard existing work or rewrite remote history'};
     }
   }
-  if (words.some(word => pathDanger(word, 'read'))) return {kind: 'danger', reason: '涉及凭据或敏感资料'};
-  if (/\b(?:curl|wget|iwr|irm|invoke-webrequest)\b[\s\S]*\|[\s\S]*\b(?:sh|bash|iex|invoke-expression)\b/i.test(command)) return {kind: 'danger', reason: '下载内容后直接执行'};
-  if (/\b(?:kubectl\s+(?:delete|apply)|terraform\s+(?:destroy|apply)|npm\s+publish)\b/i.test(command)) return {kind: 'danger', reason: '修改基础设施或发布外部内容'};
-  // 只为可识别的单条只读操作提供快路；脚本、管道与替换交模式继续裁决。
+  if (words.some(word => pathDanger(word, 'read'))) return {kind: 'danger', reason: 'Involves credentials or sensitive data'};
+  if (/\b(?:curl|wget|iwr|irm|invoke-webrequest)\b[\s\S]*\|[\s\S]*\b(?:sh|bash|iex|invoke-expression)\b/i.test(command)) return {kind: 'danger', reason: 'Executes downloaded content directly'};
+  if (/\b(?:kubectl\s+(?:delete|apply)|terraform\s+(?:destroy|apply)|npm\s+publish)\b/i.test(command)) return {kind: 'danger', reason: 'Modifies infrastructure or publishes external content'};
+  // Fast path only for recognizable single read-only operations; scripts, pipes and substitutions go on to mode adjudication.
   const name = executable(words[0] ?? '');
   const readOnly = new Set(['pwd', 'get-location', 'ls', 'dir', 'get-childitem', 'cat', 'get-content', 'head', 'tail', 'wc', 'rg', 'grep', 'findstr', 'type']);
   const unsafeOption = words.some(word => /^(?:--output|--pre|--ext-diff|--textconv|--exec)/.test(word));
   const safeGit = name === 'git' && ['status', 'diff', 'log', 'show', 'ls-files', 'rev-parse'].includes(words[1] ?? '');
-  if (!parsed.compound && !parsed.dynamic && !unsafeOption && (readOnly.has(name) || safeGit)) return {kind: 'safe', reason: '可确定的只读命令'};
-  return {kind: 'unknown', reason: '命令的实际影响需要进一步判断'};
+  if (!parsed.compound && !parsed.dynamic && !unsafeOption && (readOnly.has(name) || safeGit)) return {kind: 'safe', reason: 'Verifiably read-only command'};
+  return {kind: 'unknown', reason: "The command's actual impact needs further assessment"};
 }

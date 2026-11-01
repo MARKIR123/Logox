@@ -25,25 +25,23 @@ async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv)
   const path = file.startsWith('~/') || file.startsWith('~\\') ? join(homedir(), file.slice(2)) : file;
   let raw: Record<string, unknown>;
   try {raw = z.record(z.string(), z.unknown()).parse(JSON.parse(await readFile(path, 'utf8')));}
-  catch {throw new ProviderError('无法读取认证文件；检查路径与 JSON 格式');}
+  catch {throw new ProviderError('Cannot read the auth file; check the path and JSON format');}
   const value = raw[provider];
   if (value === undefined) return '';
   const credential = credentialSchema.safeParse(value);
-  if (!credential.success) throw new ProviderError('该提供商认证不是受支持的 api_key；OAuth 尚未接入');
+  if (!credential.success) throw new ProviderError('This provider credential is not a supported api_key; OAuth is not available yet');
   const key = credential.data.key;
-  if (key.startsWith('!')) throw new ProviderError('认证命令尚未接入；请使用密钥或环境变量引用');
+  if (key.startsWith('!')) throw new ProviderError('Auth commands are not supported yet; use a key or an environment variable reference');
   const reference = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(key);
   if (reference) return env[reference[1] ?? reference[2]!] ?? credential.data.env?.[reference[1] ?? reference[2]!] ?? '';
-  if (key.includes('$')) throw new ProviderError('认证文件只支持完整的 $ENV 或 ${ENV} 引用');
+  if (key.includes('$')) throw new ProviderError('The auth file only supports a complete $ENV or ${ENV} reference');
   return key;
 }
 
 function readStoredModelsForProvider(name: string): string[] {
   const storePaths = [
     join(homedir(), '.logox', 'models-store.json'),
-    join(homedir(), '.logox-ts', 'models-store.json'),
     join(homedir(), '.logox', 'models-cache.json'),
-    join(homedir(), '.logox-ts', 'models-cache.json'),
   ];
   for (const p of storePaths) {
     try {
@@ -65,7 +63,7 @@ function readStoredModelsForProvider(name: string): string[] {
   return [];
 }
 
-/** 统一提供商选择与请求时认证；不拥有 Agent 历史或任务状态。 */
+/** Unifies provider selection and request-time authentication; owns no agent history or task state. */
 export class ProviderRegistry {
   private config: Config;
   private transport: ReturnType<typeof createHttpTransport> | undefined;
@@ -79,7 +77,7 @@ export class ProviderRegistry {
     readonly customStorage = new CustomProviderStorage()) {
     this.config = config;
     this.fetcher = fetcher ?? ((input, init) => {
-      if (this.closed) return Promise.reject(new ProviderError('模型网络服务已关闭'));
+      if (this.closed) return Promise.reject(new ProviderError('Model network service is closed'));
       this.transport ??= createHttpTransport(this.env);
       return this.transport.fetch(input, init);
     });
@@ -143,7 +141,7 @@ export class ProviderRegistry {
     return {effort: this.config.provider.thinking_effort, levels: settings.thinkingLevels ?? ['auto']};
   }
   selectEffort(effort: ThinkingEffort): void {
-    if (!this.thinking().levels.includes(effort)) throw new ProviderError('当前模型未声明支持此思考档位');
+    if (!this.thinking().levels.includes(effort)) throw new ProviderError('The current model does not declare support for this thinking level');
     this.config = {...this.config, provider: {...this.config.provider, thinking_effort: effort}};
   }
   candidate(name: string, model?: string): ProviderRegistry {
@@ -187,12 +185,12 @@ export class ProviderRegistry {
     const file = provider.auth_file ?? config.providers[name]?.auth_file;
     if (!settings.key && file) settings.key = await storedKey(file, provider.auth_provider ?? config.providers[name]?.auth_provider ?? name, this.env);
     const keyEnv = provider.api_key_env ?? selected?.api_key_env;
-    if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('提供商 ' + name + ' 未登录；使用 /login，或设置 ' + (keyEnv ?? 'api_key_env') + ' 或检查 auth_file', false, 'authentication');
+    if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('Provider ' + name + ' is not logged in; use /login, set ' + (keyEnv ?? 'api_key_env') + ', or check auth_file', false, 'authentication');
     return settings;
   }
   capacity(name = this.config.provider.name, model?: string): ModelCapacity {
     const config = this.configFor(name, model), settings = modelSettings(config, this.env);
-    if (!settings.model) throw new ProviderError('尚未配置模型；使用 /model 选择模型');
+    if (!settings.model) throw new ProviderError('No model configured; use /model to select one');
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
     const override = config.models[name + '/' + settings.model];
     const builtin = modelCapacities[name + '/' + settings.model]
@@ -214,7 +212,7 @@ export class ProviderRegistry {
       : undefined;
     const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window ?? defaultWindow;
     const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? defaultOutput;
-    if (!window) throw new ProviderError('模型 ' + name + '/' + settings.model + ' 的上下文窗口未知；在 [models."' + name + '/' + settings.model + '"] 配置 context_window 后重启（本地填实际 num_ctx）。', false, 'capacity');
+    if (!window) throw new ProviderError('Context window for model ' + name + '/' + settings.model + ' is unknown; set context_window under [models."' + name + '/' + settings.model + '"] and restart (for local models, use the actual num_ctx).', false, 'capacity');
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};
   }
@@ -252,14 +250,14 @@ export class ProviderRegistry {
     } else if (settings.key) headers.authorization = 'Bearer ' + settings.key;
     let response: Response;
     try {response = await this.fetcher(settings.baseUrl.replace(/\/$/, '') + '/models', {headers, signal, redirect: 'error'});}
-    catch {signal.throwIfAborted(); throw new ProviderError('模型列表连接失败', true);}
+    catch {signal.throwIfAborted(); throw new ProviderError('Model list connection failed', true);}
     if (!response.ok) {
       await response.body?.cancel();
       const stored = readStoredModelsForProvider(name);
       if (stored.length > 0) return [...new Set(stored)].sort();
       const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
       if (known.length > 0) return [...new Set(known)].sort();
-      throw new ProviderError('模型列表查询失败（HTTP ' + response.status + '）');
+      throw new ProviderError('Model list query failed (HTTP ' + response.status + ')');
     }
     const payload = modelsSchema.safeParse(await response.json().catch(() => undefined));
     if (!payload.success) {
@@ -267,7 +265,7 @@ export class ProviderRegistry {
       if (stored.length > 0) return [...new Set(stored)].sort();
       const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
       if (known.length > 0) return [...new Set(known)].sort();
-      throw new ProviderError('模型列表格式无效');
+      throw new ProviderError('Model list format is invalid');
     }
     for (const model of payload.data.data) {
       const window = model.context_window ?? model.context_length;
@@ -275,7 +273,7 @@ export class ProviderRegistry {
     }
     return [...new Set(payload.data.data.map(model => model.id))].sort();
   }
-  /** 查询已认证云端和已配置本地接口；不改变当前会话选择。 */
+  /** Queries authenticated cloud and configured local endpoints; does not change the current session selection. */
   async modelCatalog(signal: AbortSignal): Promise<{models: {provider: string; id: string}[]; issues: string[]}> {
     const results = await Promise.allSettled(this.names().map(async name => {
       const settings = await this.settingsFor(name, false);
@@ -287,13 +285,13 @@ export class ProviderRegistry {
       if (!settings.key && !(configured && (local || noAuth && !!definition))) return [];
       const querySignal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
       try {return (await this.modelsFor(name, querySignal)).map(id => ({provider: name, id}));}
-      catch {signal.throwIfAborted(); throw new Error(name + '：模型列表不可用，请检查认证或连接');}
+      catch {signal.throwIfAborted(); throw new Error(name + ': model list unavailable; check authentication or connection');}
     }));
     signal.throwIfAborted();
     const models: {provider: string; id: string}[] = [], issues: string[] = [];
     for (const result of results) {
       if (result.status === 'fulfilled') models.push(...result.value);
-      else issues.push(result.reason instanceof Error ? result.reason.message : '模型列表查询失败');
+      else issues.push(result.reason instanceof Error ? result.reason.message : 'Model list query failed');
     }
     return {models, issues};
   }
@@ -312,7 +310,7 @@ export class ProviderRegistry {
       messages: [{role: 'user', text: 'Reply with exactly LOGOX_PROVIDER_READY.'}], tools: [],
       thinking: false,
     }, () => {}, signal);
-    if (turn.stop !== 'complete' || !turn.message.text.trim()) throw new ProviderError('连接检查未取得完整正文；停止原因：' + turn.stop);
+    if (turn.stop !== 'complete' || !turn.message.text.trim()) throw new ProviderError('Connection check did not get a complete response; stop reason: ' + turn.stop);
     return {text: turn.message.text, elapsedMs: Date.now() - started};
   }
 }

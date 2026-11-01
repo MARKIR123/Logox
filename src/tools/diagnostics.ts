@@ -48,7 +48,7 @@ export function diagnoseToolError(call: ToolCall, result: ToolResult): ToolResul
   }
 
   // 2. Generic Zod parameter validation enhancement
-  if (result.text.includes('Parameter validation failed') || result.text.includes('参数校验失败')) {
+  if (result.text.includes('Parameter validation failed')) {
     return {
       ...result,
       text: `${result.text}. Check the ${call.name} tool schema and supply the required parameters with correct types.`,

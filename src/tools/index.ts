@@ -1,5 +1,6 @@
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {realpath} from 'node:fs/promises';
+import {existsSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {z} from 'zod';
 import {ToolModelStorage, type ToolModel, type ToolModelMap} from './tool-models.js';
@@ -173,6 +174,17 @@ export function validateToolCall(call: ToolCall): {valid: true; data: unknown} |
   if (!args || typeof args !== 'object') {
     return {valid: false, error: `Tool arguments must be a JSON object, received ${typeof args}`};
   }
+  if ('archived_arguments' in args && typeof (args as any).archived_arguments === 'string') {
+    const archivePath = (args as any).archived_arguments;
+    if (existsSync(archivePath)) {
+      try {
+        const payload = JSON.parse(readFileSync(archivePath, 'utf8'));
+        if (payload?.call?.arguments) {
+          args = typeof payload.call.arguments === 'string' ? JSON.parse(payload.call.arguments) : payload.call.arguments;
+        }
+      } catch {}
+    }
+  }
   const toolName = canonical as ToolName;
   const result = schemas[toolName].safeParse(args);
   if (result.success) return {valid: true, data: result.data};
@@ -246,10 +258,7 @@ export class Tools {
   ) {
     this.snapshots = new Snapshots(join(cwd, '.logox', 'snapshots'));
     const home = options.home ?? homedir();
-    this.modelStorage = new ToolModelStorage(
-      join(home, '.logox', 'tool-models.json'),
-      join(home, '.logox-ts', 'tool-models.json')
-    );
+    this.modelStorage = new ToolModelStorage(join(home, '.logox', 'tool-models.json'));
   }
 
   private registry: ToolRegistry | undefined;

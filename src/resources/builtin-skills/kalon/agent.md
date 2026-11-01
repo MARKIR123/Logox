@@ -20,5 +20,5 @@ Specialized domain SOPs reside in categorized subdirectories. Inspect domain con
 ## 3. Skill Promotion & Storage
 To internalize new external skills or persist reusable design recipes:
 1. Follow the public SOP `skills/public/skill-internalization.md`.
-2. Write newly internalized skills to the appropriate category directory in either `~/.logox-ts/skills/kalon/` (user global) or `.logox/skills/kalon/` (project private).
+2. Write newly internalized skills to the appropriate category directory in either `~/.logox/skills/kalon/` (user global) or `.logox/skills/kalon/` (project private).
 3. If introducing an entirely new category, register it under `categories` in this `agent.md`.

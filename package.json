@@ -68,6 +68,8 @@
     "build": "tsc && node scripts/copy-actor-profiles.mjs",
     "demo": "npm run build && node dist/src/cli.js --demo",
     "demo:actor-bar": "npm run build && node scripts/demo-actor-bar.mjs",
+    "demo:pipeline": "npm run build && node scripts/demo-pipeline-tree.mjs",
+    "doctor": "npm run build && node dist/src/cli.js --doctor",
     "sync:profiles": "node scripts/sync-actor-profiles.mjs",
     "check:docs": "node scripts/check-docs.mjs"
   },

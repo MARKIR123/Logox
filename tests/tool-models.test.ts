@@ -12,10 +12,9 @@ import type {Draft} from '../src/tui/input/editor.js';
 test('ToolModelStorage reads, writes, and deletes tool model configurations atomically', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'logox-tool-models-'));
   const primary = join(dir, 'tool-models.json');
-  const fallback = join(dir, 'fallback-tool-models.json');
 
   try {
-    const storage = new ToolModelStorage(primary, fallback);
+    const storage = new ToolModelStorage(primary);
     assert.equal(storage.get('automa'), undefined);
 
     // Save automa model
@@ -32,22 +31,6 @@ test('ToolModelStorage reads, writes, and deletes tool model configurations atom
 
     const clearedContent = JSON.parse(await readFile(primary, 'utf8'));
     assert.deepEqual(clearedContent, {});
-  } finally {
-    await rm(dir, {recursive: true, force: true});
-  }
-});
-
-test('ToolModelStorage loads fallback file if primary is missing', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'logox-tool-models-fallback-'));
-  const primary = join(dir, 'primary.json');
-  const fallback = join(dir, 'fallback.json');
-
-  try {
-    await writeFile(fallback, JSON.stringify({automa: {provider: 'deepseek', model: 'deepseek-chat'}}), 'utf8');
-    const storage = new ToolModelStorage(primary, fallback);
-    const map = await storage.read();
-    assert.deepEqual(map.automa, {provider: 'deepseek', model: 'deepseek-chat'});
-    assert.deepEqual(storage.get('automa'), {provider: 'deepseek', model: 'deepseek-chat'});
   } finally {
     await rm(dir, {recursive: true, force: true});
   }
