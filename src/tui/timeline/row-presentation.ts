@@ -75,11 +75,9 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   const titleSegment = base.find(s => s.selectionKey?.endsWith(':title'));
   const titleText = titleSegment?.text ?? '';
   const toolWordLen = isRunningTool || (running && animation.thinking) ? extractToolWordLength(titleText) : 0;
+  const frame = Math.floor(now / 200);
   const highlightColor = mixHex(palette.fg, actorColor, 0.85);
 
-  // Gentle, organic breathing rhythm:
-  // Slow respiratory envelope cycle (~4.1s) modulated by gentle spatial traveling phase
-  const breath = (Math.sin(now / 650) + 1) / 2;
 
   const segments = transform(base, (segment, column) => {
     const cell = mappedCells.get(column);
@@ -90,7 +88,8 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
         segment = {...segment, text: stepIcon(animation.step ?? ({state: 'running'} as Step), now, motion, animation.frames), color: actorColor};
       }
     } else if (isRunningTool && cell?.key.endsWith(':icon') && cell.offset === 0) {
-      segment = {...segment, text: '▮', color: mixHex(actorColor, palette.fg, breath)};
+      // Breath: the running ▮ rises and falls between muted and the role color on a 2 s cycle of 200 ms frames.
+      segment = {...segment, text: '▮', color: motion ? mixHex(palette.muted, actorColor, (Math.sin(frame * Math.PI / 5) + 1) / 2) : mixHex(palette.muted, actorColor, 0.5)};
     }
     if (running && (isRunningTool || animation.thinking) && cell?.key.endsWith(':title')) {
       if (animation.highlighted) {

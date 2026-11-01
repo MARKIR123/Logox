@@ -36,6 +36,8 @@ Investigate the requested question and report concrete evidence.
 
 修改后在空闲时执行 `/reload`。ID、颜色、编码和大小都要通过校验，路径不允许符号链接；遇到无效定义时保留上一份完整的有效快照，不会只加载一半。`/actors` 查看角色，`/model <actor>` 设置默认模型，绑定写入用户的 `actor-models.json`，未配置时继承会话模型，详见[任务模型](task-models.md)。
 
+角色档案可选定义 `activity_verbs`：按类别（`search`、`read`、`list`、`browse`、`run`）给出 `Gerund/Past` 词汇池，用于工具组标题；缺失的类别回退到默认词汇。`~/.logox/actors/` 中已安装的档案不会被覆盖，需执行 `npm run sync:profiles` 才会获得随版本发布的词汇池。
+
 ## 一次派工的流程
 
 1. Logox 判断这是实质工作，调用派工工具，给出简短的标题和一份像对同事交代的任务说明。

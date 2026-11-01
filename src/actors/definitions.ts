@@ -12,6 +12,14 @@ const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
+const verbEntry = inline(48).refine(value => {
+  const slash = value.indexOf('/');
+  return slash > 0 && value.slice(0, slash).trim().length > 0 && value.slice(slash + 1).trim().length > 0;
+}, 'activity verbs are "Gerund/Past"');
+const verbPool = z.array(verbEntry).min(1).max(24);
+const activityVerbsSchema = z.strictObject({
+  search: verbPool.optional(), read: verbPool.optional(), list: verbPool.optional(), browse: verbPool.optional(), run: verbPool.optional(),
+});
 export const actorDefinitionSchema = z.strictObject({
   id: actorIdSchema, name: inline(80), title: inline(160), description: inline(1000),
   color: z.string().regex(/^#[\da-fA-F]{6}$/), symbol: text(8).refine(value => !/\s/.test(value) && [...new Intl.Segmenter().segment(value)].length === 1),
@@ -21,6 +29,7 @@ export const actorDefinitionSchema = z.strictObject({
   compression: text(4000), context: actorContextSchema,
   defaultModel: actorModelSchema.optional(), skills: z.array(actorIdSchema).max(256).default([]),
   thinkingAnimation: z.array(z.string().min(1)).min(1).max(32).optional(),
+  activityVerbs: activityVerbsSchema.optional(),
 });
 export type ActorDefinition = Readonly<z.infer<typeof actorDefinitionSchema>>;
 export type ActorModel = z.infer<typeof actorModelSchema>;
@@ -72,6 +81,10 @@ export function parseActor(text: string): ActorDefinition {
     if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
     delete raw.thinking_animation;
   }
+  if (Object.hasOwn(raw, 'activity_verbs')) {
+    if (!Object.hasOwn(raw, 'activityVerbs')) raw.activityVerbs = raw.activity_verbs;
+    delete raw.activity_verbs;
+  }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in the Markdown body');
   if (raw.context && typeof raw.context === 'object') {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
@@ -117,6 +130,10 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
   if (Object.hasOwn(raw, 'thinking_animation')) {
     if (!Object.hasOwn(raw, 'thinkingAnimation')) raw.thinkingAnimation = raw.thinking_animation;
     delete raw.thinking_animation;
+  }
+  if (Object.hasOwn(raw, 'activity_verbs')) {
+    if (!Object.hasOwn(raw, 'activityVerbs')) raw.activityVerbs = raw.activity_verbs;
+    delete raw.activity_verbs;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in persona.md');
   if (raw.context && typeof raw.context === 'object') {

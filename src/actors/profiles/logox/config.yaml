@@ -21,3 +21,9 @@ context:
   reserve_tokens: 32768
   low_watermark_ratio: 0.5
 skills: []
+activity_verbs:
+  search: ["Surveying/Surveyed", "Sounding/Sounded", "Canvassing/Canvassed", "Querying/Queried", "Sweeping/Swept"]
+  read: ["Reading/Read", "Reviewing/Reviewed", "Perusing/Perused", "Consulting/Consulted", "Weighing/Weighed"]
+  list: ["Mapping/Mapped", "Outlining/Outlined", "Indexing/Indexed"]
+  browse: ["Viewing/Viewed", "Regarding/Regarded", "Beholding/Beheld"]
+  run: ["Running/Ran", "Invoking/Invoked", "Executing/Executed", "Enacting/Enacted"]

@@ -11,6 +11,8 @@
 | Trace application wiring, windows, focus, Queue/Steer | `app.tsx`, `application.tsx` | `input/input-delivery.ts` |
 | Fix flicker, scrolling or output ordering | `terminal/terminal.tsx`, `terminal/terminal-plane.ts` | `timeline/row-presentation.ts` |
 | Change cards, folding or message projection | `timeline/stage.ts` | `timeline/scene.ts`, `timeline/viewport.ts`, `timeline/selection.ts` |
+| Change how consecutive Read/Grep/Glob/Shell/browser calls collapse into groups | `timeline/tool-groups.ts:groupToolMessages()` | `src/tools/ShellTool/classify.ts:classifyShellCommand()`, `timeline/stage.ts` |
+| Change how a tool group row reads (summary, targets, running hint, truncation) | `timeline/group-row.ts:toolGroupRow()` | `timeline/scene.ts:pushOrdinaryCard` (`expandable`, `subline`), `src/tools/orchestration/ActorTool/UI.ts:renderActivity` |
 | Change Markdown or display-cell layout | `timeline/markdown.ts` | `timeline/markdown-table.ts`, `terminal/text.ts` |
 | Change the composer, multiline editing or native caret | `input/fullscreen-editor.tsx`, `input/editor.ts` | `app.tsx` owns the shared draft and the single cursor setter |
 | Change command matching or candidates | `commands/completion.ts:commandSuggestions()` | `commands/command-menu.tsx`, `src/commands.ts:commandCatalog` |
@@ -53,6 +55,7 @@
 - **Rail ownership**: Director, Actor, human and system rails use their own identity tokens; collaboration interruptions use `directorIntervention` inside the working card. The token exists in `tests/theme-presets.test.ts`; rail assignment itself is *Unenforced*.
 - **Animation safety**: backgrounds and column widths stay static, only fixed-width glyph slots animate, and optional motion never changes task state. The 200 ms pacing for up to eight frames is enforced by `tests/actor-thinking-animation.test.ts`; the 130 ms ten-dot Braille pacing is *Unenforced*.
 - **Tool UI is tool-owned**: registered tool UIs own formatting; hidden tools have no visible or selectable surface; rendering never executes a tool. Enforced by `tests/tool-ui.test.ts`.
+- **Expandable cards draw no `▮`**: tool groups and the "Task from" card lead with ▸/▾ via `pushOrdinaryCard({expandable: true})`; the whole title row (including the elapsed time) hovers and toggles through `:title_*` selection keys. A group header is `<verb> N <noun>` per category (`timeline/group-row.ts:groupVerb()` picks a stable word per group id from the actor's `activity_verbs` pool, gerund while running, past when done), italic, white (`palette.fg`) while running and muted when finished. A collapsed running group shows each running tool as a `└` row (`timeline/group-row.ts:visibleRunningCalls()`, kept at least 700 ms per tool id); expanded groups show none. A running single-tool `▮` breathes between muted and the role color on the 200 ms frame rhythm. Enforced by `tests/tool-group-render.test.ts`.
 - **Login secrets stay local**: never in runtime questions, transcripts or model context; one keyboard owner for runtime questions. Enforced by `tests/login-panel.test.tsx`, `tests/question-panel.test.tsx`, `tests/fullscreen-composer.test.tsx`.
 
 ## 5. Dependencies

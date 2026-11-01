@@ -36,6 +36,7 @@
 3. If the field is layered text, add it to `mergeActorPromptLayer()`; user, then project, assets append to the shipped base.
 4. `serializeActor()` follows the schema. Surface the field in `management.ts` (the actor detail text) only if users should see it.
 5. If `builtins.ts:role()` should set it, pass it through there too.
+- Example: `activity_verbs` (`definitions.ts:actorDefinitionSchema`) holds Gerund-slash-Past pools per tool-group category; missing categories fall back to `src/tui/timeline/group-row.ts:defaultActivityVerbs`.
 - Tests: `tests/actor-definitions.test.ts`, `tests/prompt-composition.test.ts`.
 
 ### Change delivery kind or priority
@@ -55,6 +56,7 @@ Follow "Add a built-in tool" in [`src/tools/AGENTS.md`](../tools/AGENTS.md), ste
 - **Reports are independent and full**: only formal Director dispatch selects report mode, and the full `delivery.text` is handed off, never a compact index. Enforced by `tests/finish-round.test.ts`, `tests/message-delivery.test.ts`.
 - **Failure ownership**: direct human-to-Actor failures stay local; stop gates, root recovery budgets and dispatch depth survive wake-ups and restart. Enforced by `tests/actor-recovery.test.ts`, `tests/director-coordination.test.ts`.
 - **Bounded observations**: Director facts include at most eight tasks; the roster appears only when peers are active; labels and tool completion are never acceptance. Enforced by `tests/director-facts.test.ts`.
+- **`persona.zh.md` mirrors `persona.md`**: it is the user-facing Chinese reference and is not loaded at runtime; any edit to `persona.md` must be mirrored there. *Unenforced*.
 - **Personas never restate collaboration tools or channel workflow**: shared etiquette lives in `src/prompts/collaboration/`. Enforced by `tests/prompts.test.ts`.
 - **Model bindings are user-scoped** in `~/.logox/actor-models.json` and survive project changes; a missing main model must not hide saved bindings. Enforced by `tests/fresh-directory-models.test.ts`.
 - **Profiles seed missing-only**: `seedActorProfiles()` and `--install-profiles` never overwrite user files; only `npm run sync:profiles` forces. Enforced by `tests/prompt-architecture.test.ts`. Builtin colors come from shipped YAML, never RGB tables or themes: `tests/actor-color-source.test.ts`.

@@ -28,6 +28,7 @@ categories:
 | Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/agent.ts`, `src/context/round-memory.ts` |
 | Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
 | Automa (stateless read-only sub-agent) | `orchestration/AutomaTool/AutomaTool.ts:executeAutoma()` | `tool-models.ts:ToolModelStorage` (`~/.logox/tool-models.json`, `/model automa`) |
+| Classify a Shell command as search, read, list or command (timeline grouping) | `ShellTool/classify.ts:classifyShellCommand()` | `src/tui/timeline/tool-groups.ts:groupToolMessages()`, `src/permissions/shell.ts:shellCommands()` |
 | Missing ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `@vscode/ripgrep` in `package.json` |
 | Hanging child process | `process.ts:runProcess()` | `process.ts:killActivityProcesses()` |
 | `/undo` rollback | `snapshots.ts:Snapshots` | the `/undo` branch in `src/application.ts` |

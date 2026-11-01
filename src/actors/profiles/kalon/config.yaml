@@ -27,3 +27,9 @@ skills:
   - minimalist-ui
   - high-end-visual-design
   - design-system
+activity_verbs:
+  search: ["Seeking/Sought", "Gleaning/Gleaned", "Combing/Combed", "Foraging/Foraged", "Hunting/Hunted"]
+  read: ["Studying/Studied", "Savoring/Savored", "Contemplating/Contemplated", "Leafing through/Leafed through", "Reading/Read"]
+  list: ["Skimming/Skimmed", "Glancing over/Glanced over", "Browsing/Browsed"]
+  browse: ["Observing/Observed", "Admiring/Admired", "Appraising/Appraised", "Gazing at/Gazed at", "Beholding/Beheld"]
+  run: ["Staging/Staged", "Rehearsing/Rehearsed", "Performing/Performed", "Conjuring/Conjured", "Running/Ran"]

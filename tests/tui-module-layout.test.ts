@@ -15,8 +15,8 @@ const layout: Record<string, string[]> = {
   previews: ['provider-wizard-preview.ts', 'question-preview.tsx', 'slash-preview.tsx'],
   status: ['actor-pills.tsx', 'statusbar-editor.tsx', 'statusbar.ts'],
   terminal: ['clipboard.ts', 'metrics.ts', 'mouse.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
-  timeline: ['activity-card.tsx', 'actor-location.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts',
-    'scene.ts', 'selection.ts', 'stage.ts', 'thinking-groups.ts', 'tool-ui.ts', 'viewport.ts'],
+  timeline: ['activity-card.tsx', 'actor-location.ts', 'group-row.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts',
+    'scene.ts', 'selection.ts', 'stage.ts', 'thinking-groups.ts', 'tool-groups.ts', 'tool-ui.ts', 'viewport.ts'],
 };
 
 const sourceModules = (directory: URL) => readdirSync(directory, {withFileTypes: true})

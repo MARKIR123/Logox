@@ -24,3 +24,9 @@ skills:
   - investigate-first
   - diagnosing-bugs
   - research
+activity_verbs:
+  search: ["Scouting/Scouted", "Tracking/Tracked", "Trailing/Trailed", "Ferreting out/Ferreted out", "Sweeping/Swept"]
+  read: ["Examining/Examined", "Scrutinizing/Scrutinized", "Dissecting/Dissected", "Auditing/Audited", "Cross-checking/Cross-checked"]
+  list: ["Charting/Charted", "Surveying/Surveyed", "Plotting/Plotted", "Mapping/Mapped"]
+  browse: ["Watching/Watched", "Witnessing/Witnessed", "Monitoring/Monitored", "Observing/Observed"]
+  run: ["Testing/Tested", "Reproducing/Reproduced", "Verifying/Verified", "Probing/Probed", "Running/Ran"]

@@ -14,6 +14,8 @@ import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {stripNarration} from '../../runtime/narration.js';
+import {groupToolMessages, type ToolGroup} from './tool-groups.js';
+import {pushGroupStage, pushToolGroupCard} from './group-row.js';
 
 export interface StageControls {readonly stopping?: ReadonlySet<string>; readonly focusedStop?: string; readonly hoveredStop?: string; readonly focusedQuestionId?: string}
 
@@ -51,9 +53,10 @@ const messageLayouts = new WeakMap<Message, Map<string, readonly SceneRow[]>>();
 // immutable messages/activity state, never on viewport, hover or fold state.
 const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof projectMessages>>>();
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
-  const messages = snapshot.messages.filter(message => message.sessionId === sessionId && (view === 'logox' || message.ownerId === view) &&
-    isTimelineMessage(message) && isVisibleToolMessage(message) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor') &&
-    !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
+  const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (view === 'logox' || message.ownerId === view) &&
+    isTimelineMessage(message) && isVisibleToolMessage(message) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
+  // Narration-only messages are never drawn, but they still mark stage changes for tool grouping.
+  const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
   const grouped = new Map<string, Message[]>();
   for (const message of messages) if (message.activityId) {
@@ -61,7 +64,13 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
     group.push(message); grouped.set(message.activityId, group);
   }
   const thinking = thinkingRequests(messages);
-  return {messages, activities, grouped, thinking};
+  // Actor cards also receive narration-only messages so a `⏵` stage can label the next tool group.
+  const staged = new Map<string, Message[]>();
+  for (const message of candidates) if (message.activityId) {
+    const group = staged.get(message.activityId) ?? [];
+    group.push(message); staged.set(message.activityId, group);
+  }
+  return {messages, candidates, staged, activities, grouped, thinking};
 }
 function messageProjection(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   let views = projections.get(snapshot);
@@ -79,7 +88,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   folds: Readonly<Record<string, boolean>>, hovered: string | null,
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
   const builder = createBuilder(width, hovered, roles);
-  const {messages, activities, grouped, thinking} = messageProjection(snapshot, sessionId, view);
+  const {messages, candidates, staged, activities, grouped, thinking} = messageProjection(snapshot, sessionId, view);
   const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (view === 'logox' || request.ownerId === view));
   const requests = new Map<string, Interaction[]>();
   for (const request of pending) {
@@ -211,9 +220,37 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       {kind: 'confirm_answer', requestId: request.requestId}, rail);
     builder.pushBlank(rail, frame);
   };
+  // Runs of collapsible calls (Read/Grep/Glob/Shell/browser reads) fold into one group row; actor cards split runs.
+  const groupAt = new Map<string, ToolGroup>();
+  const absorbed = new Set<string>();
+  {
+    let run: Message[] = [];
+    const flushRun = () => {
+      for (const item of groupToolMessages(run, {stages: true})) if (item.type === 'group') {
+        groupAt.set(item.messages[0]!.id, item);
+        for (const member of item.messages.slice(1)) absorbed.add(member.id);
+      }
+      run = [];
+    };
+    for (const message of candidates) {
+      if (message.activityId && activities.get(message.activityId)?.kind === 'actor') flushRun(); else run.push(message);
+    }
+    flushRun();
+  }
   for (const message of messages) {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
     const actor = activity?.kind === 'actor';
+    if (!actor && (absorbed.has(message.id) || groupAt.has(message.id))) {
+      const group = groupAt.get(message.id);
+      if (group) {
+        const rail = railFor(message.ownerId);
+        pushGroupStage(builder, group, rail, ownerColor(message.ownerId, roles), roles[message.ownerId]?.symbol ?? '◈');
+        pushToolGroupCard(builder, group, {ownerId: message.ownerId, open: open(group.id), railColor: rail, verbs: roles[message.ownerId]?.activityVerbs,
+          renderChild: (child, inner) => body(child, inner)});
+      }
+      if (activity && grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
+      continue;
+    }
     if (!message.kind && (message.role === 'system' || message.role === 'notice') && activity && ['failed', 'cancelled'].includes(activity.status) && !actor) {
       if (grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
       continue;
@@ -224,7 +261,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (!builder.rows.at(-1)?.action?.owner) builder.pushBlank(viewColor);
       getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, grouped.get(activity.activityId)), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
-        messages: grouped.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [],
+        messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [],
         thinking, originalPrompt: actorGoal(activity), detailed: true, renderMessage: body, renderInteraction: interaction});
       continue;
     }
@@ -235,7 +272,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       } else {
         getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, grouped.get(activity.activityId)), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
-          messages: grouped.get(activity.activityId) ?? [], pending: [], thinking, originalPrompt: actorGoal(activity),
+          messages: staged.get(activity.activityId) ?? [], pending: [], thinking, originalPrompt: actorGoal(activity),
           detailed: false, renderMessage: body, renderInteraction: interaction});
       }
     }

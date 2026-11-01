@@ -2,6 +2,13 @@ import {cast} from '../../actors/ensemble.js';
 import {deriveActorCardColors} from '../../actors/definitions.js';
 import {palette} from './theme.js';
 
+export interface ActivityVerbs {
+  readonly search?: readonly string[] | undefined;
+  readonly read?: readonly string[] | undefined;
+  readonly list?: readonly string[] | undefined;
+  readonly browse?: readonly string[] | undefined;
+  readonly run?: readonly string[] | undefined;
+}
 export interface ActorStyle {
   readonly symbol: string;
   readonly name: string;
@@ -10,6 +17,8 @@ export interface ActorStyle {
   readonly cardClosed?: string | undefined;
   readonly cardOpen?: string | undefined;
   readonly thinkingAnimation?: readonly string[] | undefined;
+  /** Optional `Gerund/Past` verb pools per tool-group category (see `activity_verbs` in the actor profile). */
+  readonly activityVerbs?: ActivityVerbs | undefined;
 }
 export type ActorStyles = Readonly<Record<string, ActorStyle>>;
 

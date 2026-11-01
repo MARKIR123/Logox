@@ -128,6 +128,10 @@ export interface RowBuilder {
     step?: Step;
     tokens?: number;
     renderBody?(frame: FrameWrap): void;
+    /** Expandable cards (▸/▾ leading glyph in the title) draw no `▮` icon, and the whole header row hovers and toggles. */
+    expandable?: boolean;
+    /** Rows drawn under a collapsed header (for example the running tools of a group). Their hover and clicks belong to this card. */
+    renderAfterHeader?(frame: FrameWrap): void;
   }): void;
 }
 
@@ -332,6 +336,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const pf = opts.parentFrame ?? topFrame();
     const isDream = opts.kind === 'Anamnesis';
     const firstRow = rows.length;
+    let subFrom = -1, subTo = -1;
     const bright = opts.open || hoveredFoldId === opts.id;
     const simple = opts.kind === 'Thinking' || opts.kind === 'Tool' || opts.kind === 'Task';
     const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : opts.open && simple ? palette.toolExpanded : pf.bg;
@@ -358,15 +363,16 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       const statusText = isTool && status ? status.trim() : status;
       const statusSep = status ? thinking ? terminal ? ' ' : ' · ' : ' · ' : '';
       const isHovered = hoveredFoldId === opts.id;
+      const italic = Boolean(opts.titleSegments?.[0]?.italic); // an italic title row carries its separator and elapsed time in italic too
       const titlePieces: SceneSegment[] = opts.titleSegments && opts.titleSegments.length > 0
-        ? opts.titleSegments.map(s => (isHovered && (!s.color || s.color === palette.muted) ? {...s, color: highlightColor} : s))
+        ? opts.titleSegments.map(s => (isHovered && (!s.color || s.color === palette.muted || (opts.expandable && opts.step?.state === 'running' && s.color === palette.fg)) ? {...s, color: highlightColor} : s))
         : [{text: title, color: isHovered ? highlightColor : titleColor, selectionKey: opts.id + ':title', selectionOffset: 0}];
 
       pushFramedLine(opts.id, opts.railColor, [
-        {text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0},
+        ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
         ...titlePieces,
-        {text: statusSep},
-        {text: statusText, color: palette.muted, selectionKey: opts.id + ':status', selectionOffset: 0},
+        {text: statusSep, ...(italic ? {italic: true} : {})},
+        {text: statusText, color: palette.muted, ...(italic ? {italic: true} : {}), selectionKey: opts.id + ':status', selectionOffset: 0},
         ...(thinking ? [{text: ((opts.tokens ?? 0) > 0 ? ' · ' + opts.tokens + ' Tokens' : '') +
           (opts.step?.state === 'waiting' ? ' · ' + (opts.step.waiting ?? 'Waiting') : ''), color: palette.muted, selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
         ...((opts.faultLabel ?? fault) ? [{text: '  ' + (opts.faultLabel ?? fault), color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
@@ -375,6 +381,11 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         const row = rows[index]!;
         const frames = opts.ownerId && roles[opts.ownerId]?.thinkingAnimation ? roles[opts.ownerId]?.thinkingAnimation : undefined;
         rows[index] = {...row, animation: {step: opts.step, thinking, highlighted: hoveredFoldId === opts.id, actorColor: highlightColor, frames}};
+      }
+      if (!opts.open && opts.renderAfterHeader) {
+        subFrom = rows.length;
+        opts.renderAfterHeader(frame);
+        subTo = rows.length;
       }
     } else pushCardHeader(opts.id, [{text: opts.kind, color: labelColor, bold: isDream}],
       opts.title, opts.status ?? '', frame, opts.railColor, action,
@@ -388,8 +399,12 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
     for (let index = firstRow; index < rows.length; index++) {
       const row = rows[index]!;
+      if (index >= subFrom && index < subTo) {
+        rows[index] = {...row, hits: (row.hits ?? []).map(hit => ({...hit, action})), ...(row.hover ? {hover: {...row.hover, foldId: opts.id}} : {})};
+        continue;
+      }
       const startCol = opts.open || isDream ? baseGutterCols + pf.leftCols : row.gutterCols;
-      const titleCells = row.selectionCells?.filter(cell => cell.key.startsWith(opts.id + ':title') || cell.key === opts.id + ':icon') ?? [];
+      const titleCells = row.selectionCells?.filter(cell => cell.key.startsWith(opts.id + ':title') || cell.key === opts.id + ':icon' || (opts.expandable && cell.key === opts.id + ':status')) ?? [];
       const endCol = opts.open || isDream ? width - pf.rightCols : simple ? baseGutterCols + Math.max(startCol - baseGutterCols, ...titleCells.map(cell => cell.column + cell.width)) : row.gutterCols + stringWidth(row.text.trimEnd());
       rows[index] = {...row, hits: [...row.hits ?? [], {startCol, endCol, action}],
         ...(!opts.open ? {hover: {foldId: opts.id, startCol, endCol}} : {})};

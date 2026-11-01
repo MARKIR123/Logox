@@ -26,3 +26,9 @@ skills:
   - surgical-patch
   - codebase-design
   - lean-build
+activity_verbs:
+  search: ["Probing/Probed", "Gauging/Gauged", "Tracing/Traced", "Scanning/Scanned", "Measuring/Measured"]
+  read: ["Inspecting/Inspected", "Assaying/Assayed", "Vetting/Vetted", "Checking/Checked", "Reviewing/Reviewed"]
+  list: ["Listing/Listed", "Inventorying/Inventoried", "Cataloguing/Catalogued", "Laying out/Laid out"]
+  browse: ["Previewing/Previewed", "Checking/Checked", "Test-driving/Test-drove"]
+  run: ["Running/Ran", "Firing/Fired", "Cranking/Cranked", "Bench-testing/Bench-tested", "Driving/Drove"]

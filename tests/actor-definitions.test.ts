@@ -168,6 +168,23 @@ test('parseActorProfile 严格校验字段、大小上限与提示词位置', ()
   assert.throws(() => parseActorProfile({...valid, persona: ''}));
 });
 
+test('activity_verbs: snake_case 别名、条目格式与数量校验、缺失类别回退默认词汇', async () => {
+  const base = 'id: test\nname: 测试\ntitle: 专家\ndescription: 描述\ncolor: "#112233"\nsymbol: ◈\nskills: []\n';
+  const profile = (verbs: string) => parseActorProfile({config: base + 'activity_verbs:\n  read: ' + verbs + '\n', persona: '人设', compression: '压缩'});
+  const parsed = profile('[Examining/Examined]');
+  assert.deepEqual(parsed.activityVerbs, {read: ['Examining/Examined']});
+  assert.deepEqual(parseActor(serializeActor(parsed)).activityVerbs, parsed.activityVerbs);
+  assert.throws(() => profile('[Examining]'), 'missing slash');
+  assert.throws(() => profile('["/Examined"]'), 'empty gerund');
+  assert.throws(() => profile('["Examining/"]'), 'empty past');
+  const pool = (size: number) => '[' + Array.from({length: size}, (_, i) => `V${i}/W${i}`).join(', ') + ']';
+  assert.throws(() => profile(pool(25)), 'more than 24');
+  assert.doesNotThrow(() => profile(pool(24)));
+  const {groupVerb} = await import('../src/tui/timeline/group-row.js');
+  assert.equal(groupVerb('g', 'read', true, parsed.activityVerbs), 'Examining');
+  assert.match(groupVerb('g', 'search', true, parsed.activityVerbs), /^(Searching|Scanning|Looking up)$/, 'missing category uses the default pool');
+});
+
 test('角色配置解耦：支持自定义 card_closed 与 card_open，未指定时自动推导；用户配置目录 theme 生效', async () => {
   const {ownerSurface} = await import('../src/tui/appearance/actor-style.js');
   const {palette, applyTheme} = await import('../src/tui/appearance/theme.js');

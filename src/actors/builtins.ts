@@ -14,12 +14,13 @@ function role(id: string, name: string, title: string, symbol: string, descripti
   const prompt = profile(id, 'persona.md'), compression = profile(id, 'compression.md');
   // Only visual defaults come from YAML here; preserve the builtin behavior/context contract.
   // Installed user profiles still take precedence when ActorCatalog loads them.
-  const {color, cardClosed, cardOpen} = parseActorProfile({config: profile(id, 'config.yaml'), persona: prompt, compression,
+  const {color, cardClosed, cardOpen, activityVerbs} = parseActorProfile({config: profile(id, 'config.yaml'), persona: prompt, compression,
     ...(execution ? {execution} : {}), ...(collaboration ? {collaboration} : {})});
   return immutable({id, name, title, symbol, color, description, prompt, compression,
     ...(execution ? {execution} : {}), ...(collaboration ? {collaboration} : {}),
     ...(cardClosed ? {cardClosed} : {}),
     ...(cardOpen ? {cardOpen} : {}),
+    ...(activityVerbs ? {activityVerbs} : {}),
     context: {keep_recent_rounds: id === 'logox' ? 2 : 0, keep_recent_tools: tools}, skills});
 }
 export const builtinActors: readonly ActorDefinition[] = immutable([
