@@ -6,72 +6,87 @@ categories:
   extensions: Configured MCP service discovery and invocation
 ---
 
-# Module: Tools & Execution Engine (`src/tools/`)
+# Module: Tools & Execution (`src/tools/`)
 
 ## 1. Scope
-- **Owns**: Canonical tool registry, Zod parameter schemas, tool aliases, bundled ripgrep resolution, process tree lifecycle management, and file rollback snapshots (`/undo`). Browser interaction and screenshots use the local Playwright MCP server in `src/extensions/`.
-- **Does not own**: Permission evaluation engine (owned by `src/permissions/`).
+- **Owns**: Built-in tool registry and metadata (`registry.ts`, `catalog.ts`, `metadata.ts`), Zod parameter schemas and aliases, native tool disclosure (`discovery.ts`), tool-owned UI (`ui-registry.ts`), process tree lifecycle (`process.ts`), and `/undo` snapshots (`snapshots.ts`).
+- **Does not own**: Permission evaluation ([`src/permissions/AGENTS.md`](../permissions/AGENTS.md)); actor-facing tool execution and ensemble state ([`src/actors/AGENTS.md`](../actors/AGENTS.md)); MCP transport and the Playwright server config (`src/extensions/`, no signpost; routed through the Start Here table); provider wire formats for disclosure ([`src/providers/AGENTS.md`](../providers/AGENTS.md)).
+- **Design rationale**: [docs/modules/context.md](../../docs/modules/context.md) (tool disclosure); [docs/modules/resources-and-extensions.md](../../docs/modules/resources-and-extensions.md) (MCP and Playwright).
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| Tool dispatch, schemas, or execution | `index.ts:Tools.execute()` | `types.ts:canonicalToolMap` and `<ToolName>Tool/` |
-| Actor status details or Director-bound messages | `coordination/ListActorsTool/` and `coordination/SendMessageTool/` | `actors/facts.ts`, `actors/collaboration.ts` and `actors/services.ts` |
-| Model-facing parameter names or legacy aliases | `<ToolName>Tool/<ToolName>Tool.ts` | `aliases.ts:normalizeAliases()` |
-| Missing or broken ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `package.json` `@vscode/ripgrep` dependency |
-| Process tree termination or hanging CLI | `process.ts:runProcess()` | 1.5s forced cleanup timer and `taskkill /T /F` |
-| Browser interaction, screenshots, or offline setup | `../extensions/playwright.ts` | `../extensions/mcp.ts` image transport and `npm run browser:install` |
-| Atomic file undo and snapshot rollback | `snapshots.ts:Snapshots` | `/undo` command in `src/application.ts` |
-| Stateless mechanical indexing & extraction | `orchestration/AutomaTool/` | `prompt.ts:AUTOMA_ANIMATION_FRAMES` and `AutomaTool.ts` |
-| Dedicated tool model configuration & persistence | `tool-models.ts:ToolModelStorage` | `~/.logox/tool-models.json` and `/model automa` in `application.ts` |
-| Tiered tool taxonomy & role scoping | `AGENTS.md` category descriptions and `taxonomy.ts` loader | `metadata.ts:ToolMetadata`, `registry.ts:ToolRegistry` and `.logox/tools.json` |
-| Silent git state on-demand inspection | `protocol/_GitStatusTool/` | `metadata.ts` (`terminalVisibility: 'silent'`) |
-| Missing argument validation error formatting | `index.ts:validateToolCall()` | Specific tool Zod schema in `<ToolName>Tool.ts` |
-| Tool presentation, visibility or question actions | `ui-registry.ts` and sibling `UI.ts` | `ui-types.ts` and shared `tui/timeline/tool-ui.ts` |
-| Hidden terminal round metadata | `protocol/_FinishRoundTool/` | `kernel/agent.ts` and `context/round-memory.ts` |
+| Trace a core tool call (validate, permission, run) | `index.ts:Tools.execute()` | `index.ts:validateToolCall()`, `src/permissions/guard.ts` |
+| Trace an actor-facing tool (Actor, SendMessage, ListActors...) | `src/actors/services.ts:ActorServices.execute()` | `src/actors/services.ts:serviceTools`, `src/actors/collaboration.ts` |
+| Change which actors see a tool, or how it loads | `metadata.ts:toolMetadataSchema` | `registry.ts:ToolRegistry.resolveForActor()`, `metadata.ts:isToolAllowedForActor()` |
+| Override tool metadata per user or project | `registry.ts:ToolRegistry.reloadUserConfigs()` | `metadata.ts:userToolConfigSchema`, `.logox/tools.json` |
+| Change the deferred-tool directory or LoadTools behavior | `registry.ts:ToolRegistry.formatDiscoveryCatalog()` | `discovery.ts:buildToolExposure()`, `discovery.ts:resolveToolLoad()`, `protocol/LoadToolsTool/` |
+| Change a category description | Frontmatter `categories:` of this file | `taxonomy.ts:readToolCategories()` |
+| Rename a parameter or keep a legacy name | `<tier>/<Name>Tool/<Name>Tool.ts` schema | `aliases.ts:normalizeAliases()`, `types.ts:toolAliases` |
+| Change a card title, visibility or question UI | `<Name>Tool/UI.ts` | `ui-registry.ts:toolUIs`, `ui-types.ts`, `src/tui/timeline/tool-ui.ts:createToolUI()` |
+| Improve a tool error hint | `diagnostics.ts:diagnosticHandlers` | `<Name>Tool/diagnostic.ts` |
+| Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/agent.ts`, `src/context/round-memory.ts` |
+| Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
+| Automa (stateless read-only sub-agent) | `orchestration/AutomaTool/AutomaTool.ts:executeAutoma()` | `tool-models.ts:ToolModelStorage` (`~/.logox/tool-models.json`, `/model automa`) |
+| Missing ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `@vscode/ripgrep` in `package.json` |
+| Hanging child process | `process.ts:runProcess()` | `process.ts:killActivityProcesses()` |
+| `/undo` rollback | `snapshots.ts:Snapshots` | the `/undo` branch in `src/application.ts` |
+| MCP tools, Playwright browser | `src/extensions/mcp.ts:Mcp` | `src/extensions/playwright.ts:playwrightServer()`; `src/application.ts` registers MCP tools under category `extensions` |
 
-## 3. Hard Boundaries
-- **PascalCase Alignment**: Tools are strictly registered in PascalCase (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Shell`, `AskUserQuestion`, `WebFetch`, `Automa`, `Actor`, `ListActors`, `CancelActor`, `UpdateTaskProgress`). Aliases are normalized via `canonicalToolName()`.
-- **Automa Read-Only Confinement**: Automa executes as an ephemeral, stateless mechanical sub-agent using exclusively Read, Glob, Grep, WebFetch. It is strictly prohibited from Write, Edit, Shell, and Actor delegation. Calls append to `subagents/automa.jsonl` for auditability but accumulate zero conversational context across invocations. Automa is strictly a tool decoupled from `ActorCatalog`; its dedicated model is persisted via `ToolModelStorage` (`~/.logox/tool-models.json`) and configured via `/model automa [model|inherit]`, defaulting to session model inheritance.
-- **Claude Code Parameter Contract**: Model-facing schemas expose `file_path`, `old_string`, `new_string`, Grep `output_mode`/`glob`/`head_limit`, and Shell millisecond `timeout`. Never add `.default()` to a model-facing field: Zod 4 marks defaulted fields as `required` in `toJSONSchema`, which forces the model to send them. Legacy names (`path`, `old_text`, `new_text`, Grep `limit`) are accepted only through `normalizeAliases()` and are scheduled for removal.
-- **Tiered Tool Taxonomy & Dynamic Role Scoping**: Root tools use `core`; categorized tools use directory paths rather than a closed category enum. The `categories: {directory: description}` frontmatter in this `AGENTS.md` is the runtime category source; only that data is indexed, not this navigation body. Add categories in data, not formatter branches. Roles are adjudicated via `isToolAllowedForActor(meta.roles, actorId)` (`'all' | 'director' | 'actors' | readonly string[]`); new actors inherit group eligibility without code changes.
-- **Disclosure and Presentation**: `loading: 'eager' | 'deferred'` is independent of roles and terminal visibility. Root tools default eager; categorized tools default deferred. `_FinishRound` is mandatory/eager; LoadTools is eager only for native disclosure. Every eligible deferred tool appears by name and short English description, without schemas or implementation paths. Legacy non-hidden prompt visibility values are accepted but do not select loading or directory detail. `hidden` removes eligibility. Terminal visibility (`'card' | 'notice' | 'silent'`) is independent and captured on runtime steps from the application-owned registry.
-- **Read Evidence Integrity**: Text reads retain complete selected lines, with a default 2,000-line range and a 256 KiB UTF-8 output limit. Oversized output fails explicitly; do not silently clip individual lines. The file-size limit remains 32 MiB and visual image input remains limited to 10 MiB.
-- **Native Contracts**: `discovery.ts` retains genuine canonical LoadTools pairs and sorted discovered names; loading never executes a target or grants permission. Anthropic references and Responses search outputs expand current legal definitions. Unknown endpoints use all ordinary legal contracts. Deferred directory text alone does not reduce native schema cost.
-- **Bundled ripgrep**: Grep must resolve the ripgrep binary from the `@vscode/ripgrep` dependency (or `LOGOX_RIPGREP_PATH`); never rely on the host PATH as the primary source. The JS traversal is a last-resort fallback only.
-- **Internal Tool Policy**: `_FinishRound` is an explicitly terminal, hidden, omit-pair tool, not a prefix-based permission exception. Its minimal receipt is recorded without another model request; it creates no visible tool step.
-- **Presentation Ownership**: Built-ins, including collaboration tools, own `UI.ts`; common hosts retain layout, focus and permission scheduling. Execution never imports the renderer registry. Unknown extension tools use a safe visible fallback. Add tool-local signposts only for non-obvious constraints.
-- **Tool-Owned Titles**: Each `UI.ts` names the most decision-relevant parameter first: `file_path` for Read/Write/Edit, `pattern` for Grep/Glob, task owner/goal for Actor, question header for AskUserQuestion, and channel for channel-scoped SendMessage. Titles must stay one line and never dump payload bodies.
-- **Prompt Ownership**: Tool-specific descriptions and repair prompts stay co-located in `src/tools/<Tool>/prompt.ts`. Cross-cutting rules (charter, collaboration, reporting, recovery, runtime state) live under `src/prompts/`; do not move tool descriptions into that tree.
-- **1.5s Process Cleanup Guarantee**: `runProcess()` enforces a 1.5-second safety timer after kill signals to destroy unclosed stdio streams and reject immediately, preventing orphaned child processes from deadlocking the session.
-- **Browser Verification**: Playwright MCP owns browser state and screenshots. Keep actions and evidence in one page session; generic Shell execution does not inject browser shims or rewrite browser flags.
-- **Scratchpad Confinement**: All temporary calculation scripts and preview screenshots must be written inside session scratchpad.
+## 3. Common Changes
+### Add a built-in tool
+1. Create `<tier>/<Name>Tool/` (`core` tools sit directly under `src/tools/`; tiers are `protocol/`, `coordination/`, `orchestration/`). Model it on `GlobTool/`:
+   - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `promptVisibility`, `description`).
+   - `prompt.ts`: the `<NAME>_DESCRIPTION` string (see `GlobTool/prompt.ts`).
+   - `UI.ts`: `export const UI = createToolUI([...])` naming the title parameters (see `GlobTool/UI.ts`).
+   - Optional `diagnostic.ts`, registered in `diagnostics.ts:diagnosticHandlers`.
+2. Metadata defaults: `category: 'core'` implies `loading: 'eager'` and `promptVisibility: 'always'`; any other category defaults to `deferred` and `summary`. `roles` is `'all' | 'director' | 'actors' | string[]`; `terminalVisibility` is `'card' | 'notice' | 'silent'`.
+3. Register the schema and description in `index.ts`: import them, add to `schemas` and `descriptions` (typed `Record<ToolName, string>`, so a missing entry fails typecheck), and add to the re-export block.
+4. Register the metadata in `catalog.ts:builtinToolRegistrations()`: import `metadata as metaN` and append it to the array. The JSON-schema definition is derived from `schemas` and `descriptions`; only `SendMessage` is special-cased.
+5. Add the canonical name plus lowercase and snake_case spellings to `types.ts:toolAliases`. Without them `canonicalToolName()` rejects the tool.
+6. Add `UI` to `ui-registry.ts:toolUIs`.
+7. Wire execution:
+   - Tool that touches files or the shell: add a branch in `index.ts:Tools.execute()` after the permission block, and extend its `effect` computation if the tool is read-only.
+   - Tool that needs ensemble state (the `coordination/` and `orchestration/` tools): add the name to `src/actors/services.ts:serviceTools` and a branch in `ActorServices.execute()`.
+- Tests: `tests/tool-ui.test.ts` (iterates `schemas`; needs a UI entry), `tests/tools-registry.test.ts`, `tests/tools-claude-alignment.test.ts`; add a `tests/<name>-tool.test.ts` for execution.
 
-## 4. Integration Points
-```text
-kernel/agent.ts (receives tool calls from model)
-  → tools/index.ts (validates schema & requests permission)
-  → permissions/guard.ts (evaluates policy & prompts user if needed)
-  → tools/<ToolName>Tool/<ToolName>Tool.ts (executes action)
-```
+### Add a tool category / tier
+1. Create the directory `src/tools/<category>/` (category names are directory paths; `metadata.ts:toolCategorySchema` allows nested paths).
+2. Add `<category>: <one-line English description>` to the frontmatter `categories:` of this file. That is the only runtime source of descriptions; no formatter code changes.
+3. Set `category: '<category>'` in each tool's metadata. Non-`core` categories default to deferred and appear in the LoadTools directory under `<category>/`.
+- Tests: `tests/tools-taxonomy.test.ts` (new categories and the packaged signpost), `tests/tools-registry.test.ts`.
 
-## 5. Verification
-- **Targeted Test Suite**:
-  - `tests/tool-parameter-alignment.test.ts`: Model-facing schemas, legacy aliases, Grep modes, Shell timeout, AskUserQuestion multiSelect, bundled ripgrep.
-  - `tests/tools-claude-alignment.test.ts`: PascalCase alignment and execution for all tools.
-  - `tests/tools-metadata.test.ts`: Metadata contracts and dynamic role scoping resolver.
-  - `tests/tools-registry.test.ts`: ToolRegistry category grouping and user config overrides.
-  - `tests/tools-taxonomy.test.ts`: Root AGENTS.md descriptions, arbitrary new categories, collapsed/explicit indexing, preserved schemas and packaged assets.
-  - `tests/git-status-tool.test.ts`: Silent _GitStatus execution and fallback.
-  - `tests/tiered-tools-integration.test.ts`: Integration across director, worker, dynamic actor, and TUI silent rendering.
-  - `tests/subagent-efficiency-vision.test.ts`: Multimodal reading and process error tolerance.
-- **Fast Run Command**:
-  ```bash
-  node --test dist/tests/tools-*.test.js dist/tests/git-status-tool.test.js dist/tests/tiered-tools-integration.test.js dist/tests/tool-parameter-alignment.test.js dist/tests/finish-round.test.js
-  ```
+### Change a model-facing parameter
+1. Edit the schema in `<Name>Tool.ts` (see `ReadTool/ReadTool.ts` for the pattern). Use Claude Code names (`file_path`, `old_string`, `new_string`, `head_limit`).
+2. Never add `.default()` to a model-facing field; use `.optional()` and apply the default in `execute<Name>()`. Zod 4 lists defaulted fields as `required` in `z.toJSONSchema`, which forces the model to send them.
+3. To keep an old name working, wrap the schema as `z.preprocess(value => normalizeAliases(value, {old: 'new'}), schema)` as in `EditTool/EditTool.ts`. The canonical key wins when both are present; the strict object then rejects any name that is neither.
+4. If the path argument changes, update `aliases.ts:filePathOf()`, which `Tools.execute()` uses to build the permission target.
+5. Update the description in `prompt.ts` and the title keys in `UI.ts`.
+- Tests: `tests/tool-parameter-alignment.test.ts` (required lists, alias parsing), `tests/tool-contract-accuracy.test.ts` (description matches behavior).
 
-## 6. Known Gaps
-- `Shell` does not yet support `run_in_background`, `BashOutput`, or `KillShell`; background execution is deferred.
-- `Shell.timeout` retains legacy unit inference: positive values up to 600 are seconds, larger values are milliseconds. The model-facing contract must disclose this; removing inference requires a caller migration, not a description-only edit.
-- Legacy parameter aliases (`path`, `old_text`, `new_text`, Grep `limit`) remain accepted for migration and are scheduled for removal in a later version.
-- Provider wire compatibility is tested with local fixtures; live model behavior is not certified by registry or UI tests.
+## 4. Hard Boundaries
+- **Model-facing fields never use `.default()`**: defaulted fields become `required` in the JSON schema. Partially enforced: `tests/tool-parameter-alignment.test.ts` asserts the `required` list of the core tools; other tools are *Unenforced*.
+- **Legacy parameter names only through `normalizeAliases()`**: `path`, `old_text`, `new_text`, Grep `limit` are accepted but not exposed to the model, and are scheduled for removal. Enforced by `tests/tool-parameter-alignment.test.ts`.
+- **Built-in names are PascalCase and resolve through `toolAliases`**: Enforced by `tests/tools-claude-alignment.test.ts`.
+- **Automa is read-only and stateless**: only Read, Glob, Grep, WebFetch; Write, Edit and Shell are refused. Enforced by `tests/automa-tool.test.ts`. Its model lives in `ToolModelStorage`, not `ActorCatalog` (storage covered by `tests/tool-models.test.ts`; the decoupling itself is *Unenforced*).
+- **`_FinishRound` is mandatory**: always eager, silent and available to all roles; user overrides that defer, hide or restrict it are rejected. Enforced by `tests/tool-disclosure.test.ts`, `tests/tools-registry.test.ts`, `tests/tool-ui.test.ts`.
+- **`loading` is independent of `roles` and `terminalVisibility`**: Enforced by `tests/tool-disclosure-registry.test.ts`.
+- **The deferred directory lists names and one-line descriptions, never schemas**; builtin names cannot be overridden by extension registrations. Enforced by `tests/tool-disclosure-registry.test.ts`.
+- **Loading a tool never executes it or grants permission**: Enforced by `tests/anthropic-tool-disclosure.test.ts`, `tests/openai-tool-disclosure.test.ts`.
+- **Categories come from data, not code**: `categories:` frontmatter in this file feeds `readToolCategories()`; a missing or invalid header falls back to directory names. Enforced by `tests/tools-taxonomy.test.ts`.
+- **Read keeps complete lines**: default 2,000 lines, 256 KiB UTF-8 output cap that fails explicitly instead of clipping a line, 32 MiB file cap, 10 MiB image cap. Enforced by `tests/tool-contract-accuracy.test.ts` for the 256 KiB and line rules; the 32 MiB and 10 MiB caps are *Unenforced*.
+- **Grep uses the bundled ripgrep** (`LOGOX_RIPGREP_PATH` first, never host PATH as primary). `tests/tool-parameter-alignment.test.ts` asserts the resolved binary exists; the no-PATH rule is *Unenforced*.
+- **`runProcess()` reclaims children within 1.5 s of a kill**, even if `taskkill` fails. Enforced by `tests/agent.test.ts`.
+- **Every built-in owns a `UI.ts`; hidden tools have no visible surface**: Enforced by `tests/tool-ui.test.ts`. Execution code must not import `ui-registry.ts`: *Unenforced*.
+- **Titles name the decision-relevant parameter first and stay on one line**: Enforced by `tests/tool-ui.test.ts`.
+- **Tool descriptions live in the tool's `prompt.ts`, not under `src/prompts/`**: *Unenforced*.
+
+## 5. Dependencies
+- **Depends on**: `src/permissions/` (path risk and `guard.authorize()` before every core tool), `src/runtime/` (`ToolDefinition`, `ToolCall`), `src/tui/timeline/tool-ui.ts` (`createToolUI`), `src/extensions/` (MCP definitions and the Playwright server config), `@vscode/ripgrep`.
+- **Used by**: `src/kernel/agent.ts` (`agentRequestBase()` pool and exposure), `src/actors/services.ts` (service tool execution), `src/application.ts` (registry creation, MCP registration, `/undo`, `/model automa`), `src/tui/` (`ui-registry.ts` for cards and the question interaction), `src/context/` (round memory from `_FinishRound`).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/tools-*.test.js dist/tests/tool-*.test.js dist/tests/automa-tool.test.js dist/tests/git-status-tool.test.js dist/tests/finish-round.test.js dist/tests/tiered-tools-integration.test.js dist/tests/*disclosure*.test.js`
+- Not covered offline: live Playwright browser runs (`tests/playwright-browser.test.ts` is skipped without installed browsers); live provider behavior for native tool search.
+- Shell has no `run_in_background`, `BashOutput` or `KillShell`.
+- `Shell.timeout` still infers units: values up to 600 are seconds, larger are milliseconds. Removing this needs a caller migration, not a description edit.

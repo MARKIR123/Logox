@@ -1,78 +1,68 @@
-# AGENTS.md — LOGOX Core Technical Map & Agent Navigation Signpost
+# AGENTS.md — LOGOX Signpost
 
-This document establishes the **Fractal Signpost Protocol (FSP)** for AI coding agents (Claude, Codex, Cursor, local models) working on `Logox`.
-It defines global architectural invariants, module topologies, and disciplined exploration protocols.
-All subsystem development and maintenance must strictly adhere to the FSP paradigm.
+LOGOX is a full-screen terminal coding assistant (Node.js, TypeScript, React/Ink) that replaces the legacy Python project. A Director (Logox) works directly on trivial tasks and orchestrates a persistent ensemble of companion actors (Techne, Kalon, Aletheia) for substantive work. Phase roadmap: Basic Features -> Anamnesis Dreaming -> Persistent Subagents. This file is the entry map for external coding agents and is also loaded by Logox as project rules, so it stays short.
 
----
+## 1. Navigation Protocol (FSP)
 
-## 1. Fractal Signpost Protocol (FSP) & Look-Ahead Navigation
-
-Before exploring, reading, or modifying files in any subsystem directory (`src/<subsystem>/`), adhere to this strict sequence:
-
-1. **Check Local Signpost First (`src/<subsystem>/AGENTS.md`)**:
-   - Subtree signposts define exact file routes, invariant boundaries, and entrypoints.
-   - Read the localized signpost FIRST before reading actual source files or running repo-wide greps.
-   - If a subdirectory lacks an `AGENTS.md`, fall back to the nearest ancestor signpost and follow symbol imports.
-2. **6-Section Minimal Signpost Template**:
-   - Localized signposts strictly adhere to the 6 sections:
-     `Scope` → `Start Here (Task Router)` → `Hard Boundaries` → `Integration Points` → `Verification` → `Known Gaps`.
-3. **Type Contracts Over Prose**:
-   - Types and schemas never lie (`zod` schemas in `contracts.ts`, `definitions.ts`, `types.ts`).
-   - Type definitions tell you **HOW** the system behaves; signposts define **BOUNDARIES**.
-4. **Public Documentation (`docs/`)**:
-   - Start with [the documentation index](docs/README.md) for usage and current module behavior.
-   - Public guides must stand alone; local development instructions and working documents are not publication dependencies.
-
----
+1. Before reading or editing `src/<subsystem>/`, read its local `AGENTS.md` first. A folder without one inherits the nearest ancestor signpost (see the map in section 3). Avoid unguided repo-wide greps.
+2. Local signposts follow six sections: `Scope` (with a design-rationale link into `docs/`), `Start Here` (task router), `Common Changes` (step-by-step recipes), `Hard Boundaries` (each citing its enforcing test or marked *Unenforced*), `Dependencies`, `Verification & Gaps`. [`src/tools/AGENTS.md`](src/tools/AGENTS.md) is the reference example. Add a new signpost only for constraints that are not evident from code.
+3. Backticked paths and `<file>.ts:<symbol>` references in signposts are machine-checked by `npm run check:docs`; keep them resolvable (use `<placeholder>` or `*` for patterns). When you change code a signpost references, update the signpost in the same change.
+4. Types and zod schemas (`contracts.ts`, `definitions.ts`, `types.ts`) are authoritative for HOW code works; signposts define boundaries and invariants; [`docs/`](docs/README.md) explains WHY and usage.
 
 ## 2. Core Invariants
 
-1. **English System Interface**:
-   - All internal prompts, tool names, schemas, descriptions, error diagnostics, and terminal status lines must be **strictly 100% English**.
-   - No bilingual parenthetical clutter or mixed-language tags.
-   - Conversational responses to the user follow the language used by the user.
-2. **Continuous Natural Execution Loop**:
-   - `max_iterations = 0` (unlimited natural while(true) loop). No 50-turn blocking popups; stops on task completion or user cancel (`Esc` / `Ctrl+C`).
-3. **Scratchpad Sandbox Isolation**:
-   - All ephemeral test scripts, numerical calculations, and screenshots MUST be created in the session scratchpad directory (`tmpdir()/logox-scratchpad/<cwdHash>/<sessionId>/`), never in the project root.
-4. **Multimodal Vision & Browser Verification**:
-   - Multimodal vision is enabled by default. `Read` inspects local images; MCP image blocks enter visual input directly.
-   - Use the local Playwright MCP server for web/SVG/UI verification. Keep interaction, state checks, and screenshots in the same page session; each actor receives its own isolated browser instance.
-5. **Shared Workspace & Observation Guard**:
-   - Companion actors hold full tool access (`Read`, `Edit`, `Write`, `Shell`, `Grep`, `Glob`, `SendMessage`) and self-verify their work. Concurrent non-overlapping `Edit` calls serialize under per-file atomic locks, while stale overwrites are blocked by per-actor read observation guards.
-6. **Persistent User Configuration in `~/.logox/`**:
-   - Primary user storage is `~/.logox/`. Some components still load `~/.logox-ts/` for compatibility, with component-specific precedence; see [usage](docs/USAGE.md). Credentials and runtime data stay outside tracked source files.
-7. **Internal Round Memory and Independent Reports**:
-   - Every normally completed round submits hidden `_FinishRound` metadata. Only formal Director assignments produce task reports; direct human requests receive normal answers.
-   - Closed context uses compact five-field indexes with authoritative ledger ranges. Raw journals remain append-only; effective goals, constraints, evidence status and unresolved work survive instead of every original message.
-8. **Fractal Signpost Protocol (FSP) Enforcement**:
-   - Subsystem and test signposts follow the six-section template. Tool folders inherit the nearest signpost; add a local one only for constraints not evident from code.
-
----
+- **English system interface**: prompts, tool descriptions, schemas, UI labels, status lines and errors are English only, with no bilingual text. Network notices stay concise (`[Network] Connection interrupted. Retrying (1/5)...`). Conversational replies follow the user's language.
+- **Natural loop**: `max_iterations = 0`; the `while(true)` loop ends on goal completion, unrecoverable failure, or user cancel (`Esc` / `Ctrl+C`), with no turn-limit prompts.
+- **Scratchpad isolation**: temporary scripts, calculations and screenshots go to `join(tmpdir(), 'logox-scratchpad', cwdHash, sessionId)`, never the project root. Permissions auto-approve this directory, and oversized tool output is offloaded to its `tool-results/` (`src/kernel/scratchpad.ts`).
+- **Vision and UI verification**: multimodal is on by default. `Read` inspects images; for HTML/SVG/frontend work use the local Playwright MCP server in one page session (each actor gets its own browser). For existing desktop bugs, ask the user for a screenshot via `AskUserQuestion`.
+- **Configuration**: canonical user config lives in `~/.logox/` (see [usage](docs/USAGE.md)); the retired `~/.logox-ts/` is no longer read. Credentials and runtime journals stay out of tracked files.
+- **Sessions**: `state/sessions/<sessionId>/` holds `director.jsonl`, `tasks.json`, `events.json`, `README.md` and `subagents/<actor>.jsonl`. Raw ledgers are append-only.
+- **Round memory vs delivery**: normal rounds close through hidden `_FinishRound`; only formal Director dispatches produce structured task reports, while direct human requests get conversational replies. Compaction indexes closed context into compact records and must keep effective constraints, evidence status and open work.
+- **Tool-owned presentation**: built-in tools keep `UI.ts` (and interaction logic) beside their definition; shared hosts own layout, focus and permission scheduling.
+- **Prompts are static constants**, not strings concatenated inside business logic.
+- **Shared workspace**: companion actors have full tool access; concurrent edits serialize under per-file locks and per-actor read guards prevent stale overwrites.
 
 ## 3. Subsystem Map
 
-| Subsystem | Signpost Path | Core Responsibility |
+Paths under `src/`. "Inherits" means no local signpost; use the named one.
+
+| Directory | Signpost | Responsibility |
 |---|---|---|
-| **Actors & Ensemble** | [`src/actors/AGENTS.md`](src/actors/AGENTS.md) | Actor personas, ensemble lifecycle, actor model persistence, `SendMessage` (queue vs interrupt), `.logox/bulletin.md` |
-| **Tools & Execution** | [`src/tools/AGENTS.md`](src/tools/AGENTS.md) | PascalCase tools, process tree management, 1.5s forced cleanup, `ListActors` & `CancelActor`; browser interaction via Playwright MCP |
-| **Providers & Models** | [`src/providers/AGENTS.md`](src/providers/AGENTS.md) | Model pool, Undici transport, proxy auto-fallback, OpenAI dual-auth (API Key vs Responses API), 6-tier thinking |
-| **Runtime & Store** | [`src/runtime/AGENTS.md`](src/runtime/AGENTS.md) | While(true) engine, task progress tracking, dual-write session transcripts (`director.jsonl`, `tasks.json`) |
-| **Terminal UI (TUI)** | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink plane rendering, 180-200ms frame pacing, dual-harmonic breathing wave, active actor animation, anti-noise inline cards |
-| **Resources & Skills** | [`src/resources/AGENTS.md`](src/resources/AGENTS.md) | Hierarchical skills (`skills/<actor>/<domain>/*.md`), Path as Prompt, three-tier waterfall priority |
-| **Permissions & Sandbox** | [`src/permissions/AGENTS.md`](src/permissions/AGENTS.md) | Three-tier security matrix, scratchpad auto-approval, sensitive path protection, persistent rules |
-| **Context & Compaction** | [`src/context/AGENTS.md`](src/context/AGENTS.md) | Dual-watermark pruning, hidden round memory and compact indexes, tool output disk archiving, token metering |
-| **Configuration & Storage** | [`src/config/AGENTS.md`](src/config/AGENTS.md) | Hierarchical config cascade, atomic `StateFile` locking, thinking protocol and level sets |
-| **Prompts & Assembly** | [`src/prompts/AGENTS.md`](src/prompts/AGENTS.md) | Static/dynamic prompt zones, charter, collaboration fragments, compaction/recovery sections, cache-stable order |
-| **Test Suite & Verification** | [`tests/AGENTS.md`](tests/AGENTS.md) | Domain test groups, fast verification commands (~1-3s), test sandbox isolation rules |
+| `actors/` | [`src/actors/AGENTS.md`](src/actors/AGENTS.md) | Personas, ensemble lifecycle, model persistence, `SendMessage` collaboration, bulletin |
+| `tools/` | [`src/tools/AGENTS.md`](src/tools/AGENTS.md) | Tool registry and taxonomy (core tools at root; `src/tools/protocol/`, `src/tools/coordination/`, `src/tools/orchestration/` tiers), process lifecycle, `/undo` snapshots |
+| `providers/` | [`src/providers/AGENTS.md`](src/providers/AGENTS.md) | Model pool, HTTP transport and proxy fallback, OpenAI routing, thinking levels, login wizard |
+| `runtime/` | [`src/runtime/AGENTS.md`](src/runtime/AGENTS.md) | Immutable store snapshots, step timing, task progress, input delivery queues, system events |
+| `tui/` | [`src/tui/AGENTS.md`](src/tui/AGENTS.md) | Ink rendering, frame pacing, timeline, actor status bar, panels |
+| `resources/` | [`src/resources/AGENTS.md`](src/resources/AGENTS.md) | Hierarchical skills, project rules and guideline loading, hot reload |
+| `permissions/` | [`src/permissions/AGENTS.md`](src/permissions/AGENTS.md) | `default` / `auto` / `creative` modes, path risk, rule persistence |
+| `context/` | [`src/context/AGENTS.md`](src/context/AGENTS.md) | Watermark budgeting, round-memory indexing, tool-output offload, token metering |
+| `config/` | [`src/config/AGENTS.md`](src/config/AGENTS.md) | Config cascade, TOML, `modelSettings()`, themes, onboarding preferences, atomic `StateFile` |
+| `prompts/` | [`src/prompts/AGENTS.md`](src/prompts/AGENTS.md) | Prompt composer, charter, collaboration contracts, cache-stable ordering |
+| `kernel/` | Inherits `runtime/` | Agent loop (`agent.ts`), execution recovery, scratchpad |
+| `store/` | Inherits `runtime/` and `config/` | `.lock-v2` file locks, journals, sessions, session trash, system history, atomic replace |
+| `extensions/` | Inherits `tools/` | MCP client (`mcp.ts`, `mcp-client.ts`), Playwright controller, hooks, external processes, extension config |
+| `commands/`, `commands.ts` | Inherits `tui/` | Command surface descriptors and slash commands |
+| `anamnesis/` | Inherits `context/` | Idle-triggered dream lifecycle (`service.ts`), recap and AutoDream runners (`runner.ts`), memory store (`memory.ts`); not yet wired into the main app |
+| `demo/`, `demo.ts` | Inherits `tui/` | Scripted demo scenes behind `--demo` |
+| `doctor.ts` | Inherits `tests/` | Environment, dependency and config diagnostics behind `--doctor` |
+| `application*.ts`, `cli.tsx` | Root | Application container, bootstrap, sessions, status, command wiring, CLI entry |
+| `tests/` | [`tests/AGENTS.md`](tests/AGENTS.md) | Domain test matrices, home-directory isolation, mock fixture rules |
 
----
+## 4. Verification
 
-## 4. Development & Verification Commands
+```bash
+npm run check          # check:docs (links, headings, signposts) + tsc --noEmit
+npm run build          # tsc + copy actor profiles into dist/
+npm test               # check:docs + build + full suite
+node --test --test-concurrency=4 dist/tests/*.test.js   # full suite on an existing build
+npm start              # interactive TUI; also --doctor, --demo, --check-config, --list-models
+```
 
-- Check types and documentation integrity: `npm run check`
-- Build TypeScript & copy assets: `npm run build`
-- Run targeted domain test group: see [`tests/AGENTS.md`](tests/AGENTS.md)
-- Run full test suite: `node --test --test-concurrency=4 dist/tests/*.test.js`
-- Start TUI interactive assistant: `npm start`
+Run targeted per-domain test commands from [`tests/AGENTS.md`](tests/AGENTS.md) while iterating (build first; tests run from `dist/`). Run `npm run check` before concluding any change.
+
+Not covered by offline tests (needs manual or authorized live verification):
+- Live provider streaming, prompt caching, reasoning levels and billing (tests use local mocks).
+- Physical terminal rendering: true color, CJK width, glyphs, mouse tracking, resize.
+- Interactive OAuth login in an external browser.
+- Headed Playwright automation (needs `npm run browser:install`).
+- Multi-process `.lock-v2` contention and long-horizon loops under production load.

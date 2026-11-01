@@ -1,52 +1,56 @@
 # Module: Resources & Skills (`src/resources/`)
 
 ## 1. Scope
-- **Owns**: Project guidelines loading (`AGENTS.md`, `CLAUDE.md`), hierarchical skills library (`skills/<actor>/<domain>/*.md`), custom slash commands, and hot-reloading.
-- **Does not own**: Low-level tool process execution (owned by `src/tools/`).
+- **Owns**: Guideline loading (project-level LOGOX, AGENTS and CLAUDE markdown files), the hierarchical skill library and its built-in seed copy (`builtin-skills/`), custom slash command templates (`.logox/commands/`), skill prompt sections, and `/reload`.
+- **Does not own**: Tool execution or the `BorrowSkill` tool ([`src/tools/AGENTS.md`](../tools/AGENTS.md), [`src/actors/AGENTS.md`](../actors/AGENTS.md)); prompt topic ordering ([`src/prompts/AGENTS.md`](../prompts/AGENTS.md)); MCP, Playwright and hook code (`src/extensions/`, routed through [`src/tools/AGENTS.md`](../tools/AGENTS.md)).
+- **Design rationale**: [docs/modules/resources-and-extensions.md](../../docs/modules/resources-and-extensions.md)
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| Hierarchical skill discovery or role visibility | `manager.ts:skillsFor()` | Directory prefix (`skills/<actor>/...`) and frontmatter |
-| Built-in official skills library | `builtin-skills/agent.md` | `builtin-skills/<actor>/` |
-| Background guideline or skill hot-reloading | `reload.ts:reloadResources()` | `/reload` slash command in `application.ts` |
-| Custom slash command registration | `manager.ts:snapshot()` | `commands` list in `Resources` |
-| Guidelines versus skills in system topics | `manager.ts:promptSections()` | `prompts/boundary.ts` and `reload.ts` |
+| Change which actors see a skill | `manager.ts:Resources.skillsFor()` | `manager.ts:Resources.reload()` (path-inferred `actors`), `manager.ts:Resources.assignSkill()` |
+| Change what skills the system prompt discloses | `manager.ts:Resources.promptSections()` | `manager.ts:Resources.categoriesFor()`, `src/kernel/agent.ts` |
+| Change guideline discovery, size limits or ordering | `manager.ts:Resources.reload()` | `maxBytes` and `ancestors()` in `manager.ts` |
+| Change category descriptions shown to an actor | `builtin-skills/<actor>/agent.md` frontmatter `categories:` | `manager.ts:Resources.categoriesFor()` |
+| Change first-run seeding or shipped-skill refresh | `manager.ts:ensureUserSkillsSeeded()` | `skill-defaults.ts:previousBrowserSkills` |
+| Change `/reload` behavior or its report | `reload.ts:reloadResources()` | `/reload` branch in `src/application.ts` |
+| Add or expand a custom slash command | `manager.ts:Resources.expand()` | `.logox/commands/*.md`, `src/commands.ts:commandCatalog` (built-in names are reserved) |
+| Meta-procedure for adopting a third-party skill | `builtin-skills/public/skill-internalization.md` | `builtin-skills/<actor>/agent.md` |
 
-## 3. Hard Boundaries
-- `promptSections()` separates guidelines from skill discovery; tool discovery does not turn skill files into native tools. Public skills apply to custom Actors unless explicit actor restrictions narrow them. Reload invalidation compares all roles' skill/category metadata, not only Director visibility.
-- **Path as Prompt / Semantic Signposts**:
-  - Skills are organized hierarchically: `skills/<actor>/<domain>/<name>.md`.
-  - Directory prefixes dictate default role visibility (`skills/kalon/...` visible to Kalon; `skills/public/...` visible to all).
-  - Frontmatter `actors: [...]` explicitly overrides path-based visibility when declared.
-- **Two-Tier Runtime & Distribution Seeding**:
-  - Runtime physical sources: **Project Private (`<cwd>/.logox/skills/`) > User Global (`~/.logox-ts/skills/`)**.
-  - Built-in skills (`builtin-skills/`) serve as distribution seed templates, non-destructively seeded to `~/.logox-ts/skills/` on load.
-- **Two-Stage Progressive Discovery**:
-  - System prompts only receive lightweight skill metadata:
-    - **L0 Core Principles** (`skills/<actor>/*.md`): Essential baselines whose metadata and path remain directly in the system prompt.
-    - **L1 Domain Repositories** (`skills/<actor>/<category>/**/*.md`): Specific SOPs whose individual filenames are collapsed; only category folder names and concise one-line descriptions (from `agent.md` `categories`) appear in the prompt.
-  - Agents inspect domain contents via `Glob("skills/<actor>/<category>/*.md")` and read complete SOP markdown instructions on-demand via `Read`.
-- **Skill Internalization Meta-SOP**:
-  - Public meta-procedure (`skills/public/skill-internalization.md`) governs adopting third-party skills, standardizing into 4-section English SOPs, and updating actor taxonomy without losing operational invariants.
+## 3. Common Changes
+### Add a built-in skill
+1. Pick the tier by path: `builtin-skills/<actor>/<name>.md` is a core principle (always listed with its path), `builtin-skills/<actor>/<category>/<name>.md` is a domain SOP (collapsed to its category), `builtin-skills/public/` is visible to every actor. `<actor>` is `logox`, `techne`, `kalon` or `aletheia`.
+2. Write frontmatter with `name` and `description`; optional `actors: [...]` overrides path-based visibility. Follow the 4-section SOP shape in `builtin-skills/public/skill-internalization.md`.
+3. For a new category directory, add `<category>: <one-line English description>` to the `categories:` frontmatter of `builtin-skills/<actor>/agent.md`, and add the file to the tree listed in `builtin-skills/agent.md`. Without a description the prompt falls back to a generic one.
+4. Existing users only receive missing files: seeding never overwrites an edited file. Refreshing an old shipped default needs its previous SHA-256 in `skill-defaults.ts:previousBrowserSkills`.
+- Tests: `tests/hierarchical-skills.test.ts`
 
-## 4. Integration Points
-```text
-application.ts (instantiates Resources)
-  → kernel/agent.ts (injects lightweight skill metadata into system prompt)
-  → actors/services.ts (resolves single-task borrowing via BorrowSkill)
-  → tools/ReadTool (agent reads full SOP markdown instructions on demand)
-```
+### Add a guideline source or skill root
+1. Guideline files and their per-level candidate order live in `manager.ts:Resources.reload()` (user level: `AGENTS.md`, `CLAUDE.md`; project ancestors additionally accept a LOGOX markdown file; each candidate is also looked up under `.logox/`).
+2. Skill roots are the `skillRoots` list in the same method, scanned built-in, then user, then project, so later roots override same-named skills. Command roots are `commandRoots`.
+3. Keep the file in the result of `reload()`; failures must be reported via `issue(...)` so `/reload` can show them.
+- Tests: `tests/resources.test.ts`, `tests/hierarchical-skills.test.ts`
 
-## 5. Verification
-- **Targeted Test Suite**:
-  - `tests/resources.test.ts`: Discovery, override hierarchy, and reloading.
-  - `tests/hierarchical-skills.test.ts`: Role-based filtering and Path as Prompt.
-- **Fast Run Command**:
-  ```bash
-  node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js
-  ```
+### Expose a new resource kind in `/reload`
+1. Extend `ResourceKind` and `ResourceSnapshot` in `manager.ts`, and populate it in `reload()`.
+2. Add its label to `labels` in `reload.ts:reloadResources()`. If it affects prompts, include it in `promptRevision` so token estimates are invalidated.
+- Tests: `tests/resources.test.ts`, `tests/prompt-disclosure-integration.test.ts`
 
-## 6. Known Gaps
-- Skill discovery is metadata/file-based; there is no native provider skill search or automatic body injection.
-- The mixed `prompt()` formatter remains a compatibility wrapper; production assembly and reload consume structured sections/snapshots.
+## 4. Hard Boundaries
+- **Skill precedence is project > user > built-in**: later roots in `skillRoots` override same-named skills. Enforced by `tests/hierarchical-skills.test.ts`.
+- **Seeding is non-destructive**: built-ins are copied to `~/.logox/skills/` only when missing; an existing file is replaced only if it still matches a known shipped default. Enforced by `tests/hierarchical-skills.test.ts`.
+- **Path is the default visibility**: `skills/<actor>/...` is visible to that actor, `skills/public/...` to all; the prompt lists core skills individually and domain skills only by category. Enforced by `tests/hierarchical-skills.test.ts`. Frontmatter `actors:` overriding the path default is *Unenforced*.
+- **Guidelines and skills stay separate, bodies stay on disk**: `promptSections()` returns them apart and never injects a skill body (public skills also reach custom actors); bodies are read on demand with `Read`. Enforced by `tests/prompt-composition.test.ts`.
+- **Reload invalidation covers every role**: a Worker-only skill change counts as a prompt change. Enforced by `tests/prompt-disclosure-integration.test.ts`.
+- **Guidelines are bounded**: per-file and total size caps, real-path de-duplication, invalid files reported and skipped, paths containing a `legacy` segment ignored. Enforced by `tests/resources.test.ts`.
+- **Custom commands cannot shadow built-ins**: names in `commandCatalog` are rejected with an issue. Enforced by `tests/resources.test.ts`.
+- **Resource roots are `~/.logox/` and `<cwd>/.logox/` only**: no other legacy home directory is read. *Unenforced*.
+
+## 5. Dependencies
+- **Depends on**: `src/commands.ts` (`commandCatalog` reserved names), `src/actors/definitions.ts` (`actorIdSchema`), `yaml` (frontmatter parsing).
+- **Used by**: `src/application.ts` (instantiates `Resources`, `/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/actors/services.ts` (`BorrowSkill`), `src/tui/commands/` (custom command suggestions).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/prompt-composition.test.js dist/tests/prompt-disclosure-integration.test.js`
+- Not covered offline: provider-native skill search does not exist; discovery is file-based with no automatic body injection.
+- The mixed `prompt()` formatter remains a compatibility wrapper; production assembly consumes `promptSections()` and snapshots.

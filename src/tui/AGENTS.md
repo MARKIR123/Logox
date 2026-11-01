@@ -1,53 +1,65 @@
 # Module: Terminal UI (`src/tui/`)
 
 ## 1. Scope
-- **Owns**: React/Ink presentation, terminal output coordination, timeline projection, local form editing and theme consumption.
-- **Does not own**: Runtime execution, Actor profile ownership, provider authentication or credential persistence.
+- **Owns**: React/Ink presentation under `src/tui/` (entrypoints `app.tsx`, `application.tsx`), terminal output coordination, timeline projection, local form editing and theme consumption. By inheritance also the slash command surface `src/commands.ts` (`commandCatalog`) and `src/commands/surfaces.ts` (`CommandSurfaces`), and the demo scene `src/demo.ts` with `src/demo/`.
+- **Does not own**: Runtime execution and the store ([`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); Actor profiles ([`src/actors/AGENTS.md`](../actors/AGENTS.md)); provider authentication and credential persistence ([`src/providers/AGENTS.md`](../providers/AGENTS.md)); theme palette and statusbar preference storage ([`src/config/AGENTS.md`](../config/AGENTS.md)); tool-owned UI modules ([`src/tools/AGENTS.md`](../tools/AGENTS.md)).
+- **Design rationale**: [docs/UI-SPEC.md](../../docs/UI-SPEC.md); [docs/modules/README.md](../../docs/modules/README.md)
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| Application wiring, windows, focus or Queue/Steer | `app.tsx` / `application.tsx` | `input/` and the public application delivery contract |
-| Terminal flicker, scrolling or output ordering | `terminal/terminal.tsx`, `terminal/terminal-plane.ts` | `timeline/row-presentation.ts` |
-| Cards, folding or message projection | `timeline/stage.ts` | `timeline/scene.ts`, `timeline/viewport.ts`, `timeline/selection.ts` |
-| Markdown or display-cell layout | `timeline/markdown.ts` | `timeline/markdown-table.ts`, `terminal/text.ts` |
-| Composer expansion, multiline editing or native caret | `input/fullscreen-editor.tsx` and `input/editor.ts` | App owns the shared draft and passes its single cursor setter |
-| Command matching or candidate lists | `commands/completion.ts` | `commands/command-menu.tsx`, `commands/command-suggestions.tsx` |
-| Full-screen selectors, management pages or query results | `panels/` | `panels/command-result.tsx`, `src/commands/surfaces.ts`, `src/application-commands.ts` |
-| Question layout and answer interaction | `interactions/question-panel.tsx` | `interactions/production-question.tsx`; App owns runtime keyboard handling |
-| Local login forms | `login/` | `providers/login.ts`, `providers/login-wizard.ts`; never persist credentials in view state |
-| Statusbar layout, styles or preview | `status/statusbar.ts` and `status/statusbar-editor.tsx` | `config/statusbar-preferences.ts`; both command entries share the editor |
-| Running Actor pills or navigation | `status/actor-pills.tsx` | `timeline/actor-location.ts` |
-| System colors, Actor identity or animation | `appearance/` | `config/theme-palette.ts`, `config/themes/*.json`, Actor profiles |
-| Independent acceptance previews | `previews/` | `scripts/preview-slash.mjs`, `scripts/preview-questions.mjs` |
+| Trace application wiring, windows, focus, Queue/Steer | `app.tsx`, `application.tsx` | `input/input-delivery.ts` |
+| Fix flicker, scrolling or output ordering | `terminal/terminal.tsx`, `terminal/terminal-plane.ts` | `timeline/row-presentation.ts` |
+| Change cards, folding or message projection | `timeline/stage.ts` | `timeline/scene.ts`, `timeline/viewport.ts`, `timeline/selection.ts` |
+| Change Markdown or display-cell layout | `timeline/markdown.ts` | `timeline/markdown-table.ts`, `terminal/text.ts` |
+| Change the composer, multiline editing or native caret | `input/fullscreen-editor.tsx`, `input/editor.ts` | `app.tsx` owns the shared draft and the single cursor setter |
+| Change command matching or candidates | `commands/completion.ts:commandSuggestions()` | `commands/command-menu.tsx`, `src/commands.ts:commandCatalog` |
+| Change selectors, management pages or query results | `panels/` | `panels/command-result.tsx`, `src/commands/surfaces.ts:CommandSurfaces`, `src/application-commands.ts:createCommandTabsFor()` |
+| Change question layout or answer interaction | `interactions/question-panel.tsx` | `interactions/production-question.tsx`; `app.tsx` owns runtime keyboard handling |
+| Change login forms | `login/login.tsx`, `login/login-wizard.tsx` | `src/providers/login-wizard.ts` |
+| Change statusbar layout, modules or style | `status/statusbar.ts`, `status/statusbar-editor.tsx` | `src/config/statusbar-preferences.ts` |
+| Change running Actor pills or navigation | `status/actor-pills.tsx` | `timeline/actor-location.ts` |
+| Change system colors, Actor identity or animation | `appearance/` | `src/config/theme-palette.ts`, `src/config/themes/*.json`, Actor profiles |
+| Preview a view in isolation | `previews/` | `scripts/preview-slash.mjs`, `scripts/preview-questions.mjs` |
+| Change the dream demo scene | `src/demo.ts` | `src/demo/scene.ts`, `src/demo/portfolio.ts` |
 
-## 3. Hard Boundaries
-- **Cohesion**: Only `app.tsx` and `application.tsx` are root source entrypoints. `components/` contains business-neutral primitives; local mouse/keyboard/focus behavior is allowed, while Actor/provider/session/task policy remains outside. Keep feature-specific types beside their implementation, not in global `utils/` or `types/` buckets. Production views never import `previews/`. Verify layout/dependencies with `tests/tui-module-layout.test.ts`.
-- **Independent implementation**: UI inspiration is a behavioral/visual specification, not permission to copy or line-edit another project's implementation. Preserve required notices for any genuinely retained third-party source. Existing library dependencies and real external credential-format integrations remain distinct from source adaptation.
-- **System colors**: Read semantic palette tokens. Focus uses `accent`; checked/unfocused controls use `checkedFg`; disabled/idle descriptions use `muted`. Preserve theme-revision invalidation through App memoization, timeline projection and encoded rows. Additions pass the color-literal and theme-color regressions. Actor identity and card surfaces remain profile-owned.
-- **Command panels**: Settings and Statusbar share `/settings` tabs; the Settings tab ID is `settings`. `/animations` remains a legacy alias of `/settings`; `/statusbar` opens the same editor directly. Settings rows keep fixed order; only modules reorder. Style/palette selectors remain separate from module IDs. Tab drafts update synchronously before save, and a pending gate locks same-chunk input immediately. Settings applies the current tab without closing or losing other drafts; the dedicated editor closes on save. `/config` opens a single read-only Effective Configuration page for the existing model, effort, base URL, Automa and execution limits; it has no appearance controls, mutation actions or source tracing. Single-tab surfaces hide redundant tabs. Permissions and runtime Status (`/status`, state and usage) remain separate.
-- **System feedback**: Hosts assign explicit `presentation`; renderers never classify text. Model/effort receipts are silent; saves flash in the existing footer, queries use owner/session-scoped result panels, and welcome appears only in empty state. Replay never re-toasts or reopens results. Result Ctrl+C copies original text, Esc returns without changing drafts, and Ctrl+D still exits. Async results must match their originating surface ID.
-- **Input intent**: Normal Enter queues later work; fullscreen Enter inserts a newline and Ctrl+Enter/Send queues. Ctrl+T steers an exact live activity. The right-side expand button edits the same session/Actor draft and caret; Collapse/Esc retains them and the timeline anchor. App remains the sole native cursor owner, passing its setter to the fullscreen view; parent input, paste, mouse and timeline plane yield while that editor is active. Preserve drafts on stale targets or rejected delivery. Queue/Steer never cancels a task. Composer stays free of leading pointer/placeholder clutter; restore the terminal cursor on exit.
-- **Selection and mouse**: Statusbar dragging selects only status text; release writes OSC52. Timeline dragging takes priority over folding. Actor pills retain activation order; double-click locates the latest Actor card.
-- **Rail ownership**: Director timeline rails use the Director accent, Actor windows use their Actor identity and human turns use `user`. Headers and pills retain per-Actor identity. System messages use the system token. Inline collaboration interruptions stay inside their working card and use `directorIntervention`.
-- **Animation safety**: Backgrounds and column widths stay static. Animate only fixed-width glyph slots and text luster. Preserve 200ms frame pacing for up to eight frames and 130ms for ten-dot Braille; Actor frames come from profiles. Optional motion never changes task state.
-- **Tool ownership**: Registered tool UI modules own formatting and question actions; hosts own layout/focus/scheduling. Hidden tools have no visible or selectable surface. Rendering never executes a tool or reopens an interaction.
-- **Local forms**: Login secrets stay in local drafts and authentication storage, never ordinary runtime questions, transcripts or model context. The pure question-row planner is shared by local forms and production views; do not mount a second keyboard owner for runtime questions.
+## 3. Common Changes
+### Add a statusbar module
+1. Add the id to `statusbarIds` and a label to `statusbarLabels` in `src/config/statusbar-preferences.ts`. New ids append disabled to saved layouts; `defaultStatusbar` enables only the first six.
+2. Add a `Descriptor` (`icon`, color `token`, `variants`) to `registry` in `status/statusbar.ts`. It is typed `Record<StatusbarId, Descriptor>`, so a missing entry fails typecheck. List `variants` from longest to shortest for narrow widths.
+3. If the module needs data not on `StageStatus`, extend `src/runtime/stage-status.ts` and populate it in `src/application-status.ts`.
+- Tests: `tests/statusbar-modules.test.ts` (iterates `statusbarIds`), `tests/statusbar-customization.test.tsx`
 
-## 4. Integration Points
-```text
-runtime/store.ts → timeline/stage.ts → timeline/scene.ts
-                                     → timeline/row-presentation.ts
-                                     → terminal/terminal-plane.ts
-app.tsx → commands/ + panels/ + interactions/ + login/ + status/
-        → components/ + appearance/ + terminal/ + input/
-```
+### Add a slash command
+1. Add an entry to `commandCatalog` in `src/commands.ts` (`name`, `usage`, `description`, `argument`). Completion, `/help` and the reserved-name check for custom commands all read this list.
+2. Handle it in `src/application.ts`: simple actions are an `if (text === '/name')` branch in the command dispatcher (near `/help`, `/skills`, `/reload`); tabbed pages are added to `src/application-commands.ts:createCommandTabsFor()`.
+3. Report through the existing receipt or surface helpers with an explicit `presentation`; never classify text in a renderer.
+- Tests: `tests/command-surfaces.test.ts`, `tests/statusbar-customization.test.tsx` (catalog and completion discoverability), `tests/slash-receipts.test.ts`
 
-## 5. Verification
-- `tests/tui-module-layout.test.ts`: directory ownership, neutral primitive dependencies and retired build artifacts.
-- `tests/{command-suggestions,question-panel,login-panel,login-wizard}.test.*`: independent view/flow behavior and privacy.
-- `tests/{settings-interaction,stage-reading,thinking-groups,theme-app,theme-colors,color-literals}.test.*`: interaction, geometry, animation and theme contracts.
-- Build with `npm run build`; run Ink tests with `NODE_ENV=development`. Full suite uses isolated homes with shipped profiles, never personal credentials.
+### Add a tab or page to a command surface
+1. Build the `CommandTab` (`id`, `title`, `lines` or `toggles`) in `src/application-commands.ts:createCommandTabsFor()`, and extend `ApplicationCommandContext` for any new data.
+2. Persist edits in `saveConfigToggles()` (same file), dispatched by tab id from the `onSaveToggles` callback in `src/application.ts`.
+3. `src/commands/surfaces.ts:CommandSurfaces.openPage()` and `panels/tabbed-page.tsx` render it with no changes; a single-tab page hides its tab bar.
+- Tests: `tests/settings-interaction.test.tsx`, `tests/tabbed-page-single.test.tsx`, `tests/command-panels.test.tsx`
 
-## 6. Known Gaps
-- Automated Ink/row tests do not replace real-terminal visual acceptance or live provider/OAuth verification.
+## 4. Hard Boundaries
+- **Only `app.tsx` and `application.tsx` are root source files**: every other module sits in a responsibility directory; `components/` depends only on neutral foundations, and production never imports `previews/`. No global "utils" or "types" catch-all directories. Enforced by `tests/tui-module-layout.test.ts`, which lists every file per directory, so adding or moving a file means editing its `layout` map.
+- **Colors come from semantic palette tokens**: no color literals in UI source; theme revision invalidates App memoization, timeline projection and encoded rows. Enforced by `tests/color-literals.test.ts`, `tests/theme-colors.test.ts`.
+- **Command pages**: `/animations` is an alias of `/settings`; `/config` is a read-only page with no mutation; drafts update synchronously and a pending save locks same-chunk input; Settings saves keep the page and other drafts open. Enforced by `tests/slash-commands-decoupled.test.ts`, `tests/settings-interaction.test.tsx`, `tests/statusbar-customization.test.tsx`.
+- **System feedback**: hosts assign `presentation`; saves flash in the footer, replay never re-toasts or reopens results, results scope to owner and session. Enforced by `tests/system-notices-ui.test.tsx`, `tests/command-result.test.tsx`, `tests/command-receipt-races.test.ts`.
+- **Input intent**: normal Enter queues; fullscreen Enter inserts a newline and Ctrl+Enter queues; Ctrl+T steers an exact activity; `app.tsx` is the sole native cursor owner; failed or stale deliveries keep drafts; Queue/Steer never cancels a task. Enforced by `tests/fullscreen-composer.test.tsx`, `tests/fullscreen-editor.test.tsx`, `tests/input-queue-ui.test.tsx`.
+- **Composer stays free of leading pointer or placeholder clutter**: Enforced by `tests/composer-clean.test.tsx`.
+- **Selection and mouse**: statusbar drag selects only status text and writes OSC52; actor pill double-click locates the latest card. Enforced by `tests/statusbar-selection.test.tsx`, `tests/actor-pills-locator.test.tsx`. Timeline drag taking priority over folding is *Unenforced*.
+- **Rail ownership**: Director, Actor, human and system rails use their own identity tokens; collaboration interruptions use `directorIntervention` inside the working card. The token exists in `tests/theme-presets.test.ts`; rail assignment itself is *Unenforced*.
+- **Animation safety**: backgrounds and column widths stay static, only fixed-width glyph slots animate, and optional motion never changes task state. The 200 ms pacing for up to eight frames is enforced by `tests/actor-thinking-animation.test.ts`; the 130 ms ten-dot Braille pacing is *Unenforced*.
+- **Tool UI is tool-owned**: registered tool UIs own formatting; hidden tools have no visible or selectable surface; rendering never executes a tool. Enforced by `tests/tool-ui.test.ts`.
+- **Login secrets stay local**: never in runtime questions, transcripts or model context; one keyboard owner for runtime questions. Enforced by `tests/login-panel.test.tsx`, `tests/question-panel.test.tsx`, `tests/fullscreen-composer.test.tsx`.
+
+## 5. Dependencies
+- **Depends on**: `src/runtime/` (store snapshots, `CommandSurface`, `StageStatus`), `src/config/` (theme palette, statusbar preferences), `src/tools/` (`src/tools/ui-registry.ts` via `timeline/tool-ui.ts`), `src/actors/` (profile identity and animation frames), `src/providers/` (login wizard flows).
+- **Used by**: `src/cli.tsx` (mounts the App), `src/application.ts` (`CommandSurfaces`, command tabs, receipts), `src/resources/` (custom command names in completion).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/tui*.test.js dist/tests/command-*.test.js dist/tests/statusbar-*.test.js dist/tests/settings-interaction.test.js dist/tests/theme-*.test.js dist/tests/color-literals.test.js dist/tests/fullscreen-*.test.js dist/tests/question-*.test.js dist/tests/login-*.test.js dist/tests/stage-*.test.js dist/tests/actor-pills*.test.js`
+- Run Ink tests with `NODE_ENV=development`.
+- Not covered offline: real-terminal rendering (true color, CJK width, Nerd Font glyphs, mouse SGR, resize); live provider and OAuth flows.

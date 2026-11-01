@@ -33,15 +33,19 @@ function parse(file) {
   const headings = new Set();
   const duplicates = new Map();
   const lines = [];
+  const spans = [];
   let fence;
+  let lineNumber = 0;
   if (!content.endsWith('\n')) report(file, 'Missing trailing newline');
   for (const line of content.split(/\r?\n/)) {
+    lineNumber++;
     const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = undefined;
       continue;
     }
     if (marker) { fence = marker[1]; continue; }
+    for (const span of line.matchAll(/(`+)(.+?)\1/g)) spans.push({line: lineNumber, text: span[2].trim()});
     lines.push(line.replace(/(`+)(.*?)\1/g, '$2'));
     const heading = line.match(/^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/)?.[1];
     if (!heading) continue;
@@ -54,7 +58,7 @@ function parse(file) {
     }
   }
   if (fence) report(file, 'Unclosed code fence');
-  return {text: lines.join('\n'), headings, links: new Set()};
+  return {text: lines.join('\n'), headings, links: new Set(), spans};
 }
 for (const file of documents.keys()) documents.set(file, parse(file));
 
@@ -86,6 +90,57 @@ for (const [file, document] of documents) {
   }
 }
 
+// Code references in signposts: `path`, `path/`, `file.ext:symbol`. Placeholders, globs and runtime paths are not checked.
+const isSignpost = file => { const name = relative(file); return name === 'AGENTS.md' || name === 'tests/AGENTS.md' || /^src\/(?:.+\/)?AGENTS\.md$/.test(name); };
+const fileExtension = /\.(?:ts|tsx|mjs|js|json|md|yaml)$/;
+const skippedPrefix = /^(?:@|tool-results\/|~|\.logox|state\/|dist\/|http|-|\$)/;
+const statCache = new Map();
+const stat = target => {
+  if (!statCache.has(target)) { try { statCache.set(target, fs.statSync(target)); } catch { statCache.set(target, null); } }
+  return statCache.get(target);
+};
+function findByName(directory, name) {
+  for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+    const full = path.join(directory, entry.name);
+    if (entry.isFile() && entry.name === name) return full;
+    if (entry.isDirectory()) { const found = findByName(full, name); if (found) return found; }
+  }
+}
+function resolveReference(file, target) {
+  const directory = target.endsWith('/');
+  const clean = target.replace(/\/+$/, '');
+  for (const base of [path.dirname(file), root, path.join(root, 'src')]) {
+    const found = stat(path.join(base, clean));
+    if (found && (directory ? found.isDirectory() : true)) return path.join(base, clean);
+  }
+  if (!clean.includes('/') && !directory) return findByName(path.dirname(file), clean);
+}
+let codeRefCount = 0;
+for (const [file, document] of documents) {
+  if (!isSignpost(file)) continue;
+  for (const {line, text} of document.spans) {
+    if (/[\s<>*{|]/.test(text) || skippedPrefix.test(text)) continue;
+    const separator = text.indexOf(':');
+    const target = separator < 0 ? text : text.slice(0, separator);
+    const symbol = separator < 0 ? '' : text.slice(separator + 1);
+    if (!target || !/^[\w.@-]+(?:\/[\w.@\[\]-]+)*\/?$/.test(target)) continue;
+    if (!target.includes('/') && !fileExtension.test(target)) continue;
+    if (target.includes('...') || /\.jsonl$/.test(target)) continue;
+    if (!target.includes('/') && /\.json$/.test(target)) continue; // bare runtime data files such as tasks.json
+    codeRefCount++;
+    const resolved = resolveReference(file, target);
+    if (!resolved) { report(file, 'Missing code reference (line ' + line + '): `' + text + '`'); continue; }
+    const identifiers = symbol.match(/[A-Za-z_$][\w$]*/g);
+    if (!identifiers || !stat(resolved)?.isFile()) continue;
+    const source = fs.readFileSync(resolved, 'utf8');
+    const has = name => new RegExp(String.raw`(?<![\w$])` + name.replace(/\$/g, String.raw`\$`) + String.raw`(?![\w$])`).test(source);
+    const last = identifiers[identifiers.length - 1];
+    if (!has(last)) report(file, 'Missing code symbol (line ' + line + '): `' + text + '` (no `' + last + '` in ' + relative(resolved) + ')');
+    else if (identifiers.length > 1 && !has(identifiers[0]) ) report(file, 'Missing code symbol (line ' + line + '): `' + text + '` (no `' + identifiers[0] + '` in ' + relative(resolved) + ')');
+  }
+}
+
 const reachable = new Set([...documents.keys()].filter(file => path.dirname(file) === root || relative(file) === 'docs/README.md'));
 const queue = [...reachable];
 for (let i = 0; i < queue.length; i++) {
@@ -101,5 +156,5 @@ if (errors.length) {
   console.error(errors.join('\n'));
   process.exitCode = 1;
 } else {
-  console.log('Documentation check passed: ' + documents.size + ' Markdown documents, ' + linkCount + ' local links');
+  console.log('Documentation check passed: ' + documents.size + ' Markdown documents, ' + linkCount + ' local links, ' + codeRefCount + ' code references');
 }

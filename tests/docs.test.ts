@@ -114,3 +114,43 @@ test('unclosed fences and missing trailing newlines are rejected', () => {
   assert.match(result.output, /Unclosed code fence/);
   assert.match(result.output, /Missing trailing newline/);
 });
+
+const signpostFiles = {
+  'README.md': '# Logox\n[actors](src/actors/AGENTS.md)\n',
+  'src/actors/ensemble.ts': 'export class EnsembleRuntime { dispatch() {} }\n',
+  'src/actors/sub/deep.ts': 'export const deepValue = 1;\n',
+};
+const signpost = (body: string) => ({...signpostFiles, 'src/actors/AGENTS.md': '# Actors\n' + body + '\n'});
+
+test('signpost code references to existing paths and symbols pass', () => {
+  const result = check(signpost('`ensemble.ts` `src/actors/ensemble.ts:EnsembleRuntime.dispatch()` `actors/ensemble.ts:EnsembleRuntime` `sub/` `deep.ts:deepValue`'));
+  assert.equal(result.status, 0, result.output);
+});
+
+test('signpost code references to missing paths are rejected', () => {
+  const result = check(signpost('See `tools/ListActorsTool/` and `missing.ts`.'));
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /Missing code reference \(line 2\): `tools\/ListActorsTool\/`/);
+  assert.match(result.output, /Missing code reference \(line 2\): `missing.ts`/);
+});
+
+test('signpost code references to missing symbols are rejected', () => {
+  const result = check(signpost('`ensemble.ts:canonicalToolMap` and `ensemble.ts:Wrong.dispatch()`'));
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /canonicalToolMap/);
+  assert.match(result.output, /no `Wrong` in src\/actors\/ensemble.ts/);
+});
+
+test('placeholders, globs, runtime paths and bare words are not code references', () => {
+  const result = check(signpost('`src/<dir>/x.ts` `tests/*.test.ts` `.logox/bulletin.md` `~/.logox/a.json` `dist/tests/a.js` `state/sessions/` `npm run check` `Read` `api_key_env` `https://x.io/a.ts` `a.ts|b.ts`'));
+  assert.equal(result.status, 0, result.output);
+});
+
+test('code references inside fenced blocks and non-signpost documents are ignored', () => {
+  const result = check({
+    ...signpost('```\n`missing.ts`\n```'),
+    'docs/README.md': '# Docs\n`missing.ts`\n',
+    'README.md': '# Logox\n[actors](src/actors/AGENTS.md)\n[docs](docs/README.md)\n`nothing/here.ts`\n',
+  });
+  assert.equal(result.status, 0, result.output);
+});

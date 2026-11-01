@@ -1,14 +1,22 @@
 # 角色与协作
 
-角色把职责、提示词、模型选择与独立历史放在一起。Logox 负责协调，Aletheia 调查核验，Techne 实现和测试，Kalon 处理设计与表达。使用方式见[使用指南](../USAGE.md)。
+Logox 里的工作由几个角色分担：Logox 负责协调，Aletheia 调查核验，Techne 实现和测试，Kalon 处理设计与表达。这个模块管角色的定义、任务队列、角色之间的消息，以及取消和失败的处理。使用方式见[使用指南](../USAGE.md)。
 
-## 定义与覆盖
+## 核心概念
 
-内置档案位于 `src/actors/profiles/<id>/`，包含必备 `config.yaml`、`persona.md`、`compression.md`，以及可选 `execution.md`、`collaboration.md`。Persona 保存身份和语气，后两者保存角色私有行动及协作规则，公共规则由系统统一装配。用户和项目可以添加同 ID 的层或自己的角色；项目的 persona/execution/collaboration 追加到用户层，不静默抹去已有正文。
+- **角色档案**：一个角色一个目录 `src/actors/profiles/<id>/`，必备 `config.yaml`（配置）、`persona.md`（身份和语气）、`compression.md`（上下文整理时优先保留什么），可选 `execution.md`、`collaboration.md`（角色私有的行动与协作规则）。公共规则由系统统一拼装，不写进人设。
+- **三层来源**：内置档案是分发母本，用户目录 `~/.logox/actors/` 和项目 `.logox/actors/` 可以添加同 ID 的层或全新的角色。项目的 persona/execution/collaboration 追加在用户层之后，不会抹掉已有正文。
+- **活动（activity）**：角色的一次任务。每个角色有自己的上下文和队列，同一角色的活动串行，不同角色并发；它们共用文件系统，改同一个文件仍需自己协调。
+- **Queue 与 Steer**：Queue 是人工提交、留待之后执行的新任务；Steer 是对某个正在运行的活动插话，绑定到它的活动 ID，不会改投别处。
 
-`src/actors/profiles/` 是分发母本，构建只复制到 dist。安装时或执行 `logox --install-profiles` 时，将缺失档案复制到 `~/.logox/actors/`，不覆盖已有文件；运行时从用户目录读取母本，再加载用户旧目录和项目覆盖。开发命令 `npm run sync:profiles` 会强制替换角色目录，使用前自行备份，不应用于保留自定义内容的日常更新。当前支持必备三文件加可选规则文件的目录档案，也保留带 YAML frontmatter 的单个 Markdown 定义。目录加载仅迁移内容指纹匹配已知旧默认值的 `compression.md`，自定义内容、人设、配置和模型绑定保持不变。
+## 档案的安装与覆盖
 
-例如在项目 `.logox/actors/scout.md` 中写入：
+1. 构建只把 `src/actors/profiles/` 复制到 `dist`，不碰用户目录。
+2. 安装时或执行 `logox --install-profiles`，把缺失的档案复制到 `~/.logox/actors/`，不覆盖已有文件。
+3. 运行时从用户目录读取母本，再叠加项目覆盖。
+4. `npm run sync:profiles` 会强制替换角色目录，只用于开发，使用前请先备份。
+
+升级时唯一会被自动更新的是 `compression.md`，且仅当内容与已知的旧默认版本完全一致；自定义内容、人设、配置和模型绑定都不动。除目录档案外，也支持带 YAML frontmatter 的单个 Markdown 文件，例如项目 `.logox/actors/scout.md`：
 
 ```markdown
 ---
@@ -26,39 +34,55 @@ context:
 Investigate the requested question and report concrete evidence.
 ```
 
-修改后在空闲时执行 `/reload`。角色 ID、颜色、字段、编码和大小都要通过校验；路径不允许符号链接。重载遇到无效定义时保留上一份完整有效快照，不发布半套角色。
+修改后在空闲时执行 `/reload`。ID、颜色、编码和大小都要通过校验，路径不允许符号链接；遇到无效定义时保留上一份完整的有效快照，不会只加载一半。`/actors` 查看角色，`/model <actor>` 设置默认模型，绑定写入用户的 `actor-models.json`，未配置时继承会话模型，详见[任务模型](task-models.md)。
 
-`/actors` 查看角色；`/model <actor>` 设置默认模型。模型绑定会写入用户 `actor-models.json`，并保存项目角色定义；未配置时继承会话模型。覆盖人设时应保留自己需要的字段，不能假设只写一段正文就会自动合并所有配置。任务开始后使用固定的角色与模型状态，详见[任务模型](task-models.md)。
+## 一次派工的流程
 
-## 队列、消息与技能
+1. Logox 判断这是实质工作，调用派工工具，给出简短的标题和一份像对同事交代的任务说明。
+2. 派工先登记一个活动，执行时才读取该角色的历史。
+3. 角色运行期间，其他角色或 Logox 可以用 `SendMessage` 给它发消息，由它在当前活动内处理，不会另开新任务。
+4. 角色结束一轮后，内部的轮次记忆另行保存；正式派工会把完整的任务报告交回 Logox，直接 `@actor` 的请求则是自然回复。
+5. 报告到达时 Logox 如果空闲，会被唤醒一次，一并处理已到达的事件。
 
-每个角色有独立上下文与队列，同角色任务串行，不同角色可并发。派工先登记活动，执行时再读取该角色历史。角色不是独立文件系统沙箱；同时修改同一文件仍需协调。
+Logox 派工后不会阻塞等待自己队列里的后续任务。直接 `@actor` 的对话记录可按需读取，不会整段重复塞进 Logox 的历史。
 
-Logox 可派工、读取角色结果、塑造角色和取消活动。派工不会阻塞等待自己队列里的后续任务；正式派工以完整任务报告交接，内部轮次记忆另行保存，完整流程留在角色账本。直接 `@actor` 使用自然回复，记录可按需读取，不把全部独立对话重复塞入 Logox 历史。
+## 消息与投递
 
-`SendMessage` uses the current-activity inbox by default, distinct from a human Queue submission for a later task. Actor-directed interrupt may stop an active tool. Director-bound direct messages and broadcasts instead use priority coordination events and do not cancel Director. Necessary communication does not grant human authorization.
+`SendMessage` 默认写入接收方当前活动的收件箱，不等同于 Queue。发给某个角色并要求打断时可以中止它正在运行的工具；发给 Logox 的消息和广播走带优先级的协调事件，不会取消 Logox 正在做的事。角色之间的沟通不等于人工授权。
 
-### Director facts and delivery
+`DeliveryQueue` 把事件持久登记，并在模型请求的边界记录“已消费”回执：
 
-`DeliveryQueue` serializes durable admission and boundary receipts. Human steering is activity-bound; task reports and explicit assistance preserve source/root identities and full report text. Human input precedes background wake tasks, while failure/help events precede normal report events. Equal-priority order is FIFO. Available events are consumed together at model boundaries, including finalizer, context-preparation and retry races; ordinary tool activity does not trigger a new Director call.
+- 优先级：人工输入先于后台唤醒；故障和求助先于普通报告；同级先进先出。
+- 同一时刻已到达的事件在模型边界一并消费，普通的工具活动不会触发新一轮 Logox 调用。
+- 正式派工的批次成员各自汇报，不互相等待；一个成员失败会暂停依赖它的排队任务。
+- 人工停止会阻止自动唤醒；只有新的人工任务真正开始，才放出被延后的报告。
+- 重启后待处理事件保留，但不会自动请求模型或重跑工具，语义是“至少一次”，不保证副作用只发生一次。
 
-Formal batch members report independently rather than waiting for their siblings. A failure still pauses dependent queued work and preserves the existing shared-root recovery budget and dispatch depth. Runtime delivery and task acceptance remain separate. Direct human/Actor failures stay local unless assistance is explicitly requested. Human stop gates automatic wake-ups, including a wake already queued behind a closing Director; new human Director work releases deferred reports only when that activity actually starts. Recovery eligibility is checked against the target root, so delivery to an unrelated busy Director or a later sibling report cannot weaken exhaustion. An explicit human continuation grant applies only to its root and acknowledges existing recovery events; subsequent failures still enforce their own limits.
+细节见[角色路标](../../src/actors/AGENTS.md)。
 
-The resident facts projection includes relevant task ancestry, exact lifecycle state, optional self-reported labels and at most three recent tool outcomes per task. It includes at most eight task records and reports the remaining count. No unrelated idle roster is injected. `ListActors` enumerates dynamic roles and exposes detailed or sanitized observations according to the caller. Raw result bodies are not copied into the snapshot, and command success does not imply task verification.
+## Logox 看到的事实
 
-Delivery IDs and append-only journal receipts support normal deduplication and retry after interrupted recipients. Terminal handoffs stage the full prepared event on the producer checkpoint before queue admission; a transient queue write failure can be retried at settlement or restored on startup without rerunning child work or claiming another recovery attempt. A Director recovery handoff records its successor event rather than repeatedly requeueing the predecessor. Queue state is branch-aware and mirrored as `deliveries.json` in the human-readable session tree. Restart preserves pending coordination without automatically restarting providers or tools; activity-bound inputs are cancelled rather than retargeted. This is at-least-once recovery, not exactly-once side effects. No timer, semantic stagnation judge or read limit is added.
-
-技能可由角色目录、frontmatter、角色的 `skills` 列表或显式分配开放。本次任务借阅只影响本次上下文，不修改持久分配。技能提供流程文字，不会绕过工具权限，格式见[资源与扩展](resources-and-extensions.md)。
+Logox 的请求里带有一份常驻事实：相关任务的祖先、确切状态、角色自述的标签，每个任务最近最多三条工具结果，一共最多八个任务，其余只说明还有多少。无关的空闲角色不会注入。`ListActors` 可以查看全部角色，对不同调用者给出详细或脱敏的内容。标签和命令成功都不代表任务已验证。
 
 ## 取消与失败
 
-- 停止 Actor 只取消对应活动及其工具，并暂停依赖批次；独立任务不因此全部停止。
-- 停止 Logox 不联动取消 Actor，晚到报告保存，等待下一次正式输入处理。
-- Technical failures in formal Director work can return to the coordinator; direct human/Actor failures remain local. Recovery shares the root-task budget across executors and restart.
-- 用户停止、认证/额度问题和模型配置错误不会一律触发自动补做。
-- 恢复读取状态与进展，不重放已完成工具；部分成功必须与未完成工作一起报告。
+- 停止某个角色，只取消它的活动和工具，并暂停依赖它的批次；独立任务不受影响。
+- 停止 Logox 不会联动取消角色，晚到的报告会保存，等下一次正式输入处理。
+- 正式派工中的技术故障可以回到 Logox 处理，直接发起的任务失败只留在本地。恢复预算（“根任务恢复预算”）按最初的那个根任务计，在不同执行者和重启之间共享。
+- 用户停止、认证或额度问题、模型配置错误不会自动补做。
+- 恢复只读取状态和进展，不重放已完成的工具；部分成功要连同未完成的工作一起报告。
 
-任务进度工具 `UpdateTaskProgress` 只可选设置当前活动标签 `label` 和说明 `detail`，不再登记阶段计划或维护完成状态。标签只显示在运行中的角色卡片；完成、失败或取消后自动回到任务或报告标题。普通新轮不继承旧标签，只有显式续做继承；历史阶段和步骤记录保留但不再生成正文标题。标签是角色自述，不是验证证据，也不刷新执行恢复预算。内部轮次记忆与完整任务报告分别保存，摘要整理失败不应把已经完成的工作改判成失败。
+`UpdateTaskProgress` 只能设置当前活动的可选标签 `label` 和说明 `detail`，显示在运行中的角色卡片上，结束后恢复为任务标题。标签是角色自述，不是验证证据，也不会刷新恢复预算。
+
+## 技能
+
+技能可以来自角色目录、frontmatter、角色的 `skills` 列表或显式分配；用 `BorrowSkill` 借阅的技能只影响本次任务。技能只提供流程文字，不绕过工具权限，格式见[资源与扩展](resources-and-extensions.md)。
+
+## 边界与限制
+
+- 角色的模型绑定在用户目录，不随项目切换而丢失。
+- 没有语义层面的停滞判断：恢复证据按进展指纹去重，不判断任务价值。
+- 角色间沟通的规范写在 `src/prompts/collaboration/`，人设里不要重复协作工具的用法。
 
 ## 源码入口
 
@@ -67,7 +91,8 @@ Delivery IDs and append-only journal receipts support normal deduplication and r
 - [ensemble.ts](../../src/actors/ensemble.ts)：调度、取消与任务终态。
 - [services.ts](../../src/actors/services.ts)、[collaboration.ts](../../src/actors/collaboration.ts)：派工、消息与技能借阅。
 - [recovery.ts](../../src/actors/recovery.ts)：故障预算、暂停与持久交接。
-- [delivery-queue.ts](../../src/actors/delivery-queue.ts), [delivery.ts](../../src/runtime/delivery.ts): durable delivery contracts, priority and consumption receipts.
-- [facts.ts](../../src/actors/facts.ts): bounded execution observations shared with Director and ListActors.
+- [delivery-queue.ts](../../src/actors/delivery-queue.ts)、[delivery.ts](../../src/runtime/delivery.ts)：持久投递的约定、优先级与消费回执。
+- [facts.ts](../../src/actors/facts.ts)：提供给 Logox 和 `ListActors` 的有界执行观察。
+- [ListActors](../../src/tools/coordination/ListActorsTool/prompt.ts)、[SendMessage](../../src/tools/coordination/SendMessageTool/prompt.ts)、[协作提示词](../../src/prompts/collaboration/index.ts)：协作工具的说明与角色间沟通规范。
 
-测试入口：[角色定义](../../tests/actor-definitions.test.ts)、[协作](../../tests/actor-collaboration.test.ts)、[恢复](../../tests/actor-recovery.test.ts)。
+测试入口：[角色定义](../../tests/actor-definitions.test.ts)、[协作](../../tests/actor-collaboration.test.ts)、[恢复](../../tests/actor-recovery.test.ts)、[Ensemble](../../tests/ensemble.test.ts)、[投递与事实](../../tests/director-facts.test.ts)。

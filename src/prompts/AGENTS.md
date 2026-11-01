@@ -1,37 +1,56 @@
-# Module: Cross-Cutting Prompts & Assembly (`src/prompts/`)
+# Module: Prompts & Assembly (`src/prompts/`)
 
 ## 1. Scope
-- Owns shared execution/collaboration rules and the five-topic system composer.
-- Role-owned persona, execution, collaboration and memory-focus assets live in `src/actors/profiles/`; tool contracts stay beside their tools.
+- **Owns**: The five-topic system composer (`boundary.ts`), shared execution rules (`charter.ts`), shared collaboration and task-report contracts (`collaboration/`), the history-memo instruction (`compaction.ts`), and typed host-message texts (`runtime/`).
+- **Does not own**: Role-owned assets (persona, execution, collaboration and compression Markdown files) in `src/actors/profiles/<id>/` ([`src/actors/AGENTS.md`](../actors/AGENTS.md)); tool descriptions beside each tool ([`src/tools/AGENTS.md`](../tools/AGENTS.md)); history compaction mechanics ([`src/context/AGENTS.md`](../context/AGENTS.md)).
+- **Design rationale**: [docs/modules/context.md](../../docs/modules/context.md) (system prompt and tool disclosure).
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| System topics, ownership or cache order | `boundary.ts:composeActorSystemPrompt()` | `PromptSection.topic`, `owner`, `stability` |
-| Shared execution and memory contract | `charter.ts` | Role `execution.md` and `compression.md` |
-| Shared collaboration or formal report contract | `collaboration/` | Role `collaboration.md`, Director provenance in runtime |
-| Live environment, restrictions or recovery | `runtime/` | `runtime/context-updates.ts`, `application.ts`, `kernel/agent.ts` |
-| Separate history summarization | `compaction.ts` | `context/manager.ts:mergeMemo()` |
+| See topic order, section owner or cache stability | `boundary.ts:composeActorSystemPrompt()` | `boundary.ts:PromptSection` |
+| See how a request assembles its prompt | `../kernel/agent.ts:agentRequestBase()` | `boundary.ts:composeBaseSystemPrompt()` |
+| Change shared execution, tool-use or round-memory text | `charter.ts` | `src/actors/profiles/<id>/execution.md`, `src/actors/profiles/<id>/compression.md` |
+| Change peer messaging etiquette | `collaboration/common.ts` | `collaboration/index.ts:COLLABORATION_COMMON`, `src/actors/profiles/<id>/collaboration.md` |
+| Change the formal task-report contract | `collaboration/reporting.ts:TASK_REPORT_CONTRACT` | `../context/round-memory.ts:TaskDelivery` |
+| Change Director wake-up or recovery wording | `runtime/director.ts` | `runtime/recovery.ts`, `../actors/services.ts` |
+| Change the live environment or restriction text | `runtime/environment.ts` | `../runtime/context-updates.ts`, `../application.ts` |
+| Change history summarization instructions | `compaction.ts:HISTORY_MEMO_INSTRUCTION` | `../context/manager.ts:mergeMemo()` |
 
-## 3. Hard Boundaries
-- Exactly five top-level topics, in order: Persona, Execution Rules, Team Collaboration, Tools & Skills, Current Environment. Nested resource/role headings cannot introduce a sixth topic.
-- Shared rules have one authoritative source; optional role assets append private rules. Persona retains identity and voice, not duplicated workflow inventories.
-- System contains the original environment baseline. Live updates append typed host context to history; changing the system tail still invalidates the prefix before all history.
-- Formal report rules are stable and conditional; actual report delivery depends on Director assignment provenance, not text claiming that provenance.
-- Tools & Skills is a shared discovery location, not a shared loading protocol: native tool contracts and file-read skills remain distinct. Native parameter schemas are not system prose.
-- Prompt text and tool descriptions are English. User/project guideline contents remain user-authored data.
+## 3. Common Changes
+### Change a shared rule
+1. Edit the constant in `charter.ts` (`CORE_EXECUTION_CHARTER`, `TASK_PROGRESS_RULE`, `TOOL_USAGE_RULES`, `ROUND_SUMMARY_CONTRACT`) or `collaboration/common.ts` (one constant per rule, joined in `collaboration/index.ts:COLLABORATION_COMMON`).
+2. Keep each file under 16 KiB and each constant defined exactly once.
+3. If the rule restates a persona line, delete it from `src/actors/profiles/<id>/persona.md`; personas hold identity and voice only.
+4. Prompt text is cache-prefix bytes: any edit invalidates cached prefixes for every actor.
+- Tests: `tests/prompt-architecture.test.ts` (single sources, file size), `tests/prompts.test.ts`.
 
-## 4. Integration Points
-```text
-application.ts → agentRequestBase() → composeBaseSystemPrompt() → composeActorSystemPrompt()
-runtime/context-updates.ts → append-only ledger → provider context encoders
-context/manager.ts → separate compaction request, never a system suffix
-```
+### Add a section inside an existing topic
+1. Add an optional field to `boundary.ts:ActorSystemPromptInput` and `BasePromptOptions`, and pass it through `composeBaseSystemPrompt()`.
+2. Call `add(name, topic, owner, text, stability)` in `composeActorSystemPrompt()` at the position that keeps the cache-stable order (shared before role, role before resource, environment last).
+3. Supply the value from `../kernel/agent.ts:agentRequestBase()`.
+4. Update the expected section-name list in the test.
+- Tests: `tests/prompt-architecture.test.ts` (exact section order), `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
 
-## 5. Verification
-- Build, then run `node --test dist/tests/prompt*.test.js dist/tests/actor-compression-contracts.test.js dist/tests/runtime-context-updates.test.js`.
-- `prompt-disclosure-integration.test.ts` covers shipped/custom roles and native/fallback application assembly.
+### Add a typed host message (live update)
+1. Put the English text constant in `runtime/` (`environment.ts` for request context, `director.ts` for Director wake-ups).
+2. Emit it from the caller (see `../application.ts`) as a typed message through `../runtime/context-updates.ts:createRuntimeContextMessage()`; never rewrite the system prompt.
+- Tests: `tests/runtime-context-updates.test.ts`, `tests/prompts.test.ts`.
 
-## 6. Known Gaps
-- Stable bytes and local cache markers do not prove remote cache hits, savings or signed-thinking compliance; live measurement requires separate authorization.
-- `persona.zh.md` is not a runtime prompt source and has not been synchronized with the English role split.
+## 4. Hard Boundaries
+- **Exactly five topics, in order**: Persona, Execution Rules, Team Collaboration, Tools & Skills, Current Environment. Nested headings are demoted (`nested()`) and cannot add a sixth. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
+- **One source per shared contract**: `ROUND_SUMMARY_CONTRACT`, `TASK_REPORT_CONTRACT` and `HISTORY_MEMO_INSTRUCTION` are each defined once. Enforced by `tests/prompt-architecture.test.ts`.
+- **Personas do not repeat tool names or collaboration workflow**: Enforced by `tests/prompts.test.ts`, `tests/prompt-composition.test.ts`.
+- **Live changes never rewrite the system prompt**: runtime facts are typed history messages; the system tail holds only the original baseline. Enforced by `tests/prompts.test.ts`, `tests/runtime-context-updates.test.ts`.
+- **Report mode follows Director dispatch provenance**, not text claiming it. Enforced by `tests/finish-round.test.ts`.
+- **Tools & Skills is a discovery location only**: native parameter schemas are not system prose, and guidelines never mix into skill discovery. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
+- **Prompt text and tool descriptions are English**; user guideline contents stay user-authored. *Unenforced*.
+
+## 5. Dependencies
+- **Depends on**: nothing; this is a leaf of pure constants and one composer.
+- **Used by**: `src/kernel/agent.ts` (system composition), `src/application.ts` (restriction and handoff text), `src/actors/services.ts` (Director wake texts), `src/context/contracts.ts` (round-summary and memo instructions), `src/kernel/execution-recovery.ts` (recovery wording).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/prompt*.test.js dist/tests/actor-compression-contracts.test.js dist/tests/runtime-context-updates.test.js`
+- Not covered offline: stable bytes and local cache markers do not prove remote cache hits or signed-thinking compliance.
+- `src/actors/profiles/<id>/persona.zh.md` is not a runtime source and is not synchronized with the English role split.

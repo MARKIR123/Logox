@@ -1,53 +1,61 @@
-# Module: Runtime & Continuous Execution (`src/runtime/`)
+# Module: Runtime, Kernel & Session Store (`src/runtime/`, `src/kernel/`, `src/store/`)
 
 ## 1. Scope
-- **Owns**: Continuous execution loop, optional activity labels (`UpdateTaskProgress`), step duration timing, immutable `RuntimeStore` snapshots, and dual-write session transcript contracts.
-- **Does not own**: UI terminal rendering (owned by `src/tui/`), multi-actor queue coordination (owned by `src/actors/`).
+- **Owns**: Immutable `RuntimeStore` snapshots and their Zod contracts (`contracts.ts`), activity labels (`task-progress.ts`), step clocks (`steps.ts`), input provenance and delivery schemas (`provenance.ts`, `delivery.ts`), host context messages (`context-updates.ts`), system event schemas (`system-events.ts`); the `src/kernel/` agent loop, execution recovery and scratchpad paths; the `src/store/` session persistence (journal, sessions, file locks, atomic replace). `kernel/` and `store/` have no signposts of their own and inherit this one.
+- **Does not own**: Terminal rendering ([`src/tui/AGENTS.md`](../tui/AGENTS.md)); actor queues, delivery admission and dispatch ([`src/actors/AGENTS.md`](../actors/AGENTS.md)); context projection and compaction ([`src/context/AGENTS.md`](../context/AGENTS.md)); permission decisions ([`src/permissions/AGENTS.md`](../permissions/AGENTS.md)).
+- **Design rationale**: [docs/modules/system-history.md](../../docs/modules/system-history.md) (system events, presentation, environment changes).
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| Natural while(true) loop convergence or stop conditions | `kernel/agent.ts` | `max_iterations = 0` and `stopReason` |
-| Optional current-activity labels and legacy progress snapshots | `task-progress.ts:TaskProgress` | `contracts.ts:currentTaskProgress()` and `UpdateTaskProgress` |
-| Step timing, thinking duration, or elapsed clocks | `steps.ts:Steps` | `stepSchema` and `animation.step` |
-| Immutable store snapshots or event subscription | `store.ts:RuntimeStore` | `activities.ts` and `messages.ts` |
-| Input origin attribution (human, director, subagent) | `provenance.ts` | `taskOriginSchema` in `contracts.ts` |
-| Queue versus Steer or durable notification metadata | `delivery.ts` | `actors/delivery-queue.ts` and Journal receipt metadata |
-| Host environment, recovery or capability deltas | `context-updates.ts` and `messages.ts` | `context/environment.ts`, `application.ts`, provider encoders |
+| Follow one model round trip, stop conditions or `_FinishRound` closure | `src/kernel/agent.ts:createAgent()` | `src/kernel/execution-recovery.ts:ExecutionRecoveryError`, `src/tools/protocol/_FinishRoundTool/_FinishRoundTool.ts` |
+| Change activity labels (`UpdateTaskProgress`) | `task-progress.ts:TaskProgress` | `contracts.ts:activityProgressSchema`, `contracts.ts:currentTaskProgress()` |
+| Fix step timing, Thinking groups or tool clocks | `steps.ts:Steps` | `contracts.ts:stepSchema`, `steps.ts:stepElapsed()` |
+| Change what a snapshot contains | `contracts.ts:RuntimeSnapshot` | `store.ts:RuntimeStore`, `contracts.ts:immutable()`, `activities.ts:Activities` |
+| Change who an input came from | `provenance.ts:inputKind()` | `contracts.ts:taskOriginSchema`, `provenance.ts:inputMessage()` |
+| Queue vs steer, durable delivery metadata | `delivery.ts:deliverySchema` | `src/actors/delivery-queue.ts:DeliveryQueue`, `src/store/journal.ts:Journal.saveDeliveries()` |
+| Environment or capability deltas for the model | `context-updates.ts:runtimeContextMessageSchema` | `src/kernel/agent.ts` (`appendUpdate`), `src/context/continuity.ts` |
+| Notices, errors, panels outside the model ledger | `system-events.ts:systemEventSchema` | `src/store/system-history.ts:SystemHistory.emit()`, `src/application.ts` (`notice()`, `receipt()`) |
+| Session files, transcripts, task checkpoints | `src/store/journal.ts:Journal` | `Journal.checkpoint()`, `Journal.append()`, `Journal.appendSystem()` |
+| Session list, resume, leases, delete | `src/store/sessions.ts:SessionManager` | `src/store/session-trash.ts:SessionTrash` |
+| Cross-process lock or atomic write | `src/store/file-lock.ts:withFileLock()` | `src/store/replace-file.ts:replaceFile()` |
+| Scratchpad directory or 32 KB output offload | `src/kernel/scratchpad.ts:getScratchpadDir()` | `src/kernel/scratchpad.ts:maybePersistLargeOutput()` |
 
-## 3. Hard Boundaries
-- **Typed Host Context**: `role: 'context'` is host-owned, persisted before request preparation and hidden from conversation UI. Environment/capability baselines and deltas do not become business rounds or human authorization; serializers mark their origin explicitly. Live updates append to history, never an earlier system suffix.
-- **Continuous Natural Execution**:
-  - `max_iterations = 0` (unlimited, while(true) natural convergence).
-  - Tasks terminate strictly when the goal is achieved or when cancelled by user/director. No artificial 50-turn blocking popups.
-- **Dual-Write Session Transcripts**:
-  - Session history maintains a clean dual-write hierarchy under `state/sessions/<sessionId>/`:
-    `director.jsonl`, `tasks.json`, `events.json`, `README.md`, `subagents/<actor>.jsonl`.
-- **Round Closure**: Normal completion delivers text and terminal `_FinishRound` metadata. Successful receipts require no further model request; mixed terminal/business batches execute no side effects. A single metadata-only correction preserves prior text and completed effects; cancellation and failures retain their real outcome.
-- **Activity Visibility**: `UpdateTaskProgress` optionally replaces `{label, detail?}` for the current activity. It does not manage plans, terminal status, acceptance or recovery progress. Legacy milestones stay readable; new steps do not inherit stage metadata. New turns start empty; only explicit resume inherits a label.
-- **Boundary Messages**: Admission is durable before acknowledgment; model history is appended only at consumption. Human steering retains human provenance, while Actor packets remain data. Await pending admission at closure and recheck before provider requests/retries. Delivery receipts are not task acceptance; restart does not replay tools or retarget bound input.
-- **System Event Presentation**: `system-events.ts` keeps optional display metadata separate from event kind and model input. Quiet events remain in snapshots/journals; timeline projections filter only explicit routes. Missing metadata keeps legacy rendering. Restore marks replay only in UI projection, never rewrites old raw events or reopens transient UI. Task-owned errors remain attached to their activity.
-- **Immutable State Snapshots**:
-  - `RuntimeStore` maintains deep-frozen snapshots (`immutable()`). Modifying store arrays in-place is forbidden; state transitions produce new snapshots.
+## 3. Common Changes
+### Add a system event kind or presentation
+1. Add the value to `system-events.ts:systemEventSchema` (`kind`) or `systemPresentationSchema`. `Message.systemEventKind` and `systemPresentation` in `contracts.ts` derive from these types.
+2. Emit it through `src/store/system-history.ts:SystemHistory.emit()` (its `kind` parameter is typed from the schema), usually via `notice()` or `receipt()` in `src/application.ts`.
+3. A new presentation needs a consumer: `src/tui/app.tsx` handles `status` and `welcome`; `isTimelineMessage()` and `src/tui/timeline/stage.ts` decide timeline visibility. Absent metadata must keep legacy rendering.
+- Tests: `tests/system-history-presentation.test.ts`, `tests/system-history.test.ts`.
 
-## 4. Integration Points
-```text
-kernel/agent.ts (runs execution loop)
-  → runtime/task-progress.ts (manages optional activity labels)
-  → runtime/steps.ts (tracks step durations)
-  → runtime/store.ts (publishes immutable snapshots)
-  → store/journal.ts (dual-writes transcripts to disk)
-```
+### Add a host context message kind
+1. Add the kind to `context-updates.ts:runtimeContextMessageSchema`; add a `superRefine` check if it carries required `data`.
+2. Create it only with `createRuntimeContextMessage()` and append it through `appendUpdate` in `src/kernel/agent.ts`. Non-environment kinds must carry `data.activityId` (and a `slot`) to survive restore.
+3. Decide restore behavior in `src/context/continuity.ts` (kinds other than `environment-*` and `capability-change` are kept only for the current activity, keyed by `slot`), then check budget in `src/context/budget.ts` and the encoders in `src/providers/http.ts` and `src/providers/disclosure/`.
+- Tests: `tests/runtime-context-updates.test.ts`, `tests/tool-disclosure-context.test.ts`.
 
-## 5. Verification
-- **Targeted Test Suite**:
-  - `tests/task-progress.test.ts`: Activity labels, legacy compatibility, explicit resume and cancellation races.
-  - `tests/runtime-steps.test.ts`: Duration calculation, group timing, and step state.
-  - `tests/agent.test.ts`: Agent loop convergence and tool dispatch.
-- **Fast Run Command**:
-  ```bash
-  node --test dist/tests/task-progress.test.js dist/tests/progress-lifecycle.test.js dist/tests/runtime-steps.test.js dist/tests/finish-round.test.js
-  ```
+### Add a delivery kind
+1. Add the value to `delivery.ts:deliveryKindSchema` and an entry to `deliveryPriority` (a `Record<DeliveryKind, number>`, so typecheck fails until you do).
+2. Route it in `src/actors/delivery-queue.ts:DeliveryQueue` (only `human_steer` is grouped alone; all other kinds are coordination).
+3. Producers: `src/actors/ensemble.ts` and `src/actors/services.ts`; persistence is automatic through `Journal.saveDeliveries()` (parsed with `deliverySchema`).
+- Tests: `tests/message-delivery.test.ts`, `tests/human-input-delivery.test.ts`.
 
-## 6. Known Gaps
-- Scripted tests exercise closure races and recovery; real model compliance with the finalizer contract still requires authorized live checks.
+## 4. Hard Boundaries
+- **Host context is typed, hidden and never authorization**: `role: 'context'` messages are persisted before request preparation and rendered as application context, never as a human request. Enforced by `tests/runtime-context-updates.test.ts`.
+- **Round closure through `_FinishRound`**: successful receipts need no further request; mixed terminal/business batches execute no side effects; one metadata-only correction preserves prior text; cancellation and failure keep their real outcome. Enforced by `tests/finish-round.test.ts`.
+- **Activity labels are optional and not status**: `UpdateTaskProgress` replaces only `{label, detail?}`; new turns start empty and only explicit resume inherits a label; legacy milestones stay readable and are never rewritten. Enforced by `tests/task-progress.test.ts`, `tests/progress-lifecycle.test.ts`.
+- **Admission is durable before acknowledgment; history is appended only at consumption**: human steering keeps human provenance, actor packets stay data, stale targets are rejected, restart does not replay. Enforced by `tests/message-delivery.test.ts`, `tests/human-input-delivery.test.ts`.
+- **System event metadata is optional and strict**: presentation is separate from kind and model input; only explicit non-timeline routes are hidden; restore marks replay without rewriting raw events. Enforced by `tests/system-history-presentation.test.ts`.
+- **Raw journals are append-only and system events never enter model history**: Enforced by `tests/system-history.test.ts`.
+- **Snapshots are deep-frozen; transitions produce new objects**: partially enforced by `tests/task-progress.test.ts` (frozen progress snapshot); store-wide freezing is *Unenforced*.
+- **Step clocks exclude queue and nested waiting time**: Enforced by `tests/runtime-steps.test.ts`.
+- **`max_iterations = 0` means no iteration cap**: the loop asks to continue only when `options.iterations > 0`. *Unenforced* (tests pass explicit caps).
+- **Session tree layout** `state/sessions/<sessionId>/` with `director.jsonl`, `tasks.json`, `events.json`, `deliveries.json`, `README.md`, `subagents/<actor>.jsonl`: written by `Journal`. *Unenforced*; only the `events.json` mirror is asserted in `tests/system-history-presentation.test.ts`.
+
+## 5. Dependencies
+- **Depends on**: `src/tools/` (`UpdateTaskProgressTool` schema, `_FinishRoundTool`, `src/tools/ui-format.ts` titles), `src/actors/` (`ActorContext` type), `src/context/` (round memory during `Journal.finish()`), `src/prompts/runtime/` (recovery and scratchpad text), `src/providers/` (`Provider` calls from the loop).
+- **Used by**: `src/actors/` (activities, deliveries, journal checkpoints), `src/tui/` (snapshots and system messages), `src/application.ts` (store, journal, sessions), `src/context/` (journal ledger ranges), `src/permissions/` (scratchpad path check).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/task-progress.test.js dist/tests/progress-lifecycle.test.js dist/tests/runtime-steps.test.js dist/tests/finish-round.test.js dist/tests/runtime-context-updates.test.js dist/tests/message-delivery.test.js dist/tests/human-input-delivery.test.js dist/tests/system-history*.test.js dist/tests/agent.test.js dist/tests/session*.test.js dist/tests/state-file-lock.test.js dist/tests/replace-file.test.js`
+- Not covered offline: real model compliance with the finalizer contract; multi-process `.lock-v2` contention under heavy write load; very long continuous loops.

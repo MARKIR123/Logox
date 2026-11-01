@@ -1,55 +1,64 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: Hierarchical configuration cascade, TOML schema validation, `modelSettings()` resolving thinking protocols and level sets, atomic `StateFile<T>` persistence (`~/.logox/model-preferences.json`, legacy `.logox-ts` fallback), model variant grouping, and the theme palette registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
-- **Does not own**: Low-level HTTP transport or network model fetching (owned by `src/providers/`).
+- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider `presets`, saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
+- **Does not own**: HTTP transport, model discovery and wire formats ([`src/providers/AGENTS.md`](../providers/AGENTS.md)); the lock and atomic-replace primitives (`src/store/file-lock.ts`, `src/store/replace-file.ts`, see [`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); picker and settings panels (`src/tui/`); actor colors and models ([`src/actors/AGENTS.md`](../actors/AGENTS.md)).
+- **Design rationale**: [docs/USAGE.md](../../docs/USAGE.md) (load order, keys); [docs/COLORS.md](../../docs/COLORS.md) (theme files and tokens); [docs/modules/task-models.md](../../docs/modules/task-models.md) (model selection).
 
-## 2. Start Here (Task Router)
-| If investigating... | Start at... | Then check... |
+## 2. Start Here
+| If you need to... | Start at | Then check |
 |---|---|---|
-| Configuration cascade, overrides, or TOML errors | `config.ts:loadConfig()` | `config.toml` search paths and `merge()` |
-| Thinking protocol capability or effort levels | `config.ts:modelSettings()` | `thinkingProtocol` and `thinkingLevels` logic |
-| Atomic state file corruption or lock contention | `model-preferences.ts:StateFile` | `withFileLock()` in `src/store/file-lock.ts` |
-| Model grouping or suffix collapsing in picker | `model-grouping.ts` | `groupModelsForProvider()` |
-| Statusbar modules, styles or migration | `statusbar-preferences.ts` | Canonical `~/.logox/statusbar.json`, then legacy `.logox-ts`; palette data is `statusbar-palettes.json` |
-| Theme palette files, `base` chains, or user theme overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/*.json` and `~/.logox/themes/*.json` |
+| Follow the cascade or a TOML error | `config.ts:loadConfig()` | `config.ts:merge()`, `config.example.toml` |
+| Add or change a config key | `config.ts:schema` | `config.example.toml`, `docs/USAGE.md` |
+| Resolve a thinking protocol or effort levels | `config.ts:modelSettings()` | `model-preferences.ts:isOpenAiReasoningModel()`, `model-grouping.ts:detectEffortLevels()` |
+| Provider presets and defaults | `config.ts:presets` | `src/providers/registry.ts:ProviderRegistry.names()` |
+| Saved model/effort selection | `model-preferences.ts:preferenceSchema` | `model-preferences.ts:StateFile`, `src/store/file-lock.ts:withFileLock()` |
+| Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |
+| Statusbar modules, styles, palettes | `statusbar-preferences.ts:StatusbarPreferences` | `statusbar-palettes.json`, `~/.logox/statusbar.json` |
+| Theme files, `base` chains, user overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/logox-dark.json` |
+| First-run onboarding flag | `onboarding-preferences.ts:shouldOfferOnboarding()` | `~/.logox/` onboarding file |
 
-## 3. Hard Boundaries
-- **Hierarchical Configuration Cascade**:
-  - Configuration cascades in order of increasing specificity:
-    `~/.logox/config.toml` -> `~/.logox-ts/config.toml` -> `<ancestors>/.logox/config.toml` -> `<cwd>/.logox/config.toml` -> Environment (`LOGOX__*`) -> CLI flags.
-  - Higher tiers override lower tiers cleanly without leaking obsolete subfields across providers.
-  - Model preference priority is project state, canonical user home, then legacy user home. Injected `resourceOptions.home` must reach both loading and saving; isolated tests never write the process user's preferences.
-- **StateFile Atomic Safety**:
-  - State files use `.tmp` random-UUID writes followed by atomic replace, wrapped inside `withFileLock()`.
-  - Corrupted state files MUST throw to trigger diagnostic notices; never silently swallow corruption with empty defaults.
-- **Theme Palettes Are Data**:
-  - System colors live in `src/config/themes/*.json` (shipped) and `~/.logox/themes/*.json` (user, same name overrides shipped). `logox-dark.json` is the complete baseline; deltas use `base` and `colors` with hex values or `$token` references. `theme-palette.ts` resolves references after inheritance, applies atomically, and increments the render-cache revision. Adding a semantic token requires a baseline data entry and the hardcoded-color/override regressions.
-  - Invalid user theme files are skipped and reported through `themeIssues()`; they never abort startup. An invalid shipped file is a developer error and throws.
-  - Actor colors and card surfaces are NOT theme data: they belong to `~/.logox/actors/<id>/config.yaml` (`color`, `card_closed`, `card_open`).
-- **Thinking Protocol Capabilities**:
-  - `deepseek`: defaults to `['auto', 'off', 'low', 'high', 'max']` (no `medium`).
-  - `anthropic-adaptive`: defaults to `['auto', 'off', 'low', 'medium', 'high', 'max']` on Opus, 5 tiers on Sonnet.
-  - `reasoning-effort`: maps to OpenAI reasoning effort levels.
+## 3. Common Changes
+### Add a config key
+1. Add the field with `.default()` to the matching object in `config.ts:schema` (or a shared schema such as `contextPolicySchema`). Also update the `.default({...})` literal of the enclosing object, which must list the same defaults.
+2. If it is a new string-typed key that must stay a string when set through `LOGOX__*`, add it to the allow-list in `loadConfig()` (numbers and booleans are coerced by regex).
+3. Add it to `config.example.toml` (commented when optional) and describe it in `docs/USAGE.md`.
+4. Read it from the validated `Config` at the call site, for example `src/application.ts`; never read TOML directly.
+- Tests: `tests/config.test.ts` (cascade and rejection cases).
 
-## 4. Integration Points
-```text
-cli.tsx / application.ts (calls loadConfig())
-  → config/config.ts (merges TOML files, environment vars, and state preferences)
-  → config/model-preferences.ts (reads/saves model-preferences.json via StateFile)
-  → providers/registry.ts (receives validated ModelSettings)
-```
+### Add a theme color token
+1. Add the key to `theme-palette.ts:themeColorKeys`. A baseline value is mandatory: add it to `themes/logox-dark.json` (hex, or `$token` for an alias); module load throws on a missing or unknown key.
+2. Use it through `palette.<key>` from `theme-palette.ts`; never write a color literal in UI code.
+3. Other shipped themes inherit via `base`; override in `themes/*.json` only when the baseline does not suit them. List the token in `docs/COLORS.md`.
+- Tests: `tests/theme-colors.test.ts`, `tests/theme-presets.test.ts`, `tests/color-literals.test.ts`.
 
-## 5. Verification
-- **Targeted Test Suite**:
-  - `tests/config.test.ts`: TOML parsing, environment overrides, cascade order.
-  - `tests/model-preferences-usage.test.ts`: Model preferences, thinking effort tiers, and usage ledgers.
-  - `tests/state-file-lock.test.ts`: Atomic write concurrency and corrupted file diagnostics.
-  - `tests/fresh-directory-models.test.ts`: Fresh-project tabs, global selection precedence and injected-home write isolation.
-- **Fast Run Command**:
-  ```bash
-  node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js dist/tests/fresh-directory-models.test.js
-  ```
+### Add a shipped theme
+1. Create `themes/<name>.json` with `colors` and optionally `base` (`logox-dark` is the root).
+2. Update the shipped-theme count assertions and list in `tests/theme-presets.test.ts` (it expects exactly the shipped set). Build copies `themes/*.json` to `dist`.
+- Tests: `tests/theme-presets.test.ts`.
 
-## 6. Known Gaps
-- Isolated configuration tests do not validate live provider availability or recover an unknown previous user selection.
+### Add a persisted preference file
+1. Define a strict Zod schema with a `version` literal and wrap the path in `StateFile` (see `model-preferences.ts:preferenceSchema`). Use `update()` for read-modify-write.
+2. Resolve the path from an injectable `home`, never `homedir()` inside the write path, so tests stay isolated.
+- Tests: `tests/state-file-lock.test.ts`, `tests/fresh-directory-models.test.ts`.
+
+## 4. Hard Boundaries
+- **Cascade order** is `~/.logox/config.toml`, then ancestor `.logox/config.toml` files (far to near, home excluded, each physical file loaded once), then the saved model preference, then `LOGOX__*`, then CLI overrides. Enforced by `tests/config.test.ts`.
+- **Switching provider drops the old endpoint, model and credentials** and keeps only `temperature`, `max_tokens`, `timeout`, `thinking_effort`. Enforced by `tests/config.test.ts`.
+- **Config never stores keys**: `api_key`, prototype keys and credentialed URLs are rejected. Enforced by `tests/config.test.ts`.
+- **Only `~/.logox/` is read**: `.logox-ts` is not a config, preference or theme source. Enforced by `tests/fresh-directory-models.test.ts`.
+- **Model preference lookup**: project `.logox/state/model-preferences.json`, then `~/.logox/model-preferences.json`; injected `home` must reach both load and save. Enforced by `tests/fresh-directory-models.test.ts`.
+- **An unreadable or invalid saved preference never aborts startup**: one diagnostic is emitted and config values win; the file is left untouched. Enforced by `tests/model-preferences-usage.test.ts` (diagnostic and fallback); byte preservation is *Unenforced*.
+- **`StateFile` writes are locked, temp-then-replace, and never overwrite a corrupt file**: Enforced by `tests/state-file-lock.test.ts`.
+- **Colors are data**: system colors live only in theme JSON (`logox-dark.json` is complete and the root); actor colors and card surfaces belong to `~/.logox/actors/<id>/config.yaml`. Enforced by `tests/color-literals.test.ts`, `tests/theme-colors.test.ts`.
+- **Theme application is atomic**: aliases resolve after inheritance; an invalid overlay changes nothing. Enforced by `tests/theme-colors.test.ts`.
+- **Bad user theme files are skipped and reported by `themeIssues()`; a bad shipped file throws**: Enforced by `tests/theme-presets.test.ts` (user side); the shipped-file throw is *Unenforced*.
+- **Thinking levels per protocol** (`deepseek` has no `medium`; `anthropic-adaptive` on Opus adds `max`; others default to five levels). Enforced by `tests/model-preferences-usage.test.ts`; a user `thinking_levels` always wins.
+
+## 5. Dependencies
+- **Depends on**: `src/store/` (`withFileLock()`, `replaceFile()`), `src/extensions/` (MCP and hook schemas embedded in the config schema), `src/runtime/` (`immutable()` for statusbar defaults).
+- **Used by**: `src/cli.tsx` and `src/application.ts` (load and apply), `src/providers/` (`modelSettings()`, `presets`), `src/kernel/agent.ts` (kernel limits), `src/actors/` (task models, recovery), `src/context/` (policy, usage), `src/tui/` (theme palette, statusbar).
+
+## 6. Verification & Gaps
+- Fast run: `node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js dist/tests/fresh-directory-models.test.js dist/tests/theme-*.test.js dist/tests/color-literals.test.js dist/tests/model-grouping.test.js dist/tests/statusbar-modules.test.js dist/tests/onboarding-preferences.test.js`
+- Not covered offline: live provider availability; recovering an unknown previous user selection; true color fidelity of themes in real terminals.
