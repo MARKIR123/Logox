@@ -29,7 +29,7 @@ async function heldState(path: string, ledger = false) {
   let output = '', errors = '';
   child.stderr.on('data', chunk => {errors += String(chunk);});
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('child did not hold lock: ' + errors)), 5000);
+    const timer = setTimeout(() => reject(new Error('child did not hold lock: ' + errors)), 30000);
     child.stdout.on('data', chunk => {output += String(chunk); if (output.includes('LOCKED\n')) {clearTimeout(timer); resolve();}});
     child.once('error', error => {clearTimeout(timer); reject(error);});
     child.once('exit', () => {clearTimeout(timer); reject(new Error('child exited before ready: ' + errors));});

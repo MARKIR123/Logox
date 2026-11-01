@@ -8,6 +8,7 @@ import {loadConfig} from '../src/config/config.js';
 import {UsageLedger} from '../src/context/usage.js';
 import {acquireFileLock} from '../src/store/file-lock.js';
 import {waitForSnapshot} from './runtime-fixture.js';
+import {waitFor} from './wait-for.js';
 import type {Provider, ModelRequest} from '../src/runtime/messages.js';
 
 type Application = Awaited<ReturnType<typeof createApplication>>;
@@ -33,7 +34,7 @@ async function fixture(provider?: Provider) {
       return {message: {role: 'assistant', text: '完成'}, stop: 'complete', usage: {input: 20, output: 5}};
     }},
   });
-  return {app, cwd, requests, log, cleanup: async () => {await app.close(); await rm(cwd, {recursive: true, force: true});}};
+  return {app, cwd, requests, log, cleanup: async () => {await app.close(); await rm(cwd, {recursive: true, force: true, maxRetries: 10, retryDelay: 50});}};
 }
 async function submit(app: Application, text: string) {
   const previous = app.store.getSnapshot().activities.length;
@@ -85,6 +86,8 @@ test('候选失败保留规则；成功切换和回退清会话许可，项目�
     for (const [path, command] of [[join(f.cwd, '.logox', 'permissions.json'), '/permissions add project deny edit *.txt'],
       [join(f.cwd, '.logox', 'state', 'model-preferences.json'), '/model second']] as const) {
       const release = await acquireFileLock(path), saving = f.app.submit(command);
+      // Side-effect-free probe: a missing session fails with 'No session' until the save is in flight.
+      await waitFor(() => f.app.submit('/resume missing').then(() => 'accepted', (error: Error) => error.message), message => !/No session/.test(message), {label: 'app rejects commands while saving ' + command});
       try {await assert.rejects(f.app.submit('/new'), /保存|saving/i); await assert.rejects(f.app.submit('/resume first'), /保存|saving/i);}
       finally {await release(); await saving;}
     }

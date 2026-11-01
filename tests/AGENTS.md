@@ -1,7 +1,7 @@
 # Module: Test Suite (`tests/`)
 
 ## 1. Scope
-- **Owns**: All `tests/*.test.ts(x)` files, the shared helpers `runtime-fixture.ts`, `terminal-screen.ts`, `compression-fixture.ts`, and `fixtures/` (MCP server, permission worker, shipped-skill snapshot).
+- **Owns**: All `tests/*.test.ts(x)` files, the shared helpers `runtime-fixture.ts`, `wait-for.ts`, `terminal-screen.ts`, `compression-fixture.ts`, and `fixtures/` (MCP server, permission worker, shipped-skill snapshot).
 - **Does not own**: Production code under test; each subsystem signpost links back here for its group. Live provider, OAuth, real-terminal and headed-browser checks are manual (see section 6).
 - Tests compile with `tsc` to `dist/tests/`; run the compiled JavaScript there. The build is a prerequisite, not part of the fast run.
 
@@ -46,11 +46,12 @@ Full run: `node --test --test-concurrency=4 dist/tests/*.test.js`. Helper files 
 
 ### Add or reuse a fixture
 1. Put static assets in `tests/fixtures/` and resolve them relative to `import.meta.url`. Current ones: `mcp-server.mjs` (`extensions.test.ts`), `permission-worker.ts` (`permissions.test.ts`, `permission-modes.test.ts`), `browser-screenshot-v1.md` (`hierarchical-skills.test.ts`).
-2. Put shared code helpers beside the tests as non-`.test` files (see `runtime-fixture.ts`). Do not add production-only branches to make a fixture pass.
+2. Put shared code helpers beside the tests as non-`.test` files (see `runtime-fixture.ts`). Do not add production-only branches to make a fixture pass. `wait-for.ts` holds the shared `waitFor(read, predicate, {timeoutMs, label})` poller.
 - Tests: `tests/extensions.test.ts`
 
 ## 4. Hard Boundaries
 - **Tests never touch the real home or credentials**: always pass a temp `home` and `boundary`; use fake or local providers so no API credits are spent. *Unenforced* (convention; a test that forgets reads the real `~/.logox/`).
+- **Async assertions wait on conditions, never fixed sleeps**: UI frames, store state, files and cross-process effects are awaited with `tests/wait-for.ts:waitFor` (or `runtime-fixture.ts:waitForSnapshot`), which polls with a generous deadline and reports the last observed value; only scheduling timeouts may be widened, never semantic assertions. *Unenforced*.
 - **Temp roots are deterministic**: `mkdtemp` under `tmpdir()` with cleanup in `finally`; dynamic ports only. *Unenforced*.
 - **Delivery regressions inspect real artifacts**: assert actual provider requests and persisted receipts, not only queue or card creation (pending admission, finalizer sealing, retry, stale targets, broadcasts after stop). Examples: `tests/message-delivery.test.ts`, `tests/human-input-delivery.test.ts`. As a rule, *Unenforced*.
 - **Raw journals stay append-only**: tests distinguish authoritative records from UI and model projections. Enforced by `tests/round-memory.test.ts`, `tests/session-lifecycle.test.ts`.

@@ -13,11 +13,22 @@ function dead(pid: number): boolean {
   catch (error) {return code(error) === 'ESRCH';}
 }
 async function removeOwner(directory: string, owner: Owner): Promise<void> {
-  try {await unlink(join(directory, marker(owner)));}
-  catch (error) {if (code(error) !== 'ENOENT') throw error;}
+  // Windows can briefly deny unlink while a contender reads the marker; retry
+  // so a live owner never leaves its identity behind.
+  for (let attempt = 0; ; attempt++) {
+    try {await unlink(join(directory, marker(owner))); break;}
+    catch (error) {
+      const failure = code(error);
+      if (failure === 'ENOENT') break;
+      if (!['EPERM', 'EACCES'].includes(failure ?? '') || attempt >= 20) throw error;
+      await delay(10);
+    }
+  }
   // A replacement owner has a different filename and makes rmdir fail safely.
+  // EPERM/EACCES means a contender holds the now-empty directory open; reclaim
+  // removes empty directories later, so release still succeeds.
   try {await rmdir(directory);}
-  catch (error) {if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(code(error) ?? '')) throw error;}
+  catch (error) {if (!['ENOENT', 'ENOTEMPTY', 'EEXIST', 'EPERM', 'EACCES'].includes(code(error) ?? '')) throw error;}
 }
 async function reclaim(directory: string): Promise<void> {
   let entries: string[];

@@ -5,6 +5,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {render} from 'ink';
 import {App} from '../src/tui/app.js';
 import {RuntimeStore} from '../src/runtime/store.js';
+import {waitFor} from './wait-for.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 class Input extends PassThrough {
@@ -68,9 +69,12 @@ test('正式 Ink 阅读：同批滚轮累加，阅读期间流式追加保留位
   const instance = render(<App stage sessionId="s" store={store} onCancel={() => {}} onClose={async () => {}} onSubmit={async () => {}}/>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, incrementalRendering: false,
       maxFps: 60, patchConsole: false, exitOnCtrlC: false});
-  const frame = async (action: () => void) => {
-    output.text = ''; action(); await delay(80); await instance.waitUntilRenderFlush();
-    return output.text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  const ansi = new RegExp(String.fromCharCode(27) + '[[][0-?]*[ -/]*[@-~]', 'g');
+  const strip = (text: string) => text.replace(ansi, '');
+  const frame = async (action: () => void, ready: (text: string) => boolean, label: string) => {
+    output.text = ''; action();
+    await waitFor(() => strip(output.text), ready, {label}); await instance.waitUntilRenderFlush();
+    return strip(output.text);
   };
   try {
     await delay(80); await instance.waitUntilRenderFlush();
@@ -78,18 +82,18 @@ test('正式 Ink 阅读：同批滚轮累加，阅读期间流式追加保留位
     // Status always uses one row, leaving 14 history rows in this terminal.
     const start = total - 14 - 6;
     const expected = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {}, null)[start]!.text;
-    const wheel = await frame(() => input.write('\x1b[<64;5;5M\x1b[<64;5;5M'));
+    const wheel = await frame(() => input.write('\x1b[<64;5;5M\x1b[<64;5;5M'), text => text.includes(expected), 'wheel frame shows expected row');
     assert.ok(wheel.includes(expected), '同一输入批次的两次滚轮各移动三行');
-    const append = await frame(() => store.appendMessage(id, '\nTAIL-STREAM'));
+    const append = await frame(() => store.appendMessage(id, '\nTAIL-STREAM'), text => text.includes(expected), 'frame after streamed append');
     assert.ok(append.includes(expected), '追加后保留阅读位置');
     assert.ok(!append.includes('TAIL-STREAM'), '阅读期间不抢回底部');
-    const down = await frame(() => input.write('\x1b[<65;5;5M'.repeat(20)));
+    const down = await frame(() => input.write('\x1b[<65;5;5M'.repeat(20)), text => text.includes('TAIL-STREAM'), 'frame scrolled to bottom');
     assert.ok(down.includes('TAIL-STREAM'), '滚轮回到底部');
-    const following = await frame(() => store.appendMessage(id, '\nTAIL-FOLLOW'));
+    const following = await frame(() => store.appendMessage(id, '\nTAIL-FOLLOW'), text => text.includes('TAIL-FOLLOW'), 'follow frame shows TAIL-FOLLOW');
     assert.ok(following.includes('TAIL-FOLLOW'), '到底后新分片自动跟随');
-    const page = await frame(() => input.write('\x1b[5~'));
+    const page = await frame(() => input.write('\x1b[5~'), text => text.length > 0 && !text.includes('TAIL-FOLLOW'), 'PageUp frame');
     assert.ok(!page.includes('TAIL-FOLLOW'), 'PageUp 浏览历史');
-    const end = await frame(() => input.write('\x05'));
+    const end = await frame(() => input.write('\x05'), text => text.includes('TAIL-FOLLOW'), 'Ctrl+E frame shows TAIL-FOLLOW');
     assert.ok(end.includes('TAIL-FOLLOW'), 'Ctrl+E 回到底部');
   } finally {
     instance.unmount(); await instance.waitUntilExit(); input.destroy(); output.destroy();

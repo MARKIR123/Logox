@@ -5,6 +5,7 @@ import {commandSuggestions} from '../src/tui/commands/completion.js';
 import {act} from 'react';
 import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
+import {waitFor} from './wait-for.js';
 import {mkdtemp, readFile, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -43,6 +44,7 @@ async function fixture() {
   }); await flush();};
   await flush();
   return {app, output, path, uiPath: join(root, '.logox', 'ui-preferences.json'), key, flush, text: () => output.lines.join('\n'),
+    async until(pattern: RegExp) {await waitFor(async () => {await flush(); return output.lines.join('\n');}, text => pattern.test(text), {label: 'screen matches ' + pattern});},
     get calls() {return calls;}, get networkCalls() {return networkCalls;},
     async open(command: string) {await act(async () => {await app.submit(command);}); await flush();},
     async resize(columns: number, rows: number) {await act(async () => {output.resize(columns, rows);}); await flush();},
@@ -77,11 +79,11 @@ test('settings and read-only config are separately discoverable in catalog, help
 test('typing the discoverable statusbar command opens the live editor without a model request', async () => {
   const f = await fixture();
   try {
-    await f.key('/statusb'); assert.match(f.text(), /\/statusbar/);
+    await f.key('/statusb'); await f.until(/\/statusbar/); assert.match(f.text(), /\/statusbar/);
     await f.key('\t'); await f.key('\r');
-    assert.match(f.text(), /Style: Pipes/); assert.match(f.text(), /Preview/);
+    await f.until(/Style: Pipes/); await f.until(/Preview/); assert.match(f.text(), /Style: Pipes/); assert.match(f.text(), /Preview/);
     assert.doesNotMatch(f.text(), /Style: Native/); assert.equal(f.calls, 0);
-    await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null);
+    await f.key('\x1b'); await waitFor(() => f.app.surfaces.getSnapshot(), snapshot => snapshot === null, {label: 'statusbar surface closed'});
   } finally {await f.close();}
 });
 

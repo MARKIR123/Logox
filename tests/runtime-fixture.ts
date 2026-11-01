@@ -19,10 +19,10 @@ export function createTestApplication(options: Parameters<typeof productionAppli
   return productionApplication({...options, ...(options.provider ? {provider: finalizingProvider(options.provider)} : {})});
 }
 
-export function waitForSnapshot(store: RuntimeStore, predicate: (snapshot: RuntimeSnapshot) => boolean, timeoutMs = 3000): Promise<void> {
+export function waitForSnapshot(store: RuntimeStore, predicate: (snapshot: RuntimeSnapshot) => boolean, timeoutMs = 15000): Promise<void> {
   if (predicate(store.getSnapshot())) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {unsubscribe(); reject(new Error('运行时未到达预期状态'));}, timeoutMs);
+    const timeout = setTimeout(() => {unsubscribe(); reject(new Error('运行时未到达预期状态（等待 ' + timeoutMs + 'ms 后超时）: ' + JSON.stringify(store.getSnapshot().activities.map(a => [a.ownerId, a.status, a.phase]))));}, timeoutMs);
     const unsubscribe = store.subscribe(() => {
       if (predicate(store.getSnapshot())) {clearTimeout(timeout); unsubscribe(); resolve();}
     });

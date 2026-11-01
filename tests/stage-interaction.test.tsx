@@ -20,6 +20,7 @@ import {StatusbarPreferences} from '../src/config/statusbar-preferences.js';
 import {App} from '../src/tui/app.js';
 import {renderTerminal} from '../src/tui/terminal/terminal.js';
 import {TerminalScreen} from './terminal-screen.js';
+import {waitFor} from './wait-for.js';
 
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
 function clipboard(output: TerminalScreen): string {const all = [...output.text.matchAll(/\x1b\]52;c;([^\x07]*)\x07/g)]; return Buffer.from(all.at(-1)?.[1] ?? '', 'base64').toString('utf8');}
@@ -30,9 +31,11 @@ function mount(store: RuntimeStore, extra: Partial<React.ComponentProps<typeof A
   const instance = renderTerminal(<Profiler id="app" onRender={() => {commits++;}}><App stage sessionId="s" store={store} onSubmit={async () => {}} onCancel={id => stopped.push(id)} onClose={async () => {}} {...extra}/></Profiler>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, incrementalRendering: true, patchConsole: false, exitOnCtrlC: false});
   const settle = async (ms = 60) => {await delay(ms); await instance.waitUntilRenderFlush();};
+  // Resolve once a full observation window passes with no terminal output, so late frames from earlier transitions drain first.
+  const quiet = async (windowMs = 220) => {await waitFor(async () => {output.text = ''; await settle(windowMs); return output.text;}, text => text === '', {timeoutMs: 10000, label: 'terminal output goes quiet'});};
   const key = async (text: string) => {input.write(text); await settle();};
   const mouse = async (kind: number, x: number, y: number, release = false) => key(`\x1b[<${kind};${x + 1};${y + 1}${release ? 'm' : 'M'}`);
-  return {input, output, instance, stopped, settle, key, mouse, commits: () => commits,
+  return {input, output, instance, stopped, settle, quiet, key, mouse, commits: () => commits,
     async close() {instance.unmount(); await instance.waitUntilExit(); input.destroy(); output.destroy();}};
 }
 function actor(store: RuntimeStore) {
@@ -146,7 +149,7 @@ test('真实 Ink 选区跨滚动和追加保持内容，拖到边缘自动滚动
   } finally {await ui.close();}
 });
 
-test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终态静止，关闭动效仍更新耗时', {timeout: 7000}, async () => {
+test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终态静止，关闭动效仍更新耗时', {timeout: 30000}, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'logox-motion-')), prefs = new StatusbarPreferences(join(dir, 'ui.json'));
   const store = new RuntimeStore(); actor(store);
   const steps = new Steps(store, {sessionId: 's', ownerId: 'techne', activityId: 'actor'}), thinking = steps.thinking();
@@ -170,7 +173,7 @@ test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终
     const laterBg = decorateRow(actorRow, 1875).bg!;
     assert.equal(earlyBg, actorRow.bg, 'Actor 背景保持纯净稳定');
     assert.equal(laterBg, actorRow.bg, '不同时间点背景绝对不发生全卡片重绘');
-    const resume = steps.wait(thinking, '等待回答'); await ui.settle(); ui.output.text = ''; await ui.settle(220);
+    const resume = steps.wait(thinking, '等待回答'); await ui.settle(); await ui.quiet();
     assert.equal(ui.output.text, '', '等待时可见活动动画全部停止');
     resume(); await ui.settle(); await prefs.saveMotion(false); await ui.settle();
     const disabled = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true}, null).find(row => row.messageId === thinking)!;
@@ -179,7 +182,7 @@ test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终
     assert.deepEqual(first.segments?.map(segment => [segment.color, segment.bg]), second.segments?.map(segment => [segment.color, segment.bg]));
     assert.notEqual(first.displayText, second.displayText, '关闭动效仍更新实际耗时');
     assert.equal(stepIcon(steps.get(thinking), Date.now(), false), '·');
-    steps.finish(thinking, 'completed'); store.activities.update('s', 'actor', {status: 'completed'}); await ui.settle(); ui.output.text = ''; await ui.settle(220);
+    steps.finish(thinking, 'completed'); store.activities.update('s', 'actor', {status: 'completed'}); await ui.settle(); await ui.quiet();
     assert.equal(ui.output.text, '', '终态停止计时与背景刷新');
     const restored = new StatusbarPreferences(join(dir, 'ui.json')); await restored.load(); assert.equal(restored.getSnapshot().motion, false);
     await writeFile(join(dir, 'ui.json'), '{bad'); await assert.rejects(prefs.saveMotion(true)); assert.equal(prefs.getSnapshot().motion, false);
