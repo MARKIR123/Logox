@@ -1,15 +1,16 @@
 import {createHash} from 'node:crypto';
+import {conversationLanguage} from '../prompts/runtime/environment.js';
 import type {ModelMessage} from '../runtime/messages.js';
 import {createRuntimeContextMessage, executionEnvironmentSchema, type ExecutionEnvironment, type RuntimeContextMessage} from '../runtime/context-updates.js';
 export type {ExecutionEnvironment} from '../runtime/context-updates.js';
 
 const labels: Record<keyof ExecutionEnvironment, string> = {
   model: 'Task model', effort: 'Thinking effort', permission: 'Permission and action boundary', directory: 'Working directory',
-  scratchpad: 'Scratchpad directory', rules: 'Rules version', services: 'Service connections',
+  scratchpad: 'Scratchpad directory', rules: 'Rules version', services: 'Service connections', language: 'Conversation language',
 };
 export function formatEnvironment(value: ExecutionEnvironment, keys = Object.keys(labels) as Array<keyof ExecutionEnvironment>): string {
-  return keys.map(key => labels[key] + ': ' +
-    (Array.isArray(value[key]) ? (value[key] as readonly string[]).join(', ') || 'none' : value[key])).join('\n');
+  return keys.filter(key => value[key] !== undefined).map(key => labels[key] + ': ' +
+    (key === 'language' ? conversationLanguage(value.language!) : Array.isArray(value[key]) ? (value[key] as readonly string[]).join(', ') || 'none' : value[key])).join('\n');
 }
 /** Delivery is determined by the effective ledger, never by a preparation attempt. */
 export class EnvironmentState {

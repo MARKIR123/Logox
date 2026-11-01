@@ -15,6 +15,7 @@
 | Change hidden-pair replay | `round-memory.ts:omitInternalToolPairs()` | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundPolicy` |
 | Change role memory focus | `contracts.ts:memoryFocusInstruction()` | `src/actors/profiles/<id>/compression.md` |
 | Keep discovery or environment across compaction | `continuity.ts:retainRuntimeContext()` | `contracts.ts:contextStateSchema`, `../tools/discovery.ts` |
+| Change conversation-language detection or its environment line | `language.ts:detectConversationLanguage()` | `environment.ts:formatEnvironment()`, `../application.ts` (`requestBase`), `../prompts/runtime/environment.ts:conversationLanguage()` |
 | Token estimates and usage anchors | `budget.ts:estimateRequest()` | `usage.ts:UsageLedger` |
 | Restart, rollback or physical line references | `../store/journal.ts:Journal.sourceLines()` | `contracts.ts:RoundRecord` source hashes |
 
@@ -43,6 +44,7 @@
 - **A round is an activity**, not every injected user message. Enforced by `tests/round-memory.test.ts`.
 - **Missing or invalid metadata keeps raw working content** and never invents verification. Enforced by `tests/finish-round.test.ts`, `tests/round-memory.test.ts`.
 - **Discovery pairs and the latest environment snapshot survive compaction**: original successful LoadTools pairs are retained, never fabricated or archived. Enforced by `tests/tool-disclosure-context.test.ts`.
+- **Conversation language comes only from human-authored input** (`role: user`, `inputKind: human`); tool output, actor reports and Director briefings never set it. It rides the environment snapshot (`language`), so changes are `environment-change` deltas and actors share the session value. Enforced by `tests/conversation-language.test.ts`.
 - **Budget estimates**: charge eager and actually expanded contracts once; exclude image base64 on full and incremental paths; an anchor is valid only for the same model, rules, tools and prefix. Enforced by `tests/tool-disclosure-context.test.ts`, `tests/context.test.ts`.
 - **Reports are not indexes**: task reports are separate full deliveries; round memory only stores them separately. Enforced by `tests/round-memory.test.ts`, `tests/finish-round.test.ts`.
 - **One memory contract, one resident focus per role request**: Enforced by `tests/actor-compression-contracts.test.ts`.

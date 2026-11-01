@@ -49,6 +49,7 @@ import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
 import {StatusbarPreferences} from './config/statusbar-preferences.js';
 import {stageStatus} from './application-status.js';
+import {sessionLanguage} from './context/language.js';
 import {EnvironmentState, environmentVersion, formatEnvironment} from './context/environment.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from './runtime/context-updates.js';
 import {planToolCatalog} from './tools/discovery.js';
@@ -354,12 +355,15 @@ export async function createSessionApplication(options: SessionApplicationOption
     const policy = actorServices.skills(context);
     const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
     const history = (await journal.load(context.sessionId, context.ownerId)).map(storedMessage);
+    const language = sessionLanguage(store.getSnapshot().messages
+      .filter(message => message.role === 'user' && message.inputKind === 'human').map(message => message.text));
     const effective = environment.plan({model: model.provider + '/' + model.model,
       effort: thinking.levels.length > 1 ? thinking.effort : 'unsupported', permission: permissions.mode + ' · ' +
         permissionModes[permissions.mode].description +
         '\nExplicit rules (still adjudicated per call): ' + permissionRules,
       directory: cwd, scratchpad,
-      rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort()}, history);
+      rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort(),
+      ...(language ? {language} : {})}, history);
     const extensionRegistrations: ToolRegistration[] = extensions.mcp.definitions().map(definition => ({definition,
       metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
     const base = await agentRequestBase(cwd, context.ownerId, extensionRegistrations,
