@@ -1,7 +1,7 @@
 # Module: Prompts & Assembly (`src/prompts/`)
 
 ## 1. Scope
-- **Owns**: The five-topic system composer (`boundary.ts`), shared execution rules (`charter.ts`), shared collaboration and task-report contracts (`collaboration/`), the history-memo instruction (`compaction.ts`), and typed host-message texts (`runtime/`).
+- **Owns**: The six-topic system composer (`boundary.ts`), shared execution rules (`charter.ts`), shared collaboration and task-report contracts (`collaboration/`), the history-memo instruction (`compaction.ts`), and typed host-message texts (`runtime/`).
 - **Does not own**: Role-owned assets (persona, execution, collaboration and compression Markdown files) in `src/actors/profiles/<id>/` ([`src/actors/AGENTS.md`](../actors/AGENTS.md)); tool descriptions beside each tool ([`src/tools/AGENTS.md`](../tools/AGENTS.md)); history compaction mechanics ([`src/context/AGENTS.md`](../context/AGENTS.md)).
 - **Design rationale**: [docs/modules/context.md](../../docs/modules/context.md) (system prompt and tool disclosure).
 
@@ -28,7 +28,7 @@
 
 ### Add a section inside an existing topic
 1. Add an optional field to `boundary.ts:ActorSystemPromptInput` and `BasePromptOptions`, and pass it through `composeBaseSystemPrompt()`.
-2. Call `add(name, topic, owner, text, stability)` in `composeActorSystemPrompt()` at the position that keeps the cache-stable order (shared before role, role before resource, environment last).
+2. Call `add(name, topic, owner, text, stability)` in `composeActorSystemPrompt()` at the position that keeps the cache-stable order (fixed text above `boundary.ts:PROMPT_CACHE_BOUNDARY`, what can change below it, environment last).
 3. Supply the value from `../kernel/agent.ts:agentRequestBase()`.
 4. Update the expected section-name list in the test.
 - Tests: `tests/prompt-architecture.test.ts` (exact section order), `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
@@ -39,7 +39,7 @@
 - Tests: `tests/runtime-context-updates.test.ts`, `tests/prompts.test.ts`.
 
 ## 4. Hard Boundaries
-- **Exactly five topics, in order**: Persona, Execution Rules, Team Collaboration, Tools & Skills, Current Environment. Nested headings are demoted (`nested()`) and cannot add a sixth. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
+- **Exactly six topics, ordered by how likely they are to change**: Persona, Execution Rules, Team Collaboration, then `boundary.ts:PROMPT_CACHE_BOUNDARY`, then Project Guidelines, Tools & Skills, Current Environment. Everything above the boundary is fixed text. Nested headings are demoted (`nested()`) and cannot add a seventh. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
 - **Companion layer**: `collaboration/index.ts:collaborationFor(ownerId)` returns team rules for every actor and appends `COMPANION_COLLABORATION` for every actor except `logox` (crafted and dynamic actors are companions). The composer receives `ownerId` from `../kernel/agent.ts:agentRequestBase()`. Enforced by `tests/prompts.test.ts`.
 - **One source per shared contract**: `ROUND_SUMMARY_CONTRACT`, `TASK_REPORT_CONTRACT` and `HISTORY_MEMO_INSTRUCTION` are each defined once. Enforced by `tests/prompt-architecture.test.ts`.
 - **Personas do not repeat tool names or collaboration workflow**: Enforced by `tests/prompts.test.ts`, `tests/prompt-composition.test.ts`.
@@ -56,4 +56,4 @@
 - Fast run: `node --test dist/tests/prompt*.test.js dist/tests/actor-compression-contracts.test.js dist/tests/runtime-context-updates.test.js`
 - Not covered offline: stable bytes and local cache markers do not prove remote cache hits or signed-thinking compliance.
 - `src/actors/profiles/<id>/persona.zh.md` is not a runtime source and is not synchronized with the English role split.
-- Section names are `persona`, `shared_execution`, `round_memory`, `memory_focus`, `guidelines`, `collaboration`, `role_collaboration`, `tools`, `skills`, `environment`.
+- Section names, in order: `persona`, `shared_execution`, `round_memory`, `memory_focus`, `role_execution`, `collaboration`, `role_collaboration`, `guidelines`, `tools`, `skills`, `environment`. Shared rules come before the role rules that build on them, and the memory focus follows the memory contract it refines.

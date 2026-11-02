@@ -21,7 +21,7 @@ test('提示词工程：基础系统提示词按静态切片分层组装，核�
   // 1. 结构化切片数组正确导出
   assert.ok(result.sections.length >= 4);
   const names = result.sections.map(s => s.name);
-  assert.deepEqual(names, ['persona', 'shared_execution', 'round_memory', 'guidelines', 'collaboration', 'environment']);
+  assert.deepEqual(names, ['persona', 'shared_execution', 'round_memory', 'collaboration', 'guidelines', 'environment']);
 
   // 2. 文本拼接严格遵循前缀顺序
   assert.ok(result.system.includes('与其思考，不如实践'));

@@ -8,7 +8,8 @@ export const executionEnvironmentSchema = z.strictObject({
 export type ExecutionEnvironment = z.infer<typeof executionEnvironmentSchema>;
 export const runtimeContextMessageSchema = z.strictObject({
   role: z.literal('context'),
-  kind: z.enum(['environment-baseline', 'environment-change', 'capability-change', 'task-state', 'recovery', 'finalizer', 'ledger']),
+  // `snapshot` describes this moment only: it is sent last on one request and never stored in the ledger.
+  kind: z.enum(['environment-baseline', 'environment-change', 'capability-change', 'task-state', 'recovery', 'finalizer', 'ledger', 'snapshot']),
   text: z.string(),
   data: z.record(z.string(), z.unknown()).optional(),
 }).superRefine((message, context) => {

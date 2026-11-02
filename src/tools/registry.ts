@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {ToolDefinition, ToolDiscoveryProtocol} from '../runtime/messages.js';
 import {toolMetadataSchema, userToolConfigSchema, isToolAllowedForActor,
-  type ToolMetadata, type ToolMetadataInput, type ToolTerminalVisibility, type ToolPromptVisibility, type UserToolConfig} from './metadata.js';
+  type ToolMetadata, type ToolMetadataInput, type ToolTerminalVisibility, type UserToolConfig} from './metadata.js';
 import {canonicalToolName} from './types.js';
 import {builtinToolRegistrations, type ToolRegistration, type ResolvedTool} from './catalog.js';
 import {readToolCategories} from './taxonomy.js';
@@ -35,10 +35,9 @@ export class ToolRegistry {
     if (!base) return undefined;
     const metadata = toolMetadataSchema.parse({...base, ...this.userOverrides.get(name)});
     // Terminal round closure is an internal protocol, never a user-disableable business capability.
-    return name === '_FinishRound' ? {...metadata, roles: 'all', loading: 'eager', promptVisibility: 'explicit', terminalVisibility: 'silent'} : metadata;
+    return name === '_FinishRound' ? {...metadata, roles: 'all', loading: 'eager', terminalVisibility: 'silent'} : metadata;
   }
   getTerminalVisibility(name: string): ToolTerminalVisibility {return this.getMetadata(name)?.terminalVisibility ?? 'card';}
-  getPromptVisibility(name: string): ToolPromptVisibility {return this.getMetadata(name)?.promptVisibility ?? 'always';}
   resolveForActor(actorId: string, extras: readonly ToolRegistration[] = []): readonly ResolvedTool[] {
     const entries = new Map(this.registrations);
     for (const item of extras) {
@@ -53,7 +52,7 @@ export class ToolRegistry {
       entries.set(name, {metadata, definition});
     }
     return [...entries.values()].map(item => ({...item, metadata: this.getMetadata(item.metadata.name) ?? item.metadata}))
-      .filter(item => item.metadata.promptVisibility !== 'hidden' && isToolAllowedForActor(item.metadata.roles, actorId))
+      .filter(item => isToolAllowedForActor(item.metadata.roles, actorId))
       .sort((a, b) => a.metadata.category.localeCompare(b.metadata.category) || a.definition.name.localeCompare(b.definition.name));
   }
   getToolsForActor(actorId: string): readonly ToolDefinition[] {return this.resolveForActor(actorId).map(item => item.definition);}
@@ -90,7 +89,7 @@ export class ToolRegistry {
           const parsed = userToolConfigSchema.safeParse(config);
           if (parsed.success) {
             const name = this.canonical(key);
-            if (name === '_FinishRound' && (parsed.data.loading === 'deferred' || parsed.data.promptVisibility === 'hidden' ||
+            if (name === '_FinishRound' && (parsed.data.loading === 'deferred' ||
               parsed.data.roles !== undefined && parsed.data.roles !== 'all')) throw new Error('The mandatory _FinishRound tool cannot be disabled or deferred.');
             overrides.set(name, {...overrides.get(name), ...parsed.data});
           }

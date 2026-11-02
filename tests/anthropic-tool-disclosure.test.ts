@@ -18,7 +18,7 @@ test('loading cannot authorize a deferred write in its producing batch', async (
     const calls = bodies.length === 1 ? [
       {type: 'tool_use', id: 'load', name: 'LoadTools', input: {names: ['Write']}},
       {type: 'tool_use', id: 'write', name: 'Write', input: {file_path: 'never.txt', content: 'must not write'}},
-    ] : [{type: 'text', text: 'No write was executed.'}, {type: 'tool_use', id: 'done', name: '_FinishRound', input: {title: 'Protected write', verification: null, carry_forward: []}}];
+    ] : [{type: 'text', text: 'No write was executed.'}, {type: 'tool_use', id: 'done', name: '_FinishRound', input: {title: 'Protected write', outcome: 'Round outcome.', verification: null, carry_forward: []}}];
     return new Response([...calls.map((content_block, index) => ({type: 'content_block_start', index, content_block})),
       {type: 'message_delta', delta: {stop_reason: 'tool_use'}}, {type: 'message_stop'}].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
   });
@@ -41,7 +41,7 @@ test('native Anthropic loading carries actual references while eager tools and s
     bodies.push(JSON.parse(String(init?.body)));
     const loading = bodies.length === 1;
     const call = {type: 'tool_use', id: loading ? 'load-real' : 'finish-real', name: loading ? 'LoadTools' : '_FinishRound',
-      input: loading ? {names: ['_GitStatus']} : {title: 'Loaded tool', verification: null, carry_forward: []}};
+      input: loading ? {names: ['_GitStatus']} : {title: 'Loaded tool', outcome: 'Round outcome.', verification: null, carry_forward: []}};
     const frames = [{type: 'message_start', message: {usage: {input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 30}}},
       ...(!loading ? [{type: 'content_block_start', index: 0, content_block: {type: 'text', text: 'Loaded, without running Git.'}}] : []),
       {type: 'content_block_start', index: 1, content_block: call},

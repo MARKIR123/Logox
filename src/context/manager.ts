@@ -6,6 +6,7 @@ import {inputMessage} from '../runtime/provenance.js';
 import {Journal, storedMessage, type HistoryEntry} from '../store/journal.js';
 import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
+import {historyForkInstruction, PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
 import {formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
@@ -27,6 +28,14 @@ export interface ContextOptions {
   beforeCompact?(identity: Identity, tokens: number): void;
 }
 export class ContextBudgetError extends Error {}
+/** Upper bound for a model-written overview or progress summary. */
+const SUMMARY_TOKENS = 4000;
+interface Fork {readonly base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>; readonly prefix: readonly ModelMessage[]; readonly model: ModelCapacity; readonly safety: number}
+function withoutThinking(value: ModelMessage): ModelMessage {
+  if (value.role !== 'assistant' || !value.reasoning && !value.signature) return value;
+  const {reasoning: _reasoning, signature: _signature, ...rest} = value;
+  return rest;
+}
 function message(entry: HistoryEntry): ModelMessage {
   if (entry.role === 'user') return inputMessage(entry.text, entry);
   return storedMessage(entry);
@@ -115,7 +124,8 @@ export class ContextManager {
       .some(round => !original.folded.includes(round.start) && (!original.memo || round.end > original.memo.end));
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
     const projected = (candidate: ContextState, end = entries.length): ModelMessage[] => {
-      const raw = entries.map(message);
+      // After a compaction, earlier thinking is never sent again: its signature bound the history that was replaced.
+      const raw = entries.map((entry, index) => candidate.thinkingCut !== undefined && index < candidate.thinkingCut ? withoutThinking(message(entry)) : message(entry));
       for (const archive of candidate.archives) {
         const result = raw[archive.resultIndex], assistant = raw[archive.callIndex];
         if (result?.role !== 'tool' || assistant?.role !== 'assistant') throw new Error('Archive boundaries do not match messages');
@@ -168,6 +178,7 @@ export class ContextManager {
           ordinal: round.record?.ordinal ?? (activityOrdinal || rounds.indexOf(round) + 1),
           title: memory?.source === 'model' ? memory.title : summary.title,
           status: round.record?.status ?? 'failed', verification: memory?.verification ?? null,
+          outcome: memory?.source === 'model' ? memory.outcome : undefined,
           carryForward: memory?.source === 'model' ? memory.carryForward : ['Legacy record; inspect evidence before relying on its claims.', summary.report],
           start: lines.start, end: lines.end,
         })});
@@ -188,7 +199,8 @@ export class ContextManager {
     if (force || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
       try {
-        const candidate = {...structuredClone(state), ...contextSnapshot(sourceMessages)};
+        // A compacted view never sends thinking from before this point, including in the request built right now.
+        const candidate: ContextState = {...structuredClone(state), ...contextSnapshot(sourceMessages), thinkingCut: entries.length};
         const archiveTools = async (all: boolean) => {
           for (const pair of pairs) {
             signal.throwIfAborted();
@@ -209,6 +221,23 @@ export class ContextManager {
           for (const round of closed) if (!candidate.folded.includes(round.start)) candidate.folded.push(round.start);
           await archiveTools(true);
         }
+        // Summaries are asked at the end of the real conversation so they reuse its cached prefix.
+        const fork: Fork = {base, prefix: requestFor(original).messages, model, safety: marks.safety};
+        const folded = estimateRequest(requestFor(candidate));
+        // The newest folded rounds stay as index lines with their ledger ranges; only older history becomes an overview,
+        // unless the lines themselves are what keeps the request over the high watermark.
+        const keepLines = closed.length > (policy.keep_index_lines ?? 20) ? policy.keep_index_lines ?? 20 : folded >= marks.high ? 0 : undefined;
+        if (folded > marks.low && keepLines !== undefined && closed.length > keepLines) {
+          const last = closed.at(-(keepLines + 1))!;
+          if (!candidate.memo || last.end > candidate.memo.end) {
+            const ordinal = last.record?.ordinal ?? rounds.indexOf(last) + 1;
+            const memo = await this.mergeMemo(identity, projected(candidate, last.end), signal, {...fork, instruction: historyForkInstruction(ordinal)});
+            if (memo) {
+              candidate.memo = {end: last.end, text: memo};
+              if (candidate.working && candidate.working.start < last.end) delete candidate.working;
+            }
+          }
+        }
         if (estimateRequest(requestFor(candidate)) >= marks.high) {
           const current = rounds.findLast(round => !round.closed);
           if (current) {
@@ -216,23 +245,14 @@ export class ContextManager {
             const end = lastBatch ?? entries.findLastIndex(entry => entry.role === 'assistant');
             if (end > current.start + 1) {
               const start = current.start + 1;
-              const progress = summarizeRound(entries.slice(current.start, end).map(message), 'cancelled');
-              candidate.working = {start, end, text: progress.report};
+              const written = await this.forkSummary(identity, {...fork, instruction: PROGRESS_FORK_INSTRUCTION}, signal);
+              candidate.working = {start, end, text: written ?? summarizeRound(entries.slice(current.start, end).map(message), 'cancelled').report};
             }
-          }
-        }
-        if (estimateRequest(requestFor(candidate)) >= marks.high && closed.length) {
-          const end = closed.at(-1)!.end;
-          // Only closed rounds are covered; working progress and its goal stay outside.
-          const memo = await this.mergeMemo(identity, projected(candidate, end), signal);
-          if (memo) {
-            candidate.memo = {end, text: memo};
-            if (candidate.working && candidate.working.start < end) delete candidate.working;
           }
         }
         const candidateRequest = requestFor(candidate);
         if (estimateRequest(candidateRequest) < estimateRequest(requestFor(original)) ||
-          force && estimateRequest(candidateRequest) < marks.high && JSON.stringify(candidate) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages)})) {
+          force && estimateRequest(candidateRequest) < marks.high && JSON.stringify({...candidate, thinkingCut: undefined}) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages), thinkingCut: undefined})) {
           candidate.sourceLength = entries.length; candidate.sourceHash = digest(entries);
           signal.throwIfAborted();
           await journal.saveContext(candidate);
@@ -254,9 +274,30 @@ export class ContextManager {
     if (input >= marks.high || output < 1) throw new ContextBudgetError('[Context] Input still exceeds the safe budget; no request sent. Retry /compact, configure the actual model window, or reduce input. Raw history and completed effects are retained.');
     return {request: {...request, maxTokens: output}, model, compacted};
   }
-  private async mergeMemo(identity: Identity, messages: readonly ModelMessage[], signal: AbortSignal): Promise<string | undefined> {
+  /** Asks the task's own model to summarize at the end of the real conversation; undefined when that cannot be done safely. */
+  private async forkSummary(identity: Identity, fork: Fork & {instruction: string}, signal: AbortSignal): Promise<string | undefined> {
     const {model, provider} = this.options.summarizer(identity);
-    this.options.report?.(identity, '[Context] Summarizing closed history that still exceeds the high watermark.');
+    if (model.identity !== fork.model.identity) return undefined; // another model has no cached prefix to reuse
+    const request: ModelRequest = {...fork.base, messages: [...fork.prefix, {role: 'user', text: fork.instruction}]};
+    const room = Math.floor(Math.min(SUMMARY_TOKENS + 512, model.maxOutput ?? Infinity, model.window - estimateRequest(request) - fork.safety));
+    if (room < 1024) return undefined;
+    try {
+      const turn = await provider.respond({...request, maxTokens: room}, () => {}, signal);
+      this.meter(identity).chargeUsage(turn.usage);
+      const text = turn.message.text.trim();
+      if (turn.stop !== 'complete' || turn.message.toolCalls?.length || !text || estimateText(text) > SUMMARY_TOKENS) return undefined;
+      return text;
+    } catch (error) {
+      signal.throwIfAborted();
+      this.options.report?.(identity, '[Context] Summary from the conversation failed; using the fallback: ' + (error instanceof Error ? error.message : String(error)));
+      return undefined;
+    }
+  }
+  private async mergeMemo(identity: Identity, messages: readonly ModelMessage[], signal: AbortSignal, fork?: Fork & {instruction: string}): Promise<string | undefined> {
+    this.options.report?.(identity, '[Context] Summarizing older closed history into an overview.');
+    const forked = fork ? await this.forkSummary(identity, fork, signal) : undefined;
+    if (forked) return forked;
+    const {model, provider} = this.options.summarizer(identity);
     const system = HISTORY_MEMO_INSTRUCTION + memoryFocusInstruction(this.summaryContract(identity));
     const text = messages.map(value => value.role + ': ' + JSON.stringify(value)).join('\n');
     const limit = Math.max(1, Math.floor((model.window - estimateText(system) - 128) / 3));
@@ -277,10 +318,10 @@ export class ContextManager {
         tools: [], thinking: false};
       const input = estimateRequest(request), available = model.window - input - 128;
       if (available <= 0) throw new Error('Summary input exceeds the model window');
-      const turn = await provider.respond({...request, maxTokens: Math.floor(Math.min(512, model.maxOutput ?? Infinity, available))}, () => {}, signal);
+      const turn = await provider.respond({...request, maxTokens: Math.floor(Math.min(SUMMARY_TOKENS + 512, model.maxOutput ?? Infinity, available))}, () => {}, signal);
       this.meter(identity).chargeUsage(turn.usage);
       const next = turn.message.text.trim();
-      if (turn.stop !== 'complete' || turn.message.toolCalls?.length || !next || next.length > 2000 ||
+      if (turn.stop !== 'complete' || turn.message.toolCalls?.length || !next || estimateText(next) > SUMMARY_TOKENS ||
         estimateText(next) >= estimateText(memo + part)) throw new Error('Model summary is invalid or does not reduce history');
       memo = next;
     }

@@ -1,7 +1,7 @@
 # Module: Providers & Model Dispatch (`src/providers/`)
 
 ## 1. Scope
-- **Owns**: `ProviderRegistry` (selection, per-request auth, capacity), `createProvider()` wire encoding and streaming for OpenAI Chat, OpenAI Responses and Anthropic Messages, the Undici transport with proxy handling, `ModelPool` discovery cache, `AuthStorage` / `CustomProviderStorage`, OpenAI OAuth, native tool-disclosure codecs (`disclosure/`), and network error formatting.
+- **Owns**: `ProviderRegistry` (selection, per-request auth, capacity), `createProvider()` wire encoding and streaming for OpenAI Chat, OpenAI Responses and Anthropic Messages, the Undici transport with proxy handling, `ModelPool` discovery cache, the per-endpoint AIMD request gate (`request-gate.ts`), `AuthStorage` / `CustomProviderStorage`, OpenAI OAuth, native tool-disclosure codecs (`disclosure/`), and network error formatting.
 - **Does not own**: Provider presets, `modelSettings()` and thinking-protocol inference (`src/config/config.ts`, see [`src/config/AGENTS.md`](../config/AGENTS.md)); retry budgeting and recovery policy (`src/kernel/agent.ts`, `src/actors/recovery.ts`); the model picker and login panels (`src/tui/`, `src/application.ts`); tool metadata and the deferred directory ([`src/tools/AGENTS.md`](../tools/AGENTS.md)).
 - **Design rationale**: [docs/modules/task-models.md](../../docs/modules/task-models.md) (model selection and switching); [docs/USAGE.md](../../docs/USAGE.md) (providers, network, tool discovery).
 
@@ -10,6 +10,7 @@
 |---|---|---|
 | Change what is sent to a model or how a stream is parsed | `http.ts:createProvider()` | `http.ts:openaiMessages()`, `http.ts:anthropicMessages()`, `http.ts:responsesInput()` |
 | Classify an HTTP or transport failure | `http.ts:providerFailure()` | `http.ts:isProviderInterruption()`, `http.ts:ProviderError` |
+| Limit concurrent requests or slow down on HTTP 429/529 | `request-gate.ts:RequestGate` | `registry.ts:ProviderRegistry.gateFor()`, `http.ts:isRateLimitFailure()`, `http.ts:parseRetryAfter()` |
 | Fix connection drops, proxy or TLS | `transport.ts:createHttpTransport()` | `error-format.ts:formatNetworkError()` |
 | Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-capacities.ts:modelCapacities` |
 | Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()`, `auth.ts:AuthStorage` |
@@ -50,6 +51,7 @@
 - **Usage accounting differs per vendor**: Anthropic total input = uncached + cache-read + cache-created; OpenAI `input_tokens` already includes cached input. Enforced by `tests/anthropic-tool-disclosure.test.ts`, `tests/model-preferences-usage.test.ts`. Fixtures do not prove remote cache hits.
 - **Network failures never surface raw `fetch failed`**: causes are unwrapped to a public code (`ECONNREFUSED`, timeout, DNS) and request data is not echoed. Enforced by `tests/error-format.test.ts`, `tests/providers.test.ts`.
 - **Credentials are read at request time and never stored in selection data**: switching provider clears the old endpoint and auth. Enforced by `tests/providers.test.ts`, `tests/provider-lifecycle.test.ts`.
+- **Every model `respond` goes through one `RequestGate` per normalized base URL** (shared with `candidate()` registries; max 16 in flight, halved on 429/529/`rate_limit_error`/`overloaded_error`, never retries, keyed without credentials). `check()` and `/models` listing bypass it. Rate-limit errors carry `diagnostic.status` and optional `diagnostic.retryAfterMs`. Enforced by `tests/provider-request-gate.test.ts`.
 - **Local proxy auto-probe**: when the configured proxy port refuses, `transport.ts` probes `7898, 7890, 7897, 10808, 10809` on `127.0.0.1`. *Unenforced*.
 - **The transport never modifies global fetch, dispatcher or environment**: *Unenforced*.
 

@@ -52,8 +52,8 @@ test('base prompt exposes a fixed static zone order and runtime sections stay dy
     rulesContext: 'project rules', scratchpadDir: '/tmp/scratchpad', includeSummary: true,
   });
   assert.deepEqual(result.sections.map(section => section.name),
-    ['persona', 'shared_execution', 'round_memory', 'memory_focus', 'guidelines', 'collaboration', 'environment']);
-  assert.ok(result.sections.every(section => section.zone === 'static'));
+    ['persona', 'shared_execution', 'round_memory', 'memory_focus', 'collaboration', 'guidelines', 'environment']);
+  assert.deepEqual(result.sections.map(section => section.zone), ['static', 'static', 'static', 'static', 'static', 'dynamic', 'dynamic']);
   const summary = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'logox', builtinPrompt: 'Logox persona', includeSummary: false});
   assert.ok(!summary.system.includes('Round memory contract'));
 });
@@ -88,4 +88,11 @@ test('config.yaml drives built-in actor parameters in the user directory', async
   } finally {
     await rm(home, {recursive: true, force: true});
   }
+});
+
+test('fixed rules run general to specific: shared rules, the memory focus beside its contract, then role rules', () => {
+  const {sections} = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'techne', builtinPrompt: 'Techne persona',
+    execution: 'Role habits', collaboration: 'Role collaboration', memoryFocus: 'Remember the plan', rulesContext: 'Project rules'});
+  assert.deepEqual(sections.map(section => section.name),
+    ['persona', 'shared_execution', 'round_memory', 'memory_focus', 'role_execution', 'collaboration', 'role_collaboration', 'guidelines', 'environment']);
 });

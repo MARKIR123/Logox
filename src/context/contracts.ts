@@ -24,6 +24,8 @@ export const contextStateSchema = z.strictObject({
   archives: z.array(z.strictObject({callIndex: z.number().int().nonnegative(), resultIndex: z.number().int().nonnegative(), hash: z.string().regex(/^[a-f0-9]{64}$/)})),
   memo: z.strictObject({end: z.number().int().positive(), text: z.string().min(1)}).optional(),
   working: z.strictObject({start: z.number().int().nonnegative(), end: z.number().int().positive(), text: z.string().min(1)}).optional(),
+  /** Ledger length when this view was compacted: thinking produced before it is no longer sent, because its signature bound the history that compaction replaced. */
+  thinkingCut: z.number().int().nonnegative().optional(),
 });
 export type ContextState = z.infer<typeof contextStateSchema>;
 export interface ModelCapacity {

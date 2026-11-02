@@ -33,3 +33,10 @@ activity_verbs:
   list: ["Skimming/Skimmed", "Glancing over/Glanced over", "Browsing/Browsed"]
   browse: ["Observing/Observed", "Admiring/Admired", "Appraising/Appraised", "Gazing at/Gazed at", "Beholding/Beheld"]
   run: ["Staging/Staged", "Rehearsing/Rehearsed", "Performing/Performed", "Conjuring/Conjured", "Running/Ran"]
+automa:
+  name: atelier hands
+  default_preset: scout
+  model: haiku
+  presets:
+    scout: {tools: read}
+    variant: {tools: write, model: sonnet}

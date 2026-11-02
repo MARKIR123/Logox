@@ -16,7 +16,7 @@ import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import {createProvider} from '../src/providers/http.js';
 
-const metadata = {title: 'Delivered result', verification: null, carry_forward: []};
+const metadata = {title: 'Delivered result', outcome: 'Round outcome.', verification: null, carry_forward: []};
 const finish = (id = 'finish', args: unknown = metadata): ToolCall => ({id, name: '_FinishRound', arguments: typeof args === 'string' ? args : JSON.stringify(args)});
 const turn = (text: string, calls?: ToolCall[], stop: ModelTurn['stop'] = calls ? 'tools' : 'complete'): ModelTurn => ({message: {role: 'assistant', text, ...(calls ? {toolCalls: calls} : {})}, stop});
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn | Promise<ModelTurn>, setup?: (journal: Journal) => void) {
@@ -181,12 +181,14 @@ test('only formal Director dispatch produces an independent full report', async 
     const formal = f.handed[0] as TaskResult<string> & {delivery?: {text: string}};
     assert.equal(formal?.delivery?.text, report);
     assert.ok(formal.summary.report.length <= 2000);
-    assert.match(f.requests[0]!.system, /Only when this round was formally assigned by Director[\s\S]*no rigid template headings required/);
+    assert.match(JSON.stringify(f.requests[0]!.messages), /Director assignment[\s\S]*When you finish this assignment[\s\S]*no rigid template headings required/);
+    assert.doesNotMatch(f.requests[0]!.system, /When you finish this assignment/);
     const direct = f.ensemble.dispatch('techne', 'Discuss', 'direct', {inputKind: 'human'});
     await direct.done;
     assert.equal(f.handed.length, 1);
     assert.equal(f.requests[1]!.system, f.requests[0]!.system, 'Report rules are stable and conditional on assignment provenance.');
-    assert.ok(!JSON.stringify(f.requests[1]!.messages).includes('_FinishRound'));
+    assert.ok(!f.requests[1]!.messages.some(message => message.role === 'assistant' && message.toolCalls?.some(call => call.name === '_FinishRound')), 'finished round pairs stay hidden on non-append-only protocols');
+    assert.ok(!JSON.stringify(f.requests[1]!.messages.findLast(message => message.role === 'user')).includes('When you finish this assignment'), 'a direct conversation owes no report');
     const entries = await f.journal.load('s', 'techne');
     const records = await f.journal.rounds('s', 'techne', entries);
     assert.equal(records.find(record => record.activityId === direct.activityId)?.delivery, undefined);

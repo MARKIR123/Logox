@@ -47,7 +47,7 @@ export function usageLines(records: readonly UsageRecord[], config: Config): str
       [total.cacheRead, price?.cache_read], [total.cacheWrite, price?.cache_write]] as const;
     const known = !!price && buckets.every(([tokens, rate]) => tokens === 0 || rate !== undefined);
     const cost = known ? buckets.reduce((sum, [tokens, rate]) => sum + tokens * (rate ?? 0) / 1e6, 0) : undefined;
-    lines.push('', model + ' · ' + (category === 'task' ? 'task' : category === 'approval' ? 'approval' : 'summary'),
+    lines.push('', model + ' · ' + (['task', 'approval', 'automa'].includes(category) ? category : 'summary'),
       'Input / output: ' + total.input + ' / ' + total.output + ' token',
       'Cache read / write: ' + total.cacheRead + ' / ' + total.cacheWrite + ' token',
       'Estimated cost: ' + (cost === undefined ? 'unknown (no price)' : cost.toFixed(6) + ' ' + price!.currency));

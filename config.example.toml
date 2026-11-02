@@ -11,12 +11,17 @@ timeout = 600 # Seconds without meaningful model progress.
 [context]
 keep_recent_rounds = 2
 keep_recent_tools = 2
+keep_index_lines = 20 # Folded rounds kept as index lines when older history becomes an overview.
 reserve_tokens = 32768
+high_watermark_ratio = 0.8 # The high watermark is the larger of window minus reserve and this share of the window.
 low_watermark_ratio = 0.5
 # max_budget_tokens = 6000
 # target_budget_tokens = 4000
 # summary_provider = "work"
 # summary_model = "your-model-id"
+
+[automa]
+max_parallel = 4 # Jobs run at once per dispatch (1-8); a dispatch may ask for more, up to 8.
 
 [kernel]
 max_iterations = 0 # Unlimited round trips; cancellation still applies.

@@ -17,7 +17,7 @@ export class ExecutionRecoveryError extends Error {
 
 export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
-const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'borrow_skill', 'update_task_progress', 'UpdateTaskProgress',
+const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'update_task_progress', 'UpdateTaskProgress',
   'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
 
 /** Differences in argument JSON key order or formatting do not count as new progress, and re-reading the same result does not refresh the budget. */
@@ -25,12 +25,12 @@ export function toolProgressFingerprint(call: ToolCall, result: ToolResult): str
   if (result.isError || coordinationTools.has(call.name) || coordinationTools.has(canonicalToolName(call.name) ?? call.name)) return;
   let argumentsValue: unknown;
   try {argumentsValue = JSON.parse(call.arguments);} catch {return;}
-  return createHash('sha256').update(JSON.stringify([call.name, canonical(argumentsValue), result.text])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([call.name, canonicalJson(argumentsValue), result.text])).digest('hex');
 }
 
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
+export function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => [key, canonical(item)]));
+    .map(([key, item]) => [key, canonicalJson(item)]));
   return value;
 }

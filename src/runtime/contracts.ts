@@ -142,7 +142,22 @@ export interface Message {
   readonly systemTitle?: string;
   readonly systemReplay?: boolean;
 }
+const automaJobStateSchema = z.strictObject({
+  title: z.string(),
+  state: z.enum(['queued', 'running', 'done', 'failed', 'cancelled', 'denied', 'interrupted']),
+  elapsedMs: z.number().nonnegative(),
+  /** Set while running; the renderer samples its own clock from it. */
+  startedAt: z.number().optional(),
+  /** The call in progress right now. */
+  tool: z.string().optional(),
+  calls: z.array(z.strictObject({name: z.string(), title: z.string(), state: z.enum(['running', 'completed', 'failed'])})),
+  receipt: z.string().optional(),
+});
+export const automaSwarmSchema = z.strictObject({name: z.string(), jobs: z.array(automaJobStateSchema)});
+export type AutomaJobState = z.infer<typeof automaJobStateSchema>;
+export type AutomaSwarm = z.infer<typeof automaSwarmSchema>;
 export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),
+  swarm: automaSwarmSchema.optional(),
   terminalVisibility: z.enum(['card', 'notice', 'silent']).optional(),
   stage: stepStageSchema.optional(), disposition: z.enum(['denied', 'error']).optional(), note: z.string().max(1000).optional(),
   groupId: z.string().optional(), groupState: z.enum(['completed', 'failed', 'cancelled']).optional(),

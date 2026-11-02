@@ -36,7 +36,7 @@ export interface ResourceSnapshot {
 }
 export interface ResourcePromptSections {readonly guidelines: readonly TextResource[]; readonly skills: string}
 export interface ResourceOptions {home?: string; boundary?: string}
-export interface SkillVisibility {readonly actorId: string; readonly skills?: readonly string[]; readonly borrowed?: readonly string[]}
+export interface SkillVisibility {readonly actorId: string; readonly skills?: readonly string[]}
 const maxBytes = 64 * 1024;
 const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
 const forbidden = (path: string) => path.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy');
@@ -120,7 +120,7 @@ export class Resources {
     actorIdSchema.parse(input.actorId);
     return Object.freeze(this.value.skills.filter(skill => {
       const explicit = input.skills?.includes(skill.name) || this.assignments.get(skill.name)?.has(input.actorId);
-      return explicit || input.borrowed?.includes(skill.name) || skill.public || skill.actors?.includes(input.actorId)
+      return explicit || skill.public || skill.actors?.includes(input.actorId)
         || (input.actorId === 'logox' && skill.actors === undefined);
     }));
   }

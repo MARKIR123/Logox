@@ -29,7 +29,13 @@ export class Snapshots {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly observations = new Map<string, Map<string, string>>();
   private readonly writers = new Map<string, {ownerId: string; activityId: string; afterHash: string; time: number}>();
+  private readonly writeListeners = new Map<string, (file: {path: string; before: Buffer | null; after: Buffer}) => void>();
   constructor(private readonly directory: string) {}
+  /** Reports each write made under `ownerId`, measured here at the write itself rather than taken from the writer's account. */
+  trackWrites(ownerId: string, listener: (file: {path: string; before: Buffer | null; after: Buffer}) => void): () => void {
+    this.writeListeners.set(ownerId, listener);
+    return () => {if (this.writeListeners.get(ownerId) === listener) this.writeListeners.delete(ownerId);};
+  }
   async withLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(path) ?? Promise.resolve();
     let release!: () => void;
@@ -76,6 +82,7 @@ export class Snapshots {
       if (ownerId) {
         this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime});
         this.observe(path, after, ownerId);
+        this.writeListeners.get(ownerId)?.({path, before, after});
       }
     } catch (error) {await unlink(file).catch(() => {}); throw error;}
   }

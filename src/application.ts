@@ -42,7 +42,9 @@ import {submitDeliverySchema, type SubmitDelivery} from './runtime/delivery.js';
 export type {SubmitDelivery} from './runtime/delivery.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
-import {Tools, executeAutoma} from './tools/tools.js';
+import {Tools} from './tools/tools.js';
+import {markInterruptedJobs} from './tools/orchestration/AutomaTool/AutomaTool.js';
+import {chooseAutomaModel} from './tools/orchestration/AutomaTool/preset.js';
 import {finishRoundTool} from './tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
@@ -337,16 +339,20 @@ export async function createSessionApplication(options: SessionApplicationOption
       record => usage.record(session, ownerId, record), await usage.read(session, ownerId));
     meteredOwners.add(ownerId);
   }
-  tools.setAutomaRunner(async (args, context) => {
-    const configured = tools.modelStorage.get('automa') ?? registry.selection();
-    const candidate = registry.candidate(configured.provider, configured.model);
-    const journalPath = join(cwd, '.logox', 'state', 'subagents', 'automa.jsonl');
-    return executeAutoma(args, context.signal, {
-      cwd,
-      sessionId: session,
-      journalPath,
-      provider: candidate.provider(),
-    });
+  const automaJournal = (sessionId: string) => join(state, 'sessions', sessionId, 'subagents', 'automa.jsonl');
+  void markInterruptedJobs(automaJournal(session));
+  tools.setAutomaEnvironment({
+    resolveModel: preferred => {
+      const session = registry.selection();
+      const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get('automa'), preferred, session, pool: modelPool.snapshot(),
+        expand: name => modelPool.resolveShorthand(name, session.provider)});
+      return {provider: registry.candidate(chosen.provider, chosen.model).provider(), model: chosen.provider + '/' + chosen.model};
+    },
+    profile: ownerId => actors.find(ownerId)?.automa,
+    actorName: ownerId => actors.find(ownerId)?.name,
+    maxParallel: () => config.automa.max_parallel,
+    journalPath: automaJournal,
+    charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
   });
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
     assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}) => {
@@ -376,12 +382,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     const pending = directorReports.get(context.activityId);
     await actorServices.flush();
     const facts = actorServices.facts(context);
-    for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : ''], ['director-facts', facts]] as const) {
+    for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : '']] as const) {
       const previous = history.findLast(message => message.role === 'context' && message.kind === 'task-state' &&
         message.data?.slot === slot && message.data?.activityId === context.activityId);
       if (text || previous?.text) contextUpdates.push(createRuntimeContextMessage('task-state', text || 'No current ' + slot + '.', {slot, activityId: context.activityId}));
     }
-    return {...base, contextUpdates};
+    return {...base, contextUpdates, ...(facts ? {snapshot: facts} : {})};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),

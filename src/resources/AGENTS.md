@@ -2,7 +2,7 @@
 
 ## 1. Scope
 - **Owns**: Guideline loading (project-level LOGOX, AGENTS and CLAUDE markdown files), the hierarchical skill library and its built-in seed copy (`builtin-skills/`), custom slash command templates (`.logox/commands/`), skill prompt sections, and `/reload`.
-- **Does not own**: Tool execution or the `BorrowSkill` tool ([`src/tools/AGENTS.md`](../tools/AGENTS.md), [`src/actors/AGENTS.md`](../actors/AGENTS.md)); prompt topic ordering ([`src/prompts/AGENTS.md`](../prompts/AGENTS.md)); MCP, Playwright and hook code (`src/extensions/`, routed through [`src/tools/AGENTS.md`](../tools/AGENTS.md)).
+- **Does not own**: Tool execution ([`src/tools/AGENTS.md`](../tools/AGENTS.md), [`src/actors/AGENTS.md`](../actors/AGENTS.md)); prompt topic ordering ([`src/prompts/AGENTS.md`](../prompts/AGENTS.md)); MCP, Playwright and hook code (`src/extensions/`, routed through [`src/tools/AGENTS.md`](../tools/AGENTS.md)).
 - **Design rationale**: [docs/modules/resources-and-extensions.md](../../docs/modules/resources-and-extensions.md)
 
 ## 2. Start Here
@@ -48,7 +48,7 @@
 
 ## 5. Dependencies
 - **Depends on**: `src/commands.ts` (`commandCatalog` reserved names), `src/actors/definitions.ts` (`actorIdSchema`), `yaml` (frontmatter parsing).
-- **Used by**: `src/application.ts` (instantiates `Resources`, `/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/actors/services.ts` (`BorrowSkill`), `src/tui/commands/` (custom command suggestions).
+- **Used by**: `src/application.ts` (instantiates `Resources`, `/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/tui/commands/` (custom command suggestions).
 
 ## 6. Verification & Gaps
 - Fast run: `node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/prompt-composition.test.js dist/tests/prompt-disclosure-integration.test.js`

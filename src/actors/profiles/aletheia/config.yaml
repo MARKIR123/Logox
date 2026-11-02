@@ -30,3 +30,14 @@ activity_verbs:
   list: ["Charting/Charted", "Surveying/Surveyed", "Plotting/Plotted", "Mapping/Mapped"]
   browse: ["Watching/Watched", "Witnessing/Witnessed", "Monitoring/Monitored", "Observing/Observed"]
   run: ["Testing/Tested", "Reproducing/Reproduced", "Verifying/Verified", "Probing/Probed", "Running/Ran"]
+automa:
+  name: drone swarm
+  default_preset: scout
+  model: haiku
+  presets:
+    scout: {tools: read}
+    probe:
+      tools: read
+      commands: ["npm test", "npx tsc --noEmit"]
+      exclusive: ["npm test"]
+      model: sonnet

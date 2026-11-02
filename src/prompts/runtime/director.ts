@@ -1,4 +1,4 @@
-export const DIRECTOR_FACTS_HEADER = '[Director facts: runtime observations, not task acceptance; labels are self-reported]';
+export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
 export const DIRECTOR_COORDINATION_WAKE = 'Process pending coordination events for Director-owned work. Human instructions take precedence. Inspect delivered evidence, preserve existing effects and report only supported conclusions; receipt is not acceptance.';
 export const DIRECTOR_RESULTS_READY = 'Actor results are available. Check the evidence and continue the original task; execution completion is not acceptance.';
 export const DIRECTOR_FAILURE = 'An Actor task ended abnormally. Inspect preserved results before deciding to repair, resume, reassign or take over. Do not replay completed effects or bypass denied permissions.';

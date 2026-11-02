@@ -16,7 +16,7 @@ async function memoryModule() {
   return value;
 }
 async function toolModule() {
-  const path = '../src/tools/_FinishRoundTool/_FinishRoundTool.js';
+  const path = '../src/tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
   const value = await import(path).catch(() => undefined);
   assert.ok(value, 'Internal finalization must have a strict schema and explicit policy');
   return value;
@@ -41,7 +41,7 @@ test('folding replaces human logs and Director assignments with exact indexes, n
       const {request} = await contexts.prepare({sessionId: 's', ownerId}, {system: 'Execution rules', tools: []}, new AbortController().signal, true);
       const text = JSON.stringify(request.messages);
       assert.ok(!text.includes('PASTED_LOG') && !text.includes('FULL_TASK_REPORT') && !text.includes('_FinishRound'));
-      assert.ok(request.messages.some(message => message.text === '1 | Fixed cancellation cleanup | Completed; Targeted tests passed | Windows integration unverified | 1:5'));
+      assert.ok(request.messages.some(message => message.text === '1 | Fixed cancellation cleanup | Completed; Targeted tests passed | Round outcome. | Windows integration unverified | 1:5'));
       assert.deepEqual(request.messages.filter(message => message.role === 'tool').map(message => message.callId), ['read']);
       assert.match(request.messages.findLast(message => message.role === 'user')!.text, /do not write files[\s\S]*unverified/);
       assert.ok(request.messages.some(message => message.role === 'context' && message.kind === 'ledger' && message.text.includes(journal.path('s', ownerId))));
@@ -119,26 +119,26 @@ test('validated legacy sidecars beginning at injected input retain completed sta
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-const finalCall = (id = 'finish') => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Fixed cancellation cleanup', verification: 'Targeted tests passed', carry_forward: ['Windows integration unverified']})});
+const finalCall = (id = 'finish') => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Fixed cancellation cleanup', outcome: 'Round outcome.', verification: 'Targeted tests passed', carry_forward: ['Windows integration unverified']})});
 
-test('round indexes use five compact fields and keep an empty carry-forward column', async () => {
+test('round indexes use six compact fields and keep empty columns in place', async () => {
   const {formatRoundIndex} = await memoryModule();
-  assert.equal(formatRoundIndex({ordinal: 42, title: 'Fixed cancellation cleanup', status: 'completed', verification: 'targeted tests passed', carryForward: ['Windows integration unverified'], start: 120, end: 158}),
-    '42 | Fixed cancellation cleanup | Completed; targeted tests passed | Windows integration unverified | 120:158');
+  assert.equal(formatRoundIndex({ordinal: 42, title: 'Fixed cancellation cleanup', status: 'completed', verification: 'targeted tests passed', outcome: 'Release now waits for exit', carryForward: ['Windows integration unverified'], start: 120, end: 158}),
+    '42 | Fixed cancellation cleanup | Completed; targeted tests passed | Release now waits for exit | Windows integration unverified | 120:158');
   assert.equal(formatRoundIndex({ordinal: 43, title: 'Explained actor model selection', status: 'completed', verification: null, carryForward: [], start: 159, end: 172}),
-    '43 | Explained actor model selection | Completed || 159:172');
+    '43 | Explained actor model selection | Completed |  |  | 159:172');
   const sanitized = formatRoundIndex({ordinal: 1, title: 'First\nSecond|Third', status: 'cancelled', verification: null, carryForward: ['Blocker\r\ncontinued|detail'], start: 1, end: 2});
-  assert.equal(sanitized, '1 | First Second/Third | Cancelled | Blocker continued/detail | 1:2');
-  assert.equal(sanitized.split('|').length, 5);
+  assert.equal(sanitized, '1 | First Second/Third | Cancelled |  | Blocker continued/detail | 1:2');
+  assert.equal(sanitized.split('|').length, 6);
   assert.throws(() => formatRoundIndex({ordinal: 0, title: 'Bad range', status: 'failed', verification: null, carryForward: [], start: 3, end: 2}));
 });
 
 test('finalization accepts semantic metadata, not model-owned runtime facts', async () => {
   const {finishRoundSchema, finishRoundTool, finishRoundPolicy} = await toolModule();
-  const metadata = {title: 'Explained tools', verification: null, carry_forward: []};
+  const metadata = {title: 'Explained tools', outcome: 'Round outcome.', verification: null, carry_forward: []};
   assert.deepEqual(finishRoundSchema.parse(metadata), metadata);
   for (const extra of [{status: 'completed'}, {ordinal: 3}, {start: 4}, {end: 7}]) assert.equal(finishRoundSchema.safeParse({...metadata, ...extra}).success, false);
-  for (const invalid of [{...metadata, title: ' '}, {...metadata, title: 'x'.repeat(121)}, {...metadata, carry_forward: [' ']}, {...metadata, verification: 'x'.repeat(241)}, {...metadata, carry_forward: Array(9).fill('item')}]) {
+  for (const invalid of [{...metadata, title: ' '}, {...metadata, title: 'x'.repeat(121)}, {...metadata, carry_forward: [' ']}, {...metadata, verification: 'x'.repeat(241)}, {...metadata, carry_forward: Array(9).fill('item')}, {...metadata, outcome: 'x'.repeat(601)}, {title: 'No outcome', verification: null, carry_forward: []}]) {
     assert.equal(finishRoundSchema.safeParse(invalid).success, false);
   }
   assert.equal(finishRoundTool.name, '_FinishRound');
@@ -188,7 +188,7 @@ test('durable closure covers the whole activity and stores report separately fro
     assert.equal(record.start, 0);
     assert.equal(record.ordinal, 1);
     assert.deepEqual(record.sourceLines, {start: 1, end: 5});
-    assert.deepEqual(record.memory, {title: 'Fixed cancellation cleanup', verification: 'Targeted tests passed', carryForward: ['Windows integration unverified'], source: 'model'});
+    assert.deepEqual(record.memory, {title: 'Fixed cancellation cleanup', outcome: 'Round outcome.', verification: 'Targeted tests passed', carryForward: ['Windows integration unverified'], source: 'model'});
     assert.ok(record.delivery);
     assert.equal(record.delivery.text, report, 'A full report is not truncated to the legacy summary limit');
     assert.equal(record.delivery.title, 'Outcome: completed', 'Report presentation does not expose private memory metadata');

@@ -1,3 +1,4 @@
+import {PROMPT_CACHE_BOUNDARY} from '../prompts/boundary.js';
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
 import type {ModelSettings} from '../config/config.js';
@@ -23,12 +24,26 @@ export type ProviderErrorCategory = 'model_missing' | 'authentication' | 'quota'
 type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field';
 export interface ProviderDiagnostic {
   status?: number; code?: string; phase?: 'connection' | 'stream'; parameter?: string; issue?: ProtocolIssue;
-  elapsedMs?: number; progressIdleMs?: number; transportIdleMs?: number; receivedBytes?: number;
+  retryAfterMs?: number; elapsedMs?: number; progressIdleMs?: number; transportIdleMs?: number; receivedBytes?: number;
 }
 export class ProviderError extends Error {
   constructor(message: string, readonly retryable = false,
     readonly category: ProviderErrorCategory = retryable ? 'temporary' : 'protocol',
     readonly diagnostic?: ProviderDiagnostic) {super(message);}
+}
+const rateLimitCodes = ['rate_limit_error', 'overloaded_error'];
+/** True for HTTP 429/529 and `rate_limit_error` / `overloaded_error` payloads, including errors raised mid-stream (status 200). */
+export function isRateLimitFailure(error: unknown): error is ProviderError {
+  const diagnostic = error instanceof ProviderError ? error.diagnostic : undefined;
+  return !!diagnostic && (diagnostic.status === 429 || diagnostic.status === 529 || rateLimitCodes.includes(diagnostic.code ?? ''));
+}
+/** Parses a `Retry-After` header (delta-seconds or HTTP-date) to milliseconds; undefined when absent or malformed. */
+export function parseRetryAfter(value: string | null | undefined, now = Date.now()): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000);
+  const at = Date.parse(text);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 export function providerTimeout(): ProviderError {
   return new ProviderError('Model request timed out', true, 'temporary', {status: 408, code: 'idle_timeout'});
@@ -82,7 +97,7 @@ function idleDeadline(signal: AbortSignal, milliseconds: number) {
     }, close: () => clearTimeout(timer)};
 }
 /** Known public errors keep API wording; unknown echoes use structured diagnostics and never carry the whole response body. */
-export function providerFailure(status: number, payload?: unknown): ProviderError {
+export function providerFailure(status: number, payload?: unknown, retryAfterMs?: number): ProviderError {
   const parsed = z.object({error: z.object({code: z.string().optional(), type: z.string().optional(),
     message: z.string().optional(), param: z.string().nullable().optional()}).optional()}).safeParse(payload);
   const code = parsed.success ? parsed.data.error?.code ?? parsed.data.error?.type : undefined;
@@ -97,8 +112,12 @@ export function providerFailure(status: number, payload?: unknown): ProviderErro
   }
   if (['authentication_error', 'permission_error'].includes(code ?? '')) return new ProviderError('Model authentication or permission unavailable', false, 'authentication');
   if (['model_not_found', 'model_not_exist', 'model_not_available'].includes(code ?? '')) return new ProviderError('Selected model does not exist or is unavailable', false, 'model_missing');
-  if (['rate_limit_error', 'overloaded_error'].includes(code ?? '')) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
-  if ([408, 429, 500, 502, 503, 504, 529].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
+  const rateLimited = status === 429 || status === 529 || rateLimitCodes.includes(code ?? '');
+  if (rateLimited) {
+    return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status,
+      ...(code && rateLimitCodes.includes(code) ? {code} : {}), ...(retryAfterMs !== undefined ? {retryAfterMs} : {})});
+  }
+  if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
   const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
     : /tool_call_id|tool_use_id|tool_calls.*(?:follow|response|match)|tool.*(?:preceding|correspond)/i.test(text) ? 'tool_pairing'
@@ -285,6 +304,15 @@ export function openaiMessages(input: readonly ModelMessage[], requiresReasoning
       }))} : {})};
   });
 }
+/** The system prompt as one text, for protocols with no cache markers. */
+export function systemText(system: string): string {
+  return system.replace('\n\n' + PROMPT_CACHE_BOUNDARY + '\n\n', '\n\n').replace(PROMPT_CACHE_BOUNDARY, '');
+}
+/** One cache marker on each part: a change below the boundary keeps the fixed part cached. With tools and the message marker this uses all four allowed. */
+export function anthropicSystem(system: string): readonly ObjectValue[] {
+  return system.split('\n\n' + PROMPT_CACHE_BOUNDARY + '\n\n').filter(text => text.trim())
+    .map(text => ({type: 'text', text, cache_control: {type: 'ephemeral'}}));
+}
 export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2, referenceNames?: ReadonlySet<string>, caching = false): ObjectValue[] {
   const messages = input.flatMap<WireMessage>(message => message.role !== 'context' ? [message] : encodeAnthropicContext(message)
     .map(block => ({role: 'user', text: String(block.text)})));
@@ -420,12 +448,13 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       }
     } else if (request.thinking === false && (native || settings.thinkingControl)) thinking.thinking = {type: 'disabled'};
     const supportsVision = request.supportsVision ?? true;
+    const plainSystem = systemText(request.system);
     const isStream = oauthResponses ? true : request.stream !== false;
     const chosenModel = settings.model;
     const body = native
       ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),
-        system: caching ? [{type: 'text', text: request.system, cache_control: {type: 'ephemeral'}}] : request.system,
+        system: caching ? anthropicSystem(request.system) : plainSystem,
         messages: anthropicMessages(request.messages, 2, new Set(request.tools.filter(tool => tool.deferLoading).map(tool => tool.name)), caching), tools, ...thinking}
       : isResponsesApi
         ? {
@@ -433,7 +462,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             store: false,
             stream: isStream,
             ...(!oauthResponses ? {max_output_tokens: maxTokens} : {}),
-            instructions: request.system,
+            instructions: plainSystem,
             input: responsesInput(request.messages, supportsVision, 2,
               request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined),
             ...(tools.length ? {tools} : {}),
@@ -456,7 +485,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         const payload = await errorPayload(response);
         signal.throwIfAborted();
         if (timed.aborted) throw providerTimeout();
-        throw providerFailure(response.status, payload);
+        throw providerFailure(response.status, payload, parseRetryAfter(response.headers.get('retry-after')));
       }
       let text = '', reasoning = '', signature = '';
       let stop: ModelTurn['stop'] = 'other';

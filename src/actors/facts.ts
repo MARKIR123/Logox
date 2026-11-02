@@ -44,17 +44,13 @@ export function toolFacts(snapshot: RuntimeSnapshot, activityId: string, now = D
     })),
   };
 }
-export function activityFacts(snapshot: RuntimeSnapshot, activity: Activity, now = Date.now()) {
+/** One line of the ensemble snapshot. Detail lives in ListActors, and what an actor actually did in ReadActor. */
+export function activityFacts(activity: Activity) {
   const terminal = ['completed', 'failed', 'cancelled'].includes(activity.status);
-  const label = !terminal ? currentTaskProgress(activity.progress)?.label : undefined;
-  const observed = toolFacts(snapshot, activity.activityId, now);
-  const {recentTools, recentFiles} = observed;
+  const subtitle = terminal ? undefined : currentTaskProgress(activity.progress)?.label?.trim();
   return {activityId: activity.activityId, ownerId: activity.ownerId, status: activity.status,
     ...(activity.taskTitle ? {taskTitle: activity.taskTitle} : {}),
-    rootActivityId: activity.rootActivityId ?? activity.activityId, parentActivityId: activity.parentActivityId ?? null,
-    batchId: activity.batchId ?? null, phase: activity.phase ?? null, evidenceSource: 'runtime',
-    ...(label ? {selfReportedLabel: label} : {}),
-    ...(terminal ? {recentTools, ...(recentFiles ? {recentFiles} : {})} : observed)};
+    ...(subtitle ? {subtitle} : {})};
 }
 export function activeEnsembleRoster(
   snapshot: RuntimeSnapshot,
@@ -82,7 +78,7 @@ export function activeEnsembleRoster(
   return 'Active ensemble roster (Logox is always reachable as Director; idle roles omitted):\n' + lines.join('\n');
 }
 export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: string; activityId: string; rootActivityId?: string | undefined},
-  deliveries: readonly Delivery[] = [], now = Date.now()) {
+  deliveries: readonly Delivery[] = []) {
   if (context.ownerId !== 'logox') return undefined;
   const root = context.rootActivityId ?? context.activityId;
   const related = new Set(deliveries.filter(item => item.ownerId === 'logox' &&
@@ -92,6 +88,5 @@ export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: stri
   if (!tasks.length && !deliveries.some(item => item.ownerId === 'logox' && item.status === 'pending' && !item.targetActivityId)) return undefined;
   const rank = (activity: Activity) => ['running', 'waiting_input'].includes(activity.status) ? 0 : ['queued', 'paused'].includes(activity.status) ? 1 : 2;
   tasks.sort((a, b) => rank(a) - rank(b));
-  return {observedAt: now, revision: snapshot.revision, tasks: tasks.slice(0, 8).map(task => activityFacts(snapshot, task, now)),
-    additionalTasks: Math.max(0, tasks.length - 8)};
+  return {tasks: tasks.slice(0, 8).map(task => activityFacts(task)), additionalTasks: Math.max(0, tasks.length - 8)};
 }

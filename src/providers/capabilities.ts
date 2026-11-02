@@ -16,5 +16,5 @@ export function resolveProviderCapabilities(settings: ModelSettings): ProviderCa
     (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-')) && settings.model === 'gpt-5.4';
   const toolDiscovery = declared === 'auto' ? official && settings.kind === 'anthropic' && anthropicModels.has(settings.model) ? 'anthropic'
     : responses && settings.kind === 'openai_compat' ? 'openai-responses' : 'none' : declared;
-  return {toolDiscovery, runtimeInstructions: 'meta-user', caching: settings.kind === 'anthropic' && (official || declared === 'anthropic') ? 'anthropic' : 'none'};
+  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching: settings.kind === 'anthropic' && (official || declared === 'anthropic') ? 'anthropic' : 'none'};
 }

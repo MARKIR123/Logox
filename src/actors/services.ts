@@ -26,8 +26,6 @@ import {
   CRAFT_ACTOR_DESCRIPTION,
   readActorSchema,
   READ_ACTOR_DESCRIPTION,
-  borrowSkillSchema,
-  BORROW_SKILL_DESCRIPTION,
   listActorsSchema,
   LIST_ACTORS_DESCRIPTION,
   executeListActors,
@@ -46,7 +44,7 @@ import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READ
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {inputKind} from '../runtime/provenance.js';
 
-const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'BorrowSkill', 'SendMessage']);
+const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'SendMessage']);
 
 export interface ActorServicesOptions {
   toolRegistry?: ToolRegistry;
@@ -81,7 +79,6 @@ export class ActorServices {
   readonly deliveries: DeliveryQueue;
   private readonly definitions = new Map<string, ActorDefinition>();
   private readonly active = new Map<string, ActorDefinition>();
-  private readonly borrowed = new Map<string, Set<string>>();
   private readonly depths = new Map<string, number>();
   private readonly origins = new Map<string, TaskOrigin>();
   private readonly stoppedActors = new Set<string>();
@@ -171,8 +168,7 @@ export class ActorServices {
     return contextPolicySchema.parse({...this.options.config.context, ...role?.context});
   }
   contract(ownerId: string): string | undefined {return (this.active.get(ownerId) ?? this.options.catalog.find(ownerId))?.compression;}
-  skills(context: ActorContext) {return {actorId: context.ownerId, skills: this.definition(context).skills,
-    borrowed: [...this.borrowed.get(context.activityId) ?? []]};}
+  skills(context: ActorContext) {return {actorId: context.ownerId, skills: this.definition(context).skills};}
   tools(ownerId: string): readonly ToolDefinition[] {
     return (this.options.toolRegistry ?? defaultToolRegistry).getToolsForActor(ownerId).filter(tool => serviceTools.has(tool.name));
   }
@@ -207,7 +203,6 @@ export class ActorServices {
           const explicitTitle = (task.title ?? task.description ?? task.goal)?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
           if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
-          for (const name of task.skills ?? []) if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('Skill not found: ' + name);
           if (task.resumeTask) {
             const previous = saved.find(previous => previous.activityId === task.resumeTask);
             if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
@@ -241,13 +236,13 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
-        const grouped = new Map<string, {prompts: string[]; skills: Set<string>; files: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
+        const grouped = new Map<string, {prompts: string[]; files: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], skills: new Set<string>(), files: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
-          group.prompts.push(task.prompt); for (const skill of task.skills ?? []) group.skills.add(skill);
+          group.prompts.push(task.prompt);
           for (const file of task.files ?? []) group.files.add(file);
           grouped.set(task.ownerId, group);
         }
@@ -271,14 +266,14 @@ export class ActorServices {
             ...(task.files.size ? {ownedFiles: [...task.files]} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
           this.origins.set(handle.activityId, childOrigin);
-          this.depths.set(handle.activityId, nextDepth); this.borrowed.set(handle.activityId, task.skills);
+          this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
           return handle;
         });
         for (const activityId of resumed) this.continuedTasks.add(activityId);
         const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
-          text: `Tasks dispatched to ${targets} (Batch ${group.batchId}). Companions run asynchronously; the runtime will automatically deliver their completion reports and wake you. Conclude your current round or proceed with independent steps.`,
+          text: `Tasks dispatched to ${targets} (Batch ${group.batchId}). Companions keep running after your round ends, and their reports wake you automatically. Unless you have independent work of your own, reply now with one short line and end your round. Do not check files or actor status to see whether they are done.`,
           isError: false,
         };
       }
@@ -331,12 +326,6 @@ export class ActorServices {
             return {success, message: success ? `Activity for ${actorId} cancelled.` : `Failed to cancel activity for ${actorId}.`};
           },
         });
-      }
-      if (canonical === 'BorrowSkill') {
-        const {name} = borrowSkillSchema.parse(input);
-        if (!this.options.resources.snapshot().skills.some(skill => skill.name === name)) throw new Error('Skill not found');
-        const borrowed = this.borrowed.get(context.activityId) ?? new Set<string>(); borrowed.add(name); this.borrowed.set(context.activityId, borrowed);
-        return {text: 'This task has borrowed ' + name + '; read the skill body before using it.', isError: false};
       }
       const collab = await this.collaboration.execute(call, context);
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
@@ -467,6 +456,6 @@ export class ActorServices {
       ...(status === 'cancelled' ? {stopReason: 'shutdown'} : {})});
     const definition = this.definitions.get(activityId);
     if (definition && this.active.get(definition.id) === definition) this.active.delete(definition.id);
-    this.definitions.delete(activityId); this.borrowed.delete(activityId); this.depths.delete(activityId); this.origins.delete(activityId); this.stoppedActors.delete(activityId);
+    this.definitions.delete(activityId); this.depths.delete(activityId); this.origins.delete(activityId); this.stoppedActors.delete(activityId);
   }
 }

@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {parseDocument, stringify} from 'yaml';
 import {contextPolicySchema} from '../config/config.js';
 import {immutable} from '../runtime/contracts.js';
+import {automaProfileSchema} from '../tools/orchestration/AutomaTool/preset.js';
 
 export const actorIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).refine(id => !['legacy', 'con', 'prn', 'aux', 'nul', ...Array.from({length: 9}, (_, i) => 'com' + (i + 1)), ...Array.from({length: 9}, (_, i) => 'lpt' + (i + 1))].includes(id));
 const text = (max: number) => z.string().trim().min(1).max(max).refine(value => !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value));
@@ -10,6 +11,8 @@ export const actorModelSchema = z.strictObject({provider: inline(128), model: in
 const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   reserve_tokens: contextPolicySchema.shape.reserve_tokens.removeDefault().optional(),
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),
+  high_watermark_ratio: contextPolicySchema.shape.high_watermark_ratio.removeDefault().optional(),
+  keep_index_lines: contextPolicySchema.shape.keep_index_lines.removeDefault().optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
 const verbEntry = inline(48).refine(value => {
@@ -30,6 +33,7 @@ export const actorDefinitionSchema = z.strictObject({
   defaultModel: actorModelSchema.optional(), skills: z.array(actorIdSchema).max(256).default([]),
   thinkingAnimation: z.array(z.string().min(1)).min(1).max(32).optional(),
   activityVerbs: activityVerbsSchema.optional(),
+  automa: automaProfileSchema.optional(),
 });
 export type ActorDefinition = Readonly<z.infer<typeof actorDefinitionSchema>>;
 export type ActorModel = z.infer<typeof actorModelSchema>;

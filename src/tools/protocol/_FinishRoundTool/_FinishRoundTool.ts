@@ -5,6 +5,7 @@ import {FINISH_ROUND_DESCRIPTION} from './prompt.js';
 export const FINISH_ROUND_NAME = '_FinishRound';
 export const finishRoundSchema = z.strictObject({
   title: z.string().trim().min(1).max(120).describe('Concise English title; reuse the task report title when applicable'),
+  outcome: z.string().trim().min(1).max(600).describe('What this round concluded or changed: key decisions, results and the files involved'),
   verification: z.string().trim().min(1).max(240).nullable().describe('Actual verification overview, or null when not applicable or unknown'),
   carry_forward: z.array(z.string().trim().min(1).max(240)).max(8).describe('Only material unresolved work, constraints, or limitations; empty when none'),
 });

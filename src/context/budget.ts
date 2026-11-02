@@ -28,16 +28,16 @@ export function estimateRequest(request: ModelRequest): number {
     request.messages.reduce((sum, message) => sum + estimateMessage(message), 0);
 }
 export interface BudgetPolicy {
-  reserve_tokens: number; low_watermark_ratio: number;
+  reserve_tokens: number; low_watermark_ratio: number; high_watermark_ratio?: number | undefined;
   max_budget_tokens?: number | undefined; target_budget_tokens?: number | undefined;
 }
 export function watermarks(model: ModelCapacity, policy: BudgetPolicy) {
   const reserve = Math.min(policy.reserve_tokens, Math.floor(model.window / 4));
-  const high = Math.min(model.window - reserve, policy.max_budget_tokens ?? Infinity);
+  const high = Math.min(Math.max(model.window - reserve, Math.floor(model.window * (policy.high_watermark_ratio ?? 0.8))), policy.max_budget_tokens ?? Infinity);
   const low = Math.min(Math.floor(model.window * policy.low_watermark_ratio), policy.target_budget_tokens ?? Infinity, high - 1);
   return {high, low, safety: Math.max(16, Math.min(128, Math.floor(model.window / 32)))};
 }
-export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval']),
+export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval', 'automa']),
   input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
   cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative()}).refine(record => record.cacheRead + record.cacheWrite <= record.input, 'Cache usage cannot exceed total input');
 export type UsageRecord = z.infer<typeof usageRecordSchema>;

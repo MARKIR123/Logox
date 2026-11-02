@@ -1,6 +1,6 @@
-import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {dirname, join, relative, resolve} from 'node:path';
 import type {Activity} from '../runtime/contracts.js';
-import {overreach, overreachNote} from './ownership.js';
+import {inside, overreach, overreachNote, patternHolder, patternsOverlap} from './ownership.js';
 import {realpath} from 'node:fs/promises';
 import {existsSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
@@ -39,8 +39,6 @@ import {craftActorSchema, type CraftActorArgs} from './orchestration/CraftActorT
 import {CRAFT_ACTOR_DESCRIPTION, CRAFT_ACTOR_TOOL_NAME} from './orchestration/CraftActorTool/prompt.js';
 import {readActorSchema, type ReadActorArgs} from './orchestration/ReadActorTool/ReadActorTool.js';
 import {READ_ACTOR_DESCRIPTION, READ_ACTOR_TOOL_NAME} from './orchestration/ReadActorTool/prompt.js';
-import {borrowSkillSchema, type BorrowSkillArgs} from './coordination/BorrowSkillTool/BorrowSkillTool.js';
-import {BORROW_SKILL_DESCRIPTION, BORROW_SKILL_TOOL_NAME} from './coordination/BorrowSkillTool/prompt.js';
 import {listActorsSchema, executeListActors, type ListActorsArgs} from './coordination/ListActorsTool/ListActorsTool.js';
 import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './coordination/ListActorsTool/prompt.js';
 import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './orchestration/CancelActorTool/CancelActorTool.js';
@@ -51,7 +49,11 @@ import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
-import {automaSchema, executeAutoma, type AutomaArgs} from './orchestration/AutomaTool/AutomaTool.js';
+import {automaSchema, executeAutomaDispatch, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
+import {grantTools, isExclusiveCommand, pathDenial, planDispatch, shellDenial} from './orchestration/AutomaTool/grant.js';
+import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
+import {getScratchpadDir} from '../kernel/scratchpad.js';
+import type {ModelTurn} from '../runtime/messages.js';
 import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './orchestration/AutomaTool/prompt.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
@@ -63,7 +65,7 @@ export {
   type ToolResult,
   type CanonicalToolName,
   automaSchema,
-  executeAutoma,
+  executeAutomaDispatch,
   type AutomaArgs,
   AUTOMA_DESCRIPTION,
   AUTOMA_TOOL_NAME,
@@ -85,10 +87,6 @@ export {
   type ReadActorArgs,
   READ_ACTOR_DESCRIPTION,
   READ_ACTOR_TOOL_NAME,
-  borrowSkillSchema,
-  type BorrowSkillArgs,
-  BORROW_SKILL_DESCRIPTION,
-  BORROW_SKILL_TOOL_NAME,
   listActorsSchema,
   executeListActors,
   type ListActorsArgs,
@@ -121,7 +119,6 @@ export const schemas = {
   Actor: actorSchema,
   CraftActor: craftActorSchema,
   ReadActor: readActorSchema,
-  BorrowSkill: borrowSkillSchema,
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
   UpdateTaskProgress: updateTaskProgressSchema,
@@ -145,7 +142,6 @@ export const descriptions: Record<ToolName, string> = {
   Actor: ACTOR_DESCRIPTION,
   CraftActor: CRAFT_ACTOR_DESCRIPTION,
   ReadActor: READ_ACTOR_DESCRIPTION,
-  BorrowSkill: BORROW_SKILL_DESCRIPTION,
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
   UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
@@ -223,11 +219,6 @@ export function validToolCall(call: ToolCall): boolean {
   return validateToolCall(call).valid;
 }
 
-function inside(root: string, path: string): boolean {
-  const remainder = relative(root, path);
-  return !isAbsolute(remainder) && remainder !== '..' && !remainder.startsWith('..' + sep);
-}
-
 async function resolvedPath(path: string): Promise<string> {
   let current = path;
   const missing: string[] = [];
@@ -243,6 +234,21 @@ async function resolvedPath(path: string): Promise<string> {
     }
   }
 }
+
+const AUTOMA_DEFAULT_PARALLEL = 4;
+
+/** What the application supplies so Automa can run; tests supply fakes. */
+export interface AutomaEnvironment {
+  /** Picks the model: `/model automa` first, then `preferred` (preset, then role) when it resolves, then the session model. */
+  resolveModel(preferred: string | undefined): ResolvedAutomaModel;
+  profile?(ownerId: string): AutomaProfile | undefined;
+  actorName?(ownerId: string): string | undefined;
+  maxParallel?(): number;
+  journalPath?(sessionId: string): string;
+  charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
+}
+
+interface OwnedInstance extends RetainedInstance {readonly sessionId: string; readonly ownerId: string; readonly activityId: string}
 
 async function fileVersion(path: string): Promise<string> {
   const bytes = await bytesOrMissing(path);
@@ -283,10 +289,89 @@ export class Tools {
   }
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
-  private automaRunner?: ((args: AutomaArgs, context: ActorContext) => Promise<ToolResult>) | undefined;
+  private automa: AutomaEnvironment | undefined;
+  /** In memory only: a kept instance never outlives its task or this process. */
+  private readonly instances = new Map<string, OwnedInstance>();
+  private readonly dispatches = new Map<string, {readonly ownerId: string; readonly files: readonly string[]}>();
 
-  setAutomaRunner(runner: (args: AutomaArgs, context: ActorContext) => Promise<ToolResult>): void {
-    this.automaRunner = runner;
+  setAutomaEnvironment(environment: AutomaEnvironment): void {
+    this.automa = environment;
+  }
+
+  /** A write pattern held by someone other than `ownerId`: a peer's active assignment, or a peer's running job. */
+  private patternHolder(ownerId: string, pattern: string): string | undefined {
+    const display = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
+    const activity = this.activities ? patternHolder(this.activities(), ownerId, pattern, this.cwd) : undefined;
+    if (activity) return `${display(activity.ownerId)}'s active assignment "${(activity.taskTitle ?? activity.title).replace(/\s+/g, ' ').trim()}"`;
+    for (const dispatch of this.dispatches.values()) {
+      if (dispatch.ownerId !== ownerId && dispatch.files.some(file => patternsOverlap(file, pattern, this.cwd))) return `a running Automa job of ${display(dispatch.ownerId)}`;
+    }
+    return undefined;
+  }
+
+  /** Grant check for a worker's call. Refusals here never reach the permission engine or an approval card. */
+  private async workerDenial(name: ToolName, parsed: unknown, context: ActorContext): Promise<string | undefined> {
+    const grant = context.via!.grant;
+    if (!grantTools(grant).includes(name)) return `Tool \`${name}\` is not available to this job. Available: ${grantTools(grant).join(', ')}.`;
+    if (name === 'WebFetch') return undefined;
+    if (name === 'Shell') return shellDenial(grant, schemas.Shell.parse(parsed).command);
+    const target = filePathOf(parsed);
+    const lexical = target ? resolve(this.cwd, target) : this.cwd;
+    const canonical = await resolvedPath(lexical), root = await realpath(this.cwd);
+    if (name === 'Read' && inside(getScratchpadDir(this.cwd, context.sessionId), lexical)) return undefined;
+    const denial = pathDenial(name, grant, {lexical, cwd: this.cwd, canonical, root});
+    if (denial || (name !== 'Edit' && name !== 'Write')) return denial;
+    const owner = this.activities ? overreach(this.activities(), context.ownerId, canonical, root) : undefined;
+    if (!owner) return undefined;
+    const actor = owner.ownerId.charAt(0).toUpperCase() + owner.ownerId.slice(1);
+    return `Not written: ${relative(root, canonical).replaceAll('\\', '/')} belongs to ${actor}'s active assignment. Report it in notes.`;
+  }
+
+  /** The single Automa entry: every worker tool call re-enters `execute()` under the principal's identity. */
+  private async runAutoma(args: AutomaArgs, context: ActorContext): Promise<ToolResult> {
+    const environment = this.automa;
+    if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
+    const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
+    const {sessionId, ownerId, activityId} = context;
+    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, `release`, or both.');
+    const key = JSON.stringify([sessionId, ownerId]);
+    if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
+    const mine = (instance: OwnedInstance) => instance.sessionId === sessionId && instance.ownerId === ownerId;
+    // An instance belongs to one task: anything left over from an earlier task of this actor ends here.
+    for (const [id, instance] of this.instances) if (mine(instance) && instance.activityId !== activityId) this.instances.delete(id);
+    const release = args.release ?? [];
+    const unknown = release.filter(id => !(this.instances.has(id) && mine(this.instances.get(id)!)));
+    const retained = [...this.instances.values()].filter(mine);
+    const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
+    const plan = planDispatch({jobs: args.jobs ?? [], preset: args.preset, release, profile, cwd: this.cwd, retained,
+      holder: pattern => this.patternHolder(ownerId, pattern)});
+    if (!plan.ok) return refuse(plan.error);
+    const released = release.filter(id => !unknown.includes(id));
+    for (const id of released) this.instances.delete(id);
+    const unknownNote = unknown.length ? ` · not found: ${unknown.join(', ')}` : '';
+    if (!plan.jobs.length) return {text: `Released ${released.join(', ') || 'nothing'}${unknownNote}.`, isError: false};
+    const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
+    const {startTool: _principalStep, reportSwarm, ...principal} = context;
+    const parallel = args.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
+    this.dispatches.set(key, {ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.files)});
+    try {
+      const result = await executeAutomaDispatch({
+        jobs: plan.jobs, parallel, swarmName: profile.name, signal: context.signal,
+        cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
+        resolveModel: environment.resolveModel,
+        instance: id => {const found = this.instances.get(id); return found && mine(found) ? found : undefined;},
+        retain: instance => {this.instances.set(instance.id, {...instance, sessionId, ownerId, activityId});},
+        forget: id => {this.instances.delete(id);},
+        executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
+        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
+        journalPath: environment.journalPath?.(sessionId),
+        ...(reportSwarm ? {onProgress: reportSwarm} : {}),
+        ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
+      });
+      return unknownNote ? {...result, text: result.text + '\n\n' + unknownNote.slice(3)} : result;
+    } finally {
+      this.dispatches.delete(key);
+    }
   }
 
   configurePermissions(sessionId: string, options: GuardOptions): () => void {
@@ -375,6 +460,11 @@ export class Tools {
       const raw: unknown = JSON.parse(call.arguments);
       const parsed = schemas[name].parse(raw);
 
+      if (context.via) {
+        const denial = await this.workerDenial(name, parsed, context);
+        if (denial) return {text: denial, isError: true, disposition: 'denied'};
+      }
+
       if (name === 'AskUserQuestion') {
         const args = schemas.AskUserQuestion.parse(parsed);
         if (!await this.permissionGuard(context).authorize({tool: 'ask_user', paths: [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
@@ -394,19 +484,11 @@ export class Tools {
 
       if (name === 'Automa') {
         const args = schemas.Automa.parse(parsed);
-        if (!await this.permissionGuard(context).authorize({tool: 'automa', paths: args.paths ?? [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
+        if (!await this.permissionGuard(context).authorize({tool: 'automa', paths: [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
           return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }
         context.startTool?.();
-        if (this.automaRunner) {
-          return await this.automaRunner(args, context);
-        }
-        const journalPath = join(this.cwd, '.logox', 'state', 'subagents', 'automa.jsonl');
-        return await executeAutoma(args, context.signal, {
-          cwd: this.cwd,
-          sessionId: context.sessionId,
-          journalPath,
-        });
+        return await this.runAutoma(args, context);
       }
 
       if (name === '_GitStatus') {
@@ -460,7 +542,7 @@ export class Tools {
         ...(name === 'Shell' ? {command: schemas.Shell.parse(parsed).command} : {}),
       };
       const guard = this.permissionGuard(context), permissionArgs = JSON.parse(JSON.stringify(parsed)) as Record<string, z.infer<ReturnType<typeof z.json>>>;
-      this.report(context, name + ' · ' + (targetPath ?? (name === 'Shell' ? schemas.Shell.parse(parsed).command : 'url' in parsed ? (parsed as {url: string}).url : '')));
+      if (!context.via) this.report(context, name + ' · ' + (targetPath ?? (name === 'Shell' ? schemas.Shell.parse(parsed).command : 'url' in parsed ? (parsed as {url: string}).url : '')));
       let policy: string;
       do {
         if (!await guard.authorize(target, permissionArgs, context)) {
@@ -480,13 +562,13 @@ export class Tools {
       context.startTool?.();
 
       if (name === 'Read') {
-        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.ownerId);
+        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId);
       }
       if (name === 'Write') {
-        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId));
+        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId));
       }
       if (name === 'Edit') {
-        return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.ownerId));
+        return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId));
       }
       if (name === 'Glob') {
         return await executeGlob(schemas.Glob.parse(parsed), path, originalPath, context.signal);
@@ -495,7 +577,9 @@ export class Tools {
         return await executeGrep(schemas.Grep.parse(parsed), path, originalPath, this.cwd, context.signal);
       }
       if (name === 'Shell') {
-        return await executeShell(schemas.Shell.parse(parsed), this.cwd, context.signal, {activityId: context.activityId, toolId: call.id});
+        const args = schemas.Shell.parse(parsed);
+        const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id});
+        return await (context.via && isExclusiveCommand(context.via.grant, args.command) ? this.snapshots.withLock('automa-exclusive-command', run) : run());
       }
       throw new Error('Unhandled tool: ' + name);
     } catch (error) {

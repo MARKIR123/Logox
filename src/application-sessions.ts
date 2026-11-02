@@ -108,12 +108,21 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     return operation.finally(() => {transition = undefined;});
   };
   const turns = async () => {
-    const entries = (await Promise.all((await owners(current.sessionId)).map(owner => journal.load(current.sessionId, owner)))).flat();
+    const ledgers = await Promise.all((await owners(current.sessionId)).map(async owner => ({owner, entries: await journal.load(current.sessionId, owner)})));
+    const entries = ledgers.flatMap(ledger => ledger.entries);
+    // The round's own _FinishRound title and outcome name it better than the first input does.
+    const memories = new Map<string, {title: string; outcome?: string | undefined}>();
+    for (const ledger of ledgers) {
+      try {
+        for (const record of await journal.rounds(current.sessionId, ledger.owner, ledger.entries))
+          if (record.memory?.source === 'model') memories.set(record.activityId, {title: record.memory.title, outcome: record.memory.outcome});
+      } catch {}
+    }
     const tasks = await journal.activeTasks(current.sessionId);
     const records = new Map(tasks.map(task => [task.activityId, {id: task.activityId, owner: task.ownerId, text: task.prompt, time: task.time}]));
     for (const entry of entries) if (entry.role === 'user' && entry.activityId)
       records.set(entry.activityId, {id: entry.activityId, owner: entry.ownerId, text: entry.text, time: records.get(entry.activityId)?.time ?? entry.time ?? 0});
-    return [...records.values()].sort((a, b) => a.time - b.time);
+    return [...records.values()].sort((a, b) => a.time - b.time).map(round => ({...round, memory: memories.get(round.id)}));
   };
   const rewind = (target: string): Promise<void> => {
     requireIdle();
@@ -239,7 +248,8 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       await current.surfaces.openPicker({title: 'Rewind to Before Round', description: 'Undo the selected round and later conversation and file tool changes; Shell/MCP side effects are not restored', current: ''},
         async () => {
           const rounds = await turns(), pending = await journal.pending(current.sessionId);
-          return {items: pending ? [{id: pending.target, label: 'Retry unfinished rewind', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + round.text.slice(0, 100), description: round.owner})).reverse()};
+          return {items: pending ? [{id: pending.target, label: 'Retry unfinished rewind', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + (round.memory?.title ?? round.text.replace(/\s+/g, ' ').slice(0, 100)),
+            description: round.owner + (round.memory ? ' · ' + (round.memory.outcome ?? round.text).replace(/\s+/g, ' ').slice(0, 160) : '')})).reverse()};
         }, async id => {await rewind(id); return {};});
       return true;
     }

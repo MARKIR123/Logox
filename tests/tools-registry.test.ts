@@ -75,7 +75,7 @@ test('ToolRegistry formats all deferred contracts under category descriptions', 
   assert.match(promptSection, /  - protocol\/:/);
   assert.doesNotMatch(promptSection, /    - _FinishRound:/);
   assert.match(promptSection, /  - orchestration\/:/);
-  assert.match(promptSection, /    - Actor:/);
+  assert.match(promptSection, /    - CraftActor:/);
 });
 
 test('ToolRegistry discovery omits eager tools and includes every eligible deferred tool', () => {
@@ -85,14 +85,13 @@ test('ToolRegistry discovery omits eager tools and includes every eligible defer
   assert.doesNotMatch(text, /^\s*(?:- )?(Read|Grep|Shell|_FinishRound):/m);
   assert.match(text, /^  - protocol\/:/m);
   assert.match(text, /^    - _GitStatus: /m);
-  assert.match(text, /^  - coordination\/:/m);
-  assert.match(text, /^    - ListActors: /m);
   assert.match(text, /^  - orchestration\/:/m);
-  assert.match(text, /^    - Actor: /m);
+  assert.match(text, /^    - CraftActor: /m);
+  assert.doesNotMatch(text, /^    - (Actor|ListActors|ReadActor|CancelActor|SendMessage): /m, 'the Director has its orchestration tools without loading them');
   const workerText = registry.formatTieredToolsPrompt('new-worker');
   assert.doesNotMatch(workerText, /^\s*(?:- )?(Read|_FinishRound):/m);
   assert.match(workerText, /^    - _GitStatus: /m);
-  assert.match(workerText, /^    - SendMessage: /m);
+  assert.doesNotMatch(workerText, /^    - SendMessage: /m, 'SendMessage is offered directly to everyone');
   assert.match(workerText, /^    - UpdateTaskProgress: /m);
   assert.doesNotMatch(workerText, /^    - (Actor|CancelActor): /m);
 });

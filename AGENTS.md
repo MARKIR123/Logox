@@ -20,6 +20,7 @@ LOGOX is a full-screen terminal coding assistant (Node.js, TypeScript, React/Ink
 - **Round memory vs delivery**: normal rounds close through hidden `_FinishRound`; only formal Director dispatches produce structured task reports, while direct human requests get conversational replies. Compaction indexes closed context into compact records and must keep effective constraints, evidence status and open work.
 - **Tool-owned presentation**: built-in tools keep `UI.ts` (and interaction logic) beside their definition; shared hosts own layout, focus and permission scheduling.
 - **Prompts are static constants**, not strings concatenated inside business logic.
+- **Automa**: stateless parallel workers any actor can dispatch. A grant only narrows what the dispatcher already has, and every worker call passes the permission engine under the dispatcher's name; see [`src/tools/AGENTS.md`](src/tools/AGENTS.md).
 - **Shared workspace**: companion actors have full tool access; concurrent edits serialize under per-file locks and per-actor read guards prevent stale overwrites.
 
 ## 3. Subsystem Map

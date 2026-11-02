@@ -43,7 +43,7 @@ export function groupVerb(groupId: string, category: VerbCategory, running: bool
   return (running ? entry.slice(0, slash) : entry.slice(slash + 1)).trim();
 }
 
-function seconds(ms: number): string {
+export function seconds(ms: number): string {
   const s = ms / 1000;
   return s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + 'm' + String(Math.floor(s % 60)).padStart(2, '0') + 's';
 }
@@ -121,7 +121,7 @@ export function toolGroupRow(group: ToolGroup, opts: {id: string; open: boolean;
 }
 
 /** Turns the first row of a rendered tool card into `└ ▮ ...` by swapping its left inset for the connector. */
-function connect(rows: SceneRow[], index: number, insetIndex: number): void {
+export function connect(rows: SceneRow[], index: number, insetIndex: number): void {
   const row = rows[index];
   const segment = row?.segments?.[insetIndex];
   if (!row?.segments || !segment || !/^ +$/.test(segment.text)) return;

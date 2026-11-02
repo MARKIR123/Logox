@@ -1,4 +1,4 @@
-import {isAbsolute, relative, resolve} from 'node:path';
+import {isAbsolute, relative, resolve, sep} from 'node:path';
 import type {Activity} from '../runtime/contracts.js';
 
 /** Statuses during which an assignment still owns its files; terminal states release them. */
@@ -28,6 +28,11 @@ function globRegex(pattern: string): RegExp {
   return new RegExp('^' + out + '$');
 }
 
+export function inside(root: string, path: string): boolean {
+  const remainder = relative(root, path);
+  return !isAbsolute(remainder) && remainder !== '..' && !remainder.startsWith('..' + sep);
+}
+
 /** True when `target` (absolute or cwd-relative) falls under one of the owned paths or globs. */
 export function ownsPath(patterns: readonly string[], target: string, cwd: string): boolean {
   const path = normalize(target, cwd);
@@ -46,6 +51,35 @@ export function ownsPath(patterns: readonly string[], target: string, cwd: strin
 export function overreach(activities: readonly OwnedActivity[], editorOwnerId: string, target: string, cwd: string): OwnedActivity | undefined {
   return activities.find(activity => activity.ownerId !== editorOwnerId && ACTIVE.has(activity.status) &&
     activity.ownedFiles?.length && ownsPath(activity.ownedFiles, target, cwd));
+}
+
+/** The fixed directory a pattern is rooted at; a bare glob such as `*.css` matches anywhere, so its base is the workspace. */
+export function patternBase(pattern: string, cwd: string): string {
+  const segments = normalize(pattern, cwd).replace(/\/+$/, '').split('/');
+  const wild = segments.findIndex(segment => /[*?]/.test(segment));
+  return (wild < 0 ? segments : segments.slice(0, wild)).join('/');
+}
+
+/** Whether two paths or globs could name the same file. Unknown glob pairs count as overlapping: this guards writes, so a false alarm is the safe error. */
+export function patternsOverlap(left: string, right: string, cwd: string): boolean {
+  const a = normalize(left, cwd).replace(/\/+$/, ''), b = normalize(right, cwd).replace(/\/+$/, '');
+  const wild = (pattern: string) => /[*?]/.test(pattern);
+  const nested = (x: string, y: string) => !x || !y || x === y || x.startsWith(y + '/') || y.startsWith(x + '/');
+  if (!wild(a) && !wild(b)) return nested(a, b);
+  if (!wild(a) || !wild(b)) {
+    const [path, pattern] = wild(a) ? [b, a] : [a, b];
+    return ownsPath([pattern], path, cwd) || patternBase(pattern, cwd).startsWith(path + '/');
+  }
+  if (!nested(patternBase(a, cwd), patternBase(b, cwd))) return false;
+  const suffix = (pattern: string) => pattern.slice(pattern.lastIndexOf('*') + 1);
+  const [x, y] = [suffix(a), suffix(b)];
+  return !x || !y || /[/?]/.test(x + y) || x.endsWith(y) || y.endsWith(x);
+}
+
+/** The active assignment of ANOTHER actor whose owned files could include `pattern`. */
+export function patternHolder(activities: readonly OwnedActivity[], editorOwnerId: string, pattern: string, cwd: string): OwnedActivity | undefined {
+  return activities.find(activity => activity.ownerId !== editorOwnerId && ACTIVE.has(activity.status) &&
+    activity.ownedFiles?.some(owned => patternsOverlap(owned, pattern, cwd)));
 }
 
 export function overreachNote(file: string, activity: OwnedActivity, actorName: string): string {

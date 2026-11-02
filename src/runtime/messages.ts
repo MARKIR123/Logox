@@ -23,6 +23,8 @@ export interface ProviderCapabilities {
   toolDiscovery: ToolDiscoveryProtocol;
   runtimeInstructions: 'meta-user' | 'system' | 'developer';
   caching: 'none' | 'anthropic' | 'automatic';
+  /** The API binds replayed thinking to the exact earlier messages, so nothing sent before may be removed. */
+  appendOnlyHistory?: boolean;
 }
 export interface ModelRequest {
   system: string;

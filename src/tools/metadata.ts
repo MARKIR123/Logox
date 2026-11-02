@@ -12,9 +12,6 @@ export type ToolRoles = 'all' | 'director' | 'actors' | readonly string[];
 export const toolLoadingSchema = z.enum(['eager', 'deferred']);
 export type ToolLoading = z.infer<typeof toolLoadingSchema>;
 
-export const toolPromptVisibilitySchema = z.enum(['always', 'explicit', 'summary', 'hidden']);
-export type ToolPromptVisibility = z.infer<typeof toolPromptVisibilitySchema>;
-
 export const toolTerminalVisibilitySchema = z.enum(['card', 'notice', 'silent']);
 export type ToolTerminalVisibility = z.infer<typeof toolTerminalVisibilitySchema>;
 
@@ -23,19 +20,16 @@ export const toolMetadataSchema = z.strictObject({
   category: toolCategorySchema,
   roles: toolRolesSchema,
   loading: toolLoadingSchema.optional(),
-  promptVisibility: toolPromptVisibilitySchema.optional(),
   terminalVisibility: toolTerminalVisibilitySchema,
   description: z.string().optional(),
-}).transform(meta => ({...meta,
-  loading: meta.loading ?? (meta.category === 'core' ? 'eager' : 'deferred'),
-  promptVisibility: meta.promptVisibility ?? (meta.category === 'core' ? 'always' : 'summary')}));
+}).transform(meta => ({...meta, loading: meta.loading ?? (meta.category === 'core' ? 'eager' : 'deferred')}));
 export type ToolMetadata = z.infer<typeof toolMetadataSchema>;
 export type ToolMetadataInput = z.input<typeof toolMetadataSchema>;
 
 export const userToolConfigSchema = z.strictObject({
   loading: toolLoadingSchema.optional(),
+  /** An empty list turns the tool off for everyone. */
   roles: toolRolesSchema.optional(),
-  promptVisibility: toolPromptVisibilitySchema.optional(),
   terminalVisibility: toolTerminalVisibilitySchema.optional(),
 });
 export type UserToolConfig = z.infer<typeof userToolConfigSchema>;

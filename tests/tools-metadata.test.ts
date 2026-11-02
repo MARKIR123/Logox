@@ -39,7 +39,6 @@ test('toolMetadataSchema validates and parses valid metadata', () => {
     category: 'protocol',
     roles: 'all',
     loading: 'deferred',
-    promptVisibility: 'explicit',
     terminalVisibility: 'silent',
     description: 'Fetch concise git status',
   };

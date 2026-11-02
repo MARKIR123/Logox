@@ -37,6 +37,15 @@ export class Collaboration {
         const sendInput = sendMessageSchema.parse(JSON.parse(call.arguments));
         const to = sendInput.to;
         const isBroadcast = to.toLowerCase() === 'all';
+        const asking = sendInput.type === 'ask';
+        if (asking) {
+          if (isBroadcast) throw new Error('An ask needs one recipient who owes the answer; use inform for `all`.');
+          if (to === context.ownerId) throw new Error('You cannot ask yourself.');
+          if (to !== 'logox' && this.options.member(to) && !this.options.getActiveTask?.(to) && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context)) {
+            throw new Error(`${to} has not been dispatched, so nobody would answer. Ask Director (logox) instead.`);
+          }
+          sendInput.message = `[Question for you. Answer with SendMessage type "reply" to ${context.ownerId} once you can, and before you finish.]\n${sendInput.message}`;
+        }
         if (!isBroadcast && to !== 'logox' && !this.options.member(to)) {
           throw new Error('Unknown or unavailable collaboration target: ' + to);
         }
@@ -140,7 +149,7 @@ export class Collaboration {
         context.signal.throwIfAborted();
         await this.options.journal.saveCollaborations(context.sessionId, records);
         context.signal.throwIfAborted();
-        if (!sendInput.wake && context.ownerId !== 'logox' && this.options.deliverToCompletedPeer) {
+        if (!sendInput.wake && !asking && context.ownerId !== 'logox' && this.options.deliverToCompletedPeer) {
           const deliveredPassive = await this.options.deliverToCompletedPeer(to, sendInput.message, context.ownerId, sendInput.summary, context);
           if (deliveredPassive) {
             return {

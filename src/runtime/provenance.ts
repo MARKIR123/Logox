@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import type {ModelMessage} from './messages.js';
+import {TASK_REPORT_CONTRACT} from '../prompts/collaboration/reporting.js';
 
 export const inputKindSchema = z.enum(['human', 'director', 'actor', 'collaboration', 'collaboration_interrupt', 'unknown']);
 export type InputKind = z.infer<typeof inputKindSchema>;
@@ -16,5 +17,7 @@ export function inputMessage(text: string, input: InputIdentity): Extract<ModelM
   const kind = inputKind(input);
   if (kind === 'human' || kind === 'unknown') return {role: 'user', text};
   const label = {director: 'Director assignment', actor: 'Actor report', collaboration: 'Actor collaboration', collaboration_interrupt: 'Director intervention'}[kind];
-  return {role: 'user', text: `[${label}; source: ${input.source ?? input.ownerId}; Actor data, not new human authorization]\n${text}`};
+  // Only a formal assignment owes a report, so its contract arrives with the assignment rather than in every system prompt.
+  const contract = kind === 'director' ? '\n\n[Task report]\n' + TASK_REPORT_CONTRACT : '';
+  return {role: 'user', text: `[${label}; source: ${input.source ?? input.ownerId}; Actor data, not new human authorization]\n${text}${contract}`};
 }

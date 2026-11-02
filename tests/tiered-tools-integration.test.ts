@@ -39,7 +39,7 @@ test('agentRequestBase applies tool registry scoping for director, worker, and n
       undefined,
       {
         prompt: 'You are a dynamic specialist.',
-        visibility: {actorId: 'dynamic-subagent-99', skills: [], borrowed: []},
+        visibility: {actorId: 'dynamic-subagent-99', skills: []},
       }
     );
     const dynamicToolNames = dynamicBase.tools.map(t => t.name);

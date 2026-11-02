@@ -21,7 +21,7 @@
 
 ## 3. Common Changes
 ### Change retention or watermarks
-1. Global defaults live in `../config/config.ts:contextPolicySchema` (`keep_recent_rounds`, `keep_recent_tools`, `reserve_tokens`, `low_watermark_ratio`, `max_budget_tokens`, `target_budget_tokens`). Add new policy keys there; `parseActor()` rejects context keys not in that shape.
+1. Global defaults live in `../config/config.ts:contextPolicySchema` (`keep_recent_rounds`, `keep_recent_tools`, `keep_index_lines`, `reserve_tokens`, `high_watermark_ratio`, `low_watermark_ratio`, `max_budget_tokens`, `target_budget_tokens`). Add new policy keys there; `parseActor()` rejects context keys not in that shape.
 2. Per-actor override: `../actors/services.ts:ActorServices.policy()` merges the actor's `context` over config (Director uses config as is). Shipped defaults are set in `../actors/builtins.ts:role()` and the fallbacks in `../actors/definitions.ts:parseActorProfile()`.
 3. Threshold math is only in `budget.ts:watermarks()`; `manager.ts:prepare()` reads `policy.keep_recent_rounds` and `policy.keep_recent_tools`. Actors (not Director) fold older closed rounds on the next request even below the watermark.
 - Tests: `tests/context.test.ts`, `tests/actor-context.test.ts`.
@@ -30,7 +30,7 @@
 1. Add the argument to `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` (snake_case, bounded) and describe it in `../tools/protocol/_FinishRoundTool/prompt.ts`; `kernel/agent.ts` also clamps `carry_forward` arguments, so check it for list-like fields.
 2. Add the camelCase field to `round-memory.ts:roundMemorySchema` as `.optional()` so saved sidecars still parse; map it in `extractRoundMemory()`.
 3. Provide fallbacks for runtime and legacy records in `../store/journal.ts:Journal.finishRecord()`.
-4. Render it in `manager.ts` only if it belongs in the index. The index has five fixed fields (`formatRoundIndex()`), so a sixth changes `ROUND_SUMMARY_CONTRACT` in `../prompts/charter.ts` and every role's `src/actors/profiles/<id>/compression.md`.
+4. Render it in `manager.ts` only if it belongs in the index. The index has six fixed fields (`formatRoundIndex()`: ordinal, title, status with verification, outcome, carry-forward, range), so another one changes `ROUND_SUMMARY_CONTRACT` in `../prompts/charter.ts` and every role's `src/actors/profiles/<id>/compression.md`.
 - Tests: `tests/round-memory.test.ts`, `tests/finish-round.test.ts`, `tests/actor-compression-contracts.test.ts`.
 
 ### Change a role's memory focus
@@ -40,7 +40,10 @@
 
 ## 4. Hard Boundaries
 - **Raw journals are append-only**: compaction never rewrites or deletes ledger lines; references are one-based inclusive physical ranges in the authoritative ledger, not the readable mirror. Enforced by `tests/round-memory.test.ts`, `tests/context.test.ts`.
-- **`_FinishRound` pairs vanish together** before repair, budgeting and serialization; business tool pairs stay paired. Enforced by `tests/round-memory.test.ts`, `tests/finish-round.test.ts`.
+- **`_FinishRound` pairs vanish together** before repair, budgeting and serialization, except on an append-only protocol (`appendOnlyHistory` in `src/providers/capabilities.ts`), where removing them would invalidate replayed thinking; business tool pairs stay paired. Enforced by `tests/round-memory.test.ts`, `tests/finish-round.test.ts`.
+- **Compaction resets the prompt cache, so it is rare and goes all the way down**: once over the high watermark (the larger of window minus reserve and `high_watermark_ratio` of the window), one pass reaches the low watermark. Actors also fold closed rounds at each new task. The newest `keep_index_lines` folded rounds stay as index lines; only older history becomes a model overview of at most about 4000 tokens. Enforced by `tests/context-compaction-v2.test.ts`.
+- **Summaries are asked at the end of the real conversation** (`manager.ts:ContextManager.prepare()` builds the fork from the uncompacted request) so they reuse its cached prefix; a different summary model or a failure falls back to chunked summarization or runtime extraction. Enforced by `tests/context-compaction-v2.test.ts`.
+- **Thinking from before a compaction is never sent again** (`contracts.ts:contextStateSchema`, `thinkingCut`): its signature bound the history that compaction replaced. Text and tool calls stay. Enforced by `tests/context-compaction-v2.test.ts`.
 - **A round is an activity**, not every injected user message. Enforced by `tests/round-memory.test.ts`.
 - **Missing or invalid metadata keeps raw working content** and never invents verification. Enforced by `tests/finish-round.test.ts`, `tests/round-memory.test.ts`.
 - **Discovery pairs and the latest environment snapshot survive compaction**: original successful LoadTools pairs are retained, never fabricated or archived. Enforced by `tests/tool-disclosure-context.test.ts`.

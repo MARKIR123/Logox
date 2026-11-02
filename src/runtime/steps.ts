@@ -80,6 +80,13 @@ export class Steps {
       this.phase(previous.state === 'running' && step.title === 'Thinking' ? 'model' : 'tool');
     };
   }
+  swarm(id: string, swarm: NonNullable<Step['swarm']>): void {
+    const step = this.get(id);
+    if (['completed', 'failed', 'cancelled'].includes(step.state)) return;
+    const updated = {...step, swarm};
+    this.stepsCache.set(id, updated);
+    this.store.updateMessage(id, {step: updated});
+  }
   finish(id: string, state: 'completed' | 'failed' | 'cancelled', text?: string, disposition?: Step['disposition']): Step {
     const previous = this.get(id), {runningSince: _, waiting: __, ...rest} = previous;
     const step: Step = {...rest, state, elapsedMs: stepElapsed(previous, this.now()), ...(disposition ? {disposition} : {})};

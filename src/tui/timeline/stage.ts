@@ -106,6 +106,13 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // Director's timeline is orchestrated by the Director, so it carries the
   // Director accent. An actor's own window keeps that actor's color.
   const railFor = (ownerId: string) => ownerId === 'anamnesis' ? palette.anamnesis : viewColor;
+  // Tool-owned nested folds (swarm jobs) change a message layout without changing the message.
+  const nestedKey = (message: Message): string => {
+    const jobs = message.step?.swarm?.jobs;
+    if (!jobs) return '';
+    const prefix = message.id + '-job-';
+    return jobs.map((_, index) => open(prefix + index) ? '1' : '0').join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
+  };
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
     const request = thinking.get(message.id);
@@ -135,7 +142,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     const systemError = isTimelineError(message);
     const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
-    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id]);
+    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message)]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -153,7 +160,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const call = messageToolCall(message);
         const ui = getToolUI(call?.name ?? '');
         (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
-          ...(frame ? {frame} : {}), open: open(message.id), accent: rail});
+          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail});
       } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),
@@ -220,11 +227,13 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       {kind: 'confirm_answer', requestId: request.requestId}, rail);
     builder.pushBlank(rail, frame);
   };
-  // Runs of collapsible calls (Read/Grep/Glob/Shell/browser reads) fold into one group row; actor cards split runs.
+  // Runs of collapsible calls (Read/Grep/Glob/Shell/browser reads) fold into one group row.
+  // An actor card draws once, at its activity's first message, so only that message splits a run; later ones draw nothing here.
   const groupAt = new Map<string, ToolGroup>();
   const absorbed = new Set<string>();
   {
     let run: Message[] = [];
+    const drawnCards = new Set<string>();
     const flushRun = () => {
       for (const item of groupToolMessages(run, {stages: true})) if (item.type === 'group') {
         groupAt.set(item.messages[0]!.id, item);
@@ -233,7 +242,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       run = [];
     };
     for (const message of candidates) {
-      if (message.activityId && activities.get(message.activityId)?.kind === 'actor') flushRun(); else run.push(message);
+      if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor') { run.push(message); continue; }
+      if (drawnCards.has(message.activityId)) continue;
+      drawnCards.add(message.activityId);
+      flushRun();
     }
     flushRun();
   }

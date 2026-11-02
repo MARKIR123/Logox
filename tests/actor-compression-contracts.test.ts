@@ -11,7 +11,7 @@ import {acquireFileLock} from '../src/store/file-lock.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
 import {legacyCompression} from './compression-fixture.js';
 
-const grammar = '<number> | <title> | <status>[; <verification>] | <carry-forward> | <start>:<end>';
+const grammar = '<number> | <title> | <status>[; <verification>] | <outcome> | <carry-forward> | <start>:<end>';
 async function migration() {
   const path = '../src/actors/compression-migration.js';
   const value = await import(path).catch(() => undefined);
@@ -24,7 +24,7 @@ test('each actual role request receives one common memory contract and one resid
   const seen: ModelRequest[] = [];
   const provider: Provider = {async respond(request) {
     seen.push(request);
-    return {stop: 'tools', message: {role: 'assistant', text: 'Normal response', toolCalls: [{id: 'finish-' + seen.length, name: '_FinishRound', arguments: JSON.stringify({title: 'Answered request', verification: null, carry_forward: []})}]}};
+    return {stop: 'tools', message: {role: 'assistant', text: 'Normal response', toolCalls: [{id: 'finish-' + seen.length, name: '_FinishRound', arguments: JSON.stringify({title: 'Answered request', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
   }};
   const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, provider, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
@@ -36,7 +36,7 @@ test('each actual role request receives one common memory contract and one resid
       assert.equal(request.system.split(role.compression).length - 1, 1, role.id);
       assert.ok(request.tools.some(tool => tool.name === '_FinishRound'));
       assert.ok(!request.system.includes('[Round Summary]') && !request.system.includes('250 words') && !request.system.includes('Exports & Changes'));
-      assert.match(request.system, /Only when this round was formally assigned by Director/);
+      assert.doesNotMatch(request.system, /When you finish this assignment/, 'the report contract arrives with a formal assignment, not in the system prompt');
       assert.ok(!role.compression.includes('_FinishRound') && !role.compression.includes(grammar));
       const priorities = {logox: /global|dependencies|acceptance/i, techne: /implementation|test commands|blockers/i, aletheia: /facts|hypotheses|evidence/i, kalon: /design|visual verification|tokens/i};
       assert.match(role.compression, priorities[role.id as keyof typeof priorities]);

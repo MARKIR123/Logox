@@ -1,3 +1,4 @@
+import {PROMPT_CACHE_BOUNDARY} from '../src/prompts/boundary.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, rm, symlink} from 'node:fs/promises';
@@ -22,15 +23,17 @@ test('optional role rules survive directory and legacy definition round trips', 
   assert.equal(Reflect.get(minimal, 'execution'), undefined);
 });
 
-test('system assembly has five themes and keeps environment facts after stable rules', () => {
+test('system assembly orders six themes by how likely they are to change, with the boundary after the fixed ones', () => {
   const {system} = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'custom-specialist',
     customPrompt: 'A precise specialist.', memoryFocus: 'Remember evidence.',
     rulesContext: 'A project constraint.', scratchpadDir: '/tmp/probes'});
   assert.deepEqual(system.match(/^# .+$/gm), [
-    '# Persona', '# Execution Rules', '# Team Collaboration', '# Tools & Skills', '# Current Environment',
+    '# Persona', '# Execution Rules', '# Team Collaboration', '# Project Guidelines', '# Tools & Skills', '# Current Environment',
   ]);
   assert.ok(system.indexOf('Remember evidence.') < system.indexOf('# Team Collaboration'));
-  assert.ok(system.indexOf('A project constraint.') < system.indexOf('# Team Collaboration'));
+  assert.ok(system.indexOf('# Team Collaboration') < system.indexOf(PROMPT_CACHE_BOUNDARY));
+  assert.ok(system.indexOf(PROMPT_CACHE_BOUNDARY) < system.indexOf('# Project Guidelines'));
+  assert.ok(system.indexOf('A project constraint.') > system.indexOf('# Project Guidelines'), 'a project rule edit must not re-cache the fixed rules');
   assert.ok(system.indexOf('Working directory: /workspace') > system.indexOf('# Current Environment'));
   assert.equal(system.split('Working directory: /workspace').length - 1, 1);
 });

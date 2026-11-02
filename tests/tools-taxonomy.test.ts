@@ -41,7 +41,7 @@ test('every deferred tool expands below its directory description regardless of 
     const registry = new ToolRegistry(root, root, root);
     registry.register({name: 'InspectMetrics', category: 'observability', roles: 'all', terminalVisibility: 'silent'}, definition);
     registry.register({name: 'TraceRequest', category: 'observability', roles: 'all', terminalVisibility: 'silent',
-      promptVisibility: 'explicit', description: 'Trace a request on demand.'}, {...definition, name: 'TraceRequest'});
+      description: 'Trace a request on demand.'}, {...definition, name: 'TraceRequest'});
     const prompt = registry.formatTieredToolsPrompt('any-new-actor');
     assert.match(prompt, /  - observability\/: Runtime measurements\n    - InspectMetrics: Inspect runtime metrics\.\n    - TraceRequest: Trace a request on demand\./);
     assert.match(prompt, /InspectMetrics/);
@@ -49,16 +49,17 @@ test('every deferred tool expands below its directory description regardless of 
   });
 });
 
-test('visibility overrides expand the index without changing parameter schemas', async () => {
+test('a roles override opens a tool to another actor without changing its parameter schema', async () => {
   await fixture(async root => {
     await mkdir(join(root, '.logox'));
-    await writeFile(join(root, '.logox', 'tools.json'), JSON.stringify({InspectMetrics: {promptVisibility: 'explicit'}}));
+    await writeFile(join(root, '.logox', 'tools.json'), JSON.stringify({InspectMetrics: {roles: ['new-specialist', 'second-specialist']}}));
     const registry = new ToolRegistry(root, root, root);
     registry.register({name: definition.name, category: 'observability', roles: ['new-specialist'], terminalVisibility: 'card'}, definition);
     await registry.reloadUserConfigs();
     assert.match(registry.formatTieredToolsPrompt('new-specialist'), /    - InspectMetrics: Inspect runtime metrics\./);
     assert.deepEqual(registry.getToolsForActor('new-specialist').find(tool => tool.name === definition.name)?.parameters,
       definition.parameters);
+    assert.match(registry.formatTieredToolsPrompt('second-specialist'), /    - InspectMetrics: /);
     assert.doesNotMatch(registry.formatTieredToolsPrompt('other-specialist'), /observability/);
   });
 });
@@ -74,11 +75,12 @@ test('missing or invalid category signposts fall back to directory names without
   });
 });
 
-test('metadata accepts new category directories and defaults nested tools to summary visibility', () => {
+test('metadata accepts new category directories and defaults nested tools to deferred loading', () => {
   const parsed = toolMetadataSchema.parse({name: 'InspectMetrics', category: 'observability', roles: 'all', terminalVisibility: 'card'});
-  assert.equal(parsed.promptVisibility, 'summary');
+  assert.equal(parsed.loading, 'deferred');
   const core = toolMetadataSchema.parse({name: 'Read', category: 'core', roles: 'all', terminalVisibility: 'card'});
-  assert.equal(core.promptVisibility, 'always');
+  assert.equal(core.loading, 'eager');
+  assert.equal('promptVisibility' in core, false);
 });
 
 test('shipped category signpost is available in the built distribution and uses English', () => {
@@ -88,6 +90,18 @@ test('shipped category signpost is available in the built distribution and uses 
   assert.match(prompt, /orchestration\/: Task dispatch and execution management/);
   assert.doesNotMatch(prompt, /[㐀-鿿]/);
   assert.doesNotMatch(prompt, /    - _FinishRound:/);
-  assert.match(prompt, /    - ReadActor:/);
+  assert.match(prompt, /    - CraftActor:/);
   assert.ok(registry.getToolsForActor('logox').some(tool => tool.name === 'ReadActor' && tool.parameters));
+});
+
+test('empty roles turn a tool off for everyone', async () => {
+  await fixture(async root => {
+    await mkdir(join(root, '.logox'), {recursive: true});
+    await writeFile(join(root, '.logox', 'tools.json'), JSON.stringify({InspectMetrics: {roles: []}}));
+    const registry = new ToolRegistry(root, root, root);
+    registry.register({name: definition.name, category: 'observability', roles: 'all', terminalVisibility: 'card'}, definition);
+    await registry.reloadUserConfigs();
+    for (const actor of ['logox', 'techne', 'any-new-actor']) assert.ok(!registry.getToolsForActor(actor).some(tool => tool.name === definition.name), actor);
+    assert.doesNotMatch(registry.formatTieredToolsPrompt('logox'), /InspectMetrics/);
+  });
 });

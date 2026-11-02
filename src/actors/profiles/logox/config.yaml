@@ -27,3 +27,9 @@ activity_verbs:
   list: ["Mapping/Mapped", "Outlining/Outlined", "Indexing/Indexed"]
   browse: ["Viewing/Viewed", "Regarding/Regarded", "Beholding/Beheld"]
   run: ["Running/Ran", "Invoking/Invoked", "Executing/Executed", "Enacting/Enacted"]
+automa:
+  name: runners
+  default_preset: scout
+  model: haiku
+  presets:
+    scout: {tools: read}

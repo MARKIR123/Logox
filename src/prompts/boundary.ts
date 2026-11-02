@@ -1,11 +1,12 @@
 import {ROUND_SUMMARY_CONTRACT, SHARED_EXECUTION_RULES} from './charter.js';
-import {collaborationFor, TASK_REPORT_CONTRACT} from './collaboration/index.js';
+import {collaborationFor} from './collaboration/index.js';
 import {workingDirectory} from './runtime/environment.js';
 import {getScratchpadPromptSection} from './runtime/scratchpad.js';
 
+/** Separates the fixed part of the system prompt from what can change. Providers split on it or remove it; models never see it. */
 export const PROMPT_CACHE_BOUNDARY = '<!-- __LOGOX_PROMPT_CACHE_BOUNDARY__ -->';
 export type PromptZone = 'static' | 'dynamic';
-export type PromptTopic = 'persona' | 'execution' | 'collaboration' | 'tools-skills' | 'environment';
+export type PromptTopic = 'persona' | 'execution' | 'collaboration' | 'guidelines' | 'tools-skills' | 'environment';
 export interface PromptSection {
   readonly name: string;
   readonly text: string;
@@ -48,29 +49,29 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   if (!input.persona.trim()) throw new Error('Actor has no valid persona.');
   const sections: PromptSection[] = [];
   const add = (name: string, topic: PromptTopic, owner: PromptSection['owner'], text: string, stability: PromptSection['stability'] = 'stable') => {
-    if (text.trim()) sections.push({name, topic, owner, stability, zone: 'static', text: nested(text)});
+    if (text.trim()) sections.push({name, topic, owner, stability, zone: ['persona', 'execution', 'collaboration'].includes(topic) ? 'static' : 'dynamic', text: nested(text)});
   };
   add('persona', 'persona', 'role', input.persona);
   add('shared_execution', 'execution', 'shared', SHARED_EXECUTION_RULES);
   if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', ROUND_SUMMARY_CONTRACT);
-  if (input.execution) add('role_execution', 'execution', 'role', input.execution);
   if (input.memoryFocus?.trim()) {
     const focus = input.memoryFocus.trim();
     add('memory_focus', 'execution', 'role', /^#{1,6}\s/.test(focus) ? focus : '## Role Memory Focus\n' + focus);
   }
-  for (const guideline of input.guidelines) add('guidelines', 'execution', 'resource',
-    '## Project and User Guidelines\nSource: ' + guideline.path + '\n\n' + nested(guideline.text), 'revisioned');
-  add('collaboration', 'collaboration', 'shared', collaborationFor(input.ownerId) + '\n\n' + TASK_REPORT_CONTRACT);
+  // Role rules follow the shared rules they build on, so they read as additions rather than being overridden.
+  if (input.execution) add('role_execution', 'execution', 'role', input.execution);
+  add('collaboration', 'collaboration', 'shared', collaborationFor(input.ownerId));
   if (input.collaboration) add('role_collaboration', 'collaboration', 'role', input.collaboration);
+  for (const guideline of input.guidelines) add('guidelines', 'guidelines', 'resource',
+    'Source: ' + guideline.path + '\n\n' + nested(guideline.text), 'revisioned');
   add('tools', 'tools-skills', 'resource', input.toolsIndex ? '## Tools\n' + input.toolsIndex : '', 'revisioned');
   add('skills', 'tools-skills', 'resource', input.skillsIndex ? '## Skills\n' + input.skillsIndex : '', 'revisioned');
   add('environment', 'environment', 'runtime', input.environmentBaseline, 'revisioned');
-  const headings: readonly [PromptTopic, string][] = [
-    ['persona', 'Persona'], ['execution', 'Execution Rules'], ['collaboration', 'Team Collaboration'],
-    ['tools-skills', 'Tools & Skills'], ['environment', 'Current Environment'],
-  ];
-  return {system: headings.map(([topic, title]) => '# ' + title + '\n\n' +
-    sections.filter(section => section.topic === topic).map(section => section.text).join('\n\n')).join('\n\n'), sections};
+  const render = (topics: readonly [PromptTopic, string][]) => topics.map(([topic, title]) => '# ' + title + '\n\n' +
+    sections.filter(section => section.topic === topic).map(section => section.text).join('\n\n')).join('\n\n');
+  // Fixed text first, then what the user or the session can change, so a change never re-caches what could not have changed.
+  return {system: render([['persona', 'Persona'], ['execution', 'Execution Rules'], ['collaboration', 'Team Collaboration']]) + '\n\n' + PROMPT_CACHE_BOUNDARY + '\n\n' +
+    render([['guidelines', 'Project Guidelines'], ['tools-skills', 'Tools & Skills'], ['environment', 'Current Environment']]), sections};
 }
 
 export function composeBaseSystemPrompt(options: BasePromptOptions): {system: string; sections: readonly PromptSection[]} {

@@ -14,6 +14,8 @@ export interface ToolRenderContext {
   result?: ToolResult;
   frame?: ToolFrame;
   open: boolean;
+  /** Fold state of ids the tool owns inside its card (for example swarm jobs). */
+  isOpen?: (id: string) => boolean;
   accent: string;
 }
 export interface ToolInteractionState {

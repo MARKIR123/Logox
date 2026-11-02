@@ -46,7 +46,7 @@ export class PermissionGuard {
       [record.owner + ' · ' + record.action + ' · ' + record.decision + ' · ' + record.source, record.reason])];
   }
   private record(context: ActorContext, target: PermissionTarget, decision: PermissionRecord['decision'], source: PermissionRecord['source'], reason: string): void {
-    const action = target.tool + (target.command ? ' · ' + target.command.trim().split(/\s+/)[0] + ' · #' + digest(target.command).slice(0, 8)
+    const action = (context.via ? context.via.label + ' · ' : '') + target.tool + (target.command ? ' · ' + target.command.trim().split(/\s+/)[0] + ' · #' + digest(target.command).slice(0, 8)
       : target.paths.length ? ' · ' + target.paths[0]!.slice(0, 180) : '');
     this.records.push({owner: context.ownerId, tool: target.tool, action, decision, source, reason});
     if (this.records.length > 100) this.records.shift();
@@ -122,7 +122,7 @@ export class PermissionGuard {
         reason = verdict.reason; source = 'model';
         if (verdict.decision === 'allow') {this.record(context, target, 'allow', source, reason); return true;}
       }
-      const allowed = await context.permission({kind: 'permission', title: 'Allow ' + target.tool + '?', tool: target.tool, arguments: args, reason});
+      const allowed = await context.permission({kind: 'permission', title: (context.via ? context.via.label + ': allow ' : 'Allow ') + target.tool + '?', tool: target.tool, arguments: args, reason});
       context.signal.throwIfAborted();
       if (policy !== this.policy()) continue;
       if (!allowed) {

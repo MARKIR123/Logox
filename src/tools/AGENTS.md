@@ -27,9 +27,13 @@ categories:
 | Improve a tool error hint | `diagnostics.ts:diagnosticHandlers` | `<Name>Tool/diagnostic.ts` |
 | Improve an MCP or Playwright error hint (`mcp` and direct `mcp__<server>__<tool>` calls) | `src/extensions/diagnostic.ts:diagnoseMcp` | `diagnostics.ts:diagnoseToolError` (maps `mcp__*` names onto the `mcp` handler) |
 | Change what a repeated `ListActors` call returns | `coordination/ListActorsTool/ListActorsTool.ts:executeListActors` | `ListActorsTool.ts:rosterFingerprint`, `coordination/ListActorsTool/prompt.ts` |
+| Change what a message means (`inform`, `ask`, `reply`) | `coordination/SendMessageTool/SendMessageTool.ts:sendMessageSchema` | `src/actors/collaboration.ts`, `src/runtime/asks.ts:AskBoard`, `src/kernel/peer-wait.ts:PeerWait` |
 | Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/agent.ts`, `src/context/round-memory.ts` |
 | Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
-| Automa (stateless read-only sub-agent) | `orchestration/AutomaTool/AutomaTool.ts:executeAutoma()` | `tool-models.ts:ToolModelStorage` (`~/.logox/tool-models.json`, `/model automa`) |
+| Trace an Automa dispatch (stateless parallel workers) | `index.ts:Tools.runAutoma()` | `orchestration/AutomaTool/AutomaTool.ts:executeAutomaDispatch()`, `tool-models.ts:ToolModelStorage` (`/model automa`) |
+| Change what a worker may touch, or when a dispatch is refused | `orchestration/AutomaTool/grant.ts:planDispatch()` | `index.ts:Tools.workerDenial()`, `grant.ts:pathDenial()`, `grant.ts:shellDenial()` |
+| Change an actor's swarm name, presets or worker model | `src/actors/profiles/<id>/config.yaml` (`automa:`) | `orchestration/AutomaTool/preset.ts:automaProfileSchema`, `src/application.ts` (`setAutomaEnvironment`) |
+| Change how a receipt reads or what `changed` measures | `orchestration/AutomaTool/AutomaTool.ts:executeAutomaDispatch()` | `snapshots.ts:Snapshots.trackWrites()` |
 | Classify a Shell command as search, read, list or command (timeline grouping) | `ShellTool/classify.ts:classifyShellCommand()` | `src/tui/timeline/tool-groups.ts:groupToolMessages()`, `src/permissions/shell.ts:shellCommands()` |
 | Missing ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `@vscode/ripgrep` in `package.json` |
 | Hanging child process | `process.ts:runProcess()` | `process.ts:killActivityProcesses()` |
@@ -39,11 +43,11 @@ categories:
 ## 3. Common Changes
 ### Add a built-in tool
 1. Create `<tier>/<Name>Tool/` (`core` tools sit directly under `src/tools/`; tiers are `protocol/`, `coordination/`, `orchestration/`). Model it on `GlobTool/`:
-   - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `promptVisibility`, `description`).
+   - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `description`).
    - `prompt.ts`: the `<NAME>_DESCRIPTION` string (see `GlobTool/prompt.ts`).
    - `UI.ts`: `export const UI = createToolUI([...])` naming the title parameters (see `GlobTool/UI.ts`).
    - Optional `diagnostic.ts`, registered in `diagnostics.ts:diagnosticHandlers`.
-2. Metadata defaults: `category: 'core'` implies `loading: 'eager'` and `promptVisibility: 'always'`; any other category defaults to `deferred` and `summary`. `roles` is `'all' | 'director' | 'actors' | string[]`; `terminalVisibility` is `'card' | 'notice' | 'silent'`.
+2. Metadata defaults: `category: 'core'` implies `loading: 'eager'`; any other category defaults to `deferred`. Eager tools carry their full contract; deferred ones show one directory line (`description`) until `LoadTools`. To turn a tool off, give it empty `roles`, here or in `.logox/tools.json`. `roles` is `'all' | 'director' | 'actors' | string[]`; `terminalVisibility` is `'card' | 'notice' | 'silent'`.
 3. Register the schema and description in `index.ts`: import them, add to `schemas` and `descriptions` (typed `Record<ToolName, string>`, so a missing entry fails typecheck), and add to the re-export block.
 4. Register the metadata in `catalog.ts:builtinToolRegistrations()`: import `metadata as metaN` and append it to the array. The JSON-schema definition is derived from `schemas` and `descriptions`; only `SendMessage` is special-cased.
 5. Add the canonical name plus lowercase and snake_case spellings to `types.ts:toolAliases`. Without them `canonicalToolName()` rejects the tool.
@@ -72,7 +76,13 @@ categories:
 - **Legacy parameter names only through `normalizeAliases()`**: `path`, `old_text`, `new_text`, Grep `limit` are accepted but not exposed to the model, and are scheduled for removal. Enforced by `tests/tool-parameter-alignment.test.ts`.
 - **Built-in names are PascalCase and resolve through `toolAliases`**: Enforced by `tests/tools-claude-alignment.test.ts`.
 - **Edit/Write overreach note is advisory**: `index.ts:Tools.withOverreachNote()` still runs the edit and appends one line when `ownership.ts:overreach()` finds another actor's active `ownedFiles`; wired by `Tools.setActivityProbe()` in `application.ts`. Enforced by `tests/tool-ownership.test.ts`.
-- **Automa is read-only and stateless**: only Read, Glob, Grep, WebFetch; Write, Edit and Shell are refused. Enforced by `tests/automa-tool.test.ts`. Its model lives in `ToolModelStorage`, not `ActorCatalog` (storage covered by `tests/tool-models.test.ts`; the decoupling itself is *Unenforced*).
+- **Every Automa tool call re-enters `Tools.execute()` as its principal**: no worker path calls an `execute<Name>()` directly, so the principal's tool access, permission modes, rules and path dangers apply unchanged; worker reads do not satisfy the principal's read guard. Enforced by `tests/automa-tool.test.ts`.
+- **A job's grant only narrows, and is checked before the permission engine**: read-only without `files` and `commands`; a write outside `files`, a command outside its prefixes, a compound command or a tool outside the grant is refused with no approval card. Workers never get Automa, Actor, SendMessage, CraftActor, CancelActor or AskUserQuestion. `files` cannot be the whole workspace, must be disjoint across jobs, and cannot overlap a peer's active assignment or running job. Enforced by `tests/automa-tool.test.ts`.
+- **A receipt's `changed` line is measured at the write, never self-reported**; it does not cover files changed by `commands` (*Unenforced* gap, stated in the tool description). Enforced by `tests/automa-tool.test.ts`.
+- **Automa is single-use unless a job sets `persistence`**: a kept instance belongs to its principal alone, keeps its original grant, is capped at `grant.ts:AUTOMA_MAX_RETAINED` per actor, lives in memory only, and ends on `release`, when its task ends, on failure or cancel, or at `AutomaTool.ts:AUTOMA_RETAINED_INPUT_LIMIT`. Enforced by `tests/automa-tool.test.ts`.
+- **One dispatch at a time per actor, at most 8 jobs**: with no worker able to dispatch, that bounds the total, so there is no global cap. Rate limiting belongs to `src/providers/request-gate.ts`. Enforced by `tests/automa-tool.test.ts`.
+- **The user's `/model automa` choice outranks every preset and role model**: `orchestration/AutomaTool/preset.ts:chooseAutomaModel()`. Enforced by `tests/automa-tool.test.ts`.
+- **Automa is decoupled from the actor catalog**: its model lives in `ToolModelStorage`, not `ActorCatalog` (storage covered by `tests/tool-models.test.ts`; the decoupling itself is *Unenforced*).
 - **`_FinishRound` is mandatory**: always eager, silent and available to all roles; user overrides that defer, hide or restrict it are rejected. Enforced by `tests/tool-disclosure.test.ts`, `tests/tools-registry.test.ts`, `tests/tool-ui.test.ts`.
 - **`loading` is independent of `roles` and `terminalVisibility`**: Enforced by `tests/tool-disclosure-registry.test.ts`.
 - **The deferred directory lists names and one-line descriptions, never schemas**; builtin names cannot be overridden by extension registrations. Enforced by `tests/tool-disclosure-registry.test.ts`.
@@ -92,7 +102,7 @@ categories:
 - **Used by**: `src/kernel/agent.ts` (`agentRequestBase()` pool and exposure), `src/actors/services.ts` (service tool execution), `src/application.ts` (registry creation, MCP registration, `/undo`, `/model automa`), `src/tui/` (`ui-registry.ts` for cards and the question interaction), `src/context/` (round memory from `_FinishRound`).
 
 ## 6. Verification & Gaps
-- Fast run: `node --test dist/tests/tools-*.test.js dist/tests/tool-*.test.js dist/tests/automa-tool.test.js dist/tests/git-status-tool.test.js dist/tests/finish-round.test.js dist/tests/tiered-tools-integration.test.js dist/tests/*disclosure*.test.js`
+- Fast run: `node --test dist/tests/tools-*.test.js dist/tests/tool-*.test.js dist/tests/automa-*.test.js dist/tests/git-status-tool.test.js dist/tests/finish-round.test.js dist/tests/tiered-tools-integration.test.js dist/tests/*disclosure*.test.js`
 - Not covered offline: live Playwright browser runs (`tests/playwright-browser.test.ts` is skipped without installed browsers); live provider behavior for native tool search.
 - Shell has no `run_in_background`, `BashOutput` or `KillShell`.
 - `Shell.timeout` still infers units: values up to 600 are seconds, larger are milliseconds. Removing this needs a caller migration, not a description edit.

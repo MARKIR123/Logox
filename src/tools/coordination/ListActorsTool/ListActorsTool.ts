@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import type {ToolResult} from '../../types.js';
-import type {ActivityStatus, RuntimeSnapshot} from '../../../runtime/contracts.js';
+import {currentTaskProgress, type ActivityStatus, type RuntimeSnapshot} from '../../../runtime/contracts.js';
 import {toolFacts} from '../../../actors/facts.js';
 
 export const listActorsSchema = z.strictObject({});
@@ -8,7 +8,7 @@ export type ListActorsArgs = z.infer<typeof listActorsSchema>;
 export interface ActorStatusReport {
   id: string; name: string; status: 'busy' | 'idle'; activityStatus?: ActivityStatus;
   stage?: string; activityId?: string; currentTool?: string; tool_id?: string; toolElapsed?: string;
-  queuedCount?: number; recentTools?: ReturnType<typeof toolFacts>['recentTools'];
+  queuedCount?: number; selfReportedLabel?: string; recentTools?: ReturnType<typeof toolFacts>['recentTools'];
 }
 const DEFAULT_NAMES: Record<string, string> = {logox: 'Logox', techne: 'Techne', aletheia: 'Aletheia', kalon: 'Kalon'};
 
@@ -42,7 +42,8 @@ export function executeListActors(_args: ListActorsArgs, context: {
     }
     const state = {...base, status: 'busy' as const, activityStatus: active.status, stage: active.stage || active.status};
     if (!isDirector) return state;
-    return {...state, activityId: active.activityId, queuedCount: activities.filter(activity => activity.status === 'queued').length,
+    const label = currentTaskProgress(active.progress)?.label;
+    return {...state, activityId: active.activityId, queuedCount: activities.filter(activity => activity.status === 'queued').length, ...(label ? {selfReportedLabel: label} : {}),
       ...toolFacts(snapshot, active.activityId)};
   });
   const memo = context.memo ?? (memos.get(context.getSnapshot) ?? memos.set(context.getSnapshot, {fingerprints: new Map()}).get(context.getSnapshot)!);
@@ -57,4 +58,4 @@ export function executeListActors(_args: ListActorsArgs, context: {
   return {text: JSON.stringify({actors}, null, 2), isError: false};
 }
 
-export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'ListActors', category: 'coordination', roles: 'all', terminalVisibility: 'card', description: 'List available actors in the active ensemble'};
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'ListActors', category: 'coordination', loading: 'eager', roles: 'all', terminalVisibility: 'card', description: 'List available actors in the active ensemble'};

@@ -50,4 +50,4 @@ export function executeCancelActor(
   };
 }
 
-export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'CancelActor', category: 'orchestration', roles: 'director', terminalVisibility: 'card', description: 'Cancel an active actor task'};
+export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'CancelActor', category: 'orchestration', loading: 'eager', roles: 'director', terminalVisibility: 'card', description: 'Cancel an active actor task'};

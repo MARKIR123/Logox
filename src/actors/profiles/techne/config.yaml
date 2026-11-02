@@ -32,3 +32,14 @@ activity_verbs:
   list: ["Listing/Listed", "Inventorying/Inventoried", "Cataloguing/Catalogued", "Laying out/Laid out"]
   browse: ["Previewing/Previewed", "Checking/Checked", "Test-driving/Test-drove"]
   run: ["Running/Ran", "Firing/Fired", "Cranking/Cranked", "Bench-testing/Bench-tested", "Driving/Drove"]
+automa:
+  name: work crew
+  default_preset: scout
+  model: haiku
+  presets:
+    scout: {tools: read}
+    edit:
+      tools: write
+      commands: ["npm test", "npm run build", "npx tsc --noEmit"]
+      exclusive: ["npm test", "npm run build"]
+      model: sonnet

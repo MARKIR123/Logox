@@ -12,6 +12,18 @@ import {Resources} from '../src/resources/manager.js';
 import {Journal} from '../src/store/journal.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
+import {EnsembleRuntime} from '../src/actors/ensemble.js';
+import {createAgent} from '../src/kernel/agent.js';
+import {composeBaseSystemPrompt, PROMPT_CACHE_BOUNDARY} from '../src/prompts/boundary.js';
+import {createRuntimeContextMessage} from '../src/runtime/context-updates.js';
+import {anthropicSystem, systemText} from '../src/providers/http.js';
+import {canonicalJson} from '../src/kernel/execution-recovery.js';
+import {resolveProviderCapabilities} from '../src/providers/capabilities.js';
+import {Mcp} from '../src/extensions/mcp.js';
+import {builtinToolRegistrations} from '../src/tools/catalog.js';
+import {canonicalToolName} from '../src/tools/types.js';
+import {Tools, toolDefinitions} from '../src/tools/index.js';
+import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
 
 function activity(store: RuntimeStore, id: string, owner: string, status: 'running' | 'waiting_input' | 'queued' | 'paused' | 'completed', formal = true) {
   store.activities.create({sessionId: 's', activityId: id, ownerId: owner, kind: owner === 'logox' ? 'director' : 'actor',
@@ -94,16 +106,18 @@ test('resident facts distinguish self-reported labels and tool completion from t
     const text = f.facts();
     const data = JSON.parse(text.slice(text.indexOf('\n') + 1));
     const child = data.tasks.find((item: {activityId: string}) => item.activityId === 'child');
-    assert.equal(child.status, 'running'); assert.equal(child.rootActivityId, 'root');
-    assert.equal(child.selfReportedLabel, 'Tests passed according to Actor');
-    assert.deepEqual(child.recentTools.map((item: {callId: string}) => item.callId), ['read-3', 'read-4', 'read-5']);
-    assert.equal(child.accepted, undefined); assert.equal(child.verified, undefined);
-    assert.equal(child.evidenceSource, 'runtime');
+    assert.deepEqual(Object.keys(child).sort(), ['activityId', 'ownerId', 'status', 'subtitle']);
+    assert.equal(child.status, 'running');
+    assert.equal(child.subtitle, 'Tests passed according to Actor');
     assert.ok(!text.includes('Large private result body')); assert.ok(!text.includes('Private task instructions'));
-    assert.equal(typeof data.observedAt, 'number');
+    assert.equal(f.facts(), text, 'an unchanged ensemble produces identical text, so no new record is written');
+    f.store.message('s', 'techne', 'assistant', 'More work', {activityId: 'child', kind: 'tool', step: {title: 'Read', callId: 'read-9', state: 'completed', elapsedMs: 1}});
+    assert.equal(f.facts(), text, 'tool activity is not a change in who is doing what');
     f.store.activities.update('s', 'child', {status: 'completed'});
-    const terminal = f.facts();
-    assert.ok(!terminal.includes('Tests passed according to Actor'));
+    assert.notEqual(f.facts(), text, 'a status change is');
+    assert.ok(!f.facts().includes('Tests passed according to Actor'), 'a finished task shows no subtitle');
+    const roster = JSON.parse(executeListActors({}, {caller: 'logox', getSnapshot: () => f.store.getSnapshot()}).text).actors.find((item: {id: string}) => item.id === 'techne');
+    assert.equal(roster.recentTools.at(-1).callId, 'read-9', 'detail is still available through ListActors');
   } finally {await f.close();}
 });
 
@@ -270,4 +284,116 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
     await services.flush();
     await rm(directory, {recursive: true, force: true});
   }
+});
+
+test('only the current snapshot is ever sent: it replaces the last one, comes last and is never stored', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-test-snapshot-'));
+  const store = new RuntimeStore();
+  const requests: ModelRequest[] = [];
+  const stored: unknown[] = [];
+  const turns: ModelTurn[] = [
+    {message: {role: 'assistant', text: '', toolCalls: [{id: 'g1', name: 'Glob', arguments: '{"pattern":"a*"}'}]}, stop: 'tools'},
+    {message: {role: 'assistant', text: '', toolCalls: [{id: 'g2', name: 'Glob', arguments: '{"pattern":"b*"}'}]}, stop: 'tools'},
+    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools'},
+  ];
+  const provider: Provider = {async respond(request, delta) {
+    requests.push(structuredClone(request));
+    const turn = turns[requests.length - 1]!;
+    if (turn.message.text) delta({kind: 'text', text: turn.message.text});
+    return turn;
+  }};
+  let state = 0;
+  const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: 'state ' + ++state})});
+  const journal = new Journal(join(directory, 'sessions'));
+  const old = createRuntimeContextMessage('task-state', 'stale facts', {slot: 'director-facts', activityId: 'a'});
+  const savedFacts = {role: 'context', text: old.text, message: old} as unknown as ActorContext['history'][number];
+  const ensemble = new EnsembleRuntime<string>('s', store, journal, async (prompt, context) => execute(prompt, {...context, history: [...context.history, savedFacts], record: async (message, step) => { stored.push(message); await context.record(message, step); }}), {handoff: async () => {}});
+  try {
+    await ensemble.dispatch('logox', 'Go', 'direct').done;
+    assert.equal(requests.length, 3);
+    const states: number[] = [];
+    for (const request of requests) {
+      const snapshots = request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot');
+      assert.equal(snapshots.length, 1, 'never more than one');
+      assert.equal(request.messages.at(-1), snapshots[0], 'always last');
+      states.push(Number(/state (\d+)$/.exec(request.messages.at(-1)!.text)![1]));
+      assert.ok(!JSON.stringify(request.messages).includes('stale facts'), 'copies stored by older sessions are not replayed');
+    }
+    assert.ok(states[0]! < states[1]! && states[1]! < states[2]!, 'each request carries the state read for it');
+    assert.ok(!JSON.stringify(stored).includes('state '), 'never written to the ledger');
+    assert.ok(stored.length > 0);
+  } finally { await ensemble.close(); await rm(directory, {recursive: true, force: true}); }
+});
+
+test('where the API binds thinking to history, the snapshot is appended only on change and nothing is ever removed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-test-append-'));
+  const store = new RuntimeStore();
+  const requests: ModelRequest[] = [];
+  const turn = (id: string): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern: id})}]}, stop: 'tools'});
+  const turns = [turn('g1'), turn('g2'), turn('g3'),
+    {message: {role: 'assistant' as const, text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools' as const},
+    {message: {role: 'assistant' as const, text: 'Again.', toolCalls: [{id: 'f2', name: '_FinishRound', arguments: JSON.stringify({title: 'Again', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools' as const}];
+  const provider: Provider = {capabilities: {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true},
+    async respond(request, delta) {
+      requests.push(structuredClone(request));
+      const value = turns[requests.length - 1]!;
+      if (value.message.text) delta({kind: 'text', text: value.message.text});
+      return value;
+    }};
+  const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: requests.length < 2 ? 'techne running' : 'techne completed'})});
+  const ensemble = new EnsembleRuntime<string>('s', store, new Journal(join(directory, 'sessions')), execute, {handoff: async () => {}});
+  try {
+    await ensemble.dispatch('logox', 'Go', 'direct').done;
+    assert.equal(requests.length, 4);
+    const copies = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
+    assert.deepEqual(copies(requests[0]!), ['techne running']);
+    assert.deepEqual(copies(requests.at(-1)!), ['techne running', 'techne completed'], 'one record per change, and the earlier one stays');
+    assert.ok(!requests.some(request => request.messages.some(message => message.role === 'context' && message.kind === 'snapshot')));
+    await ensemble.dispatch('logox', 'Again', 'direct').done;
+    assert.equal(requests.length, 5);
+    assert.ok(requests[4]!.messages.some(message => message.role === 'assistant' && message.toolCalls?.some(call => call.name === '_FinishRound')),
+      'the closed round keeps its _FinishRound call when the next round starts');
+    for (let index = 1; index < requests.length; index++) {
+      const before = requests[index - 1]!.messages, after = requests[index]!.messages;
+      // Key order inside a stored record is not part of the wire format; the provider rebuilds each block in a fixed shape.
+      const same = (a: unknown, b: unknown) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+      const diverged = before.findIndex((message, at) => !same(message, after[at]));
+      assert.equal(diverged, -1, `request ${index} rewrote message ${diverged}: ${JSON.stringify(before[diverged])} became ${JSON.stringify(after[diverged])}`);
+    }
+  } finally { await ensemble.close(); await rm(directory, {recursive: true, force: true}); }
+});
+
+test('only the Anthropic protocol is append-only', () => {
+  const settings = {kind: 'anthropic', baseUrl: 'https://proxy.example/v1', model: 'm', key: '', temperature: 0, maxTokens: 1, timeoutMs: 1} as const;
+  assert.equal(resolveProviderCapabilities(settings as never).appendOnlyHistory, true);
+  assert.equal(resolveProviderCapabilities({...settings, kind: 'openai_compat'} as never).appendOnlyHistory, undefined);
+});
+
+test('the system prompt is two cached parts for Anthropic and plain text everywhere else', () => {
+  const {system} = composeBaseSystemPrompt({cwd: '/w', ownerId: 'techne', builtinPrompt: 'Persona', rulesContext: 'Project rule'});
+  const parts = anthropicSystem(system) as readonly {text: string; cache_control: unknown}[];
+  assert.equal(parts.length, 2);
+  assert.ok(parts.every(part => part.cache_control));
+  assert.ok(parts[0]!.text.includes('# Team Collaboration') && !parts[0]!.text.includes('Project rule'));
+  assert.ok(parts[1]!.text.startsWith('# Project Guidelines'));
+  assert.ok(!systemText(system).includes(PROMPT_CACHE_BOUNDARY));
+  assert.ok(!parts.some(part => part.text.includes(PROMPT_CACHE_BOUNDARY)));
+  const changed = anthropicSystem(composeBaseSystemPrompt({cwd: '/elsewhere', ownerId: 'techne', builtinPrompt: 'Persona', rulesContext: 'Another rule'}).system) as readonly {text: string}[];
+  assert.equal(changed[0]!.text, parts[0]!.text, 'a new project or rule leaves the fixed part byte-identical');
+});
+
+test('an actor getting its own browser client does not change the tool list', () => {
+  const mcp = new Mcp(tmpdir(), {playwright: {transport: 'stdio', command: 'node', args: ['-v'], env: {}, enabled: true, description: '', timeout: 1, startup_timeout_s: 1}});
+  const before = JSON.stringify(mcp.definitions());
+  assert.match(before, /Servers: playwright"/);
+  const client = Reflect.get(mcp, 'clientFor') as (server: string, owner: string) => unknown;
+  assert.ok(Reflect.apply(client, mcp, ['playwright', 'techne']));
+  assert.equal(JSON.stringify(mcp.definitions()), before);
+});
+
+test('BorrowSkill is gone', () => {
+  assert.ok(!builtinToolRegistrations().some(item => item.metadata.name === 'BorrowSkill'));
+  assert.equal(canonicalToolName('borrow_skill'), undefined);
 });

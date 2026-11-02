@@ -121,18 +121,6 @@ test('unavailable task models require confirmation and preserve the actual repla
     assert.equal(f.app.contexts.status({sessionId: 'actors', ownerId: 'scout'})?.window, 131072);
   } finally {await f.cleanup();}
 });
-test('borrowed skills affect only the current task index', async () => {
-  let calls = 0;
-  const f = await fixture(async request => {
-    calls++;
-    if (calls === 1) {assert.ok(!request.system.includes('配色技能')); return call('borrow_skill', {name: 'paint'});}
-    if (calls === 2) assert.ok(request.system.includes('配色技能'));
-    if (calls === 3) assert.ok(!request.system.includes('配色技能'));
-    return complete('配色要求已核对');
-  });
-  try {await direct(f.app, '借阅技能'); await direct(f.app, '新的任务'); assert.equal(calls, 3);}
-  finally {await f.cleanup();}
-});
 test('actor creation requires exact-content approval and rejection writes nothing', async () => {
   const content = serializeActor({...builtinActors[2]!, id: 'builder'});
   let calls = 0;

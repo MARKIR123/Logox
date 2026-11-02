@@ -78,7 +78,7 @@ Logox 的请求里带有一份常驻事实：相关任务的祖先、确切状�
 
 ## 技能
 
-技能可以来自角色目录、frontmatter、角色的 `skills` 列表或显式分配；用 `BorrowSkill` 借阅的技能只影响本次任务。技能只提供流程文字，不绕过工具权限，格式见[资源与扩展](resources-and-extensions.md)。
+技能可以来自角色目录、frontmatter、角色的 `skills` 列表或显式分配。要用别的角色的技能，直接用 Read 读取对应文件即可，不进入技能列表。技能只提供流程文字，不绕过工具权限，格式见[资源与扩展](resources-and-extensions.md)。
 
 ## 边界与限制
 

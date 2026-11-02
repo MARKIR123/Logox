@@ -103,7 +103,7 @@ test('MCP images reach the next model request through the application', async ()
       assert.equal(result.images[0]!.mimeType, 'image/png');
       assert.equal(Buffer.from(result.images[0]!.data, 'base64').subarray(1, 4).toString(), 'PNG');
       return {stop: 'tools', message: {role: 'assistant', text: 'Screenshot received.', toolCalls: [{
-        id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Screenshot verified', verification: 'Image received', carry_forward: []}),
+        id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Screenshot verified', outcome: 'Round outcome.', verification: 'Image received', carry_forward: []}),
       }]}};
     }}});
   try {

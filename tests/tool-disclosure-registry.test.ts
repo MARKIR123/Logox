@@ -27,7 +27,8 @@ test('the discovery directory lists every eligible deferred name with short desc
   assert.equal(typeof resolve, 'function'); assert.equal(typeof format, 'function');
   const pool = resolve.call(registry, 'logox');
   const first = format.call(registry, pool, 'anthropic');
-  for (const name of ['Actor', 'ReadActor', 'ListActors', '_GitStatus', 'SendMessage']) assert.match(first, new RegExp('\\b' + name + ': [^\\n]+'));
+  for (const name of ['CraftActor', '_GitStatus']) assert.match(first, new RegExp('\\b' + name + ': [^\\n]+'));
+  for (const name of ['Actor', 'SendMessage', 'ListActors', 'ReadActor', 'CancelActor']) assert.doesNotMatch(first, new RegExp('\\b' + name + ': '), name + ' is offered directly');
   assert.doesNotMatch(first, /(?:^|\n)\s*-?\s*(Read|Write|_FinishRound):|parameters|properties|src\/tools/);
   assert.equal(format.call(registry, pool, 'none'), '');
   assert.equal(format.call(registry, resolve.call(registry, 'logox'), 'anthropic'), first);
@@ -74,7 +75,7 @@ test('application startup and reload apply tool overrides without global state o
     provider: {async respond(request) {
       seen.push(request);
       return {stop: 'tools', message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'done-' + seen.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', verification: null, carry_forward: []})}]}};
+        arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
     }}});
   try {
     await app.ensemble.dispatch('logox', 'Inspect the catalog.', 'direct', {inputKind: 'human'}).done;

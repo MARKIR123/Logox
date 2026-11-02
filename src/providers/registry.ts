@@ -14,6 +14,7 @@ import {AuthStorage} from './auth.js';
 import {CustomProviderStorage, type CustomProviderRecord} from './custom-storage.js';
 import {createHttpTransport} from './transport.js';
 import {refreshOpenAIToken} from './oauth.js';
+import {RequestGate, type RequestGateOptions} from './request-gate.js';
 
 const credentialSchema = z.object({type: z.literal('api_key'), key: z.string(), env: z.record(z.string(), z.string()).optional()});
 const modelsSchema = z.object({data: z.array(z.object({id: z.string().min(1),
@@ -71,6 +72,10 @@ export class ProviderRegistry {
   private closed = false;
   private readonly capabilities = new Map<string, {window?: number; maxOutput?: number}>();
   readonly customProviders = new Map<string, CustomProviderRecord>();
+  /** One gate per normalized endpoint, shared with candidates so every model request to an endpoint queues together. */
+  private gates = new Map<string, RequestGate>();
+  /** Gate tuning; tests shorten cooldowns. Applies to gates created afterwards. */
+  gateOptions: RequestGateOptions = {};
   constructor(config: Config, private readonly env: NodeJS.ProcessEnv = process.env,
     fetcher?: typeof fetch,
     readonly auth = new AuthStorage(),
@@ -146,6 +151,8 @@ export class ProviderRegistry {
   }
   candidate(name: string, model?: string): ProviderRegistry {
     const next = new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth, this.customStorage);
+    next.gates = this.gates;
+    next.gateOptions = this.gateOptions;
     for (const [k, v] of this.customProviders) next.customProviders.set(k, v);
     for (const [key, value] of this.capabilities) next.capabilities.set(key, {...value});
     const settings = modelSettings(next.config, this.env);
@@ -216,6 +223,17 @@ export class ProviderRegistry {
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};
   }
+  /** Gate key is the endpoint only (lowercase origin plus path); credentials, query and fragment are never part of it. */
+  private gateFor(baseUrl: string): RequestGate {
+    let key: string;
+    try {
+      const url = new URL(baseUrl);
+      key = url.protocol.toLowerCase() + '//' + url.host.toLowerCase() + url.pathname.replace(/\/+$/, '');
+    } catch {key = baseUrl.trim().replace(/\/+$/, '').toLowerCase();}
+    let gate = this.gates.get(key);
+    if (!gate) {gate = new RequestGate(this.gateOptions); this.gates.set(key, gate);}
+    return gate;
+  }
   providerFor(name: string, model?: string): Provider {
     return this.candidate(name, model).provider();
   }
@@ -231,7 +249,8 @@ export class ProviderRegistry {
       signal.throwIfAborted();
       const settings = await this.settings();
       signal.throwIfAborted();
-      return createProvider(settings, this.fetcher).respond(request, onDelta, signal);
+      const inner = createProvider(settings, this.fetcher);
+      return this.gateFor(settings.baseUrl).run(() => inner.respond(request, onDelta, signal), signal);
     }};
   }
   async models(signal: AbortSignal = AbortSignal.timeout(15000)): Promise<string[]> {

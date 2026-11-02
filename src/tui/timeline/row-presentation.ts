@@ -1,6 +1,7 @@
 import stringWidth from 'string-width';
 import type {Step} from '../../runtime/contracts.js';
-import {stepIcon, thinkingDuration, stepStatus} from '../appearance/animation.js';
+import {stepElapsed} from '../../runtime/steps.js';
+import {stepIcon, thinkingDuration, stepStatus, swarmElapsed} from '../appearance/animation.js';
 import {mixHex} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SceneRow, SceneSegment} from './scene.js';
@@ -66,7 +67,7 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
     return cached.decorated;
   }
 
-  const status = animation.step && running ? animation.thinking ? thinkingDuration(animation.step, now) : stepStatus(animation.step, now).slice(0, 7) : '';
+  const status = animation.step && running ? animation.thinking ? thinkingDuration(animation.step, now) : stepStatus(animation.step, now).trim().slice(0, 7) : '';
   const base = rowSegments(row);
   const mappedCells = new Map(row.selectionCells?.map(cell => [cell.column, cell]));
   const actorColor = animation.actorColor ?? palette.accent;
@@ -84,6 +85,8 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
     const cell = mappedCells.get(column);
     if (running && cell?.key.endsWith(':status') && cell.offset < status.length)
       segment = {...segment, text: status[cell.offset] ?? segment.text};
+    if (running && animation.step && cell?.key.endsWith(':swarm_icon') && cell.offset === 0) segment = {...segment, text: stepIcon(animation.step, now, motion, animation.frames), color: actorColor};
+    if (running && animation.step && cell?.key.endsWith(':swarm_time')) segment = {...segment, text: swarmElapsed(stepElapsed(animation.step, now))[cell.offset] ?? ' '};
     if (isWorking && cell?.key.endsWith(':icon') && cell.offset === 0) {
       if (!activeActor || !animation.open) {
         segment = {...segment, text: stepIcon(animation.step ?? ({state: 'running'} as Step), now, motion, animation.frames), color: actorColor};

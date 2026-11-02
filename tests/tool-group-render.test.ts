@@ -50,6 +50,25 @@ test('group header has no tool icon and keeps the single-tool icon elsewhere', (
   assert.ok(rows.some(row => /▮ Edit/i.test(text(row))), 'non-collapsible tools keep their icon');
 });
 
+test('a running actor does not split the Director tool run; only its card does', () => {
+  const f = fixture();
+  f.call('Glob', {pattern: 'before-1'}); f.call('Glob', {pattern: 'before-2'});
+  f.store.activities.create({sessionId: 's', activityId: 'b', ownerId: 'techne', kind: 'actor', title: 'Rig', taskTitle: 'Rig', status: 'running', stage: 'x', detail: ''});
+  f.store.message('s', 'techne', 'user', 'Build the rig.', {activityId: 'b', inputKind: 'director'});
+  const actor = new Steps(f.store, {sessionId: 's', activityId: 'b', ownerId: 'techne'});
+  for (const pattern of ['after-1', 'after-2', 'after-3']) {
+    const id = actor.tool({id: 'actor-' + pattern, name: 'Read', arguments: JSON.stringify({file_path: 'G:/p/' + pattern})});
+    actor.start(id); actor.finish(id, 'completed', 'ok');
+    f.call('Glob', {pattern});
+  }
+  const rows = f.rows(120).map(text);
+  assert.equal(rows.filter(row => /[▸▾] [A-Z][\w' -]* 2 patterns/.test(row)).length, 1, 'calls before the card stay one group');
+  assert.equal(rows.filter(row => /[▸▾] [A-Z][\w' -]* 3 patterns/.test(row)).length, 1, 'calls after the card fold across the actor messages');
+  assert.ok(!rows.some(row => /▮ Glob/.test(row)), rows.join('\n'));
+  const card = rows.findIndex(row => /Techne/.test(row));
+  assert.ok(card > rows.findIndex(row => / 2 patterns/.test(row)) && card < rows.findIndex(row => / 3 patterns/.test(row)), 'the card sits between the two groups');
+});
+
 test('single collapsible tool call stays a normal tool card', () => {
   const f = fixture(); f.call('Read', {file_path: 'G:/p/a.ts'});
   const rows = f.rows(100);

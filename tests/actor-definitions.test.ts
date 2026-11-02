@@ -116,7 +116,6 @@ test('技能双向声明、显式分配与一次任务借阅不永久扩权', as
     const names = (id: string) => resources.skillsFor({actorId: id}).map(skill => skill.name);
     assert.deepEqual(names('logox'), ['general']); assert.deepEqual(names('kalon'), ['design']); assert.deepEqual(names('techne'), []);
     assert.deepEqual(resources.skillsFor({actorId: 'techne', skills: ['design']}).map(skill => skill.name), ['design']);
-    assert.equal(resources.skillsFor({actorId: 'techne', borrowed: ['general']}).length, 1); assert.deepEqual(names('techne'), []);
     resources.assignSkill('general', 'techne'); assert.deepEqual(names('techne'), ['general']);
     resources.assignSkill('general', 'techne', false); assert.deepEqual(names('techne'), []);
     assert.ok(!resources.prompt({actorId: 'techne'}).context.includes('设计技能'));

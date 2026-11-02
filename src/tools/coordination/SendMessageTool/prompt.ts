@@ -1,2 +1,6 @@
-export const SEND_MESSAGE_DESCRIPTION =
-  'Send high-signal peer coordination data to an actor, Director (logox), or all. Recipients process messages at their next step boundary without creating duplicate cards. Replies are optional and entirely at the recipient\'s discretion—do NOT expect, force, or send automated ping-pong courtesy replies. For completed peers, messages are recorded passively unless `wake: true` is set for a rework pass.';
+export const SEND_MESSAGE_DESCRIPTION = `Send high-signal coordination data to an actor, Director (logox), or all. Recipients get it at their next step boundary without a duplicate card. Say what the message is with \`type\`:
+- \`inform\` (default): one way. It needs no answer, so do not wait for one and do not send courtesy replies.
+- \`ask\`: you need an answer. The call returns at once, so keep working on whatever does not depend on it. Your task cannot finish until the answer arrives: if nothing else is left, end your round as usual, your task stays open at no cost, and you resume when the reply comes. An \`ask\` to \`all\`, or to a teammate who has not been dispatched, is refused. Ask Director instead.
+- \`reply\`: your final answer to someone's \`ask\`. Only this closes their question. A question can take several messages to settle: if you cannot answer yet, keep working, or send \`inform\` to say what you need; send \`reply\` when you have the answer, and always before you finish.
+
+To depend on a teammate's work, \`ask\` them to tell you when it is ready, rather than watching for files: a file changing does not mean it is finished. For completed peers, \`inform\` is recorded passively unless \`wake: true\` is set for a rework pass; an \`ask\` always wakes them.`;

@@ -136,7 +136,7 @@ test('small windows clamp reserves and output allowance and reject oversized cur
   const model = {identity: 'small', window: 256, maxOutput: 500};
   const f = await fixture({}, model);
   try {
-    assert.deepEqual(watermarks(model, f.options.policy), {high: 192, low: 128, safety: 16});
+    assert.deepEqual(watermarks(model, f.options.policy), {high: 204, low: 128, safety: 16});
     await f.append('current', {role: 'user', text: 'hello'});
     const result = await f.contexts.prepare(identity, {system: '', tools: []}, signal);
     assert.ok(result.request.maxTokens! <= model.window - estimateRequest(result.request) - 16);
@@ -222,7 +222,7 @@ test('compaction notices distinguish automatic thresholds, forced cleanup and no
       await f.append('current', {role: 'user', text: 'Continue'});
       assert.equal((await f.contexts.prepare(identity, base, signal, force)).compacted, true);
       const notice = f.reports.find(text => text.startsWith('[Context] Compacted'))!;
-      assert.match(notice, /high watermark 3072; window 4096/);
+      assert.match(notice, /high watermark 3276; window 4096/);
       assert.match(notice, force ? /history cleanup/ : /automatic/);
       assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
       f.reports.length = 0;

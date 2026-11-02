@@ -5,6 +5,7 @@ import {finishRoundSchema, isFinishRound} from '../tools/protocol/_FinishRoundTo
 
 export const roundMemorySchema = z.strictObject({
   title: z.string().min(1).max(120),
+  outcome: z.string().min(1).max(600).optional(),
   verification: z.string().max(240).nullable(),
   carryForward: z.array(z.string().min(1).max(240)).max(8),
   source: z.enum(['model', 'runtime', 'legacy']),
@@ -14,14 +15,15 @@ export const taskDeliverySchema = z.strictObject({title: z.string().min(1).max(1
 export type TaskDelivery = z.infer<typeof taskDeliverySchema>;
 
 const field = (text: string): string => text.replace(/\|/g, '/').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
-export function formatRoundIndex(input: {ordinal: number; title: string; status: RoundStatus; verification: string | null; carryForward: readonly string[]; start: number; end: number}): string {
+export function formatRoundIndex(input: {ordinal: number; title: string; status: RoundStatus; verification: string | null; outcome?: string | undefined; carryForward: readonly string[]; start: number; end: number}): string {
   if (![input.ordinal, input.start, input.end].every(value => Number.isSafeInteger(value) && value > 0) || input.end < input.start) {
     throw new Error('Round indexes require a positive ordinal and an inclusive physical line range.');
   }
   const status = {completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled'}[input.status];
   const verification = input.verification ? field(input.verification) : '';
   const carry = input.carryForward.map(field).filter(Boolean).join('; ');
-  return `${input.ordinal} | ${field(input.title)} | ${status}${verification ? '; ' + verification : ''}${carry ? ' | ' + carry + ' | ' : ' || '}${input.start}:${input.end}`;
+  const outcome = input.outcome ? field(input.outcome) : '';
+  return `${input.ordinal} | ${field(input.title)} | ${status}${verification ? '; ' + verification : ''} | ${outcome} | ${carry} | ${input.start}:${input.end}`;
 }
 
 export function omitInternalToolPairs(messages: readonly ModelMessage[], preserveCallIds: ReadonlySet<string> = new Set()): ModelMessage[] {
@@ -54,7 +56,7 @@ export function extractRoundMemory(messages: readonly ModelMessage[], finalizerC
       if (receipt?.role !== 'tool' || receipt.isError || !isFinishRound(receipt.name)) continue;
       try {
         const parsed = finishRoundSchema.safeParse(JSON.parse(call.arguments));
-        if (parsed.success) return {title: parsed.data.title, verification: parsed.data.verification, carryForward: parsed.data.carry_forward, source: 'model'};
+        if (parsed.success) return {title: parsed.data.title, outcome: parsed.data.outcome, verification: parsed.data.verification, carryForward: parsed.data.carry_forward, source: 'model'};
       } catch {}
     }
   }

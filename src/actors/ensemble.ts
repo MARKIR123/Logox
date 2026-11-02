@@ -1,3 +1,5 @@
+import type {JobGrant} from '../tools/orchestration/AutomaTool/grant.js';
+import type {AutomaSwarm} from '../runtime/contracts.js';
 import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
 import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot, type TaskOriginData} from '../runtime/contracts.js';
@@ -40,7 +42,10 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly progress?: TaskProgressSnapshot;
   saveProgress?(progress: TaskProgressSnapshot): Promise<void>;
   readonly source?: string;
+  /** Set when a stateless worker acts for this actor: permissions stay the principal's, reads never count as the principal's own. */
+  readonly via?: {readonly label: string; readonly workerId: string; readonly grant: JobGrant};
   startTool?(): void;
+  reportSwarm?(swarm: AutomaSwarm): void;
   wait?(reason: string): () => void;
   drainInbox?(): readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
   humanInputs?(): readonly string[];

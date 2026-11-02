@@ -21,7 +21,10 @@ const capacitySchema = z.object({
 export const contextPolicySchema = z.object({
   keep_recent_rounds: z.number().int().nonnegative().default(2),
   keep_recent_tools: z.number().int().nonnegative().default(2),
+  /** Folded rounds kept as index lines when older history is merged into an overview. */
+  keep_index_lines: z.number().int().nonnegative().default(20),
   reserve_tokens: z.number().int().nonnegative().default(32768),
+  high_watermark_ratio: z.number().positive().lt(1).default(0.8),
   low_watermark_ratio: z.number().positive().lt(1).default(0.5),
   max_budget_tokens: z.number().int().positive().optional(),
   target_budget_tokens: z.number().int().positive().optional(),
@@ -47,7 +50,7 @@ const schema = z.object({
   mcp: z.object({playwright: z.boolean().default(true), servers: z.record(z.string().min(1), mcpServerSchema).default({})})
     .default({playwright: true, servers: {}}),
   hooks: hooksSchema.default({enabled: false, timeout_s: 5, entries: []}),
-  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, reserve_tokens: 32768, low_watermark_ratio: 0.5}),
+  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, keep_index_lines: 20, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5}),
   models: z.record(z.string(), capacitySchema).default({}),
   provider: z.object({
     context_window: capacitySchema.shape.context_window, max_output_tokens: capacitySchema.shape.max_output_tokens,
@@ -62,6 +65,9 @@ const schema = z.object({
     max_tokens: z.number().int().positive().default(16384),
     timeout: z.number().positive().default(600),
   }).default({thinking_effort: 'auto', name: 'openai-compatible', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
+  automa: z.object({
+    max_parallel: z.number().int().min(1).max(8).default(4),
+  }).default({max_parallel: 4}),
   kernel: z.object({
     max_iterations: z.number().int().nonnegative().default(0),
     max_retries: z.number().int().nonnegative().max(10).default(3),

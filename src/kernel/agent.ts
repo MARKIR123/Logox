@@ -23,6 +23,12 @@ import type {TaskModels} from '../actors/task-models.js';
 import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFingerprint, type ExecutionRecoveryKind} from './execution-recovery.js';
+import {ToolPacing} from './tool-pacing.js';
+import {PeerWait} from './peer-wait.js';
+import {asksFor} from '../runtime/asks.js';
+import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
+import {ASK_SENT_NOTE, ASK_SENT_NOTE_DIRECTOR, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
+import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {composeBaseSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
@@ -47,6 +53,8 @@ export interface AgentRequestBase {
   tools: readonly ToolDefinition[];
   pool: readonly ResolvedTool[];
   contextUpdates?: readonly RuntimeContextMessage[];
+  /** The ensemble as it is right now: sent last on this request only, so earlier states never pile up in context. */
+  snapshot?: string;
 }
 export interface AgentOptions {
   cwd: string;
@@ -107,6 +115,11 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
   return {system, pool, tools: buildToolExposure(pool, extractDiscoveredToolNames(discoveryPairs), protocol),
     contextUpdates: catalog.updates, ...(protocol !== 'none' ? {toolDiscovery: protocol} : {})};
 }
+/** Times a finishing actor is told to answer before it may finish anyway; the asker is then told it ended without replying. */
+const ASK_CLOSE_REMINDERS = 2;
+/** Model requests an actor may work with an unanswered question before its single working reminder. */
+const ASK_WORK_REMINDER_AFTER = 4;
+
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const localRecoveries = new Map<string, ActorRecovery>();
   const approvalHandled = new Set(options.extraApprovalHandled ?? []);
@@ -123,9 +136,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
     const observeProgress = (fingerprint: string) => options.executionProgress?.(context, fingerprint) ?? localRecovery.progress(root, fingerprint);
     const taskModel = await options.taskModels?.begin(context);
     let outcome: 'completed' | 'failed' | 'cancelled' = 'failed';
+    const asks = asksFor(options.store);
+    let lastDrain = 0;
     try {
-      const messages: ModelMessage[] = normalizeMessages(omitInternalToolPairs(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
-        : storedMessage(entry))));
+      // Round-closing pairs stay in the working history; each request decides whether to send them.
+      const messages: ModelMessage[] = normalizeMessages(context.history.map(entry => entry.role === 'user' ? inputMessage(entry.text, entry)
+        : storedMessage(entry)));
       messages.push(inputMessage(prompt, context));
       // Request repair may convert unpaired tool records into user messages; approval authorization uses only original user records.
       const humanTexts = context.authorization ?? [...context.history.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
@@ -141,11 +157,40 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       let memoryRepair = false;
       let finalText = '';
       const correctionCalls = new Set<string>();
+      const pacing = new ToolPacing();
+      const directorWaiting = () => context.ownerId === 'logox' && options.store.getSnapshot().activities.some(activity =>
+        activity.sessionId === context.sessionId && activity.kind === 'actor' && ['queued', 'running', 'waiting_input'].includes(activity.status));
+      const teammatesRunning = () => options.store.getSnapshot().activities.some(activity => activity.sessionId === context.sessionId && activity.kind === 'actor' &&
+        activity.ownerId !== context.ownerId && ['queued', 'running', 'waiting_input'].includes(activity.status));
+      const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
+        signal: context.signal, hasPendingInbox: () => context.hasPendingInbox?.() ?? false});
+      const owedSeen = new Map<string, number>();
+      let closeReminders = 0;
+      const owesReply = () => closeReminders < ASK_CLOSE_REMINDERS && asks.owed(context.sessionId, context.ownerId).length > 0;
+      // An actor about to finish answers what it owes first, then waits for what it is owed; only then may its task end.
+      // Owed replies come first so two actors asking each other are told to answer before either can park.
+      const holdClose = async (): Promise<boolean> => {
+        if (owesReply()) {
+          closeReminders++;
+          recovery = askOwedAtClose(asks.owed(context.sessionId, context.ownerId));
+          recoveringKind = undefined; memoryRepair = false; finalText = '';
+          correctionCalls.clear();
+          context.acceptRoundMemory?.(null);
+          return true;
+        }
+        if (!wait.pending) return false;
+        context.report('Waiting', wait.describe());
+        await wait.park();
+        return true;
+      };
       context.acceptRoundMemory?.(null);
       const drainInbox = async (closing = false): Promise<boolean> => {
+        lastDrain = Date.now();
         const incoming = await (closing && context.closeInbox ? context.closeInbox() : context.drainInbox?.()) ?? [];
         if (!incoming.length) return false;
         messages.push(...incoming);
+        pacing.reset();
+        closeReminders = 0;
         const humanInputs = context.humanInputs?.();
         if (humanInputs) userRequests.splice(0, userRequests.length, ...[...new Set(humanInputs)].slice(-8).map(text => ({role: 'user' as const, text})));
         const inboundRecovery = context.inboundRecovery?.();
@@ -171,6 +216,14 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       requestLoop: for (;;) {
         context.signal.throwIfAborted();
         await drainInbox();
+        const waitNotices = wait.take();
+        if (waitNotices.length) {
+          pacing.reset();
+          closeReminders = 0;
+          memoryRepair = false; finalText = ''; recovery = ''; recoveringKind = undefined;
+          correctionCalls.clear();
+          context.acceptRoundMemory?.(null);
+        }
         const activeProvider = taskModel?.provider() ?? options.provider();
         const assembly: AgentAssembly = {capabilities: await activeProvider.resolveCapabilities?.(context.signal) ?? activeProvider.capabilities ?? FALLBACK_CAPABILITIES, history: messages};
         instruction = options.requestBase ? await options.requestBase(context, assembly)
@@ -187,7 +240,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           iteration = 0;
         }
-        const definitions = memoryRepair ? [finishRoundTool] : instruction.tools;
+        const closingOnly = memoryRepair || pacing.withdrawn && !owesReply();
+        const definitions = closingOnly ? [finishRoundTool] : instruction.tools;
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const appendUpdate = async (value: RuntimeContextMessage) => {
           const update = value.kind.startsWith('environment-') || value.kind === 'capability-change' ? value : {...value, data: {...value.data, activityId: context.activityId}};
@@ -202,12 +256,23 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           return false;
         };
         for (const update of 'contextUpdates' in instruction ? instruction.contextUpdates ?? [] : []) await appendUpdate(update);
+        const appendOnly = assembly.capabilities.appendOnlyHistory === true;
+        if (appendOnly && instruction.snapshot) await appendUpdate(createRuntimeContextMessage('task-state', instruction.snapshot, {slot: 'ensemble'}));
+        for (const notice of waitNotices) {
+          await appendUpdate(createRuntimeContextMessage('task-state', notice.text, {slot: 'wait-' + notice.id}));
+          options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
+        }
+        for (const ask of asks.owed(context.sessionId, context.ownerId)) {
+          const seen = (owedSeen.get(ask.id) ?? 0) + 1;
+          owedSeen.set(ask.id, seen);
+          if (seen === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('task-state', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
+        }
         const activityState = progress.instruction();
         if (activityState) await appendUpdate(createRuntimeContextMessage('task-state', activityState, {slot: 'activity-label'}));
         if (recovery) await appendUpdate(createRuntimeContextMessage('recovery', recovery));
         if (memoryRepair) await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
         const base = {system: instruction.system,
-          ...(!memoryRepair && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
+          ...(!closingOnly && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
           // Tool fields and validation are unchanged; omits the draft-version URL repeated in every schema.
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
         const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
@@ -216,8 +281,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');
         }
         const initialProjection = prepared?.request ?? {...base, messages};
-        const projected = {...initialProjection, messages: normalizeMessages(omitInternalToolPairs(initialProjection.messages, correctionCalls))
-          .filter(message => message.role !== 'context' || message.kind !== 'finalizer' || memoryRepair && message.data?.activityId === context.activityId)};
+        const snapshot = instruction.snapshot && !appendOnly ? [createRuntimeContextMessage('snapshot', instruction.snapshot, {activityId: context.activityId})] : [];
+        // Hiding finished `_FinishRound` pairs and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
+        const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(initialProjection.messages, correctionCalls))
+          .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || memoryRepair && message.data?.activityId === context.activityId)
+          // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
+          .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
         // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
         let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
@@ -347,7 +416,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           ids.add(call.id);
         }
         const calls = turn.message.toolCalls ?? [];
-        if (calls.some(call => isFinishRound(call.name)) || memoryRepair && calls.length) {
+        if (calls.some(call => isFinishRound(call.name)) || closingOnly && calls.length) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {try {JSON.parse(call.arguments); return false;} catch {return true;}});
           const onlyFinalizer = calls.length === 1 && isFinishRound(calls[0]!.name);
           if (onlyFinalizer && !truncated) {
@@ -358,6 +427,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 let clamped = false;
                 if (typeof obj.title === 'string' && obj.title.trim().length > 120) {
                   obj.title = obj.title.trim().slice(0, 120); clamped = true;
+                }
+                if (typeof obj.outcome === 'string' && obj.outcome.trim().length > 600) {
+                  obj.outcome = obj.outcome.trim().slice(0, 600); clamped = true;
                 }
                 if (typeof obj.verification === 'string' && obj.verification.trim().length > 240) {
                   obj.verification = obj.verification.trim().slice(0, 240); clamped = true;
@@ -399,11 +471,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             outcome = 'completed'; return;
           }
           context.signal.throwIfAborted();
+          if ((valid || closingOnly) && await holdClose()) continue requestLoop;
           if (await drainInbox(valid || memoryRepair)) continue;
           context.signal.throwIfAborted();
           if (valid) {context.acceptRoundMemory?.(calls[0]!.id); outcome = 'completed'; return;}
           if (memoryRepair) {
-            if (!finalText) throw new ExecutionRecoveryError('no_delivery', 'stop');
+            if (!finalText && !directorWaiting()) throw new ExecutionRecoveryError('no_delivery', 'stop');
             outcome = 'completed'; return;
           }
           memoryRepair = true;
@@ -485,6 +558,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 const resume = steps.wait(id, reason); try {return await operation();} finally {resume();}
               };
               const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
+                reportSwarm: (swarm: NonNullable<Step['swarm']>) => steps.swarm(id, swarm),
                 permission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.permission(input)),
                 ask: (input: Parameters<typeof context.ask>[0]) => waiting('Awaiting answer', () => context.ask(input))};
               if (canonical === 'LoadTools') {
@@ -524,9 +598,19 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                   try {
                     const rawResult = await execute(call);
                     const result = diagnoseToolError(call, rawResult);
+                    const sent = (canonicalToolName(call.name) ?? call.name) === 'SendMessage' && !result.isError ? sendMessageSchema.safeParse(JSON.parse(call.arguments)) : undefined;
+                    if (sent?.success && sent.data.type === 'reply') asks.answer(context.sessionId, context.ownerId, sent.data.to);
+                    if (sent?.success && sent.data.type === 'ask') {
+                      asks.open({sessionId: context.sessionId, from: context.ownerId, fromActivityId: context.activityId, to: sent.data.to,
+                        label: (sent.data.summary || sent.data.message).replace(/\s+/g, ' ').slice(0, 120)});
+                      return {...result, text: result.text + '\n\n' + (context.ownerId === 'logox' ? ASK_SENT_NOTE_DIRECTOR : ASK_SENT_NOTE)};
+                    }
+                    const note = pacing.observe(call, result, {
+                      waiting: directorWaiting() ? 'director' : context.ownerId !== 'logox' && teammatesRunning() ? 'companion' : undefined,
+                      automaOffered: instruction.tools.some(tool => tool.name === AUTOMA_TOOL_NAME)});
                     steps.finish(id, context.signal.aborted ? 'cancelled' : result.isError ? 'failed' : 'completed', call.name + '\n' + result.text,
                       result.isError ? result.disposition ?? 'error' : undefined);
-                    return result;
+                    return note ? {...result, text: result.text + '\n\n' + note} : result;
                   } catch (error) {
                     const rawErr: ToolResult = {text: context.signal.aborted ? 'Tool cancelled.' : String(error), isError: true};
                     const result = diagnoseToolError(call, rawErr);
@@ -571,15 +655,33 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             recovery = '';
             recoveringKind = undefined;
           }
+          if (pacing.withdrawn && !owesReply()) {
+            recovery = context.ownerId === 'logox' ? DIRECTOR_WAIT_INSTRUCTION : COMPANION_WAIT_INSTRUCTION;
+            recoveringKind = undefined;
+            if (context.ownerId !== 'logox' && !wait.pending) wait.watchAnyTeammate();
+          }
           continue;
         }
         if (prepared && !context.signal.aborted) options.context?.observe(context, request, turn, prepared.model);
         if (memoryRepair) {
           await persist(turn.message, thinkingStep);
           context.signal.throwIfAborted();
+          if (await holdClose()) continue requestLoop;
           if (await drainInbox(true)) continue;
           context.signal.throwIfAborted();
-          if (!finalText) throw new ExecutionRecoveryError('no_delivery', 'stop');
+          if (!finalText && !directorWaiting()) throw new ExecutionRecoveryError('no_delivery', 'stop');
+          outcome = 'completed'; return;
+        }
+        if (turn.stop === 'complete' && !turn.message.text.trim() && (wait.pending || owesReply())) {
+          await persist(turn.message, thinkingStep);
+          await holdClose();
+          continue requestLoop;
+        }
+        // A Director with nothing to say while companions run is waiting, not failing: retrying only pushes it back into tool calls.
+        if (turn.stop === 'complete' && !turn.message.text.trim() && directorWaiting()) {
+          await persist(turn.message, thinkingStep);
+          if (await drainInbox(true)) continue requestLoop;
+          context.signal.throwIfAborted();
           outcome = 'completed'; return;
         }
         const kind: ExecutionRecoveryKind | undefined = !turn.message.text.trim() && ['complete', 'length'].includes(turn.stop) ? 'no_delivery' : turn.stop === 'length' ? 'truncated_text' : undefined;
@@ -589,6 +691,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         } else await persist(turn.message, thinkingStep);
         if (turn.stop === 'complete' && turn.message.text.trim()) {
           const needsMemory = base.tools.some(tool => isFinishRound(tool.name));
+          if (await holdClose()) continue requestLoop;
           if (await drainInbox(!needsMemory)) continue requestLoop;
           context.signal.throwIfAborted();
           if (needsMemory) {
@@ -602,6 +705,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         }
         if (turn.stop === 'other' || turn.stop === 'tools') throw new Error('The model did not finish this turn normally (missing a valid stop reason or tool calls)');
       }
-    } finally {steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}
+    } finally {
+      // Natural end or not, the actors waiting on this one are told to stop waiting, and its own questions lapse.
+      asks.endRecipient(context.sessionId, context.ownerId, lastDrain);
+      if (context.ownerId !== 'logox') asks.dropAsker(context.activityId);
+      steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}
   };
 }

@@ -17,3 +17,10 @@ export function stepStatus(step: Step, now: number): string {
   const state = step.state === 'waiting' ? step.waiting ?? 'Waiting' : step.state === 'queued' ? 'Queued' : step.state === 'cancelled' ? 'Cancelled' : '';
   return duration + (state ? ' ' + state : '');
 }
+
+/** Width of the live elapsed slot on swarm job rows; the slot is padded so the row never changes length. */
+export const SWARM_TIME_WIDTH = 6;
+export function swarmElapsed(ms: number): string {
+  const s = Math.max(0, ms) / 1000;
+  return (s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + 'm' + String(Math.floor(s % 60)).padStart(2, '0') + 's').padEnd(SWARM_TIME_WIDTH).slice(0, SWARM_TIME_WIDTH);
+}

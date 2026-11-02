@@ -59,11 +59,7 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
     const kalonSkills = resources.skillsFor({actorId: 'kalon'}).map(s => s.name);
     assert.ok(kalonSkills.includes('morandi-palette'));
     assert.ok(kalonSkills.includes('browser-screenshot')); // public is visible to all
-    assert.ok(!kalonSkills.includes('tdd-workflow')); // Techne-only skill not visible without borrowing
-
-    // Borrowing allows cross-actor access
-    const borrowed = resources.skillsFor({actorId: 'kalon', borrowed: ['tdd-workflow']}).map(s => s.name);
-    assert.ok(borrowed.includes('tdd-workflow'));
+    assert.ok(!kalonSkills.includes('tdd-workflow')); // Techne-only skill is not listed; Kalon can still Read its file
 
     // Progressive Prompt Formatting: Kalon sees Core Principles and Domain Repositories, but NOT individual domain files
     const kalonPrompt = resources.prompt({actorId: 'kalon'}).context;
