@@ -5,7 +5,7 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs';
 const source = new URL('../../src/tui/', import.meta.url);
 const output = new URL('../src/tui/', import.meta.url);
 const layout: Record<string, string[]> = {
-  appearance: ['actor-style.ts', 'animation.ts', 'colors.ts', 'theme.ts'],
+  appearance: ['actor-style.ts', 'animation.ts', 'colors.ts', 'emblem.ts', 'theme.ts'],
   commands: ['command-menu.tsx', 'command-suggestions.tsx', 'completion.ts', 'query-match.ts'],
   components: ['card.tsx', 'list-frame.tsx', 'panel-frame.tsx', 'toggle-marker.ts'],
   input: ['editor.ts', 'fullscreen-editor.tsx', 'input-delivery.ts'],

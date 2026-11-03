@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOGOX 像素标志编辑器</title>
+<style>
+/* Layout: canvas on the left, previews and export on the right; everything works offline from a local file. */
+:root {
+  --bg: #0E1218; --panel: #151B26; --line: #283245; --ink: #E8E4DA; --muted: #8E97A8; --accent: #7DA1DE;
+  --mono: 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); padding: 20px max(16px, env(safe-area-inset-left, 0px)); }
+h1 { font: 600 18px/1.2 var(--mono); letter-spacing: .2em; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+.app { display: grid; grid-template-columns: minmax(0, auto) minmax(300px, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .app { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.panel h2 { font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.group { display: flex; gap: 4px; align-items: center; }
+.sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+button, select, input[type=number] { font: 13px var(--sans); color: var(--ink); background: #1C2433; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+input[type=number] { width: 64px; cursor: text; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button[aria-pressed="true"] { background: #26344D; border-color: var(--accent); }
+.swatch { width: 30px; height: 30px; padding: 0; border-radius: 6px; position: relative; }
+.swatch[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 2px; }
+.swatch .key { position: absolute; right: 2px; bottom: 0; font: 600 10px var(--mono); color: #0E1218; opacity: .75; }
+.swatch.erase { background: repeating-conic-gradient(#2a3242 0 25%, #1a2130 0 50%) 50% / 10px 10px; }
+.swatch.erase .key { color: var(--ink); }
+.canvas-wrap { overflow: auto; max-width: 100%; }
+canvas#grid { display: block; image-rendering: pixelated; cursor: crosshair; touch-action: none; border-radius: 4px; }
+.status { color: var(--muted); font: 12px var(--mono); margin-top: 8px; min-height: 18px; }
+.side { display: grid; gap: 16px; }
+.term { background: #14161B; border-radius: 6px; padding: 14px; overflow-x: auto; }
+.term pre { margin: 0; font: 16px/1 var(--mono); }
+.term .info { font: 14px/1.6 var(--mono); color: var(--muted); margin-top: 12px; }
+.term .info b { color: var(--ink); letter-spacing: .3em; }
+.sizes { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.sizes figure { margin: 0; display: grid; gap: 4px; justify-items: center; color: var(--muted); font: 11px var(--mono); }
+.sizes .tile { border-radius: 22%; display: grid; place-items: center; }
+.sizes .dark { background: #121722; } .sizes .light { background: #FFFFFF; border: 1px solid var(--line); }
+textarea { width: 100%; min-height: 120px; font: 12px/1.4 var(--mono); color: var(--ink); background: #10151E; border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<h1>LOGOX · PIXEL EMBLEM</h1>
+<p class="sub">在启动页徽章的基础上编辑。左键画，右键擦；改动自动保存在这个浏览器里。</p>
+
+<div class="app">
+  <section class="panel">
+    <div class="toolbar">
+      <div class="group" id="palette" role="group" aria-label="颜色"></div>
+      <span class="sep"></span>
+      <div class="group" role="group" aria-label="工具">
+        <button id="tool-pen" aria-pressed="true" title="画笔 (B)">画笔</button>
+        <button id="tool-fill" aria-pressed="false" title="填充 (G)">填充</button>
+      </div>
+      <span class="sep"></span>
+      <div class="group" role="group" aria-label="对称">
+        <button id="mirror-x" aria-pressed="true" title="左右对称 (X)">左右对称</button>
+        <button id="mirror-y" aria-pressed="true" title="上下对称 (Y)">上下对称</button>
+      </div>
+      <span class="sep"></span>
+      <div class="group">
+        <button id="undo" title="撤销 (Ctrl+Z)">撤销</button>
+        <button id="redo" title="重做 (Ctrl+Y)">重做</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <label class="group" for="size">画布 <input id="size" type="number" min="8" max="64" step="2" value="26"> 格</label>
+      <button id="apply-size">调整尺寸</button>
+      <label class="group" for="grid-lines"><input id="grid-lines" type="checkbox" checked> 网格线</label>
+      <span class="sep"></span>
+      <button id="reset">恢复原版</button>
+      <button id="clear">清空</button>
+    </div>
+    <div class="canvas-wrap"><canvas id="grid" aria-label="像素画布"></canvas></div>
+    <div class="status" id="status"></div>
+    <p class="hint">快捷键：<kbd>1</kbd>–<kbd>5</kbd> 选色，<kbd>0</kbd> 橡皮，<kbd>B</kbd> 画笔，<kbd>G</kbd> 填充，<kbd>X</kbd>/<kbd>Y</kbd> 切换对称。尺寸调整时以中心为准扩边或裁切，最好用偶数，终端里两行像素合成一个字符。</p>
+  </section>
+
+  <div class="side">
+    <section class="panel">
+      <h2>终端预览</h2>
+      <div class="term"><pre id="term"></pre>
+        <div class="info"><b>LOGOX</b><br>Speech grounded in reason, action founded on proof.<br>言出有据 · 行必有证</div>
+      </div>
+      <p class="hint">按 TUI 的画法用半格方块渲染：每个字符上下各一个像素。网页行高和真实终端略有差别。</p>
+    </section>
+
+    <section class="panel">
+      <h2>标志尺寸</h2>
+      <div class="sizes" id="sizes"></div>
+    </section>
+
+    <section class="panel">
+      <h2>导出</h2>
+      <textarea id="output" spellcheck="false" aria-label="像素数据"></textarea>
+      <div class="row">
+        <button id="copy">复制像素数据</button>
+        <button id="import">从文本框导入</button>
+        <button id="dl-svg">下载 SVG</button>
+        <button id="dl-png">下载 PNG (1024)</button>
+      </div>
+      <p class="hint">像素数据和 <code>src/tui/appearance/emblem.ts</code> 的 <code>EMBLEM_PIXELS</code> 同格式，复制后发给我即可替换启动页和标志。字母含义：<code>.</code> 空，<code>b</code> 雾蓝，<code>w</code> 骨白，<code>t</code> Techne 金，<code>k</code> Kalon 紫，<code>a</code> Aletheia 绿。</p>
+    </section>
+  </div>
+</div>
+
+<script>
+const ORIGINAL = ["..........................","............bb............","...........bbbb...........","..........bbbbbb..........",".........bbbbbbbb.........",".........bbb..bbb.........","..........b....b..........","..........................","..........................","....ww......bb......ww....","...wwww....bbbb....wwww...","..wwww....bb..bb....wwww..",".wwww....bb.ww.bb....wwww.",".wwww....bb.ww.bb....wwww.","..wwww....bb..bb....wwww..","...wwww....bbbb....wwww...","....ww......bb......ww....","..........................","..........................","..........b....b..........",".........bbb..bbb.........",".........bbbbbbbb.........","..........bbbbbb..........","...........bbbb...........","............bb............",".........................."];
+const COLORS = {b: ['#7DA1DE', '雾蓝 · Logox'], w: ['#E8E4DA', '骨白'], t: ['#E5C07B', '金 · Techne'], k: ['#B3A0D4', '紫 · Kalon'], a: ['#7FAE99', '绿 · Aletheia']};
+const STORE = 'logox-pixel-emblem';
+const $ = id => document.getElementById(id);
+
+let grid = load();
+let color = 'b', tool = 'pen', mirrorX = true, mirrorY = true;
+let undoStack = [], redoStack = [], painting = null;
+
+function load() {
+  try { const saved = JSON.parse(localStorage.getItem(STORE) || 'null'); if (valid(saved)) return saved.map(row => [...row]); } catch {}
+  return ORIGINAL.map(row => [...row]);
+}
+function save() { try { localStorage.setItem(STORE, JSON.stringify(rows())); } catch {} }
+function valid(value) { return Array.isArray(value) && value.length >= 2 && value.every(row => typeof row === 'string' && row.length === value[0].length && /^[.bwtka]+$/.test(row)); }
+const rows = () => grid.map(row => row.join(''));
+const size = () => grid.length;
+
+// Palette
+const palette = $('palette');
+[...Object.entries(COLORS), ['.', ['', '橡皮']]].forEach(([key, [hex, name]], index) => {
+  const button = document.createElement('button');
+  button.className = 'swatch' + (key === '.' ? ' erase' : '');
+  if (hex) button.style.background = hex;
+  button.title = name + ' (' + (key === '.' ? 0 : index + 1) + ')';
+  button.setAttribute('aria-label', name);
+  button.dataset.color = key;
+  button.innerHTML = '<span class="key">' + (key === '.' ? 0 : index + 1) + '</span>';
+  button.onclick = () => pick(key);
+  palette.appendChild(button);
+});
+function pick(key) { color = key; for (const b of palette.children) b.setAttribute('aria-pressed', String(b.dataset.color === key)); }
+function setTool(next) { tool = next; $('tool-pen').setAttribute('aria-pressed', String(next === 'pen')); $('tool-fill').setAttribute('aria-pressed', String(next === 'fill')); }
+function toggle(button, value) { button.setAttribute('aria-pressed', String(value)); return value; }
+
+// Canvas
+const canvas = $('grid'), ctx = canvas.getContext('2d');
+function cellSize() { const available = Math.min(window.innerWidth - 80, 640); return Math.max(8, Math.floor(available / size())); }
+function draw() {
+  const cell = cellSize(), n = size();
+  canvas.width = canvas.height = cell * n;
+  ctx.fillStyle = '#121722'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const c = grid[y][x];
+    if (c !== '.') { ctx.fillStyle = COLORS[c][0]; ctx.fillRect(x * cell, y * cell, cell, cell); }
+  }
+  if ($('grid-lines').checked) {
+    ctx.strokeStyle = 'rgba(232,228,218,0.07)'; ctx.lineWidth = 1;
+    for (let i = 1; i < n; i++) {
+      ctx.beginPath(); ctx.moveTo(i * cell + .5, 0); ctx.lineTo(i * cell + .5, n * cell); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, i * cell + .5); ctx.lineTo(n * cell, i * cell + .5); ctx.stroke();
+    }
+    // Centre lines show the symmetry axes.
+    ctx.strokeStyle = 'rgba(125,161,222,0.35)';
+    const mid = n / 2 * cell;
+    ctx.beginPath(); ctx.moveTo(mid + .5, 0); ctx.lineTo(mid + .5, n * cell); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, mid + .5); ctx.lineTo(n * cell, mid + .5); ctx.stroke();
+  }
+  renderPreviews();
+}
+function cellAt(event) {
+  const rect = canvas.getBoundingClientRect(), cell = rect.width / size();
+  const x = Math.floor((event.clientX - rect.left) / cell), y = Math.floor((event.clientY - rect.top) / cell);
+  return x >= 0 && y >= 0 && x < size() && y < size() ? [x, y] : null;
+}
+function targets(x, y) {
+  const n = size() - 1, set = new Map();
+  const add = (a, b) => set.set(a + ',' + b, [a, b]);
+  add(x, y);
+  if (mirrorX) add(n - x, y);
+  if (mirrorY) add(x, n - y);
+  if (mirrorX && mirrorY) add(n - x, n - y);
+  return [...set.values()];
+}
+function snapshot() { undoStack.push(rows()); if (undoStack.length > 200) undoStack.shift(); redoStack = []; }
+function paint(x, y, value) {
+  let changed = false;
+  for (const [a, b] of targets(x, y)) if (grid[b][a] !== value) { grid[b][a] = value; changed = true; }
+  return changed;
+}
+function fill(x, y, value) {
+  for (const [sx, sy] of targets(x, y)) {
+    const from = grid[sy][sx];
+    if (from === value) continue;
+    const stack = [[sx, sy]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      if (a < 0 || b < 0 || a >= size() || b >= size() || grid[b][a] !== from) continue;
+      grid[b][a] = value;
+      stack.push([a + 1, b], [a - 1, b], [a, b + 1], [a, b - 1]);
+    }
+  }
+}
+canvas.addEventListener('contextmenu', event => event.preventDefault());
+canvas.addEventListener('pointerdown', event => {
+  const at = cellAt(event); if (!at) return;
+  const value = event.button === 2 ? '.' : color;
+  snapshot();
+  if (tool === 'fill') { fill(at[0], at[1], value); commit(); return; }
+  painting = value; canvas.setPointerCapture(event.pointerId);
+  paint(at[0], at[1], value); draw();
+});
+canvas.addEventListener('pointermove', event => {
+  const at = cellAt(event);
+  $('status').textContent = at ? `x ${at[0]}, y ${at[1]}  ·  ${size()}×${size()}  ·  终端 ${size()} 列 × ${Math.ceil(size() / 2)} 行` : '';
+  if (painting !== null && at && paint(at[0], at[1], painting)) draw();
+});
+const stop = () => { if (painting !== null) { painting = null; commit(); } };
+canvas.addEventListener('pointerup', stop);
+canvas.addEventListener('pointercancel', stop);
+function commit() { save(); draw(); }
+function restore(from, to) { if (!from.length) return; to.push(rows()); grid = from.pop().map(row => [...row]); $('size').value = size(); commit(); }
+
+// Previews: terminal half blocks and the mark at real sizes.
+function renderPreviews() {
+  const n = size(), lines = [];
+  for (let y = 0; y < n; y += 2) {
+    let line = '';
+    for (let x = 0; x < n; x++) {
+      const top = grid[y][x], bottom = y + 1 < n ? grid[y + 1][x] : '.';
+      const tc = top === '.' ? null : COLORS[top][0], bc = bottom === '.' ? null : COLORS[bottom][0];
+      if (!tc && !bc) line += ' ';
+      else if (tc === bc) line += `<span style="color:${tc}">█</span>`;
+      else if (!bc) line += `<span style="color:${tc}">▀</span>`;
+      else if (!tc) line += `<span style="color:${bc}">▄</span>`;
+      else line += `<span style="color:${tc};background:${bc}">▀</span>`;
+    }
+    lines.push(line);
+  }
+  $('term').innerHTML = lines.join('\n');
+  const svg = toSvg();
+  const url = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  $('sizes').innerHTML = [[128, 'dark'], [64, 'dark'], [32, 'dark'], [16, 'dark'], [64, 'light'], [32, 'light']].map(([px, theme]) =>
+    `<figure><div class="tile ${theme}" style="width:${Math.round(px * 1.25)}px;height:${Math.round(px * 1.25)}px"><img src="${url}" width="${px}" height="${px}" alt="" style="image-rendering:pixelated"></div><figcaption>${px}px</figcaption></figure>`).join('');
+  $('output').value = '[\n' + rows().map(row => '  "' + row + '"').join(',\n') + '\n]';
+}
+function toSvg(px = 16) {
+  const n = size(), parts = [];
+  grid.forEach((row, y) => {
+    let start = 0;
+    for (let x = 1; x <= n; x++) {
+      if (x < n && row[x] === row[start]) continue;
+      const c = row[start];
+      if (c !== '.') parts.push(`<rect x="${start * px}" y="${y * px}" width="${(x - start) * px}" height="${px}" fill="${COLORS[c][0]}"/>`);
+      start = x;
+    }
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n * px} ${n * px}" width="${n * px}" height="${n * px}"><g shape-rendering="crispEdges">${parts.join('')}</g></svg>`;
+}
+function download(name, blob) {
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name;
+  document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+// Controls
+$('tool-pen').onclick = () => setTool('pen');
+$('tool-fill').onclick = () => setTool('fill');
+$('mirror-x').onclick = () => { mirrorX = toggle($('mirror-x'), !mirrorX); };
+$('mirror-y').onclick = () => { mirrorY = toggle($('mirror-y'), !mirrorY); };
+$('undo').onclick = () => restore(undoStack, redoStack);
+$('redo').onclick = () => restore(redoStack, undoStack);
+$('grid-lines').onchange = draw;
+$('reset').onclick = () => { snapshot(); grid = ORIGINAL.map(row => [...row]); $('size').value = size(); commit(); };
+$('clear').onclick = () => { snapshot(); grid = grid.map(row => row.map(() => '.')); commit(); };
+$('apply-size').onclick = () => {
+  const next = Math.max(8, Math.min(64, Math.round(Number($('size').value) || size())));
+  if (next === size()) return;
+  snapshot();
+  const offset = Math.floor((next - size()) / 2);
+  grid = Array.from({length: next}, (_, y) => Array.from({length: next}, (_, x) => grid[y - offset]?.[x - offset] ?? '.'));
+  $('size').value = next; commit();
+};
+$('copy').onclick = async () => {
+  const text = JSON.stringify(rows());
+  try { await navigator.clipboard.writeText(text); $('status').textContent = '已复制像素数据'; }
+  catch { $('output').select(); document.execCommand('copy'); $('status').textContent = '已复制像素数据'; }
+};
+$('import').onclick = () => {
+  try {
+    const value = JSON.parse($('output').value);
+    if (!valid(value) || value.length !== value[0].length) throw new Error('需要一个正方形的字符串数组，只能包含 . b w t k a');
+    snapshot(); grid = value.map(row => [...row]); $('size').value = size(); commit(); $('status').textContent = '已导入';
+  } catch (error) { $('status').textContent = '导入失败：' + error.message; }
+};
+$('dl-svg').onclick = () => download('logox-emblem.svg', new Blob([toSvg()], {type: 'image/svg+xml'}));
+$('dl-png').onclick = () => {
+  const n = size(), scale = Math.floor(1024 / n), out = document.createElement('canvas');
+  out.width = out.height = n * scale;
+  const c = out.getContext('2d');
+  grid.forEach((row, y) => row.forEach((p, x) => { if (p !== '.') { c.fillStyle = COLORS[p][0]; c.fillRect(x * scale, y * scale, scale, scale); } }));
+  out.toBlob(blob => download('logox-emblem.png', blob));
+};
+document.addEventListener('keydown', event => {
+  if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
+  const key = event.key.toLowerCase();
+  if ((event.ctrlKey || event.metaKey) && key === 'z') { event.preventDefault(); event.shiftKey ? restore(redoStack, undoStack) : restore(undoStack, redoStack); return; }
+  if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); restore(redoStack, undoStack); return; }
+  const keys = Object.keys(COLORS);
+  if (/^[1-5]$/.test(key)) pick(keys[Number(key) - 1]);
+  else if (key === '0') pick('.');
+  else if (key === 'b') setTool('pen');
+  else if (key === 'g') setTool('fill');
+  else if (key === 'x') mirrorX = toggle($('mirror-x'), !mirrorX);
+  else if (key === 'y') mirrorY = toggle($('mirror-y'), !mirrorY);
+});
+window.addEventListener('resize', draw);
+pick('b');
+$('size').value = size();
+draw();
+</script>
+</body>
+</html>

@@ -9,6 +9,7 @@
 | 可直接复制的配置片段 | [config.example.toml](../config.example.toml) |
 | 快捷键、鼠标、面板、状态栏、字体 | [终端操作](UI-SPEC.md) |
 | 自定义主题与配色 | [配色设置](COLORS.md) |
+| 标志、字标、配色与图标文件 | [品牌规范](BRAND.md) |
 | 模块怎样配合、源码从哪里读 | [模块总览](modules/README.md) |
 | 修改代码时的目录边界与验证命令 | [AGENTS.md](../AGENTS.md) |
 

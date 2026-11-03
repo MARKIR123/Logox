@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="LOGOX Hero Banner" width="920"/>
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
+    <img src="assets/banner.svg" alt="LOGOX: A terminal coding ensemble" width="920"/>
+  </picture>
 </p>
 
 <p align="center">
@@ -98,7 +101,7 @@ name = "local"
 
 ## 终端与字体
 
-状态栏和角色图标使用了 Powerline 与 Nerd Font 字形，请使用支持真彩色的终端（Windows Terminal、iTerm2、Ghostty、WezTerm、Alacritty 等），并把终端字体设为 [JetBrainsMono Nerd Font](https://www.nerdfonts.com/font-downloads)。没有安装 Nerd Font 时，这些字形会显示为方块。
+状态栏和角色图标使用了 Powerline 与 Nerd Font 字形，请使用支持真彩色的终端（Windows Terminal、iTerm2、Ghostty、WezTerm、Alacritty 等），并把终端字体设为带 Nerd Font 字形的等宽字体，推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)（中英文与图标一款覆盖），也可以用 [JetBrainsMono Nerd Font](https://www.nerdfonts.com/font-downloads)。没有安装 Nerd Font 时，这些字形会显示为方块。
 
 ## 常用命令与快捷键
 

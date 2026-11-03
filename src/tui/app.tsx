@@ -41,6 +41,7 @@ import {cast, type ActorId} from '../actors/ensemble.js';
 import {ActivityCard} from './timeline/activity-card.js';
 import {InteractionCard} from './interactions/interaction-card.js';
 import {ownerColor, ownerHeader, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
+import {splashLines} from './appearance/emblem.js';
 import {palette} from './appearance/theme.js';
 import {safeText} from './terminal/text.js';
 import {type QuestionDraft} from './interactions/choice-style.js';
@@ -431,6 +432,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : !loginState && !surface && !stage && (!demoScene || !inlineRequest) && request
       ? Math.max(0, Math.floor((screenRows - fixedHeight - activityHeight) * 0.6)) : 0;
   const timelineHeight = Math.max(0, screenRows - fixedHeight - activityHeight - questionHeight);
+  const splash = useMemo(() => {
+    if (!welcome) return undefined;
+    const lines = safeText(welcome.text).replace(/\t/g, '  ').split('\n');
+    return splashLines({width, height: timelineHeight, title: welcome.systemTitle, info: lines,
+      colors: {blue: roles.logox?.color ?? palette.accent, bone: palette.fg, title: palette.accent, muted: palette.muted}});
+  }, [welcome, width, timelineHeight, roles, themeVersion]);
   const view = viewport(messageRows, timelineHeight, anchor);
   const selection = selectionInViewport(selectionRange(messageRows, contentSelection.current), view.start);
   const inputY = timelineHeight + (loginFolded ? loginHeight : 0) + activityHeight + questionHeight + menuHeight + (hairlineHeight ? 1 : 0);
@@ -1213,7 +1220,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
-      {welcome ? welcomeLines.slice(0, timelineHeight).map((line, index) => <Box key={index} height={1} flexShrink={0} overflow="hidden">
+      {splash ? splash.slice(0, timelineHeight).map((line, index) => <Box key={index} height={1} flexShrink={0} overflow="hidden">
+        <Text wrap="truncate">{line.length ? line.map((segment, i) => <Text key={i} {...(segment.color ? {color: segment.color} : {})}
+          {...(segment.bg ? {backgroundColor: segment.bg} : {})} bold={Boolean(segment.bold)} italic={Boolean(segment.italic)}>{segment.text}</Text>) : ' '}</Text>
+      </Box>) : welcome ? welcomeLines.slice(0, timelineHeight).map((line, index) => <Box key={index} height={1} flexShrink={0} overflow="hidden">
         <Text color={welcome.systemTitle && index === 0 ? palette.accent : palette.muted} wrap="truncate">{clipLine(line.text, width) || ' '}</Text>
       </Box>) : !plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;

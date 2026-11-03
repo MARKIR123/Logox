@@ -205,8 +205,8 @@ Queue 与 Steer 是两种操作。Steer 需要明确的目标：用 Ctrl+N 或�
 
 界面使用 Nerd Font 字形（状态栏图标与 Powerline 连接符），没有 ASCII 回退。
 
-1. 安装 Nerd Font，推荐 [JetBrainsMono Nerd Font Mono](https://www.nerdfonts.com/font-downloads)（部分字体菜单显示为 `JetBrainsMono NFM`）。
-2. 在实际运行 Logox 的终端里，把字体切换为它的 Mono 变体。只下载或安装而不切换，缺字不会消失。
+1. 安装带 Nerd Font 字形的等宽字体。推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)（下载 `MapleMono-NF-CN` 压缩包）：英文圆润，中文严格两格宽，并自带 Nerd Font 图标，一款字体就能覆盖中英文和图标。也可以用任意 [Nerd Font](https://www.nerdfonts.com/font-downloads) 的 Mono 变体，例如 `JetBrainsMono NFM`。字体只是推荐，Logox 不绑定任何字体。
+2. 在实际运行 Logox 的终端里，把字体切换为它（字体菜单中显示为 `Maple Mono NF CN`）。只下载或安装而不切换，缺字不会消失。
 3. 重开终端，检查状态栏图标与 Powerline 接缝是否完整。
 
 ## 主题与动效

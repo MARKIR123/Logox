@@ -235,7 +235,7 @@ playwright = false
 
 `/statusbar` 打开状态栏编辑器，`/settings` 的 Statusbar 标签页是同一个入口。可以选择风格（Pipes：彩色字段加竖线和上下文进度条；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色，开关各模块并调整顺序。实时预览不写盘，Enter 保存，Esc 丢弃未保存的草稿。在 `/settings` 中应用当前标签页后页面保留，独立的 `/statusbar` 保存后会收起。
 
-先安装 [Nerd Font](https://www.nerdfonts.com/font-downloads)，并在终端中选用 Mono 字体，例如 `JetBrainsMono NFM`。偏好保存在 `~/.logox/statusbar.json`，旧布局自动兼容。按键与布局细节见[终端操作](UI-SPEC.md)。
+先安装带 Nerd Font 字形的等宽字体并在终端中选用，推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)，也可以用任意 [Nerd Font](https://www.nerdfonts.com/font-downloads) 的 Mono 变体，例如 `JetBrainsMono NFM`。偏好保存在 `~/.logox/statusbar.json`，旧布局自动兼容。按键与布局细节见[终端操作](UI-SPEC.md)。
 
 ## 全部斜杠命令
 

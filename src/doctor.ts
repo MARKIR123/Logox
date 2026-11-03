@@ -259,7 +259,7 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push('\x1b[1mFont & Powerline Alignment Check:\x1b[0m');
   lines.push('   ◈ Logox  ⊞ Techne  ✧ Kalon  ◎ Aletheia ');
   lines.push('  \x1b[2m└─ If the glyphs above render smoothly without [?], your terminal has Nerd Font enabled.\x1b[0m');
-  lines.push('  \x1b[2m   Recommended font: JetBrainsMono Nerd Font (JetBrainsMono NFM).\x1b[0m');
+  lines.push('  \x1b[2m   Recommended font: Maple Mono NF CN (or any Nerd Font Mono, e.g. JetBrainsMono NFM).\x1b[0m');
   lines.push('');
 
   return lines.join('\n');
