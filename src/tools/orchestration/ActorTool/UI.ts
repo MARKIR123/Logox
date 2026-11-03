@@ -7,7 +7,9 @@ import {ownerColor} from '../../../tui/appearance/actor-style.js';
 import {palette} from '../../../tui/appearance/theme.js';
 import {appendActorCard, type createBuilder, type SceneSegment, insetRailFrame} from '../../../tui/timeline/scene.js';
 import {stepElapsed} from '../../../runtime/steps.js';
-import {createToolUI, messageToolCall} from '../../../tui/timeline/tool-ui.js';
+import type {ToolCall} from '../../../runtime/messages.js';
+import type {ToolUI} from '../../ui-types.js';
+import {callLabel, createToolUI, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
 import {stripNarration} from '../../../runtime/narration.js';
 import {groupToolMessages} from '../../../tui/timeline/tool-groups.js';
 import {pushGroupStage, pushToolGroupCard} from '../../../tui/timeline/group-row.js';
@@ -192,7 +194,18 @@ export function renderActivity(context: ActorActivityContext): void {
     }});
 }
 const base = createToolUI(['actor', 'ownerId']);
-export const UI = {...base, renderActivity, title(call: Parameters<typeof base.title>[0]) {
+function dispatchTarget(call: ToolCall): string {
+  try {
+    const args: unknown = JSON.parse(call.arguments);
+    const tasks = args && typeof args === 'object' ? (args as Record<string, unknown>).tasks : undefined;
+    const owners = Array.isArray(tasks) ? tasks.map(task => task && typeof task === 'object' ? (task as Record<string, unknown>).ownerId : undefined).filter((owner): owner is string => typeof owner === 'string') : [];
+    if (owners.length) return 'Actor(' + [...new Set(owners)].join(', ') + ')';
+  } catch {}
+  return callLabel('Actor', ['actor', 'ownerId'])(call);
+}
+
+/** The dispatch call draws nothing on success (the actor card is the surface); a failed dispatch shows one quiet row. */
+const visible: ToolUI = {...base, renderActivity, title(call: Parameters<typeof base.title>[0]) {
   try {
     const args: unknown = JSON.parse(call.arguments);
     const tasks = args && typeof args === 'object' ? (args as Record<string, unknown>).tasks : undefined;
@@ -208,3 +221,5 @@ export const UI = {...base, renderActivity, title(call: Parameters<typeof base.t
   } catch {}
   return base.title(call);
 }};
+
+export const UI: ToolUI = hiddenToolUI(visible, dispatchTarget);

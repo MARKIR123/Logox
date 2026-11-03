@@ -1,7 +1,9 @@
 import {createElement} from 'react';
 import {QuestionCard} from './QuestionCard.js';
 import type {ToolInteractionAdapter, ToolInteractionContext, ToolInteractionTransition, ToolUI} from '../ui-types.js';
-import {createToolUI} from '../../tui/timeline/tool-ui.js';
+import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
+import {failureView, labelledLines, renderToolCard, summaryPiece, type ToolLine, type ToolView} from '../../tui/timeline/tool-card.js';
+import {callArgs} from '../ui-format.js';
 import {insetFrame, type SceneAction} from '../../tui/timeline/scene.js';
 import {choiceStyle} from '../../tui/interactions/choice-style.js';
 import {palette} from '../../tui/appearance/theme.js';
@@ -102,8 +104,56 @@ export const interaction: ToolInteractionAdapter = {
     return {draft: {...draft, error: ''}, answers: nextAnswers, complete: true};
   },
 };
+interface AskedQuestion {readonly question: string; readonly options: readonly string[]}
+function askedQuestions(args: Record<string, unknown>): AskedQuestion[] {
+  const list = Array.isArray(args.questions) ? args.questions : [];
+  return list.map((item): AskedQuestion => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const options = Array.isArray(record.options) ? record.options.map(option => option && typeof option === 'object' ? String((option as Record<string, unknown>).label ?? '') : '') : [];
+    return {question: typeof record.question === 'string' ? record.question : '', options};
+  });
+}
+
+/** What the user chose, as readable text: option labels (ids are `o<index>` as sent by the tool), or the typed answer. */
+function chosen(answer: unknown, question: AskedQuestion): {text: string; note?: string} {
+  const record = answer && typeof answer === 'object' ? answer as Record<string, unknown> : {};
+  const label = (id: unknown) => {
+    const index = /^o(\d+)$/.exec(String(id))?.[1];
+    return (index !== undefined ? question.options[Number(index)] : undefined) || String(id);
+  };
+  const note = typeof record.note === 'string' && record.note.trim() ? record.note.trim() : typeof record.notes === 'string' && record.notes.trim() ? record.notes.trim() : undefined;
+  const text = record.type === 'text' ? String(record.text ?? '') : record.type === 'options' && Array.isArray(record.optionIds) ? record.optionIds.map(label).join(', ') : label(record.optionId);
+  return {text, ...(note ? {note} : {})};
+}
+
+/** A record of the exchange once the picker is done: `Q` per question, the chosen answer bold in the user color; `answered` or `cancelled`. */
+export function questionView(args: Record<string, unknown>, result: string): ToolView {
+  let outcome: Record<string, unknown> = {};
+  try {const parsed: unknown = JSON.parse(result); if (parsed && typeof parsed === 'object') outcome = parsed as Record<string, unknown>;} catch {}
+  const response = outcome.response && typeof outcome.response === 'object' ? outcome.response as Record<string, unknown> : {};
+  const answers = response.answers && typeof response.answers === 'object' ? response.answers as Record<string, unknown> : {};
+  if (outcome.status === undefined && result.trim()) return failureView(result, false);
+  const answered = outcome.status === 'answered';
+  const questions = askedQuestions(args);
+  const lines = (width: number): readonly ToolLine[] => questions.flatMap((question, index): ToolLine[] => {
+    const rows = labelledLines('Q', question.question, width);
+    const answer = answered ? chosen(answers['q' + index], question) : undefined;
+    if (!answer?.text) return rows;
+    return [...rows, ...labelledLines('A', answer.text, width, {color: palette.user, bold: true}),
+      ...(answer.note ? labelledLines(' ', answer.note, width, {color: palette.muted}) : [])];
+  });
+  return {summary: [summaryPiece(answered ? 'answered' : 'cancelled')], quietFault: true, ...(answered ? {} : {markColor: palette.muted}),
+    body: {lines, empty: 'No questions'}};
+}
+
 const base = createToolUI();
-export const UI: ToolUI = {...base, interaction, title(call) {
+export const UI: ToolUI = {...base, interaction,
+  render(context) {
+    const call = context.call ?? messageToolCall(context.message);
+    if (!call) return;
+    renderToolCard(context, {title: UI.title(call), handlesFailure: true, view: result => questionView(callArgs(call), result)});
+  },
+  title(call) {
   try {
     const args: unknown = JSON.parse(call.arguments);
     const questions = args && typeof args === 'object' ? (args as Record<string, unknown>).questions : undefined;

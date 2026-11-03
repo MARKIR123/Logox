@@ -1,6 +1,6 @@
 import {structuredPatch} from 'diff';
 import type {SceneSegment} from './scene.js';
-import type {ToolLine} from './tool-card.js';
+import {linkSegments, textLines, type ToolLine} from './tool-card.js';
 import {palette} from '../appearance/theme.js';
 import {faintColor} from '../appearance/colors.js';
 import {layoutMarkdown} from './markdown.js';
@@ -81,9 +81,12 @@ export function codeLines(lines: readonly string[], first: number, path: string)
 
 /** Markdown rendered through the timeline's Markdown layout: bold headings, quiet code, no line numbers. */
 export function markdownLines(source: string, width: number): ToolLine[] {
-  return layoutMarkdown(source, width).map(row => ({segments: row.pieces.map((piece): SceneSegment => ({
-    text: piece.text, ...(piece.bold ? {bold: true} : {}), ...(piece.italic ? {italic: true} : {}),
-    color: piece.muted ? palette.muted : piece.code ? palette.accent : palette.fg}))}));
+  return layoutMarkdown(source, width).map(row => ({segments: row.pieces.flatMap((piece): SceneSegment[] => {
+    const style = {...(piece.bold ? {bold: true} : {}), ...(piece.italic ? {italic: true} : {}),
+      color: piece.muted ? palette.muted : piece.code ? palette.accent : palette.fg};
+    // Links, URLs and domains are always underlined in the link color, in prose and headings alike.
+    return piece.code ? [{text: piece.text, ...style}] : linkSegments(piece.text, style);
+  })}));
 }
 
 export interface DiffStats {readonly added: number; readonly removed: number}
@@ -114,4 +117,10 @@ export function diffLines(hunks: ReturnType<typeof structuredPatch>['hunks'], of
     }
   }
   return {lines, stats: {added, removed}};
+}
+
+const MARKDOWN = /^#{1,6}\s+\S|^\s*(?:[-*+]|\d+\.)\s+\S|^```|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\n]+\)|^\s*\|.+\|\s*$/m;
+/** Result text rendered for a card: Markdown through the Markdown layout when it looks like Markdown, otherwise muted wrapped text. Links are underlined either way. */
+export function resultLines(text: string, width: number): ToolLine[] {
+  return MARKDOWN.test(text) ? markdownLines(text, width) : textLines(text, width);
 }

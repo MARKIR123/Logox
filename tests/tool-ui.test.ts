@@ -24,7 +24,7 @@ test('all built-in and collaboration tool names resolve to explicitly owned pres
   for (const name of [...Object.keys(schemas), 'SendMessage']) {
     assert.ok(Object.hasOwn(toolUIs, name), name);
     assert.equal(getToolUI(name), toolUIs[name]);
-    assert.equal(getToolUI(name).visibility, ['_FinishRound', '_GitStatus', 'LoadTools'].includes(name) ? 'hidden' : 'visible');
+    assert.equal(getToolUI(name).visibility, ['_FinishRound', '_GitStatus', 'LoadTools', 'Actor', 'ListActors', 'ReadActor', 'UpdateTaskProgress'].includes(name) ? 'hidden' : 'visible');
   }
   assert.equal(getToolUI('bash'), getToolUI('Shell'));
   assert.equal(getToolUI('read'), getToolUI('Read'));
@@ -38,7 +38,7 @@ test('tool-owned titles retain intention and relevant arguments', async () => {
   const title = (name: string, args: unknown) => getToolUI(name).title({id: 'x', name, arguments: JSON.stringify(args)});
   assert.equal(title('Read', {path: 'src/app.ts', description: 'Inspect source'}), 'Read · Inspect source (src/app.ts)');
   assert.equal(title('Shell', {command: 'npm test'}), 'Shell npm test');
-  assert.equal(title('SendMessage', {to: 'techne', summary: 'Check cancellation'}), 'SendMessage to ⊞ Techne · Check cancellation · queued');
+  assert.equal(title('SendMessage', {to: 'techne', summary: 'Check cancellation'}), 'SendMessage to ⊞ Techne');
   assert.equal(title('Actor', {actor: 'techne', description: 'Fix cleanup'}), 'Actor · Fix cleanup (techne)');
   assert.equal(title('Actor', {tasks: [{ownerId: 'kalon', goal: 'Polish skyline'}]}), 'Actor · kalon (Polish skyline)');
   assert.equal(title('Grep', {pattern: 'needle', path: 'src'}), 'Grep needle');
@@ -56,8 +56,8 @@ test('tool-owned titles retain intention and relevant arguments', async () => {
   assert.equal(formatToolSummary('Shell', 'Exit code: 1\nCommand failed'), 'Exit code: 1');
 });
 
-test('internal finalization leaves no visible card or selectable surface in any tool state', () => {
-  for (const state of ['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled'] as const) {
+test('internal finalization leaves no visible card or selectable surface in any state short of failure', () => {
+  for (const state of ['queued', 'running', 'waiting', 'completed', 'cancelled'] as const) {
     const store = new RuntimeStore();
     store.message('s', 'logox', 'assistant', 'Normal answer');
     const hidden = store.message('s', 'logox', 'notice', '_FinishRound\nprivate memory metadata', {
@@ -345,11 +345,11 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   const row = rows.find(r => r.messageId === successId);
   assert.ok(row);
   // Full text contains SendMessage to ✧ Kalon · Polish skyline · queued
-  assert.ok(row.text.includes('SendMessage to ✧ Kalon · Polish skyline · queued'));
+  assert.ok(row.text.includes('SendMessage to ✧ Kalon · inform'));
   // Icon is gray for success
   assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#8D95A6');
   // Actor name kalon is rendered with kalon color (#e8a8dc) and bold
-  const targetSeg = row.segments?.find(s => s.selectionKey === successId + ':title_target');
+  const targetSeg = row.segments?.find(s => s.selectionKey === successId + ':title_1');
   assert.ok(targetSeg);
   assert.equal(targetSeg.text, '✧ Kalon');
   assert.equal(targetSeg.color, cast.kalon.color);

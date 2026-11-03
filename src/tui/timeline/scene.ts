@@ -154,6 +154,8 @@ export interface RowBuilder {
     statusRight?: boolean;
     /** A static one-row card (an image): no fold action, no hover. */
     fixed?: boolean;
+    /** Color of the leading `▮` when it should not follow the step state. */
+    markColor?: string;
     faultLabel?: string;
     bodyLines: readonly string[];
     status?: string;
@@ -455,7 +457,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
           selectionKey: s.selectionKey ?? opts.id + ':summary:' + index, selectionOffset: s.selectionOffset ?? 0}))] : [];
       const right = Boolean(opts.statusRight) && !thinking && Boolean(status);
       const pieces: SceneSegment[] = [
-        ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : opts.open && !live ? palette.fg : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
+        ...(opts.expandable ? [] : [{text: icon + ' ', color: opts.markColor ?? (fault ? palette.error : opts.open && !live ? palette.fg : thinking && opts.step && !terminal ? highlightColor : palette.muted), selectionKey: opts.id + ':icon', selectionOffset: 0}]),
         ...titlePieces,
         ...summaryPieces,
         ...(statusSepText && !right ? [separator(statusSepText, opts.id + ':status_sep')] : []),

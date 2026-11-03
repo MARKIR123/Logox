@@ -73,7 +73,7 @@ export function visibleRunningCalls(group: ToolGroup, now = Date.now()): readonl
 }
 
 /** Live clock for a running group: finished calls plus the running calls' own clock. */
-function runningStep(group: ToolGroup, title: string): Step {
+export function runningStep(group: ToolGroup, title: string): Step {
   let elapsedMs = 0;
   let runningSince = Infinity;
   for (const message of group.messages) {
@@ -120,6 +120,23 @@ export function toolGroupRow(group: ToolGroup, opts: {id: string; open: boolean;
   return {titleSegments, status, ...(running ? {step: runningStep(group, lead + body)} : {})};
 }
 
+/**
+ * Header of a browser group: `▸ Browser · 5 actions · 2.4s`. Opening, inspecting, interacting, screenshotting and closing
+ * are one sequence, so every consecutive page action of one actor lives in this one card.
+ */
+export function browserGroupRow(group: ToolGroup, opts: {id: string; open: boolean}): ToolGroupRow & {readonly summary: readonly SceneSegment[]} {
+  const running = group.running;
+  const count = group.counts.browse ?? group.messages.filter(message => message.kind === 'tool').length;
+  const status = running ? '' : group.elapsedMs > 0 ? seconds(group.elapsedMs) : '';
+  const title = (opts.open ? '▾ ' : '▸ ') + 'Browser';
+  const tone = running ? palette.fg : palette.muted;
+  return {
+    titleSegments: [{text: title, color: tone, italic: true, selectionKey: opts.id + ':title', selectionOffset: 0}],
+    summary: [{text: `${count} ${count === 1 ? 'action' : 'actions'}`, color: palette.muted, italic: true}],
+    status, ...(running ? {step: runningStep(group, title)} : {}),
+  };
+}
+
 /** Turns the first row of a rendered tool card into `└ ▮ ...` by swapping its left inset for the connector. */
 export function connect(rows: SceneRow[], index: number, insetIndex: number): void {
   const row = rows[index];
@@ -135,9 +152,11 @@ export function pushToolGroupCard(builder: ReturnType<typeof createBuilder>, gro
   renderChild(message: ToolGroup['messages'][number], frame: FrameWrap): void; now?: number;
 }): void {
   const parentWidth = opts.parentFrame?.innerWidth ?? builder.contentWidth;
-  const row = toolGroupRow(group, {id: group.id, open: opts.open, width: Math.max(1, parentWidth - 4), verbs: opts.verbs});
+  const browser = group.kind === 'browser' ? browserGroupRow(group, {id: group.id, open: opts.open}) : undefined;
+  const row = browser ?? toolGroupRow(group, {id: group.id, open: opts.open, width: Math.max(1, parentWidth - 4), verbs: opts.verbs});
   builder.pushOrdinaryCard({
     id: group.id, ownerId: opts.ownerId, kind: 'Tool', title: row.titleSegments[0]!.text, titleSegments: row.titleSegments,
+    ...(browser ? {summarySegments: browser.summary} : {}),
     status: row.status, bodyLines: [], open: opts.open, railColor: opts.railColor, expandable: true,
     ...(row.step ? {step: row.step} : {}),
     ...(opts.parentFrame ? {parentFrame: opts.parentFrame} : {}),

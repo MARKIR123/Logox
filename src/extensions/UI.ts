@@ -1,11 +1,13 @@
 import stringWidth from 'string-width';
 import type {ToolCall} from '../runtime/messages.js';
 import type {ToolUI} from '../tools/ui-types.js';
-import {formatByteSize} from '../tools/ui-format.js';
 import {messageToolCall} from '../tui/timeline/tool-ui.js';
 import {palette} from '../tui/appearance/theme.js';
+import {failureView, keyValueLines, renderToolCard, summaryPiece, type ToolView} from '../tui/timeline/tool-card.js';
+import {resultLines} from '../tui/timeline/tool-code.js';
+import {browserAction} from '../tui/timeline/tool-groups.js';
+import {browserRow} from './browser-ui.js';
 import {safeText} from '../tui/terminal/text.js';
-import {stepStatus} from '../tui/appearance/animation.js';
 
 const sensitive = /password|passwd|secret|token|api[_-]?key|authorization|credential|cookie|private[_-]?key/i;
 const redacted = '[redacted]';
@@ -98,54 +100,47 @@ function invocation(call: ToolCall) {
   const input = parse(call.arguments);
   const args = record(input) ? input : {};
   const secrets = new Set<string>();
-  const parameters = mask(record(args.arguments) ? args.arguments : {}, secrets) as Record<string, unknown>;
-  const server = typeof args.server === 'string' ? clip(args.server, 50) : 'mcp';
-  const action = args.action === 'list' ? 'list' : typeof args.tool === 'string' ? clip(args.tool, 64) : 'call';
-  return {name: `${server}.${action}`, parameters, secrets, list: args.action === 'list'};
+  const direct = /^mcp__(.+?)__(.+)$/.exec(call.name);
+  const parameters = mask(direct ? args : record(args.arguments) ? args.arguments : {}, secrets) as Record<string, unknown>;
+  const server = direct ? clip(direct[1]!, 50) : typeof args.server === 'string' ? clip(args.server, 50) : 'mcp';
+  const list = !direct && args.action === 'list';
+  const tool = list ? 'list' : direct ? clip(direct[2]!, 64) : typeof args.tool === 'string' ? clip(args.tool, 64) : 'call';
+  return {server, tool, parameters, secrets, list};
 }
 
-function preview(value: unknown): string {
-  if (typeof value === 'string') return value.length > 200 || value.includes('\n')
-    ? `[${value.length} chars]` : JSON.stringify(clip(value, 36));
-  if (Array.isArray(value)) return `[${value.length} items]`;
-  if (record(value)) return `{${Object.keys(value).length} fields}`;
-  return String(value);
-}
-
+/** `mcp · <server> › <tool>`; arguments and results are the body. */
 function title(call: ToolCall): string {
-  const {name, parameters, secrets} = invocation(call);
-  const entries = Object.entries(parameters);
-  const ordered = [...entries.filter(([, value]) => !value || typeof value !== 'object'), ...entries.filter(([, value]) => value && typeof value === 'object')];
-  const values = ordered.slice(0, 3).map(([key, value]) => `${clip(key, 24)}=${preview(value)}`);
-  if (ordered.length > 3) values.push(`… +${ordered.length - 3}`);
-  return scrub(`${name}(${values.join(', ')})`, secrets);
+  const {server, tool, secrets} = invocation(call);
+  return scrub(`mcp · ${server} › ${tool}`, secrets);
 }
 
-function firstContent(text: string): string {
-  return text.split('\n').map(line => line.trim()).find(line => line && !/^(#{1,6}\s|```|~~~|[-*_]{3,}$)/.test(line))?.replace(/^[-*]\s+/, '') ?? '';
+const IMAGE = /^\[Image: image\/(?:png|jpeg|webp|gif)\]$/;
+const MAX_ARGUMENTS = 8;
+
+function argumentRows(parameters: Record<string, unknown>) {
+  const entries = Object.entries(parameters).map(([key, value]): [string, string] =>
+    [safeText(key), typeof value === 'string' ? value : value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)]);
+  const shown = entries.slice(0, MAX_ARGUMENTS);
+  if (entries.length > shown.length) shown.push(['…', `+${entries.length - shown.length} more`]);
+  return keyValueLines(shown);
 }
 
-function outcome(text: string, list: boolean): string {
-  const images = text.match(/^\[Image: image\/(?:png|jpeg|webp|gif)\]$/gm)?.length ?? 0;
-  if (images) return `${images} image${images === 1 ? '' : 's'}`;
-  const value = parse(text);
-  if (Array.isArray(value)) return `${value.length} ${list ? 'tools' : 'items'}`;
-  if (record(value)) return `${Object.keys(value).length} fields`;
-  if (text.length > 160) return formatByteSize(Buffer.byteLength(text));
-  return clip(firstContent(text), 64) || 'Done';
-}
-
-function body(text: string, maxLines: number): string[] {
-  const lines = text.split(/\r?\n/);
-  return [...lines.slice(0, maxLines).map(line => line.length > 160 ? line.slice(0, 159) + '…' : line),
-    ...(lines.length > maxLines ? [`… (${lines.length - maxLines} more lines omitted)`] : [])];
+function mcpView(parameters: Record<string, unknown>, text: string): ToolView {
+  const rows = text.split(/\r?\n/);
+  const images = rows.filter(row => IMAGE.test(row.trim())).length;
+  const shown = rows.filter(row => !IMAGE.test(row.trim())).join('\n').trim();
+  const head = Object.keys(parameters).length ? argumentRows(parameters) : [];
+  return {
+    ...(images ? {summary: [summaryPiece(`${images} image${images === 1 ? '' : 's'}`)]} : {}),
+    body: {...(head.length ? {head} : {}), lines: shown ? width => resultLines(shown, width) : [], ...(images ? {} : {empty: 'No output'})},
+  };
 }
 
 export const UI: ToolUI = {
   visibility: 'visible',
   title,
   render(context) {
-    const {builder, message, frame, open, accent} = context;
+    const {message, open} = context;
     const call = context.call ?? messageToolCall(message);
     if (!call) return;
     const {parameters, secrets, list} = invocation(call);
@@ -153,24 +148,15 @@ export const UI: ToolUI = {
     const result = parse(raw);
     const text = scrub(result === undefined ? raw : JSON.stringify(mask(result, secrets), null, 2), secrets);
     const step = message.step;
-    const terminal = step && ['completed', 'failed', 'cancelled'].includes(step.state);
-    const fault = step?.disposition === 'denied' ? 'Denied' : step?.disposition === 'error' || step?.state === 'failed' ? 'Error' : step?.state === 'cancelled' ? 'Cancelled' : '';
-    const reason = firstContent(text).replace(/^(?:Error|Denied|Cancelled):\s*/i, '');
-    const summary = fault ? fault + (reason ? ': ' + reason : '') : terminal ? outcome(text, list) : '';
-    const width = Math.max(1, (frame?.innerWidth ?? builder.contentWidth) - 2);
-    const timingWidth = step ? Math.max(10, stringWidth(stepStatus(step, Date.now()))) + 3 : 0;
-    const summaryText = summary ? clip(summary, Math.max(0, Math.min(64, Math.floor((width - timingWidth) / 2)))) : '';
-    const titleWidth = Math.max(0, width - timingWidth - (summaryText ? stringWidth(summaryText) + 3 : 0));
-    const fullTitle = title(call);
-    const label = stringWidth(fullTitle) <= titleWidth ? fullTitle : clip(fullTitle.slice(0, -1), Math.max(0, titleWidth - 1)) + (titleWidth ? ')' : '');
-    builder.pushOrdinaryCard({
-      id: message.id, ownerId: message.ownerId, kind: 'Tool', title: label,
-      titleSegments: [
-        {text: label, color: palette.muted, selectionKey: message.id + ':title', selectionOffset: 0},
-        ...(summaryText ? [{text: ' · ' + summaryText, color: fault ? palette.error : palette.muted, selectionKey: message.id + ':outcome', selectionOffset: 0}] : []),
-      ],
-      bodyLines: open ? ['Arguments', ...body(scrub(JSON.stringify(parameters, null, 2), secrets), 12), 'Result', ...body(text || '(no content)', 20)] : [],
-      ...(step ? {step} : {}), faultLabel: '', open, railColor: accent, ...(frame ? {parentFrame: frame} : {}),
-    });
+    const failed = step?.state === 'failed' || step?.state === 'cancelled' || Boolean(step?.disposition);
+    const done = step === undefined || step.state === 'completed';
+    const failure = () => failureView(text, step?.state === 'cancelled');
+    const browser = browserAction(call);
+    if (browser && !list) {
+      const row = browserRow(browser.action, parameters, done ? text : '', open ? palette.fg : palette.muted);
+      renderToolCard(context, {title: row.title, titleSegments: row.segments, handlesFailure: true, view: () => failed ? failure() : row.view});
+      return;
+    }
+    renderToolCard(context, {title: title(call), handlesFailure: true, view: () => failed ? failure() : mcpView(parameters, text)});
   },
 };

@@ -8,6 +8,7 @@ import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBu
 import {faintColor} from '../appearance/colors.js';
 import wrapAnsi from 'wrap-ansi';
 import {getToolUI, isVisibleToolMessage} from '../../tools/ui-registry.js';
+import {hiddenFromView, pairSendMessages} from '../../tools/coordination/SendMessageTool/pairing.js';
 import {messageToolCall, renderDefaultTool} from './tool-ui.js';
 import {clipLine} from '../terminal/text.js';
 import stringWidth from 'string-width';
@@ -58,7 +59,7 @@ const messageLayouts = new WeakMap<Message, Map<string, readonly SceneRow[]>>();
 const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof projectMessages>>>();
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (view === 'logox' || message.ownerId === view) &&
-    isTimelineMessage(message) && isVisibleToolMessage(message) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
+    isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
   // Narration-only messages are never drawn, but they still mark stage changes for tool grouping.
   const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
@@ -74,7 +75,9 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
     const group = staged.get(message.activityId) ?? [];
     group.push(message); staged.set(message.activityId, group);
   }
-  return {messages, candidates, staged, activities, grouped, thinking};
+  // Asks and their replies are matched over the whole session: a reply in one actor's window needs the question from another's.
+  const pairs = pairSendMessages(snapshot.messages.filter(message => message.sessionId === sessionId));
+  return {messages, candidates, staged, activities, grouped, thinking, pairs};
 }
 function messageProjection(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   let views = projections.get(snapshot);
@@ -93,7 +96,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
   const viewColor = view === 'logox' ? palette.accent : ownerColor(view, roles);
   const builder = createBuilder(width, hovered, roles, viewColor);
-  const {messages, candidates, staged, activities, grouped, thinking} = messageProjection(snapshot, sessionId, view);
+  const {messages, candidates, staged, activities, grouped, thinking, pairs} = messageProjection(snapshot, sessionId, view);
   const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (view === 'logox' || request.ownerId === view));
   const requests = new Map<string, Interaction[]>();
   for (const request of pending) {
@@ -117,7 +120,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const jobs = message.step?.swarm?.jobs;
     if (!jobs) return more;
     const prefix = message.id + '-job-';
-    return more + jobs.map((_, index) => open(prefix + index) ? '1' : '0').join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
+    return more + jobs.map((_, index) => (open(prefix + index) ? '1' : '0') + (open(prefix + index + '-more') ? 'm' : '')).join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
   };
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
@@ -129,7 +132,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     const systemError = isTimelineError(message);
     const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
-    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message)]);
+    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -147,7 +150,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const call = messageToolCall(message);
         const ui = getToolUI(call?.name ?? '');
         (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
-          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail});
+          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail, ...(pairs.has(message.id) ? {pairing: pairs.get(message.id)!} : {})});
       } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),

@@ -9,6 +9,7 @@ import {clipLine} from '../../../tui/terminal/text.js';
 import {insetFrame, type SceneRow, type SceneSegment} from '../../../tui/timeline/scene.js';
 import {connect, seconds} from '../../../tui/timeline/group-row.js';
 import {messageToolCall, renderDefaultTool} from '../../../tui/timeline/tool-ui.js';
+import {expanderId, pushToolBody, type ToolLine} from '../../../tui/timeline/tool-card.js';
 import {AUTOMA_ANIMATION_FRAMES} from './prompt.js';
 
 const SEP = ' · ';
@@ -127,15 +128,12 @@ function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, 
     ...(running ? {step: running} : {}),
     parentFrame: parent,
     renderBody(inner) {
-      job.calls.forEach((call, at) => {
-        const glyph = call.state === 'completed' ? '✓' : call.state === 'failed' ? '✗' : '·';
-        builder.pushFramedLine(`${id}-call-${at}`, accent, [
-          {text: glyph + ' ', color: call.state === 'failed' ? palette.error : palette.muted, selectionKey: `${id}-call-${at}:icon`, selectionOffset: 0},
-          {text: fit(call.name + (call.title ? ' ' + call.title : ''), Math.max(1, inner.innerWidth - 2)), color: palette.muted, selectionKey: `${id}-call-${at}:title`, selectionOffset: 0},
-        ], inner);
-      });
-      if (job.receipt?.trim()) builder.pushProse(id + '-receipt', job.receipt, accent, 'body', inner, undefined, palette.muted);
-      else if (!job.calls.length) builder.pushProse(id + '-empty', job.state === 'queued' ? 'Waiting for a free slot' : 'No details', accent, 'body', inner, undefined, palette.muted);
+      // The shared body anatomy: call rows then the receipt, capped with the one `… N more lines` expander and the common empty state.
+      const calls: ToolLine[] = job.calls.map(call => ({segments: [
+        {text: (call.state === 'completed' ? '✓' : call.state === 'failed' ? '✗' : '·') + ' ', color: call.state === 'failed' ? palette.error : palette.muted},
+        {text: call.name + (call.title ? ' ' + call.title : ''), color: palette.muted}]}));
+      const receipt: ToolLine[] = job.receipt?.trim() ? job.receipt.trimEnd().split(/\r?\n/).map(prose => ({prose, color: palette.muted})) : [];
+      pushToolBody(builder, id, accent, inner, {lines: [...calls, ...receipt], empty: job.state === 'queued' ? 'Waiting for a free slot' : 'No details'}, context.isOpen?.(expanderId(id)) ?? false);
     },
   });
 }

@@ -40,7 +40,7 @@ const cache = new WeakMap<Message, {revision: number; widths: Map<number, readon
 
 export function timelineRows(messages: readonly Message[], width: number): readonly Row[] {
   width = Math.max(1, width);
-  return messages.filter(message => isTimelineMessage(message) && isVisibleToolMessage(message)).flatMap(message => {
+  return messages.filter(message => isTimelineMessage(message) && isVisibleToolMessage(message, false)).flatMap(message => {
     let cached = cache.get(message);
     if (!cached || cached.revision !== themeRevision()) {
       cached = {revision: themeRevision(), widths: new Map()}; cache.set(message, cached);

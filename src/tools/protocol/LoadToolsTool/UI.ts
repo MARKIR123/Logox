@@ -1,2 +1,3 @@
-import type {ToolUI} from '../../ui-types.js';
-export const UI: ToolUI = {visibility: 'hidden', title: () => ''};
+import {callLabel, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
+
+export const UI = hiddenToolUI({visibility: 'hidden', title: () => ''}, callLabel('LoadTools', []));

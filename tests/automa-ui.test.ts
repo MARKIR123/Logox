@@ -183,3 +183,19 @@ test('a running header redraws its whole elapsed time, not the padded slice of i
   const live = text(decorateRow(row, started + 21_300));
   assert.match(live, /· 21\.3s/, live);
 });
+
+test('job bodies use the shared anatomy: 12-line cap with the one expander, italic faint empty state', () => {
+  const calls = Array.from({length: 15}, (_, i) => ({name: 'Read', title: `file-${i}.ts`, state: 'completed' as const}));
+  const many: AutomaSwarm = {name: 'drone swarm', jobs: [{title: 'Scan everything', state: 'done', elapsedMs: 1000, calls}, {title: 'Nothing to report', state: 'done', elapsedMs: 100, calls: []}]};
+  const f = fixture(many, {finish: true});
+  const opened = {[f.id]: true, [f.id + '-job-0']: true, [f.id + '-job-1']: true};
+  const rows = f.rows(opened);
+  assert.equal(rows.filter(row => /Read file-\d+\.ts/.test(text(row))).length, 12);
+  assert.ok(rows.some(row => text(row).trim() === '… 3 more lines'), 'the shared expander row');
+  const empty = rows.find(row => text(row).trim() === 'No details')!;
+  assert.ok(empty, 'the shared empty state');
+  assert.equal(empty.segments!.find(segment => segment.text === 'No details')!.italic, true);
+  const more = f.rows({...opened, [f.id + '-job-0-more']: true});
+  assert.equal(more.filter(row => /Read file-\d+\.ts/.test(text(row))).length, 15);
+  assert.ok(!more.some(row => /more lines/.test(text(row))));
+});

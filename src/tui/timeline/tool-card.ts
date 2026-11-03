@@ -45,9 +45,15 @@ export interface ToolView {
   readonly fixed?: boolean;
   /** Drop the red `Error` fault label (the summary already says it, for example `exit 1`). */
   readonly quietFault?: boolean;
+  /** Color of the leading `▮` (a console with errors is red, a cancelled question muted); defaults to the state color. */
+  readonly markColor?: string;
 }
 export interface ToolCardOptions {
   readonly title: string;
+  /** Styled title pieces (a link, a coloured actor name); `title` stays the plain-text fallback. */
+  readonly titleSegments?: readonly SceneSegment[];
+  /** Failures show one quiet row (red mark, reason) without the `Error` label: tools that are normally invisible. */
+  readonly quietFailure?: boolean;
   /** Builds the user view from the result text (without the tool-name line) once the tool has completed. */
   view?(result: string): ToolView | undefined;
   /** Also run `view` when the tool failed (Shell: a non-zero exit is a normal result). */
@@ -181,12 +187,15 @@ export function renderToolCard(context: ToolRenderContext, options: ToolCardOpti
   let view: ToolView | undefined;
   // Legacy records carry no structured call: their text is all there is, shown as plain output.
   if (!step?.call) view = result.trim() ? {body: {lines: result.replace(/\s+$/, '').split('\n').map(prose => ({prose, color: palette.muted}))}} : undefined;
-  else if (failed && !options.handlesFailure) view = failureView(result, state === 'cancelled');
+  else if (failed && !options.handlesFailure) view = {...failureView(result, state === 'cancelled'), ...(options.quietFailure ? {quietFault: true} : {})};
   else if (done || (failed && options.handlesFailure)) view = options.view?.(result);
   const expanded = context.isOpen?.(expanderId(message.id)) ?? false;
   builder.pushOrdinaryCard({
     id: message.id, ownerId: message.ownerId, kind: 'Tool', title: options.title, bodyLines: [], open: view?.fixed ? false : open, railColor: accent,
     statusRight: true,
+    ...(options.titleSegments ? {titleSegments: options.titleSegments.map((segment, index) => ({...segment,
+      selectionKey: segment.selectionKey ?? message.id + (index ? ':title_' + index : ':title'), selectionOffset: segment.selectionOffset ?? 0}))} : {}),
+    ...(view?.markColor ? {markColor: view.markColor} : {}),
     ...(view?.summary?.length ? {summarySegments: view.summary} : {}),
     ...(view?.quietFault ? {faultLabel: ''} : {}),
     ...(view?.fixed ? {fixed: true} : {}),
@@ -194,4 +203,49 @@ export function renderToolCard(context: ToolRenderContext, options: ToolCardOpti
     ...(frame ? {parentFrame: frame} : {}),
     renderBody: inner => {if (view?.body) pushToolBody(builder, message.id, accent, inner, view.body, expanded);},
   });
+}
+
+/** Greedy word wrap by display cells; words longer than a row break hard. Blank lines are kept. */
+export function wrapText(text: string, width: number): string[] {
+  const room = Math.max(1, width);
+  const rows: string[] = [];
+  for (const paragraph of text.replace(/\s+$/, '').split(/\r?\n/)) {
+    let line = '', used = 0;
+    const flush = () => {rows.push(line.replace(/\s+$/, '')); line = ''; used = 0;};
+    for (const word of paragraph.split(/(?<= )/)) {
+      let rest = word;
+      while (stringWidth(rest) > room) {
+        if (used > 0) flush();
+        let head = '';
+        for (const char of rest) {if (stringWidth(head + char) > room) break; head += char;}
+        rows.push(head); rest = rest.slice(head.length);
+      }
+      if (used > 0 && used + stringWidth(rest.trimEnd()) > room) flush();
+      line += rest; used += stringWidth(rest);
+    }
+    flush();
+  }
+  return rows;
+}
+
+/** `Q  text` rows: a faint label, the text wrapped under itself with links underlined. */
+export function labelledLines(label: string, text: string, width: number, style: Omit<SceneSegment, 'text'> = {}): ToolLine[] {
+  const gutter = label + '  ';
+  const room = Math.max(8, width - stringWidth(gutter));
+  return wrapText(text, room).map((row, index) => ({segments: [
+    {text: index === 0 ? gutter : ' '.repeat(stringWidth(gutter)), color: faintColor()},
+    ...linkSegments(row, {color: palette.fg, ...style})]}));
+}
+
+/** Aligned `key  value` rows: keys faint and padded to the widest (capped), values in the foreground with links underlined. */
+export function keyValueLines(entries: readonly (readonly [string, string])[]): ToolLine[] {
+  const width = Math.min(18, Math.max(0, ...entries.map(([key]) => stringWidth(key))));
+  return entries.map(([key, value]) => ({segments: [
+    {text: clipLine(key, width).padEnd(width) + '  ', color: faintColor()},
+    ...linkSegments(value.replace(/\s+/g, ' ').trim(), {color: palette.fg})]}));
+}
+
+/** Plain text as wrapped rows in one color with links underlined; a blank line stays a blank row. */
+export function textLines(text: string, width: number, color: string = palette.muted): ToolLine[] {
+  return wrapText(text, width).map(row => ({segments: row ? linkSegments(row, {color}) : [{text: ''}]}));
 }

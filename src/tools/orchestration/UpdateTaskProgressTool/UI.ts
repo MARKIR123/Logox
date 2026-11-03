@@ -1,3 +1,3 @@
-import {createToolUI} from '../../../tui/timeline/tool-ui.js';
+import {callLabel, createToolUI, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
 
-export const UI = createToolUI(['label']);
+export const UI = hiddenToolUI(createToolUI(['label']), callLabel('UpdateTaskProgress', []));

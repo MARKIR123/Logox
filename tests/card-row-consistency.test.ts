@@ -10,7 +10,7 @@ import {palette} from '../src/tui/appearance/theme.js';
 import {cast} from '../src/actors/ensemble.js';
 
 type Surface = 'kalon' | 'logox';
-interface Case {name: string; build(ctx: {store: RuntimeStore; steps: Steps; advance(ms: number): void}): void; find(rows: readonly SceneRow[]): SceneRow | undefined; ids?: boolean}
+interface Case {name: string; build(ctx: {store: RuntimeStore; steps: Steps; advance(ms: number): void; surface: Surface}): void; find(rows: readonly SceneRow[]): SceneRow | undefined; ids?: boolean}
 
 function scene(surface: Surface, build: Case['build']) {
   const store = new RuntimeStore();
@@ -19,7 +19,7 @@ function scene(surface: Surface, build: Case['build']) {
   store.activities.create({sessionId: 's', activityId: 'a', ownerId: surface, kind: actor ? 'actor' : 'director', title: 'Pelican', taskTitle: 'Pelican animation', status: 'running', stage: 'x', detail: ''});
   store.message('s', actor ? 'kalon' : 'user', 'user', 'Check the pelican files.', {activityId: 'a', inputKind: actor ? 'director' : 'human'});
   const steps = new Steps(store, {sessionId: 's', activityId: 'a', ownerId: surface}, () => now);
-  build({store, steps, advance: ms => {now += ms;}});
+  build({store, steps, advance: ms => {now += ms;}, surface});
   return (hovered: string | null) => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {a: true}, hovered);
 }
 
@@ -39,8 +39,9 @@ const cases: Case[] = [
       const id = steps.tool({id: name + advance.length, name, arguments: JSON.stringify(args)}); steps.start(id); advance(400); steps.finish(id, 'completed', name + '\nok');
     }
   }, find: rows => rows.find(r => /[▸▾] [A-Z][\w' -]* \d+ (?:pattern|file)/.test(r.displayText ?? r.text))},
-  {name: 'SendMessage', build({steps, advance}) {
-    const id = steps.tool({id: 'send1', name: 'SendMessage', arguments: JSON.stringify({to: 'techne', summary: 'Hand off', message: 'Palette is ready'})});
+  {name: 'SendMessage', build({steps, advance, surface}) {
+    // Actor-to-actor messages stay out of the Director's timeline, so the actor addresses the Director here.
+    const id = steps.tool({id: 'send1', name: 'SendMessage', arguments: JSON.stringify({to: surface === 'kalon' ? 'logox' : 'techne', summary: 'Hand off', message: 'Palette is ready'})});
     steps.start(id); advance(500); steps.finish(id, 'completed', 'SendMessage\nQueued');
   }, find: rows => rows.find(r => /SendMessage to/.test(r.displayText ?? r.text))},
 ];

@@ -32,14 +32,17 @@ export const toolUIs: Readonly<Record<string, ToolUI>> = {
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));
 const fallback = createToolUI();
 export function getToolUI(name: string): ToolUI {
+  if (/^mcp__.+?__.+/i.test(name)) return Mcp; // direct `mcp__<server>__<tool>` names share the generic MCP presentation
   return toolUIs[canonicalToolName(name) ?? name] ?? lowercase.get(name.toLowerCase()) ?? fallback;
 }
 export function getInteractionUI(request: Interaction): ToolInteractionAdapter | undefined {
   return request.kind === 'question' ? AskUserQuestion.interaction : undefined;
 }
-export function isVisibleToolMessage(message: Message): boolean {
+export function isVisibleToolMessage(message: Message, showFailures = true): boolean {
   const call = messageToolCall(message);
   if (!call) return true;
-  if ((message.step?.terminalVisibility ?? defaultToolRegistry.getTerminalVisibility(call.name)) === 'silent') return false;
-  return getToolUI(call.name).visibility !== 'hidden';
+  const silent = (message.step?.terminalVisibility ?? defaultToolRegistry.getTerminalVisibility(call.name)) === 'silent';
+  if (!silent && getToolUI(call.name).visibility !== 'hidden') return true;
+  // Hidden and silent tools draw nothing on success; a failed call shows one quiet row so the failure is never lost.
+  return showFailures && (message.step?.state === 'failed' || Boolean(message.step?.disposition));
 }

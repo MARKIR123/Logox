@@ -47,8 +47,10 @@ export async function executeWebFetch(
   const rawText = await response.text();
 
   let markdown = '';
+  let pageTitle = '';
   if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml') || /<html|<!doctype/i.test(rawText.slice(0, 500))) {
     markdown = htmlToMarkdown(rawText);
+    pageTitle = (/<title[^>]*>([\s\S]*?)<\/title>/i.exec(rawText)?.[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
   } else {
     markdown = rawText.trim();
   }
@@ -60,7 +62,7 @@ export async function executeWebFetch(
     };
   }
 
-  const header = `[Fetched from: ${args.url}${args.prompt ? ` | Context goal: ${args.prompt}` : ''}]\n\n`;
+  const header = `[Fetched from: ${args.url} | HTTP ${response.status}${pageTitle ? ` | Title: ${pageTitle}` : ''}${args.prompt ? ` | Context goal: ${args.prompt}` : ''}]\n\n`;
   let result = header + markdown;
 
   if (options.cwd) {

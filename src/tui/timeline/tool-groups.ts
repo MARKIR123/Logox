@@ -2,11 +2,14 @@ import type {Message} from '../../runtime/contracts.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
 import {classifyShellCommand, shellExecutable} from '../../tools/ShellTool/classify.js';
 import {shellWords} from '../../permissions/shell.js';
+import type {ToolCall} from '../../runtime/messages.js';
 import {messageToolCall} from './tool-ui.js';
 
 export type ToolGroupCategory = 'search' | 'read' | 'list' | 'browse' | 'command';
 export interface ToolGroup {
   readonly type: 'group';
+  /** `browser`: a run of page actions (one `Browser` card); `explore`: reads, searches, listings and commands. */
+  readonly kind: 'explore' | 'browser';
   readonly id: string;
   readonly messages: readonly Message[];
   readonly counts: Readonly<Partial<Record<ToolGroupCategory, number>>>;
@@ -45,6 +48,15 @@ function browseTool(name: string, args: Record<string, unknown>): string | undef
   }
   if (lower.startsWith('mcp__') && (isPlaywright(lower.split('__')[1]) || lower.includes('__browser_'))) return lower;
   return undefined;
+}
+
+/** A browser call as the user sees it: the Playwright tool without its `browser_` prefix (`click`, `navigate`, `list`) and its arguments. */
+export function browserAction(call: ToolCall): {readonly action: string; readonly args: Record<string, unknown>} | undefined {
+  const args = parseArgs(call.arguments);
+  const tool = browseTool(call.name, args);
+  if (!tool) return undefined;
+  const inner = args.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments as Record<string, unknown> : {};
+  return {action: tool.replace(/^.*browser_/i, '').replace(/^mcp__.*?__/, '').toLowerCase(), args: call.name.toLowerCase() === 'mcp' ? inner : args};
 }
 
 export function categorizeToolMessage(message: Message): ToolGroupCategory | undefined {
@@ -138,11 +150,11 @@ function isFailed(message: Message): boolean {
 /** Invisible or empty entries that never break a run: thinking, silent tools, empty assistant text. */
 function isNeutral(message: Message): boolean {
   if (message.kind === 'thinking') return true;
-  if (message.kind === 'tool') return message.step?.terminalVisibility === 'silent';
+  if (message.kind === 'tool') return message.step?.terminalVisibility === 'silent' && !isFailed(message); // a failed one draws its own row
   return message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim();
 }
 
-function buildGroup(messages: readonly Message[], stage: string | undefined, now: number): ToolGroup {
+function buildGroup(messages: readonly Message[], stage: string | undefined, now: number, kind: ToolGroup['kind']): ToolGroup {
   const counts: Partial<Record<ToolGroupCategory, number>> = {};
   const targets: string[] = [];
   let elapsedMs = 0, running = false;
@@ -163,7 +175,7 @@ function buildGroup(messages: readonly Message[], stage: string | undefined, now
       }
     }
   }
-  return {type: 'group', id: messages[0]!.id + '-group', messages, counts, targets, elapsedMs, running,
+  return {type: 'group', kind, id: messages[0]!.id + '-group', messages, counts, targets, elapsedMs, running,
     ...(active ? {active} : {}), ...(stage ? {stage} : {})};
 }
 
@@ -171,16 +183,18 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
   const items: TimelineItem[] = [];
   const now = Date.now();
   let calls: Message[] = [];   // collapsible calls plus absorbed neutral messages, in order
+  let runKind: ToolGroup['kind'] | undefined; // browser actions never mix with reads, searches and commands
   let callCount = 0;
   let pending: Message[] = []; // neutral messages after the last call, not yet known to be inside the group
   let stage: string | undefined;
 
   const flush = () => {
-    if (callCount >= 2) items.push(buildGroup(calls, stage, now));
+    if (callCount >= (runKind === 'browser' ? 1 : 2)) items.push(buildGroup(calls, stage, now, runKind ?? 'explore'));
     else for (const message of calls) items.push({type: 'message', message});
     if (callCount > 0) stage = undefined;
     for (const message of pending) items.push({type: 'message', message});
     calls = [];
+    runKind = undefined;
     callCount = 0;
     pending = [];
   };
@@ -196,6 +210,9 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
     if (message.kind === 'tool') {
       const category = categorizeToolMessage(message);
       if (category && !isFailed(message)) {
+        const kind = category === 'browse' ? 'browser' : 'explore';
+        if (runKind && runKind !== kind) flush();
+        runKind = kind;
         calls.push(...pending, message);
         pending = [];
         callCount++;

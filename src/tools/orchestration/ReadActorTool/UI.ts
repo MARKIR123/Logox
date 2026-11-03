@@ -1,3 +1,3 @@
-import {createToolUI} from '../../../tui/timeline/tool-ui.js';
+import {callLabel, createToolUI, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
 
-export const UI = createToolUI(['actor', 'ownerId', 'name']);
+export const UI = hiddenToolUI(createToolUI(['actor', 'ownerId', 'name']), callLabel('ReadActor', ['ownerId', 'actor', 'name']));

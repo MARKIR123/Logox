@@ -24,8 +24,13 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 - Grep：命中按文件分组（路径用 `path` 色，后跟淡色命中数），每条命中是行号加正文，命中的子串以暖色（`highlight`）加粗；Glob：目录部分淡色、文件名用 `path` 色。
 - Shell：第一行 `$ 命令`（命令用 `path` 色），然后是输出尾部，stderr 与疑似错误行用错误色。
 - 工具组展开后，每个成员是自己的折叠行（`▮` 加标题与摘要），可各自展开，结构与上面相同。
-
-MCP 调用显示为 `服务名.工具名(参数) · 结果摘要 · 耗时`，每次调用一行。参数最多预览三项，长内容和复杂结构紧凑显示，敏感字段遮蔽；展开可查看有长度限制的参数与结果。结果摘要来自实际返回内容和执行状态，`Done` 仅表示调用完成，不代表业务成功。窄屏优先保留结果与耗时。遮蔽只作用于显示，原始账本不变。
+- WebFetch：标题 `WebFetch(域名)`，不带摘要；正文第一行是完整 URL（`link` 色加下划线，域名加粗），第二行是页面标题（加粗）加淡色 `状态 · 大小`，随后是页面内容的 Markdown 渲染摘录；原始 HTML 永远不会直接显示。
+- 浏览器（Playwright）：同一角色连续的页面动作合并为一张 `Browser` 卡，摘要 `N actions`，不与 Read / Grep / Shell 混在一起。展开后每个动作一行平实的话，各有自己的 `▮`：`Opened <URL>`、`Clicked "元素"`、`Typed "文字" into 元素`、`Pressed 键`、`Screenshot W × H → 路径`（路径用 `path` 色）、`Snapshot of 页面`、`Console · N errors`（有错误时标记变红，摘要里淡色显示第一条错误）、`Evaluated 代码`、`Waited for "文字"`、`Closed browser`。有可看内容的动作（控制台、求值结果、快照摘录）可单独展开，其余是不可展开的一行。
+- 其他 MCP 工具与未知工具：标题 `mcp · 服务 › 工具`；正文先是对齐的 `键  值` 参数行（键淡色、值正常前景，嵌套对象为单行紧凑 JSON），再是渲染后的结果（像 Markdown 时按 Markdown 渲染），同样受 12 行上限约束，空结果为 `No output`。敏感字段遮蔽只作用于显示，原始账本不变。
+- SendMessage：`SendMessage to <符号 名字>`（名字用目标角色色）加摘要 `ask · awaiting reply` / `ask · answered` / `inform` / `reply`；展开为 `Q  问题`、`A  回答`（标签淡色）。对方回复后，提问方的卡片更新为 `answered` 并显示 Q 与 A；回复方的卡片总是先显示原问题 Q 再显示自己的 A，不会只剩一个孤立的回答。角色之间的对话不出现在 Logox 主时间线，除非发送方或接收方是 Logox；各角色自己的窗口仍显示自己发出的消息。
+- AskUserQuestion：回答之后是一份记录：摘要 `answered`（或 `cancelled`），每个问题一行 `Q  问题`，所选答案 `A  答案` 以用户色加粗，备注用次要色。交互选择面板本身不变。
+- 隐藏工具（Actor、ListActors、ReadActor、LoadTools、UpdateTaskProgress、_FinishRound、_GitStatus）成功时什么都不画，也不会出现在工具组摘要里；失败时只有一行：红色 `▮`、次要色标题（如 `Actor(kalon)`）、` · `、红色原因，耗时靠右。角色卡本身不受影响。CancelActor 是不可展开的一行 `■ Stopped <符号 名字>`，用该角色的颜色。
+- Automa 的任务行使用同样的正文结构：12 行上限、同一个 `… N more lines` 展开行、同一种空状态。
 
 点击卡片折叠或展开，双击角色卡进入其窗口。拖选优先于点击，选择文字不会停止任务。停止按钮只作用于对应任务，停止 Logox 不会连带取消所有角色。
 

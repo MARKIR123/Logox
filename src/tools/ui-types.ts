@@ -5,6 +5,7 @@ import type {ToolResult} from './types.js';
 import {type QuestionDraft} from '../tui/interactions/choice-style.js';
 import type {createBuilder, insetFrame} from '../tui/timeline/scene.js';
 import type {ActorActivityContext} from './orchestration/ActorTool/UI.js';
+import type {SendPairing} from './coordination/SendMessageTool/pairing.js';
 
 export type ToolFrame = Parameters<typeof insetFrame>[0];
 export interface ToolRenderContext {
@@ -17,6 +18,8 @@ export interface ToolRenderContext {
   /** Fold state of ids the tool owns inside its card (for example swarm jobs). */
   isOpen?: (id: string) => boolean;
   accent: string;
+  /** SendMessage only: the question this message answers and the reply that closed it, from the whole session. */
+  pairing?: SendPairing;
 }
 export interface ToolInteractionState {
   request: Interaction;

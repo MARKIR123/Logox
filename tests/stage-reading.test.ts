@@ -55,7 +55,7 @@ test('正式舞台渲染 Markdown，软折行复制屏幕文字，用户和工�
   assert.equal(extractSelection(body, {anchor: {x: 0, y: 0}, focus: {x: 100, y: body.length - 1}}), '中文标题🙂\n• 第一项 和 代码\n1. 第二项\n│ 引用\n链接 (https://example.com)\n── ts ──────────\n    const value = "中文👩‍💻";\n────────────────');
   assert.equal(store.getSnapshot().messages[0]?.text, source);
   assert.ok(rows.some(row => row.messageId === user && row.text === '# 用户原文'));
-  assert.ok(rows.some(row => row.text === '# 工具原文'));
+  assert.ok(rows.some(row => row.text.includes('# 工具原文')), 'a legacy tool record keeps its text as the card title');
   const emphasis = body.findIndex(row => row.text.includes('第一项'));
   assert.equal(extractSelection(body, {anchor: {x: 4, y: emphasis}, focus: {x: 9, y: emphasis}}), '第一项');
 });
