@@ -53,7 +53,7 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
     const status = {ownerId: 'logox', name: 'Logox', model: {provider: 'demo', model: 'flash'}, effort: 'high', permission: '工作区',
       context: {tokens: 20, window: 100}, state: 'Running'};
     assert.equal(statusbarText(status, 5), '\uf007 Lo…');
-    assert.equal(statusbarText(status, 25), '\uf007 Logox | \uf4b8 demo/flash');
+    assert.equal(statusbarText(status, 25), '\uf007 Logox │ \uf4b8 demo/flash');
     assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*Context \[.*\] 20% USED.*running/);
     assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Cost|费用) CNY 1.2500/);
   } finally {await rm(dir, {recursive: true, force: true});}
@@ -153,8 +153,8 @@ test('status modules and the queue badge share one line across actor views and n
     effort: 'high', permission: '工作区', context: {tokens: 25, window: 100}, state: '就绪'})});
   try {
     await delay(80);
-    assert.ok(ui.output.lines.at(-1)?.includes('\uf007 logox | \uf4b8 demo/logox-model'));
-    await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('\uf007 aletheia | \uf4b8 demo/aletheia-model'));
+    assert.ok(ui.output.lines.at(-1)?.includes('\uf007 logox │ \uf4b8 demo/logox-model'));
+    await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('\uf007 aletheia │ \uf4b8 demo/aletheia-model'));
     await prefs.save(defaultStatusbar.map(item => ({...item, enabled: item.id === 'context'}))); await delay(80); await ui.instance.waitUntilRenderFlush();
     assert.match(ui.output.lines.at(-1)?.trim() ?? '', /25% USED/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();

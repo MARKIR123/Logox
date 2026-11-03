@@ -26,9 +26,9 @@ test('thinking text drops blank lines at the edges and between paragraphs, keepi
   const id = f.steps.thinking(); f.store.appendMessage(id, raw); f.advance(2000); f.steps.finish(id, 'completed'); f.steps.endGroup('completed');
   const message = f.store.getSnapshot().messages.find(m => m.kind === 'thinking')!;
   const rows = f.rows({a: true, [message.id]: true});
-  const first = rows.findIndex(r => text(r) === 'Firstparagraph.');
+  const first = rows.findIndex(r => /^\d+sFirstparagraph\.$/.test(text(r)));
   assert.ok(first >= 0, 'thinking body renders');
-  assert.deepEqual(rows.slice(first, first + 3).map(text), ['Firstparagraph.', 'Secondparagraph.', 'Third.']);
+  assert.deepEqual(rows.slice(first + 1, first + 3).map(text), ['Secondparagraph.', 'Third.']);
   assert.equal(rows[first - 1] && blank(rows[first - 1]!), false, 'no empty row between the header and the body');
   assert.equal(message.text, raw, 'stored data is untouched');
 });
@@ -45,7 +45,7 @@ test('trailing newlines in tool output never become an empty row, interior blank
   const first = rows.findIndex(r => text(r) === 'Exitcode:0');
   assert.ok(first >= 0, 'tool body renders');
   assert.deepEqual(rows.slice(first, first + 4).map(text), ['Exitcode:0', 'lineone', '', 'linethree']);
-  assert.ok(!blank(rows[first + 4]!) || /spacer|-bottom/.test(rows[first + 4]!.messageId) , 'nothing blank after the last output line unless it is card spacing');
+  assert.ok(!rows[first + 4] || !blank(rows[first + 4]!) || /spacer|-bottom/.test(rows[first + 4]!.messageId) , 'nothing blank after the last output line unless it is card spacing');
 });
 
 for (const owner of ['kalon', 'logox'] as const) {

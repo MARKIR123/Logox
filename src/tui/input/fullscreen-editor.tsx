@@ -5,7 +5,7 @@ import {palette} from '../appearance/theme.js';
 import {panePadding} from '../components/panel-frame.js';
 import {useMouse} from '../terminal/mouse.js';
 import {clipLine, safeText} from '../terminal/text.js';
-import {cursorAt, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './editor.js';
+import {cursorAt, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, moveWord, type Draft} from './editor.js';
 
 export const COMPOSER_EXPAND_LABEL = '⛶';
 export const COMPOSER_EXPAND_PADDING = 1;
@@ -37,9 +37,16 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
 }) {
   const geometry = fullscreenEditorLayout(width, height);
   const layout = useMemo(() => layoutInput(draft, geometry.columns), [draft, geometry.columns]);
-  const [anchor, setAnchorState] = useState<number | null>(null);
-  const anchorRef = useRef<number | null>(null);
-  const setAnchor = (value: number | null) => {anchorRef.current = value; setAnchorState(value);};
+  const anchor = draft.anchor ?? null;
+  const anchorRef = useRef<number | null>(anchor);
+  anchorRef.current = anchor;
+  const setAnchor = (value: number | null) => {
+    anchorRef.current = value;
+    onEdit(current => {
+      const {anchor: _anchor, ...rest} = current;
+      return value === null ? rest : {...rest, anchor: value};
+    });
+  };
   const previousStart = useRef(0);
   const follow = inputViewport(layout, geometry.bodyHeight, previousStart.current);
   const maxStart = Math.max(0, layout.lines.length - geometry.bodyHeight);
@@ -62,23 +69,17 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
   };
   const navigate = (update: (current: Draft) => Draft, selecting: boolean) => {
     if (selecting) {if (anchorRef.current === null) setAnchor(draft.cursor);} else setAnchor(null);
-    setScrollOffset(null); onEdit(update);
+    const at = anchorRef.current;
+    setScrollOffset(null); onEdit(current => {
+      const next = update(current);
+      return at === null ? next : {...next, anchor: at};
+    });
   };
   const copy = (): boolean => {
     if (!selected) return false;
     onCopy(graphemes(draft.text).slice(selected.start, selected.end).join('')); return true;
   };
-  const wordEdge = (current: Draft, direction: -1 | 1): Draft => {
-    const parts = graphemes(current.text); let cursor = current.cursor;
-    if (direction < 0) {
-      while (cursor > 0 && /\s/u.test(parts[cursor - 1]!)) cursor--;
-      while (cursor > 0 && !/\s/u.test(parts[cursor - 1]!)) cursor--;
-    } else {
-      while (cursor < parts.length && !/\s/u.test(parts[cursor]!)) cursor++;
-      while (cursor < parts.length && /\s/u.test(parts[cursor]!)) cursor++;
-    }
-    return {text: current.text, cursor};
-  };
+  const wordEdge = moveWord;
   usePaste(text => {if (!disabled) replace(text);});
   useInput((input, key) => {
     if (disabled || key.eventType === 'release') return;
@@ -86,7 +87,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     if (key.escape) {if (selected) setAnchor(null); else onCollapse(); return;}
     if (key.ctrl && input === 'c') {if (!copy()) onInterrupt(); return;}
     if (key.ctrl && input === 'x') {if (copy()) replace(''); return;}
-    if (key.ctrl && input === 'a') {setAnchor(0); setScrollOffset(null); onEdit(current => move(current, Infinity)); return;}
+    if (key.ctrl && input === 'a') {setAnchor(0); setScrollOffset(null); onEdit(current => ({...move(current, Infinity), anchor: 0})); return;}
     if (key.ctrl && input === 't') {onSteer(); return;}
     if (key.return) {if (key.ctrl) {if (draft.text.trim()) onSubmit();} else replace('\n'); return;}
     if (key.ctrl && input === 'j') {replace('\n'); return;}
@@ -141,12 +142,13 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     if ((event.action === 'press' || event.action === 'drag' && drag.current) && inBody) {
       const cursor = cursorAt(layout, Math.min(layout.lines.length - 1, start + event.y - geometry.bodyY), Math.max(0, event.x - geometry.padding));
       if (event.action === 'press') {setAnchor(cursor); drag.current = true;}
-      onEdit(current => ({text: current.text, cursor}));
+      const at = anchorRef.current;
+      onEdit(current => ({text: current.text, cursor, ...(at === null ? {} : {anchor: at})}));
     }
   });
   const footer = notice ? safeText(notice).replace(/\n/g, ' ') : geometry.width >= 65
     ? 'Enter / Shift+Enter Newline · Ctrl+Enter Send · Esc Back' : 'Enter Newline · ^Enter Send · Esc Back';
-  const rule = <Box height={1} flexShrink={0}><Text color={palette.line}>{'─'.repeat(geometry.width)}</Text></Box>;
+  const rule = <Box height={1} flexShrink={0}><Text color={palette.composerBorder}>{'─'.repeat(geometry.width)}</Text></Box>;
   return <Box width={geometry.width} height={geometry.height} overflow="hidden" flexDirection="column">
     {Boolean(geometry.top) && rule}
     {Boolean(geometry.header) && <Box height={1} flexShrink={0}>
@@ -155,7 +157,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     </Box>}
     <Box height={geometry.bodyHeight} flexShrink={0} flexDirection="column" overflow="hidden" paddingX={geometry.padding}>
       {layout.lines.slice(start, start + geometry.bodyHeight).map((line, index) => <Box key={start + index} height={1} flexShrink={0} overflow="hidden">
-        <Text wrap="truncate" color={palette.fg}>{(() => {
+        <Text wrap="truncate" color={palette.composerFg}>{(() => {
           if (!selected || selected.end <= line.start || selected.start >= line.end) return line.text || ' ';
           const parts = graphemes(line.text), low = Math.max(0, selected.start - line.start), high = Math.min(parts.length, selected.end - line.start);
           return <>{parts.slice(0, low).join('')}<Text color={palette.selectionFg} backgroundColor={palette.selectionBg}>{parts.slice(low, high).join('')}</Text>{parts.slice(high).join('')}</>;

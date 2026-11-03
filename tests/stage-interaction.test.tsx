@@ -15,6 +15,8 @@ import {extractSelection} from '../src/tui/timeline/viewport.js';
 import {contentPoint, selectionRange, type ContentSelection} from '../src/tui/timeline/selection.js';
 import {decorateRow} from '../src/tui/timeline/row-presentation.js';
 import {stepIcon} from '../src/tui/appearance/animation.js';
+import {expandedTint} from '../src/tui/appearance/colors.js';
+import {cast} from '../src/actors/ensemble.js';
 import {encodeRow} from '../src/tui/terminal/terminal-plane.js';
 import {StatusbarPreferences} from '../src/config/statusbar-preferences.js';
 import {App} from '../src/tui/app.js';
@@ -54,12 +56,11 @@ test('折叠只命中实际图标标题，展开灰底优先，露出背景命�
   assert.equal(actionAt(row, row.gutterCols + stringWidth(row.text.trimEnd()))?.foldId, 'actor', 'trailing blanks do not widen the region');
   const open = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true, [id]: true}, null);
   const body = open.find(row => row.text === '完整结果')!;
-  assert.equal(body.bg, '#242B3A'); assert.equal(actionAt(body, 76)?.foldId, id);
+  assert.equal(body.bg, expandedTint(cast.techne!.color)); assert.equal(actionAt(body, 76)?.foldId, id);
   assert.equal(actionAt(body, 2)?.foldId, 'actor');
   const header = open.findIndex(row => row.messageId === 'actor');
   assert.match(extractSelection(open, {anchor: {x: 2, y: header}, focus: {x: 78, y: header}}), /Techne.*整理布局.*Stop/);
-  const cap = open.findIndex(row => row.messageId === 'actor-top');
-  assert.match(extractSelection(open, {anchor: {x: 2, y: cap}, focus: {x: 78, y: cap}}), /^▄+$/);
+  assert.ok(!open.some(row => /-(top|bottom)$/.test(row.messageId)), 'expanded cards draw no ▄/▀ cap rows');
   for (const [index, row] of open.entries()) assert.equal(strip(encodeRow(row, index, {anchor: {x: 3, y: index}, focus: {x: 23, y: index}})), strip(encodeRow(row, index, null)), '选中不改变字符、内边距和字距');
 });
 
@@ -104,7 +105,7 @@ test('真实 Ink 鼠标松开才折叠，拖选标题和停止文字不会操作
   const ui = mount(store);
   try {
     await ui.settle();
-    const heading = ui.output.lines.findIndex(line => line.includes('Techne'));
+    const heading = ui.output.lines.findIndex(line => line.includes('整理布局'));
     await ui.mouse(0, 8, heading); await ui.mouse(0, 8, heading, true); await ui.settle(200);
     let line = ui.output.lines.findIndex(line => line.includes('read'));
     assert.ok(line >= 0);
@@ -160,7 +161,7 @@ test('运行点阵、Thinking 流光和 Actor 呼吸只刷新画布，等待/终
     await ui.settle(1000);
     assert.equal(ui.commits(), before); assert.equal(store.getSnapshot().revision, revision);
     // Open the actor and expose its active Thinking, then compare fixed geometry.
-    const heading = ui.output.lines.findIndex(line => line.includes('Techne'));
+    const heading = ui.output.lines.findIndex(line => line.includes('整理布局'));
     await ui.mouse(0, 8, heading); await ui.mouse(0, 8, heading, true); await ui.settle(200);
     assert.ok(ui.output.lines.some(line => line.includes('Thinking')));
     const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true}, null);

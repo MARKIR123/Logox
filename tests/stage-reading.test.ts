@@ -220,7 +220,7 @@ test('导轨跟随窗口的编排者：角色独立窗口用角色色，主窗�
   assert.equal(toolRows[0]!.railColor, techneColor, 'Techne 工具卡的导轨颜色必须是 Techne 专属主题色');
   const highlightSegment = toolRows[0]!.segments?.find(s => s.text.includes('shell'));
   assert.equal(highlightSegment?.color, techneColor, '悬停工具卡标题使用 Techne 主题色');
-  const unhovered = buildStageRows(store.getSnapshot(), 's', 'techne', 80, {[techneTool]: true}, null, {}, customRoles).find(row => row.messageId === techneTool)!;
+  const unhovered = buildStageRows(store.getSnapshot(), 's', 'techne', 80, {}, null, {}, customRoles).find(row => row.messageId === techneTool)!;
   assert.equal(unhovered.segments!.find(s => s.selectionKey === techneTool + ':title')!.color, palette.muted, '移出工具卡后恢复次要色');
   assert.equal(toolRows[0]!.segments?.find(s => s.selectionKey === techneTool + ':icon')?.color, palette.muted, '工具运行方块静默灰色');
 

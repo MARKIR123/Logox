@@ -1,16 +1,18 @@
 import type {Step} from '../../runtime/contracts.js';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
-import {mixHex} from '../appearance/colors.js';
+import {expandedTint, faintColor, quietRail} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
-import {safeText} from '../terminal/text.js';
+import {clipLine, safeText} from '../terminal/text.js';
 import {ownerColor, ownerHeader, ownerSurface, type ActorStyle, type ActorStyles} from '../appearance/actor-style.js';
 import {cast} from '../../actors/ensemble.js';
 import {type Row} from './viewport.js';
 import type {ContentCell} from './selection.js';
 import {layoutMarkdown} from './markdown.js';
-import {stepStatus, stepIcon, thinkingDuration} from '../appearance/animation.js';
+import {stepStatus, stepIcon, thinkingDuration, swarmElapsed} from '../appearance/animation.js';
 
+/** Widest an expanded card body gets, however wide the terminal is. */
+export const MAX_BODY_WIDTH = 100;
 /** Separator between row parts; always its own muted segment. */
 export const SEPARATOR = ' · ';
 
@@ -66,13 +68,19 @@ function railColorFor(who: string, roles: ActorStyles = cast): string {
   return ownerColor(who, roles);
 }
 
-function whoLabel(who: string, roles: ActorStyles = cast): string {
+function whoName(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return 'You';
   if (who === 'system') return '';
-  if (who === 'logox') return '◈ Logox';
-  return ownerHeader(who, roles);
+  if (who === 'logox') return 'Logox';
+  if (who === 'anamnesis') return 'Anamnesis';
+  return roles[who]?.name ?? who;
 }
-
+/** The speaker glyph drawn on the rail of a turn header. */
+function whoGlyph(who: string, roles: ActorStyles = cast): string {
+  if (who === 'user') return '❯';
+  if (who === 'logox') return '◈';
+  return roles[who]?.symbol ?? '◇';
+}
 
 /** Removes trailing newlines and whitespace-only lines; the indentation of the last real line is kept. */
 export function trimTrailingBlankLines(text: string): string {
@@ -101,6 +109,10 @@ export interface FrameWrap {
   readonly surfaceColor?: string;
 }
 
+/** Live activity after the speaker name: spinner, current action and elapsed time (the spinner and clock are drawn by `decorateRow`). */
+/** Without `since` the activity is static text (waiting on an answer or approval): no spinner, no clock. */
+export interface TurnActivity {readonly label: string; readonly since?: number}
+
 export interface RowBuilder {
   rows: SceneRow[];
   width: number;
@@ -108,7 +120,7 @@ export interface RowBuilder {
   contentWidth: number;
   hoveredFoldId: string | null;
   pushBlank(railColor?: string, frame?: FrameWrap, action?: SceneAction): void;
-  pushTurnHeader(id: string, who: string, origin?: string, clock?: string): void;
+  pushTurnHeader(id: string, who: string, origin?: string, clock?: string, activity?: TurnActivity): void;
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
   pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap): void;
   pushFramedLine(
@@ -170,7 +182,7 @@ export function insetRailFrame(parent: FrameWrap, railColor: string, bg?: string
   const left = 2;
   const frameBg = bg ?? parent.bg;
   return {
-    leftSegments: [...parent.leftSegments, {text: '│ ', color: railColor, ...(frameBg ? {bg: frameBg} : {})}],
+    leftSegments: [...parent.leftSegments, {text: '│ ', color: quietRail(railColor), ...(frameBg ? {bg: frameBg} : {})}],
     rightSegments: parent.rightSegments,
     leftCols: parent.leftCols + left,
     rightCols: parent.rightCols,
@@ -258,14 +270,30 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
   };
 
-  const pushTurnHeader: RowBuilder['pushTurnHeader'] = (id, who, origin = '', clock = '') => {
+  const pushTurnHeader: RowBuilder['pushTurnHeader'] = (id, who, origin = '', clock = '', activity) => {
     const railColor = railColorFor(who, roles);
-    const name = whoLabel(who, roles);
-    const pieces: SceneSegment[] = [{text: name, color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
-    if (origin) pieces.push({text: ' · ' + origin, color: palette.fg, selectionKey: id + ':origin'});
+    const pieces: SceneSegment[] = [{text: whoName(who, roles), color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
+    if (origin) pieces.push({text: ' · ' + origin, color: palette.muted, selectionKey: id + ':origin'});
+    const since = activity?.since;
+    if (activity) {
+      // The live part (spinner, action, clock) only shows when it fits on the header row; the label is clipped to the room left.
+      const fixed = since !== undefined ? 2 + 1 + 1 + SEPARATOR.length + 6 : 2;
+      const room = contentWidth - pieces.reduce((sum, p) => sum + stringWidth(p.text), 0) - fixed;
+      const label = room >= 4 ? clipLine(activity.label, room) : '';
+      if (label && since !== undefined) pieces.push(
+        {text: '  ', selectionKey: id + ':activity_gap', selectionOffset: 0},
+        {text: '⠋', color: railColor, selectionKey: id + ':activity_icon', selectionOffset: 0},
+        {text: ' ' + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0},
+        {text: SEPARATOR, color: faintColor(), separator: true, selectionKey: id + ':activity_sep', selectionOffset: 0},
+        {text: swarmElapsed(Date.now() - since), color: faintColor(), selectionKey: id + ':activity_time', selectionOffset: 0});
+      else if (label) pieces.push({text: '  ' + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0});
+    }
     const used = pieces.reduce((sum, s) => sum + stringWidth(s.text), 0);
     if (clock && used + stringWidth(clock) + 2 <= contentWidth) pieces.push({text: ' '.repeat(contentWidth - used - stringWidth(clock)) + clock, color: palette.muted});
+    const first = rows.length;
     pushFramedLine(id, railColor, pieces, topFrame());
+    rows[first] = {...rows[first]!, railGlyph: whoGlyph(who, roles),
+      ...(since !== undefined && pieces.some(p => p.selectionKey === id + ':activity_icon') ? {animation: {step: {title: '', state: 'running', elapsedMs: 0, runningSince: since} as Step, actorColor: railColor}} : {})};
   };
 
   const pushProse: RowBuilder['pushProse'] = (id, text, railColor, tone = 'body', frame, action, color) => {
@@ -362,8 +390,11 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     let subFrom = -1, subTo = -1;
     const bright = opts.open || hoveredFoldId === opts.id;
     const simple = opts.kind === 'Thinking' || opts.kind === 'Tool' || opts.kind === 'Task';
-    const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : opts.open && simple ? palette.toolExpanded : pf.bg;
-    const frame = insetFrame(pf, cardBg);
+    // Background color only ever means "expanded": a faint tint of the surface owner's color. Folded rows never carry one.
+    const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : opts.open && simple ? expandedTint(pf.surfaceColor ?? palette.accent) : pf.bg;
+    // Simple cards start right after the rail (header flush, body indented under the title); other cards keep their inset frame.
+    const bodyFrame = insetFrame(pf, cardBg, 2, 2 + Math.max(0, pf.innerWidth - 4 - MAX_BODY_WIDTH));
+    const frame = simple ? (cardBg && cardBg !== pf.bg ? {...pf, bg: cardBg} : pf) : insetFrame(pf, cardBg);
     const action: SceneAction = {kind: 'toggle_fold', foldId: opts.id};
     if (isDream) {
       pushCardCap(opts.id + '-top', 'top', cardBg, opts.railColor, pf, action);
@@ -371,13 +402,14 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     // Hover highlights belong to the surface that hosts the row, never to the card's sender or tool owner.
     const highlightColor = isDream ? palette.dreamText : pf.surfaceColor ?? palette.accent;
     const labelColor = opts.toneColor ?? (isDream ? palette.dreamText : bright ? highlightColor : palette.muted);
-    const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
+    const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : opts.open ? palette.fg : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
     if (simple) {
       const thinking = opts.kind === 'Thinking';
       const terminal = opts.step && ['completed', 'failed', 'cancelled'].includes(opts.step.state);
       const title = thinking ? terminal ? 'Thought for' : 'Thinking...' : opts.title;
       const status = thinking ? (opts.step ? thinkingDuration(opts.step, Date.now()) : '') : opts.step ? stepStatus(opts.step, Date.now()) : opts.status ?? '';
-      const icon = thinking && opts.step ? stepIcon(opts.step, Date.now(), false) : '▮';
+      const live = opts.step?.state === 'running';
+      const icon = thinking && opts.step ? stepIcon(opts.step, Date.now(), false) : opts.open && !live ? '▾' : '▮';
       const fault = opts.step?.disposition === 'denied' ? 'Denied' : opts.step?.disposition === 'error' || opts.step?.state === 'failed' ? 'Error' : '';
       const isTool = !thinking;
       const statusText = isTool && status ? status.trim() : status;
@@ -410,10 +442,10 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       const waitingText = opts.step?.state === 'waiting' ? opts.step.waiting ?? 'Waiting' : '';
       const hoverMuted = (color: string) => isHovered && color === palette.muted ? highlightColor : color;
       const pieces: SceneSegment[] = [
-        ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
+        ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : opts.open && !live ? palette.fg : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
         ...titlePieces,
         ...(statusSepText ? [separator(statusSepText, opts.id + ':status_sep')] : []),
-        ...(statusText ? [{text: statusText, color: hoverMuted(palette.muted), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
+        ...(statusText ? [{text: statusText, color: fault ? palette.error : hoverMuted(palette.muted), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
         ...(thinking && tokenText ? [separator(SEPARATOR, opts.id + ':tokens_sep'), {text: tokenText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
         ...(thinking && waitingText ? [separator(SEPARATOR, opts.id + ':waiting_sep'), {text: waitingText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':waiting', selectionOffset: 0}] : []),
         ...((opts.faultLabel ?? fault) ? [{text: '  ' + (opts.faultLabel ?? fault), color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
@@ -436,8 +468,9 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       // Interior blank lines are content (command output); the trailing ones are formatting.
       let bodyEnd = opts.bodyLines.length;
       while (bodyEnd > 0 && !opts.bodyLines[bodyEnd - 1]!.trim()) bodyEnd--;
-      opts.bodyLines.slice(0, bodyEnd).forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', frame, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
-      opts.renderBody?.(frame);
+      const inner = simple ? bodyFrame : frame;
+      opts.bodyLines.slice(0, bodyEnd).forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', inner, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
+      opts.renderBody?.(inner);
     }
     if (isDream) {
       pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, pf, action);
@@ -488,7 +521,8 @@ export function appendActorCard(
     railColor: string;
     active?: boolean;
     stop?: {readonly disabled: boolean; readonly focused: boolean; readonly hovered: boolean};
-    renderBody(frame: FrameWrap, actorColor: string, bodyAction: SceneAction): void;
+    /** `frame` is inset two columns under the symbol; `outer` starts right after the surface rail, where the inner `│` rail of an open card runs. */
+    renderBody(frame: FrameWrap, actorColor: string, bodyAction: SceneAction, outer: FrameWrap): void;
   },
 ) {
   const roles: ActorStyles = opts.roles ?? cast;
@@ -497,13 +531,12 @@ export function appendActorCard(
   const firstRow = builder.rows.length;
   const isHovered = builder.hoveredFoldId === opts.id;
   const bright = opts.open || isHovered;
-  const cardBg = opts.open ? ownerSurface(opts.owner, true, opts.roles) : undefined;
+  const cardBg = opts.open ? (opts.owner === 'anamnesis' ? ownerSurface(opts.owner, true, opts.roles) : expandedTint(role.color)) : undefined;
   const outerFrame: FrameWrap = {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth, surfaceColor: role.color};
+  // The card starts right after the surface rail: the actor symbol sits in the first content column and the inner `│` rail of an open card runs under it.
+  const headFrame: FrameWrap = cardBg ? {...outerFrame, bg: cardBg} : outerFrame;
   const frame = insetFrame(outerFrame, cardBg);
   const action: SceneAction = {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
-  if (opts.open && cardBg) {
-    builder.pushCardCap(opts.id + '-top', 'top', cardBg, opts.railColor, outerFrame, action);
-  }
   builder.pushCardHeader(
     opts.id,
     [
@@ -512,7 +545,7 @@ export function appendActorCard(
     ],
     opts.task,
     shortStatus + (opts.stop ? opts.stop.disabled ? ' · Stopping…' : ' · ■ Stop' : '') + ' ' + (opts.open ? '▾' : '▸'),
-    frame,
+    headFrame,
     opts.railColor,
     action,
     statusColor(shortStatus, role.color),
@@ -538,10 +571,7 @@ export function appendActorCard(
     }
   }
   if (opts.open) {
-    opts.renderBody(frame, role.color, action);
-    if (cardBg) {
-      builder.pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, outerFrame, action);
-    }
+    opts.renderBody(frame, role.color, action, headFrame);
   }
   for (let index = firstRow; index < builder.rows.length; index++) {
     const row = builder.rows[index]!;

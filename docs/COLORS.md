@@ -76,6 +76,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 | 分组 | 字段 |
 |---|---|
+| 输入编辑区（折叠与全屏） | `composerFg`、`composerBorder`（文字、边框；背景由终端控制，仅选区填充高亮） |
 | 系统卡片 | `toolExpanded`、`cardBase`、`cardCollapsed`、`cardExpanded` |
 | Anamnesis | `anamnesis`、`dreamCollapsed`、`dreamExpanded`、`dreamText`、`dreamMuted` |
 | 其他结构 | `borderMuted`、`panelSeparator`、`panelLabel` |
@@ -98,7 +99,7 @@ Markdown 正文读取 `fg`，链接的弱化部分读取 `muted`；行内代码�
 
 ## 状态栏配色
 
-`/statusbar` 与 `/settings → Statusbar` 的 Style 只决定 Pipes 或 Starship 的排版，Palette 决定信息段配色，切换任一项都保留模块组合。theme 使用当前系统语义色；gruvbox / dracula 使用独立的数据预设，不切换整个系统主题。角色段优先使用角色配置色，权限段使用各模式自己的语义色，不被装饰配色覆盖。上下文随已用容量读取 success / warning / error，Pipes 的分隔符使用 muted。Starship 只给信息段绘制固定底色，不改变终端整屏背景。
+`/statusbar` 与 `/settings → Statusbar` 的 Style 只决定 Pipes 或 Starship 的排版，Palette 决定信息段配色，切换任一项都保留模块组合。theme 使用当前系统语义色；gruvbox / dracula 使用独立的数据预设，不切换整个系统主题。角色段优先使用角色配置色，权限段使用各模式自己的语义色，不被装饰配色覆盖。上下文随已用容量读取 success / warning / error，Pipes 的分隔符使用 muted。默认 theme 配色跟随当前窗口角色：角色段使用角色色（Starship 为 30% 混入 `bg` 的底色加 90% 混入 `strong` 的文字，Pipes 为粗体角色色），其余段 Starship 使用 `muted` 以 12%–18% 混入 `bg` 的石板底色阶与浅灰文字、Pipes 使用 `muted`，权限段仍保留模式语义色；上下文进度条的已用格使用角色色。右下角 Actor 胶囊始终是 Starship 形态，底色为角色色 26% 混入 `bg`，文字为角色色 85% 混入 `strong`。输入框上下分隔线为角色色 45% 混入 `bg`，`❯` 提示符为 90% 混入。以上均由 `mixHex` 从主题语义色与角色色派生，gruvbox / dracula 预设保持原样。Starship 只给信息段绘制底色，不改变终端整屏背景。
 
 ## 角色配色
 
@@ -114,7 +115,7 @@ card_open: "#2E3850"
 
 ## 兼容与开发约束
 
-- 主题键共 51 个；旧写法 `dream_collapsed`、`dream_expanded` 仍被接受。
+- 主题键共 54 个；旧写法 `dream_collapsed`、`dream_expanded` 仍被接受。
 - TOML `[theme]` 的四色兼容入口保留，默认值取自同一份基准数据；它不是覆盖当前已选预设的通用叠加层。
 - 主题解析集中在 `src/config/theme-palette.ts`，TUI 通过 `src/tui/appearance/theme.ts` 读取同一调色板；角色身份与卡片底色读取位于 `src/tui/appearance/actor-style.ts`。完整系统字段以 `themeColorKeys` 为准。
 - 新增颜色先添加语义字段和基准 JSON，再由界面读取；业务 TS/TSX 不直接写十六进制、固定 RGB、命名颜色或固定彩色 SGR。

@@ -14,6 +14,8 @@
     "error": "#DA8A93",
     "selectionBg": "#3B4A66",
     "selectionFg": "$fg",
+    "composerFg": "$fg",
+    "composerBorder": "$borderMuted",
     "toolExpanded": "$surface",
     "cardBase": "#242B3A",
     "cardCollapsed": "#242B3A",

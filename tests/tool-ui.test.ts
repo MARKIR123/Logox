@@ -310,7 +310,7 @@ test('expanded Edit card renders colored diff lines with line numbers and red/gr
   const removedRow = rows.find(r => r.text.includes('const oldVar = 1;'));
   assert.ok(removedRow, 'Removed line should be present in rows');
   assert.equal(removedRow.bg, '#3E2A2C'); // palette.diffRemovedBg
-  assert.ok(removedRow.segments?.some(s => s.text.includes('-') && s.color === '#B26671'));
+  assert.ok(removedRow.segments?.some(s => s.text.includes('−') && s.color === '#B26671'));
 
   // Green line for addition
   const addedRow = rows.find(r => r.text.includes('const newVar = 2;'));

@@ -3,6 +3,7 @@ import {Box, Text} from 'ink';
 import stringWidth from 'string-width';
 import {stepIcon} from '../appearance/animation.js';
 import {palette} from '../appearance/theme.js';
+import {mixHex} from '../appearance/colors.js';
 import {type ActorStyles} from '../appearance/actor-style.js';
 
 export const PL_LEFT_ROUND = '\ue0b6';
@@ -60,8 +61,9 @@ export function computeActivePills(
     const name = (role?.name ?? ownerId).toLowerCase();
     const text = ' ' + icon + ' ' + name + ' ';
     const width = stringWidth(text);
-    const bg = role?.cardClosed ?? palette.actorPillBg;
-    const fg = role?.color ?? palette.actorPillFg;
+    // Pills wear the actor's identity: a faint tint of its colour behind a lightened copy of it.
+    const bg = role?.color ? mixHex(role.color, palette.bg, 0.26) : palette.actorPillBg;
+    const fg = role?.color ? mixHex(role.color, palette.strong, 0.85) : palette.actorPillFg;
     return {
       id: act.activityId,
       ownerId,

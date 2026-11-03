@@ -1,6 +1,15 @@
+import {isAbsolute, relative} from 'node:path';
 import {structuredPatch} from 'diff';
 import type {ToolCall} from '../runtime/messages.js';
 import {cast} from '../actors/ensemble.js';
+
+/** Shows a path relative to the workspace when it lies inside it (forward slashes); paths outside, or already relative, stay as given. */
+export function relativeToCwd(path: string, cwd: string = process.cwd()): string {
+  if (!path || !isAbsolute(path)) return path;
+  const rel = relative(cwd, path);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return path;
+  return rel.replaceAll(String.fromCharCode(92), '/');
+}
 
 export function formatToolTitle(call: ToolCall, keys: readonly string[]): string {
   try {
@@ -11,7 +20,7 @@ export function formatToolTitle(call: ToolCall, keys: readonly string[]): string
     for (const key of keys) {
       const value: unknown = Reflect.get(args, key);
       if (typeof value !== 'string') continue;
-      const detail = value.replace(/\s+/g, ' ').slice(0, 90);
+      const detail = (key === 'file_path' || key === 'path' ? relativeToCwd(value) : value).replace(/\s+/g, ' ').slice(0, 90);
       return intent ? `${call.name} · ${intent} (${detail})` : `${call.name} ${detail}`;
     }
     return intent ? `${call.name} · ${intent}` : call.name;
@@ -105,7 +114,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
       const match = /^Read\s+(.+)$/i.exec(fallbackTitle.trim());
       if (match) rawPath = match[1]!;
     }
-    const displayPath = truncateDisplayPath(rawPath);
+    const displayPath = truncateDisplayPath(relativeToCwd(rawPath));
     const offset = typeof args.offset === 'number' ? args.offset : undefined;
     const limit = typeof args.limit === 'number' ? args.limit : undefined;
 
@@ -138,7 +147,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
       const match = /^Edit\s+(.+)$/i.exec(fallbackTitle.trim());
       if (match) rawPath = match[1]!;
     }
-    const displayPath = truncateDisplayPath(rawPath);
+    const displayPath = truncateDisplayPath(relativeToCwd(rawPath));
     const desc = typeof args.description === 'string' && args.description.trim() ? args.description.trim() : '';
     const oldStr = typeof args.old_string === 'string' ? args.old_string : typeof args.old_text === 'string' ? args.old_text : '';
     const newStr = typeof args.new_string === 'string' ? args.new_string : typeof args.new_text === 'string' ? args.new_text : '';
@@ -167,7 +176,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
       const match = /^Write\s+(.+)$/i.exec(fallbackTitle.trim());
       if (match) rawPath = match[1]!;
     }
-    const displayPath = truncateDisplayPath(rawPath);
+    const displayPath = truncateDisplayPath(relativeToCwd(rawPath));
     const desc = typeof args.description === 'string' && args.description.trim() ? args.description.trim() : '';
     const content = typeof args.content === 'string' ? args.content : '';
     const count = content ? content.split('\n').length : 0;
@@ -181,7 +190,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
 
   if (name === 'grep') {
     const pattern = String(args.pattern ?? '');
-    const rawPath = args.path ? truncateDisplayPath(String(args.path)) : '';
+    const rawPath = args.path ? truncateDisplayPath(relativeToCwd(String(args.path))) : '';
     const desc = typeof args.description === 'string' && args.description.trim() ? args.description.trim() : '';
     const target = rawPath ? `"${pattern}" in ${rawPath}` : `"${pattern}"`;
     let matchPart = '';
@@ -197,7 +206,7 @@ export function formatToolCardTitle(call: ToolCall, resultText?: string, isCompl
 
   if (name === 'glob') {
     const pattern = String(args.pattern ?? '');
-    const rawPath = args.path ? truncateDisplayPath(String(args.path)) : '';
+    const rawPath = args.path ? truncateDisplayPath(relativeToCwd(String(args.path))) : '';
     const desc = typeof args.description === 'string' && args.description.trim() ? args.description.trim() : '';
     const target = rawPath ? `${pattern} in ${rawPath}` : pattern;
     let filePart = '';

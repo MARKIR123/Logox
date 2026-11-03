@@ -65,7 +65,7 @@ test('a running actor does not split the Director tool run; only its card does',
   assert.equal(rows.filter(row => /[▸▾] [A-Z][\w' -]* 2 patterns/.test(row)).length, 1, 'calls before the card stay one group');
   assert.equal(rows.filter(row => /[▸▾] [A-Z][\w' -]* 3 patterns/.test(row)).length, 1, 'calls after the card fold across the actor messages');
   assert.ok(!rows.some(row => /▮ Glob/.test(row)), rows.join('\n'));
-  const card = rows.findIndex(row => /Techne/.test(row));
+  const card = rows.findIndex(row => /Techne · Rig/.test(row));
   assert.ok(card > rows.findIndex(row => / 2 patterns/.test(row)) && card < rows.findIndex(row => / 3 patterns/.test(row)), 'the card sits between the two groups');
 });
 
@@ -114,11 +114,13 @@ test('narrow widths keep verb, counts and elapsed time and never wrap', () => {
   assert.ok(!/pelican|pedal/.test(text(header(f.rows(100)))), 'file names are not part of the header');
 });
 
-test('expanded group shows children including the absorbed thinking card', () => {
+test('expanded group shows its tool children; thinking is folded into the one row under the header', () => {
   const f = fixture(); f.call('Grep', {pattern: 'pedal'}); f.think('Check pelican.html next.'); f.call('Read', {file_path: 'G:/p/pelican.html'});
   const lines = f.rows(100, {[f.groupId()]: true}).map(text);
   const at = (re: RegExp) => lines.findIndex(l => re.test(l));
-  assert.ok(at(GROUP) < at(/▮ Grep/) && at(/▮ Grep/) < at(/Thought for/) && at(/Thought for/) < at(/▮ Read/));
+  assert.ok(at(/Thought for/) < at(GROUP), 'thinking sits above the tool group, directly under the speaker header');
+  assert.equal(lines.filter(l => /Thought/.test(l)).length, 1);
+  assert.ok(at(GROUP) < at(/▮ Grep/) && at(/▮ Grep/) < at(/▮ Read/));
 });
 
 test('collapsed running group lists each running tool as a └ row; expanded shows none', () => {
@@ -280,10 +282,10 @@ test('running thinking title is white and finished thinking is muted', () => {
   store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'logox', kind: 'director', title: 't', status: 'running', stage: 'x', detail: ''});
   const steps = new Steps(store, {sessionId: 's', activityId: 'a', ownerId: 'logox'}, () => now);
   const id = steps.thinking(); store.appendMessage(id, 'pondering');
-  const find = () => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null).find(r => /Thinking...|Thought for/.test(text(r)))!;
+  const find = () => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null).find(r => /▸ Thinking|▸ Thought for/.test(text(r)))!;
   const last = (row: SceneRow) => decorateRow(row, 2_000_000, true).segments!.filter(s => s.selectionKey?.endsWith(':title')).at(-1)!.color;
-  // The shimmer covers the whole word and rewrites the base color through mixHex, which lower-cases it.
-  assert.equal(last(find())?.toLowerCase(), palette.fg.toLowerCase());
+  // The running title shimmers (it is never the muted finished color).
+  assert.notEqual(last(find()), palette.muted);
   now += 1000; steps.finish(id, 'completed');
   assert.equal(last(find()), palette.muted);
 });

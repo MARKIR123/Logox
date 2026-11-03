@@ -1,6 +1,56 @@
 import stringWidth from 'string-width';
 
-export interface Draft {readonly text: string; readonly cursor: number; readonly preferredColumn?: number}
+export interface Draft {readonly text: string; readonly cursor: number; readonly preferredColumn?: number; readonly anchor?: number}
+export function draftSelection(draft: Draft): {start: number; end: number} | undefined {
+  if (draft.anchor === undefined || draft.anchor === draft.cursor) return undefined;
+  const length = graphemes(draft.text).length;
+  return {start: Math.max(0, Math.min(length, draft.anchor, draft.cursor)), end: Math.min(length, Math.max(draft.anchor, draft.cursor))};
+}
+export function selectedText(draft: Draft): string {
+  const range = draftSelection(draft);
+  return range ? graphemes(draft.text).slice(range.start, range.end).join('') : '';
+}
+export function removeDraftSelection(draft: Draft): Draft {
+  const range = draftSelection(draft);
+  if (!range) return {text: draft.text, cursor: draft.cursor};
+  const parts = graphemes(draft.text);
+  return {text: parts.slice(0, range.start).concat(parts.slice(range.end)).join(''), cursor: range.start};
+}
+export function navigateDraft(draft: Draft, update: (draft: Draft) => Draft, selecting: boolean): Draft {
+  const next = update(draft);
+  return selecting ? {...next, anchor: draft.anchor ?? draft.cursor} : next;
+}
+export function moveWord(draft: Draft, direction: -1 | 1): Draft {
+  const parts = graphemes(draft.text); let cursor = draft.cursor;
+  if (direction < 0) {
+    while (cursor > 0 && /\s/u.test(parts[cursor - 1]!)) cursor--;
+    while (cursor > 0 && !/\s/u.test(parts[cursor - 1]!)) cursor--;
+  } else {
+    while (cursor < parts.length && !/\s/u.test(parts[cursor]!)) cursor++;
+    while (cursor < parts.length && /\s/u.test(parts[cursor]!)) cursor++;
+  }
+  return {text: draft.text, cursor};
+}
+
+/** A window's accepted inputs and an exact scratch draft to return to after browsing. */
+export class InputHistory {
+  private entries: string[] = [];
+  private index: number | undefined;
+  private scratch: Draft = {text: '', cursor: 0};
+  record(text: string): void {
+    if (!text.trim()) return;
+    if (this.entries.at(-1) !== text) this.entries.push(text);
+    this.index = undefined;
+  }
+  browse(current: Draft, direction: -1 | 1): Draft {
+    if (!this.entries.length || this.index === undefined && direction > 0) return current;
+    if (this.index === undefined) {this.scratch = current; this.index = this.entries.length;}
+    this.index = Math.max(0, Math.min(this.entries.length, this.index + direction));
+    if (this.index === this.entries.length) {this.index = undefined; return this.scratch;}
+    const text = this.entries[this.index]!;
+    return {text, cursor: graphemes(text).length};
+  }
+}
 export interface InputLine {readonly text: string; readonly start: number; readonly end: number}
 export interface InputLayout {readonly lines: readonly InputLine[]; readonly cursorRow: number; readonly cursorColumn: number}
 const segmenter = new Intl.Segmenter('zh', {granularity: 'grapheme'});
@@ -9,6 +59,7 @@ export function graphemes(text: string): string[] {
 }
 export const emptyDraft: Draft = {text: '', cursor: 0};
 export function insert(draft: Draft, text: string): Draft {
+  draft = removeDraftSelection(draft);
   text = text.replace(/\r\n?/g, '\n').replace(/\t/g, '  ').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
   const parts = graphemes(draft.text);
   const prefix = parts.slice(0, draft.cursor).join('') + text;
@@ -19,6 +70,7 @@ export function move(draft: Draft, amount: number): Draft {
   return {text: draft.text, cursor: Math.max(0, Math.min(graphemes(draft.text).length, draft.cursor + amount))};
 }
 export function erase(draft: Draft, backward: boolean): Draft {
+  if (draftSelection(draft)) return removeDraftSelection(draft);
   const parts = graphemes(draft.text);
   const index = backward ? draft.cursor - 1 : draft.cursor;
   if (index < 0 || index >= parts.length) return draft;

@@ -29,6 +29,8 @@ export interface ActorActivityContext {
   originalPrompt: string;
   detailed: boolean;
   stop: {disabled: boolean; focused: boolean; hovered: boolean};
+  /** Folds all thinking of the card into one row (first row inside an open card). */
+  renderThinking?: ((messages: readonly Message[], frame: ToolFrame, activityId: string, ownerId: string) => void) | undefined;
   renderMessage(message: Message, frame: ToolFrame): void;
   renderInteraction(request: Interaction, frame: ToolFrame): void;
 }
@@ -52,8 +54,9 @@ export function renderActivity(context: ActorActivityContext): void {
   appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles,
     task: context.title, status: context.status, active: context.active, open: context.open, railColor: color,
     ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: context.stop} : {}),
-    renderBody(frame) {
-      const actorTreeFrame = insetRailFrame(frame, roleColor);
+    renderBody(frame, _color, _action, outer) {
+      const actorTreeFrame = insetRailFrame(outer, roleColor);
+      if (context.detailed && context.renderThinking) context.renderThinking(messages.filter(m => m.kind === 'thinking'), actorTreeFrame, activity.activityId, activity.ownerId);
       if (context.originalPrompt && context.originalPrompt.trim()) {
         const goalId = activity.activityId + '-goal';
         const goalOpen = context.isOpen ? context.isOpen(goalId) : false;

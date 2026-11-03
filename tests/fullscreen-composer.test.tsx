@@ -97,6 +97,203 @@ async function appFixture(options: Partial<AppProps> = {}, columns = 90, rows = 
   };
 }
 
+test('compact composer mouse selection deletes or replaces the selected graphemes', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('alpha beta gamma');
+    const {y} = f.label(COMPOSER_EXPAND_LABEL);
+    await f.mouse(0, 8, y); await f.mouse(32, 13, y); await f.mouse(0, 13, y, true);
+    await f.key('\x7f'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'alpha gamma');
+  } finally {await f.close();}
+});
+
+test('compact composer history returns older submissions and restores the unsent draft', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('first'); await f.key('\r');
+    await f.key('second'); await f.key('\r');
+    await f.key('unfinished');
+    await f.key('\x1b[A');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ second'));
+    await f.key('\x1b[A');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ first'));
+    await f.key('\x1b[B'); await f.key('\x1b[B'); await f.key('\r');
+    assert.equal(f.submissions.at(-1)?.text, 'unfinished');
+  } finally {await f.close();}
+});
+
+test('Esc stops the Director and restores its human request without overwriting a newer draft', async () => {
+  const store = new RuntimeStore(); addTask(store, 'recover-this');
+  const f = await appFixture({store});
+  try {
+    await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['recover-this']);
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ recover-this goal'));
+    await f.key(' edited'); await f.key('\x1b'); await f.key('\r');
+    assert.equal(f.submissions.at(-1)?.text, 'recover-this goal edited');
+  } finally {await f.close();}
+});
+
+test('compact Shift selection, copy, cut and paste keep emoji graphemes intact', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('前👩‍💻后');
+    await f.key('\x1b[D'); await f.key('\x1b[1;2D');
+    const beforeCopy = f.output.text.length;
+    await f.key('\x03');
+    assert.ok(f.output.text.slice(beforeCopy).includes(Buffer.from('👩‍💻').toString('base64')));
+    assert.equal(f.closed, 0);
+    await f.key('\x18');
+    await f.key('\x1b[200~新的\n一行\x1b[201~'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, '前新的\n一行后');
+  } finally {await f.close();}
+});
+
+test('compact drag crosses source newlines and typing replaces the complete range', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('\x1b[200~one\ntwo\nthree\x1b[201~');
+    const {y} = f.label(COMPOSER_EXPAND_LABEL);
+    await f.mouse(0, 3, y); await f.mouse(32, 4, y + 2); await f.mouse(0, 4, y + 2, true);
+    await f.key('X'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'oXree');
+  } finally {await f.close();}
+});
+
+test('compact selection survives resizing and shares its range with fullscreen editing', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('abcdef');
+    await f.key('\x1b[1;2D'); await f.key('\x1b[1;2D');
+    await f.resize(40, 20); await f.expand();
+    await f.key('X');
+    await f.key('\x1b'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'abcdX');
+  } finally {await f.close();}
+});
+
+test('history uses only human inputs in the current window and restores scratch cursor', async () => {
+  const store = new RuntimeStore();
+  store.message('s', 'logox', 'user', 'human history', {inputKind: 'human'});
+  store.message('s', 'logox', 'user', 'internal report', {inputKind: 'actor', source: 'techne'});
+  store.message('s', 'techne', 'user', 'actor human history', {inputKind: 'human'});
+  store.message('s', 'techne', 'user', 'Director assignment', {inputKind: 'director', source: 'logox'});
+  store.message('other-session', 'logox', 'user', 'wrong session', {inputKind: 'human'});
+  const f = await appFixture({store});
+  try {
+    await f.key('ab'); await f.key('\x1b[D');
+    await f.key('\x1b[A');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ human history'));
+    await f.key('\x1b[B'); await f.key('X'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'aXb');
+    await f.key('\x07'); await f.key('\x1b[A'); await f.key('\r');
+    assert.equal(f.submissions[1]?.text, 'actor human history');
+    assert.equal(f.submissions[1]?.source, 'techne');
+  } finally {await f.close();}
+});
+
+test('multiline arrows move inside the draft before browsing history at its boundaries', async () => {
+  const f = await appFixture();
+  try {
+    await f.key('old input'); await f.key('\r');
+    await f.key('\x1b[200~first\nsecond\x1b[201~');
+    await f.key('\x1b[A');
+    const p = f.label(COMPOSER_EXPAND_LABEL);
+    assert.ok(f.output.lines[p.y]!.startsWith('❯ first'));
+    assert.ok(f.output.lines[p.y + 1]!.startsWith('  second'));
+    await f.key('\x1b[A');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ old input'));
+    await f.key('\x1b[B'); await f.key('X'); await f.key('\r');
+    assert.equal(f.submissions[1]?.text, 'firstX\nsecond');
+  } finally {await f.close();}
+});
+
+test('Esc retains a newer draft and does not revive actor reports or cancel companions', async () => {
+  const store = new RuntimeStore(); addTask(store, 'director'); addTask(store, 'companion', 'techne');
+  const f = await appFixture({store});
+  try {
+    await f.key('new unsent instruction'); await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['director']);
+    await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'new unsent instruction');
+  } finally {await f.close();}
+});
+
+test('a pending submission acknowledgment cannot erase a draft kept by Esc', async () => {
+  const store = new RuntimeStore();
+  let accept!: () => void;
+  const pending = new Promise<void>(resolve => {accept = resolve;});
+  const f = await appFixture({store, onSubmit: async () => {addTask(store, 'pending'); await pending;}});
+  try {
+    await f.key('keep pending text'); await f.key('\r');
+    await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['pending']);
+    await act(async () => {accept(); await pending;}); await f.flush();
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ keep pending text'));
+  } finally {accept(); await f.close();}
+});
+
+test('Esc restores the latest human steering input, never a subsequent actor report', async () => {
+  const store = new RuntimeStore(); addTask(store, 'steered');
+  store.message('s', 'logox', 'user', 'latest steering text', {activityId: 'steered', inputKind: 'human'});
+  store.message('s', 'logox', 'user', 'internal completion report', {activityId: 'steered', inputKind: 'actor', source: 'techne'});
+  const f = await appFixture({store});
+  try {
+    await f.key('\x1b'); await f.key('\r');
+    assert.equal(f.submissions[0]?.text, 'latest steering text');
+  } finally {await f.close();}
+});
+
+test('typing batched with Esc is retained instead of being replaced by the stopped request', async () => {
+  const store = new RuntimeStore(); addTask(store, 'batched');
+  const f = await appFixture({store});
+  try {
+    await act(async () => {f.input.write('new batched draft'); f.input.write('\x1b'); await delay(40);});
+    await f.flush(); await f.key('\r');
+    assert.deepEqual(f.cancelled, ['batched']);
+    assert.equal(f.submissions[0]?.text, 'new batched draft');
+  } finally {await f.close();}
+});
+
+test('failed submission stays editable and is not inserted as a successful history entry', async () => {
+  const store = new RuntimeStore();
+  store.message('s', 'logox', 'user', 'accepted before', {inputKind: 'human'});
+  const f = await appFixture({store, onSubmit: async () => {throw new Error('Delivery rejected');}});
+  try {
+    await f.key('failed text'); await f.key('\r');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ failed text'));
+    await f.key('\x1b[A');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ accepted before'));
+    await f.key('\x1b[B');
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ failed text'));
+  } finally {await f.close();}
+});
+
+test('compact and fullscreen composers keep the terminal background and highlight only selections', async () => {
+  const previousLevel = chalk.level; chalk.level = 3;
+  const f = await appFixture();
+  try {
+    await f.key('color text');
+    const {y} = f.label(COMPOSER_EXPAND_LABEL);
+    assert.equal(f.output.backgroundColors[y]?.[0], undefined);
+    await f.key('\x1b[1;2D');
+    assert.equal(f.output.backgroundColors[y]?.[11], palette.selectionBg.toLowerCase());
+    assertCaretVisible(f.output);
+    assert.equal(f.output.cursorPosition.x, 11);
+    await f.key('\x1b');
+    assert.equal(f.output.backgroundColors[y]?.[11], undefined);
+    await f.expand();
+    const geometry = fullscreenEditorLayout(f.output.columns - 1, f.output.rows);
+    assert.equal(f.output.backgroundColors[geometry.bodyY]?.[geometry.padding], undefined);
+    await f.key('\x1b[1;2D');
+    assert.equal(f.output.backgroundColors[geometry.bodyY]?.[geometry.padding + 8], palette.selectionBg.toLowerCase());
+    await f.key('\x1b');
+    assert.equal(f.output.backgroundColors[geometry.bodyY]?.[geometry.padding + 8], undefined);
+    assert.deepEqual(f.cancelled, []);
+  } finally {try {await f.close();} finally {chalk.level = previousLevel;}}
+});
+
 function assertCaretVisible(output: TerminalScreen) {
   assert.equal([...output.text.matchAll(/\x1b\[\?25([hl])/g)].at(-1)?.[1], 'h', 'The native IME caret must be visible');
   assert.ok(output.cursorPosition.x >= 0 && output.cursorPosition.x < output.columns);
@@ -108,12 +305,12 @@ test('normal composer adds only a right-aligned expand button and keeps Shift+En
   try {
     const p = f.label(COMPOSER_EXPAND_LABEL), width = f.output.columns - 1;
     assert.equal(p.x, width - COMPOSER_EXPAND_PADDING - stringWidth(COMPOSER_EXPAND_LABEL));
-    assert.equal(f.output.lines[p.y]!.slice(0, p.x).trim(), '', 'No leading pointer or placeholder is introduced');
+    assert.equal(f.output.lines[p.y]!.slice(0, p.x).trim(), '❯', 'The only leading mark is the actor-tinted prompt glyph');
     await f.key('left'); await f.key('\x1b[13;2u'); await f.key('second');
     assert.deepEqual(f.submissions, []);
     const first = f.label(COMPOSER_EXPAND_LABEL);
-    assert.ok(f.output.lines[first.y]!.startsWith('left'));
-    assert.equal(f.output.lines[first.y + 1], 'second');
+    assert.ok(f.output.lines[first.y]!.startsWith('❯ left'));
+    assert.equal(f.output.lines[first.y + 1], '  second');
     await f.key('\r');
     assert.deepEqual(f.submissions, [{text: 'left\nsecond', source: 'logox', delivery: {mode: 'queue'}}]);
     await f.resize(6, 8);
@@ -134,7 +331,7 @@ test('expand entry is only the four-corner icon and hover changes its foreground
     await f.key('draft');
     const p = f.label(COMPOSER_EXPAND_LABEL), before = f.text(), caret = {...f.output.cursorPosition};
     assert.equal(COMPOSER_EXPAND_LABEL, '⛶');
-    assert.doesNotMatch(before, /\[⛶\]|[╭╮╰╯│]/, 'No brackets, rounded rectangle or new side borders');
+    assert.doesNotMatch(f.output.lines[p.y]!, /\[⛶\]|[╭╮╰╯│]/, 'No brackets, rounded rectangle or new side borders');
     assert.deepEqual(lastIconColor(), rgb(palette.muted));
     const background = f.output.backgroundColors[p.y]?.[p.x];
     await f.mouse(35, p.x, p.y);

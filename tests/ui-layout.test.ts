@@ -1,3 +1,4 @@
+import {expandedTint} from '../src/tui/appearance/colors.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
@@ -101,7 +102,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
   for (const id of ['main-techne-perm-allow', 'main-techne-perm-deny']) {
     const before = denyRows.find(r => r.messageId === id)!;
     const after = allowRows.find(r => r.messageId === id)!;
-    assert.equal(before.bg, ownerSurface('techne', true));
+    assert.equal(before.bg, expandedTint(demoRoles.techne.color));
     assert.equal(after.bg, before.bg);
     assert.deepEqual(before.prefixSegments, after.prefixSegments);
     assert.equal(before.gutterCols, 4);
@@ -119,7 +120,7 @@ test('卡片使用透亮烟熏色与白日梦雾白灰；收起内联工具透�
   assert.ok(kalonSelection.text.startsWith('❯ '));
   assert.equal(kalonSelection.segments!.find(s => s.text.includes('Restrained'))!.color, demoRoles.kalon.color);
   const nested = buildDemoSceneRows({...initialDemoSceneState, folds: {'main-aletheia': true}}, 99);
-  assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, ownerSurface('aletheia', true), 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
+  assert.equal(nested.find(r => r.messageId === 'main-aletheia-reads')!.bg, expandedTint(demoRoles.aletheia.color), 'Actor 内联工具调用不画灰底，直接透出 Actor 底色');
 });
 
 test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Actor 底色与内层灰底独立', () => {
@@ -153,14 +154,14 @@ test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Ac
     for (const open of [false, true]) {
       const rows = buildDemoSceneRows({...initialDemoSceneState, folds: {[id]: open}}, 40, id).filter(r => r.messageId.startsWith(id));
       assert.ok(rows.length >= 1);
-      if (open) assert.ok(rows.every(r => r.bg === palette.toolExpanded));
+      if (open) assert.ok(rows.every(r => r.bg === expandedTint(palette.accent)));
       else assert.ok(rows.every(r => !r.bg));
       const headerRow = rows.find(r => r.messageId === id)!;
       assert.equal(headerRow.action?.kind, 'toggle_fold');
       const labelSeg = headerRow.segments!.find(s => s.selectionKey?.endsWith(':title'))!;
       assert.equal(labelSeg.color, palette.accent, '悬停标题使用所属角色主题色');
       const unhovered = buildDemoSceneRows({...initialDemoSceneState, folds: {[id]: open}}, 40, null).find(r => r.messageId === id)!;
-      assert.equal(unhovered.segments!.find(s => s.selectionKey?.endsWith(':title'))!.color, palette.muted, '移出后恢复次要色，展开不永久高亮');
+      assert.equal(unhovered.segments!.find(s => s.selectionKey?.endsWith(':title'))!.color, open ? palette.fg : palette.muted, '移出后恢复：折叠次要色，展开为正常前景色，不永久高亮');
       assert.equal(Boolean(labelSeg.bold), false, '无底色卡高亮同样不加粗');
     }
   }

@@ -7,6 +7,7 @@ import {StatusbarPreferences, statusbarIds, statusbarLabels, type StatusbarAppea
 import {statusbarParts, statusbarText, extractStatusBarSlice} from '../src/tui/status/statusbar.js';
 import type {StageStatus} from '../src/runtime/stage-status.js';
 import {applyTheme, palette} from '../src/tui/appearance/theme.js';
+import {mixHex} from '../src/tui/appearance/colors.js';
 import stringWidth from 'string-width';
 
 const status: StageStatus = {ownerId: 'logox', name: 'Logox', state: 'running', model: {provider: 'demo', model: 'flash'}, effort: 'high', permission: 'auto', context: {tokens: 20, window: 100}};
@@ -40,7 +41,7 @@ test('legacy layouts retain order, enabled flags and motion while missing module
 test('Pipes returns the complete colored plan including subdued separators and a USED context gauge', () => {
   const parts = statusbarParts(status, 240);
   assert.equal(parts.map(part => part.text).join(''), statusbarText(status, 240));
-  assert.ok(parts.some(part => part.text === ' | '));
+  assert.ok(parts.some(part => part.text === ' │ '));
   assert.ok(parts.every(part => part.color));
   assert.match(statusbarText(status, 240), /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}]/u);
   assert.match(statusbarText(status, 240), /[■□]+.*20% USED/);
@@ -172,8 +173,8 @@ test('live themes recolor segments while decorative palettes preserve role and p
     const modules = [{id: 'role', enabled: true}, {id: 'model', enabled: true}, {id: 'permission', enabled: true}] as const;
     const pipes = statusbarParts(status, 240, modules);
     assert.equal(pipes[0]?.color, '#123456');
-    assert.equal(pipes[1]?.color, '#234567');
-    assert.equal(pipes[2]?.color, '#345678');
+    assert.equal(pipes[1]?.color, mixHex('#234567', palette.bg, 0.55), 'separators are a faint step of muted');
+    assert.equal(pipes[2]?.color, '#234567', 'quiet segments use muted text');
     for (const colorScheme of ['theme', 'gruvbox', 'dracula'] as const) {
       for (const permission of ['default', 'auto', 'creative'] as const) {
         const appearance: StatusbarAppearance = {style: 'pipes', colorScheme};
@@ -182,13 +183,18 @@ test('live themes recolor segments while decorative palettes preserve role and p
         const expected = {default: '#456789', auto: '#56789a', creative: '#6789ab'}[permission];
         assert.equal(parts.at(-1)?.color, expected);
         const blocks = statusbarParts({...status, permission}, 240, modules, {...appearance, style: 'starship'});
-        assert.equal(blocks[0]?.color, palette.accent);
-        assert.ok(blocks.some(part => part.text.includes('Permission') && part.backgroundColor === expected));
+        if (colorScheme === 'theme') {
+          assert.equal(blocks[0]?.color, mixHex(palette.accent, palette.bg, 0.3));
+          assert.ok(blocks.some(part => part.text.includes('Permission') && part.color === expected));
+        } else {
+          assert.equal(blocks[0]?.color, palette.accent);
+          assert.ok(blocks.some(part => part.text.includes('Permission') && part.backgroundColor === expected));
+        }
       }
     }
     assert.equal(statusbarParts(status, 80, [{id: 'model', enabled: true}], {colorScheme: 'gruvbox'})[0]?.color, '#D3869B');
     assert.equal(statusbarParts(status, 80, [{id: 'model', enabled: true}], {colorScheme: 'dracula'})[0]?.color, '#BD93F9');
-    applyTheme({question: '#abcdef'});
+    applyTheme({muted: '#abcdef'});
     assert.equal(statusbarParts(status, 80, [{id: 'model', enabled: true}])[0]?.color, '#abcdef');
   } finally {applyTheme(original);}
 });
@@ -197,10 +203,11 @@ test('valid Actor identity overrides decorative schemes but malformed colors nev
   for (const style of ['pipes', 'starship'] as const) {
     for (const colorScheme of ['theme', 'gruvbox', 'dracula'] as const) {
       const parts = statusbarParts({...status, color: '#123abc'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
-      assert.equal(parts[0]?.color, '#123abc');
-      if (style === 'starship') assert.ok(parts.some(part => part.backgroundColor === '#123abc'));
+      const tinted = colorScheme === 'theme' && style === 'starship';
+      assert.equal(parts[0]?.color, tinted ? mixHex('#123abc', palette.bg, 0.3) : '#123abc');
+      if (style === 'starship') assert.ok(parts.some(part => part.backgroundColor === (tinted ? mixHex('#123abc', palette.bg, 0.3) : '#123abc')));
       const invalid = statusbarParts({...status, color: '\u001b[31mred'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
-      assert.equal(invalid[0]?.color, palette.accent);
+      assert.equal(invalid[0]?.color, tinted ? mixHex(palette.accent, palette.bg, 0.3) : palette.accent);
     }
   }
   assert.match(statusbarText({...status, effort: 'Unsupported'}, 80, [{id: 'effort', enabled: true}]), /Thinking unsupported/);
@@ -223,4 +230,25 @@ test('all ten IDs retain order and enabled state in either appearance', () => {
     assert.doesNotMatch(text, /Cost/);
     assert.deepEqual(statusbarParts(full, 240, [], {style}), []);
   }
+});
+
+test('default scheme follows the window Actor: tinted identity segment, slate steps for the rest, Actor-coloured gauge fill', () => {
+  const modules = [{id: 'role', enabled: true}, {id: 'model', enabled: true}, {id: 'effort', enabled: true}, {id: 'context', enabled: true}] as const;
+  const actor = '#b3a0d4', quiet = {...status, color: actor};
+  const pipes = statusbarParts(quiet, 240, modules, {style: 'pipes', colorScheme: 'theme'});
+  assert.deepEqual(pipes[0], {text: pipes[0]!.text, color: actor, bold: true});
+  assert.ok(pipes.filter(part => part.text === ' │ ').every(part => part.color === mixHex(palette.muted, palette.bg, 0.55)));
+  assert.equal(pipes.find(part => part.text.includes('demo/flash'))?.color, palette.muted);
+  assert.equal(pipes.find(part => /^■+$/u.test(part.text))?.color, actor, 'filled gauge cells use the Actor colour');
+  assert.equal(pipes.map(part => part.text).join(''), statusbarText(quiet, 240, modules, {style: 'pipes'}));
+
+  const blocks = statusbarParts(quiet, 240, modules, {style: 'starship', colorScheme: 'theme'});
+  const roleBg = mixHex(actor, palette.bg, 0.3);
+  assert.equal(blocks[0]?.color, roleBg);
+  const role = blocks.find(part => part.text.includes('Logox'))!;
+  assert.equal(role.backgroundColor, roleBg);
+  assert.equal(role.color, mixHex(actor, palette.strong, 0.9));
+  const slate = blocks.filter(part => part.backgroundColor && part.backgroundColor !== roleBg && part.text.trim()).map(part => part.backgroundColor);
+  assert.ok(slate.length >= 3 && slate.every(color => color !== actor));
+  assert.equal(blocks.find(part => /^■+$/u.test(part.text))?.color, actor);
 });

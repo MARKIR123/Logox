@@ -5,6 +5,7 @@ import {z} from 'zod';
 export const themeColorKeys = [
   'bg', 'surface', 'fg', 'muted', 'strong', 'accent', 'system', 'user', 'line',
   'success', 'warning', 'error', 'selectionBg', 'selectionFg',
+  'composerFg', 'composerBorder',
   'toolExpanded', 'cardBase', 'cardCollapsed', 'cardExpanded',
   'dreamCollapsed', 'dreamExpanded', 'anamnesis', 'dreamText', 'dreamMuted',
   'borderMuted', 'question', 'diffAdded', 'diffAddedBg', 'diffAddedGutter',

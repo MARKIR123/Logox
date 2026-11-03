@@ -95,6 +95,15 @@ test('invalid parent overrides fall back before alphabetically earlier children 
   } finally {loadThemePresets(join(home, 'empty')); rmSync(home, {recursive: true, force: true});}
 }));
 
+test('composer text and border colors follow the theme and can be independently customized', () => withPalette(() => {
+  applyTheme({fg: '#202633', borderMuted: '#748096'});
+  assert.equal(palette.composerFg, '#202633');
+  assert.equal(palette.composerBorder, '#748096');
+  applyTheme({composerFg: '#111111', composerBorder: '#666666'});
+  assert.equal(palette.composerFg, '#111111');
+  assert.equal(palette.composerBorder, '#666666');
+}));
+
 test('every semantic field accepts an explicit independent override', () => withPalette(() => {
   for (const key of themeColorKeys) {
     applyTheme({[key]: '#13579b'}); assert.equal(palette[key], '#13579b', key);

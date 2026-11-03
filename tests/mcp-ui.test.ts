@@ -14,7 +14,7 @@ function render(args: unknown, text: string, options: {state?: Step['state']; di
   }});
   const snapshot = store.getSnapshot();
   const rows = buildStageRows(snapshot, 's', 'logox', options.width ?? 220, {[id]: options.open ?? false}, null);
-  return {rows: rows.filter(row => row.messageId.startsWith(id)), snapshot, id};
+  return {rows: rows.filter(row => row.messageId.startsWith(id) && !row.messageId.endsWith('-who')), snapshot, id};
 }
 const invoke = (tool: string, args: unknown = {}, server = 'playwright') => ({server, action: 'call', tool, arguments: args});
 

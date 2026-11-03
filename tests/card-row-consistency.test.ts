@@ -33,7 +33,7 @@ const cases: Case[] = [
   {name: 'single tool with status and size', build: finishedTool, find: rows => rows.find(r => /▮ Read/.test(r.displayText ?? r.text))},
   {name: 'finished thinking', build({store, steps, advance}) {
     const id = steps.thinking(); store.appendMessage(id, 'check first'); advance(2000); steps.finish(id, 'completed'); steps.endGroup('completed');
-  }, find: rows => rows.find(r => /▮ Thought for/.test(r.displayText ?? r.text))},
+  }, find: rows => rows.find(r => /▸ Thought for/.test(r.displayText ?? r.text))},
   {name: 'collapsed tool group', build({steps, advance}) {
     for (const [name, args] of [['Grep', {pattern: 'pedal'}], ['Read', {file_path: 'G:/p/a.ts'}]] as const) {
       const id = steps.tool({id: name + advance.length, name, arguments: JSON.stringify(args)}); steps.start(id); advance(400); steps.finish(id, 'completed', name + '\nok');

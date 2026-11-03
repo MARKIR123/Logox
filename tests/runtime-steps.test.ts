@@ -177,7 +177,7 @@ test('model requests retain independent Thinking identities and visible tool pee
     assert.equal(new Set(snapshot.messages.filter(message => message.kind === 'thinking').map(message => message.step?.groupId)).size, 3);
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
     const folded = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
-    assert.equal(folded.filter(row => row.text.includes('Thinking...')).length, 1);
+    assert.equal(folded.filter(row => /▸ Thinking/.test(row.text)).length, 1, 'All the thinking of the round is one live row');
     const midGroup = snapshot.messages.find(message => message.kind === 'tool')!.id + '-group';
     assert.ok(folded.some(row => /\b1 file\b/.test(row.text)), 'The collapsed group counts the read');
     assert.ok(buildStageRows(snapshot, 's', 'logox', 99, {[midGroup]: true}, null).some(row => /read.*sample\.txt/i.test(row.text)), 'Expanded, tools remain independently readable beside Thinking');
@@ -189,10 +189,11 @@ test('model requests retain independent Thinking identities and visible tool pee
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && !message.step?.groupId).length, 1, 'Tools following prose remain independently visible');
     const rows = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
-    // The Thinking between the first two tool calls folds into their Inspect group while it is collapsed.
-    assert.equal(rows.filter(row => row.text.includes('Thought for')).length, 3);
+    // The four model requests are folded into the one thinking row under the speaker header.
+    assert.equal(rows.filter(row => /▸ Thought 4 times/.test(row.text)).length, 1);
+    assert.equal(rows.filter(row => row.text.includes('Thought for')).length, 0);
     const groupId = snapshot.messages.find(message => message.kind === 'tool')!.id + '-group';
-    assert.equal(buildStageRows(snapshot, 's', 'logox', 99, {[groupId]: true}, null).filter(row => row.text.includes('Thought for')).length, 4, 'Expanding the group reveals the absorbed Thinking');
+    assert.equal(buildStageRows(snapshot, 's', 'logox', 99, {[groupId]: true}, null).filter(row => /Thought \d+ times/.test(row.text)).length, 1, 'Expanding a group never reveals per-request Thinking rows');
     const entries = await app.journal.load('s', 'logox');
     assert.equal(entries.filter(entry => entry.step?.groupId === id).length, 2);
     assert.equal(entries.filter(entry => entry.step?.title === 'Thinking' && entry.step.state === 'completed').length, 4);
@@ -201,7 +202,7 @@ test('model requests retain independent Thinking identities and visible tool pee
     try {
       assert.deepEqual(new Set(restored.store.getSnapshot().messages.filter(message => message.kind === 'thinking').map(message => message.step?.groupId)), new Set(thinking.map(message => message.step?.groupId)));
       const restoredGroup = restored.store.getSnapshot().messages.find(message => message.kind === 'tool')!.id + '-group';
-      assert.equal(buildStageRows(restored.store.getSnapshot(), 's', 'logox', 99, {[restoredGroup]: true}, null).filter(row => row.text.includes('Thought for')).length, 4);
+      assert.equal(buildStageRows(restored.store.getSnapshot(), 's', 'logox', 99, {[restoredGroup]: true}, null).filter(row => /Thought \d+ times/.test(row.text)).length, 1);
       assert.equal(requests, 4, 'Restore replays neither model requests nor tools');
     } finally {await restored.close();}
   } finally {release.resolve(); await app.close(); await rm(cwd, {recursive: true, force: true});}

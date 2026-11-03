@@ -12,6 +12,7 @@ const mergedDefinitions = {
   bg: '#1C2330', surface: '#242B3A', fg: '#E8E6E0', muted: '#8D95A6', strong: '#ffffff',
   accent: '#7DA1DE', system: '$muted', user: '#D77757', line: '#333B4A',
   success: '#7ee7c4', warning: '#e5b567', error: '#DA8A93', selectionBg: '#3B4A66', selectionFg: '$fg',
+  composerFg: '$fg', composerBorder: '$borderMuted',
   toolExpanded: '$surface', cardBase: '#242B3A', cardCollapsed: '#242B3A', cardExpanded: '#2C3548',
   dreamCollapsed: '#C9D3E4', dreamExpanded: '#E4EAF5', anamnesis: '#C9D7F2', dreamText: '#22262E', dreamMuted: '#55606F',
   borderMuted: '#3E4758', question: '#B3A0D4', diffAdded: '#82B89D', diffAddedBg: '#27392C', diffAddedGutter: '#57956B',
@@ -25,6 +26,7 @@ const mergedPalette = {
   ...mergedDefinitions,
   system: '#8D95A6', selectionFg: '#E8E6E0', toolExpanded: '#242B3A', checkedFg: '#ffffff',
   actorPillFg: '#ffffff', oauthSuccess: '#7ee7c4',
+  composerFg: '#E8E6E0', composerBorder: '#3E4758',
 };
 const builtinNames = ['logox-dark', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night'];
 const legacyNames = ['mist-dark', 'Mist Dark', 'mist_dark'];
@@ -68,10 +70,10 @@ test('exactly five shipped themes load with logox-dark first and valid colors', 
   }
 }));
 
-test('merged logox-dark preserves all 51 old mist colors and alias definitions without a root base', () => withThemeHome(() => {
+test('merged logox-dark preserves old mist colors and adds composer aliases without a root base', () => withThemeHome(() => {
   const data = JSON.parse(readFileSync(new URL('../src/config/themes/logox-dark.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(data), ['colors']);
-  assert.equal(Object.keys(mergedDefinitions).length, 51);
+  assert.equal(Object.keys(mergedDefinitions).length, 53);
   assert.deepEqual(Object.keys(mergedDefinitions).sort(), [...themeColorKeys].sort());
   assert.deepEqual(data.colors, mergedDefinitions);
   assert.deepEqual(defaultPalette, mergedPalette);
@@ -106,7 +108,7 @@ test('legacy base aliases inherit the merged default and resolve color reference
   assert.deepEqual(themeIssues(), []);
   assert.equal(themes.some(theme => theme.name === 'mist-dark'), false);
   for (const index of legacyNames.keys()) {
-    assert.deepEqual(applyThemePreset('legacy-child-' + index), {...mergedPalette, fg: '#102030', selectionFg: '#102030', panelLabel: '#8D95A6'});
+    assert.deepEqual(applyThemePreset('legacy-child-' + index), {...mergedPalette, fg: '#102030', selectionFg: '#102030', composerFg: '#102030', panelLabel: '#8D95A6'});
   }
 }));
 
@@ -125,7 +127,7 @@ test('real user mist-dark files beat compatibility aliases and remain byte-for-b
     assert.equal(applyThemePreset(name).accent, '#112233', name);
   }
   for (const index of legacyNames.keys()) {
-    assert.deepEqual(applyThemePreset('my-night-' + index), {...mergedPalette, accent: '#112233', fg: '#F0F0F0', selectionFg: '#F0F0F0', muted: '#304050', system: '#304050'});
+    assert.deepEqual(applyThemePreset('my-night-' + index), {...mergedPalette, accent: '#112233', fg: '#F0F0F0', selectionFg: '#F0F0F0', composerFg: '#F0F0F0', muted: '#304050', system: '#304050'});
   }
   assert.equal(applyThemePreset(DEFAULT_THEME).accent, '#7DA1DE', 'Legacy user data does not overwrite the canonical default');
   assert.deepEqual(readFileSync(path), bytes);

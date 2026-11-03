@@ -3,7 +3,7 @@ import stringWidth from 'string-width';
 import type {SceneRow, SceneSegment} from '../timeline/scene.js';
 import {palette} from '../appearance/theme.js';
 import {themeRevision} from '../../config/theme-palette.js';
-import {decorateRow, presentedSegments} from '../timeline/row-presentation.js';
+import {decorateRow, presentedSegments, railCell} from '../timeline/row-presentation.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from '../timeline/viewport.js';
 
 export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null}
@@ -46,7 +46,7 @@ export function encodeRow(raw: Row, index: number, selection: SelectionRange | n
   const bounds = rowSelectionBounds(raw, index, selection);
   if (!bounds && !isHovered) {const known = encoded.get(raw); if (known?.width === width && known.revision === themeRevision()) return known.text;}
   const row = raw as SceneRow;
-  const rail = row.gutterCols > 0 ? styled({text: '│ ', color: row.railColor}) : '';
+  const rail = row.gutterCols > 0 ? styled(railCell(row)) : '';
   const body = presentedSegments(row, index, selection, isHovered).map(segment => styled(segment, palette.fg, row.bg)).join('');
   const result = clipEncoded(rail + body + reset, width);
   if (!bounds && !isHovered) encoded.set(raw, {revision: themeRevision(), width, text: result});

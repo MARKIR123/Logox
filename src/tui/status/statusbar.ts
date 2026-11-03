@@ -7,8 +7,9 @@ import {defaultStatusbar, type StatusbarAppearance, type StatusbarId, type Statu
 import {hexColorSchema, themeColorKeys, type ThemeColorKey} from '../../config/theme-palette.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
 import {palette} from '../appearance/theme.js';
+import {mixHex} from '../appearance/colors.js';
 
-export type StatusbarPart = {text: string; color?: string; backgroundColor?: string};
+export type StatusbarPart = {text: string; color?: string; backgroundColor?: string; bold?: boolean};
 const schemeSchema = z.partialRecord(z.enum(themeColorKeys), hexColorSchema);
 // Load shipped data once, never perform I/O while planning a status line.
 const schemes = z.strictObject({gruvbox: schemeSchema, dracula: schemeSchema})
@@ -126,9 +127,11 @@ export function statusbarText(status: StageStatus, width: number, modules: reado
 export function statusbarParts(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}): StatusbarPart[] {
   if (!Number.isFinite(width) || width < 1) return [];
   const limit = Math.floor(width), starship = appearance.style === 'starship';
-  const scheme = appearance.colorScheme === 'gruvbox' || appearance.colorScheme === 'dracula' ? schemes[appearance.colorScheme] : {};
+  const decorative = appearance.colorScheme === 'gruvbox' || appearance.colorScheme === 'dracula';
+  const scheme = decorative ? schemes[appearance.colorScheme as 'gruvbox' | 'dracula'] : {};
   const colors = {...palette, ...scheme};
-  const segments: {text: string; color: string}[] = [];
+  const actor = hexColorSchema.safeParse(status.color).data ?? palette.accent;
+  const segments: {id: StatusbarId; text: string; color: string}[] = [];
   let used = 0;
   for (const module of modules) {
     if (!module.enabled || !Object.hasOwn(registry, module.id)) continue;
@@ -141,24 +144,42 @@ export function statusbarParts(status: StageStatus, width: number, modules: read
     if (!value) continue;
     const token = typeof descriptor.token === 'function' ? descriptor.token(status) : descriptor.token;
     // Decorative schemes must not recolor Actor identity or permission-mode semantics.
-    const color = module.id === 'role' ? hexColorSchema.safeParse(status.color).data ?? palette.accent
+    const color = module.id === 'role' ? actor
       : module.id === 'permission' ? palette[token] : colors[token];
     const text = icon + value;
-    segments.push({text, color}); used += framing + stringWidth(text);
+    segments.push({id: module.id, text, color}); used += framing + stringWidth(text);
   }
   const parts: StatusbarPart[] = [];
+  // The default scheme follows the window Actor: its segment carries the identity colour, everything else stays quiet.
+  const faint = mixHex(palette.muted, palette.bg, 0.55);
+  const gauge = (text: string, base: string): StatusbarPart[] => text.split(/(■+|□+)/u).filter(Boolean)
+    .map(piece => /^[■□]/u.test(piece) ? {text: piece, color: piece.startsWith('■') ? actor : faint} : {text: piece, color: base});
   if (!starship) {
     for (const segment of segments) {
-      if (parts.length) parts.push({text: ' | ', color: colors.muted});
-      parts.push(segment);
+      if (parts.length) parts.push({text: decorative ? ' | ' : ' │ ', color: decorative ? colors.muted : faint});
+      if (decorative) parts.push({text: segment.text, color: segment.color});
+      else if (segment.id === 'role') parts.push({text: segment.text, color: actor, bold: true});
+      else if (segment.id === 'context') parts.push(...gauge(segment.text, palette.muted));
+      else parts.push({text: segment.text, color: segment.id === 'permission' ? segment.color : palette.muted});
     }
     return parts;
   }
+  const slateSteps = [0.12, 0.15, 0.18, 0.12];
+  let slate = 0;
+  const looks = segments.map(segment => {
+    if (decorative) return {bg: segment.color, fg: colors.bg};
+    if (segment.id === 'role') return {bg: mixHex(actor, palette.bg, 0.3), fg: mixHex(actor, palette.strong, 0.9)};
+    return {bg: mixHex(palette.muted, palette.bg, slateSteps[slate++ % slateSteps.length]!),
+      fg: segment.id === 'permission' ? segment.color : mixHex(palette.fg, palette.muted, 0.7)};
+  });
   for (let index = 0; index < segments.length; index++) {
-    const segment = segments[index]!, next = segments[index + 1];
-    if (index === 0) parts.push({text: '\ue0b6', color: segment.color});
-    parts.push({text: ' ' + segment.text + ' ', color: colors.bg, backgroundColor: segment.color});
-    parts.push(next ? {text: '\ue0b0', color: segment.color, backgroundColor: next.color} : {text: '\ue0b4', color: segment.color});
+    const segment = segments[index]!, look = looks[index]!, next = looks[index + 1];
+    if (index === 0) parts.push({text: '\ue0b6', color: look.bg});
+    parts.push({text: ' ', color: look.fg, backgroundColor: look.bg});
+    if (!decorative && segment.id === 'context') parts.push(...gauge(segment.text, look.fg).map(part => ({...part, backgroundColor: look.bg})));
+    else parts.push({text: segment.text, color: look.fg, backgroundColor: look.bg, ...(!decorative && segment.id === 'role' ? {bold: true} : {})});
+    parts.push({text: ' ', color: look.fg, backgroundColor: look.bg});
+    parts.push(next ? {text: '\ue0b0', color: look.bg, backgroundColor: next.bg} : {text: '\ue0b4', color: look.bg});
   }
   return parts;
 }

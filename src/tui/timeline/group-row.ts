@@ -150,7 +150,7 @@ export function pushToolGroupCard(builder: ReturnType<typeof createBuilder>, gro
       for (const call of calls) {
         const from = builder.rows.length;
         opts.renderChild(call, indented);
-        if (builder.rows.length > from) connect(builder.rows, from, indented.leftSegments.length);
+        if (builder.rows.length > from) connect(builder.rows, from, indented.leftSegments.length - 1);
       }
     },
   });

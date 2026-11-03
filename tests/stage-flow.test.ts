@@ -6,6 +6,8 @@ import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {palette} from '../src/tui/appearance/theme.js';
 import {decorateRow} from '../src/tui/timeline/row-presentation.js';
 import {actionAt} from '../src/tui/timeline/scene.js';
+import {expandedTint} from '../src/tui/appearance/colors.js';
+import {cast} from '../src/actors/ensemble.js';
 import {contentPoint, selectionRange} from '../src/tui/timeline/selection.js';
 import {extractSelection} from '../src/tui/timeline/viewport.js';
 import {TaskProgress} from '../src/runtime/task-progress.js';
@@ -37,7 +39,8 @@ test('Actor labels stay on the card while legacy stage snapshots create no body 
     assert.match(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/);
     assert.ok(!rows.some(row => /\d\/\d/.test(row.text)));
     assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
-    assert.match(rows.find(row => row.messageId === f.first)!.text, /Thought for 1s/);
+    assert.equal(rows.filter(row => /^[▸▾] Thinking|^[▸▾] Thought/.test(row.text)).length, 1, 'one live thinking row, no per-request rows');
+    assert.ok(rows.some(row => row.messageId === f.first && /▸ Thinking/.test(row.text)));
     assert.match(rows.find(row => row.messageId === f.tool)!.text, /write[\s(]pelican\.html/i);
     assert.ok(!rows.some(row => row.text.includes('核对传动比例')));
     assert.equal(f.steps.get(f.first).stage?.id, skeleton.id, 'Historical step snapshots remain unchanged');
@@ -48,14 +51,13 @@ test('expanding one Thinking preserves sibling actions, selection and local reco
   const f = fixture();
   f.store.updateMessage(f.first, {step: {...f.steps.get(f.first), note: '输出已满，缩小当前步骤后接续。'}});
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
-  assert.ok(rows.some(row => row.text === '明确SVG场景'));
+  assert.ok(rows.some(row => row.text.includes('明确SVG场景')));
   assert.ok(rows.some(row => row.text === '输出已满，缩小当前步骤后接续。'));
-  assert.ok(!rows.some(row => row.text === '核对传动比例'));
-  const body = rows.find(row => row.text === '明确SVG场景')!;
-  assert.equal(body.bg, palette.toolExpanded);
+  assert.ok(rows.some(row => row.text.includes('核对传动比例')), 'every thought of the round is in the one body');
+  const body = rows.find(row => row.text.includes('明确SVG场景'))!;
+  assert.equal(body.bg, expandedTint(cast.techne!.color));
   assert.equal(actionAt(body, 80)?.foldId, f.first);
   const tool = rows.find(row => row.messageId === f.tool)!;
-  assert.notEqual(tool.bg, palette.toolExpanded, 'Sibling tools do not inherit an expanded reasoning background');
   assert.equal(actionAt(tool, 80)?.foldId, 'a');
   const index = rows.findIndex(row => row.messageId === f.first), heading = rows[index]!;
   const selection = {anchor: contentPoint(rows, index, heading.gutterCols), focus: contentPoint(rows, index, heading.gutterCols + 16)};
@@ -78,7 +80,7 @@ test('runtime dispositions control Denied and Error styling without marking succ
   }
   const row = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true}, null).find(row => row.messageId === f.tool)!;
   assert.ok(!row.text.includes('Error') && !row.text.includes('Denied'));
-  const running = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true}, null).find(row => row.messageId === f.second)!;
+  const running = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true}, null).find(row => row.messageId === f.first)!;
   assert.match(decorateRow(running, f.now()).text, /Thinking/);
   assert.notDeepEqual(decorateRow(running, f.now()).segments, decorateRow(running, f.now() + 320).segments);
 });
@@ -106,14 +108,14 @@ test('empty reasoning can show a separate recovery note without changing origina
   const f = fixture(), id = f.steps.thinking(); f.steps.finish(id, 'completed');
   const note = '本次只有思考，缩小当前步骤并先交付可核对成果。';
   f.store.updateMessage(id, {step: {...f.steps.get(id), note}});
-  const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [id]: true}, null);
+  const rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
   const index = rows.findIndex(row => row.messageId === id + '-note'), row = rows[index]!;
   assert.equal(row.text, note); assert.equal(row.color, palette.muted);
   assert.equal(f.store.getSnapshot().messages.find(message => message.id === id)!.text, '', 'Recovery notes do not alter original model text');
   const selection = {anchor: contentPoint(rows, index, row.gutterCols), focus: contentPoint(rows, index, row.gutterCols + 30)};
   const copied = extractSelection(rows, selectionRange(rows, selection));
   f.store.appendMessage(f.second, '继续核对');
-  const narrow = buildStageRows(f.store.getSnapshot(), 's', 'logox', 24, {a: true, [id]: true}, null);
+  const narrow = buildStageRows(f.store.getSnapshot(), 's', 'logox', 24, {a: true, [f.first]: true}, null);
   assert.equal(extractSelection(narrow, selectionRange(narrow, selection)), copied);
   assert.ok(copied.length > 0);
 });
@@ -158,16 +160,16 @@ test('legacy progress and empty completed Thinking never leave a heading before 
   assert.equal(steps.get(empty).stage?.id, riding.id);
 });
 
-test('historical failed requests do not borrow later details; only the final failure owns the error', () => {
+test('a failed round keeps one thinking row; only the activity failure owns the error text', () => {
   const f = fixture(); f.steps.finish(f.first, 'failed');
   f.store.activities.update('s', 'a', {detail: '第 4 次往返'});
   let rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
-  assert.ok(!rows.some(row => row.messageId === f.first + '-error'));
+  assert.ok(!rows.some(row => row.messageId.endsWith('-error')));
   f.steps.finish(f.second, 'failed');
   f.store.activities.update('s', 'a', {status: 'failed', detail: '最终请求连接中断'});
-  rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true, [f.second]: true}, null);
-  assert.ok(!rows.some(row => row.messageId === f.first + '-error'));
-  assert.equal(rows.find(row => row.messageId === f.second + '-error')!.text, '最终请求连接中断');
+  rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
+  assert.equal(rows.filter(row => row.messageId === f.first).length, 1);
+  assert.equal(rows.find(row => row.messageId === 'a-error')!.text, '最终请求连接中断');
 });
 
 test('actor resume follows same-owner links to the complete original goal', () => {

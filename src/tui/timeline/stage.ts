@@ -1,10 +1,12 @@
-import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot} from '../../runtime/contracts.js';
+import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
 import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
-import {compactParagraphs, createBuilder, insetFrame, type SceneAction, type SceneRow} from './scene.js';
+import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow} from './scene.js';
+import {faintColor} from '../appearance/colors.js';
+import wrapAnsi from 'wrap-ansi';
 import {getToolUI, isVisibleToolMessage} from '../../tools/ui-registry.js';
 import {messageToolCall, renderDefaultTool} from './tool-ui.js';
 import {clipLine} from '../terminal/text.js';
@@ -13,7 +15,7 @@ import {inputKind} from '../../runtime/provenance.js';
 import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
-import {stripNarration} from '../../runtime/narration.js';
+import {extractNarration, stripNarration} from '../../runtime/narration.js';
 import {groupToolMessages, type ToolGroup} from './tool-groups.js';
 import {pushGroupStage, pushToolGroupCard} from './group-row.js';
 
@@ -36,7 +38,9 @@ function activityTitle(activity: RuntimeSnapshot['activities'][number], activity
     const activeTool = activityMessages?.findLast(m => (m.kind === 'tool' || (m.role as string) === 'tool') && m.step &&
       ['running', 'waiting'].includes(m.step.state) &&
       !['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress'].includes(m.step.call?.name ?? ''))?.step?.title;
-    const subTitle = current?.label?.trim() || (mainTitle ? activeTool?.trim().slice(0, 60) : undefined);
+    const narrated = activityMessages?.findLast(m => m.role === 'assistant' && !m.kind && extractNarration(m.text))?.text;
+    const narration = narrated ? extractNarration(narrated)?.narration : undefined;
+    const subTitle = narration || current?.label?.trim() || (mainTitle ? activeTool?.trim().slice(0, 60) : undefined);
     if (mainTitle && subTitle && subTitle !== mainTitle) return `${mainTitle} · ${subTitle}`;
     return mainTitle || subTitle || activity.summary?.title || activity.title;
   }
@@ -115,27 +119,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   };
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
-    const request = thinking.get(message.id);
-    if (request) {
-      const hasContent = Boolean(message.text.trim() || (request.tokens && request.tokens > 0) || request.step.note);
-      if (request.step.state === 'completed' && !hasContent) {
-        return;
-      }
-      builder.pushOrdinaryCard({id: request.id, ownerId: message.ownerId, kind: 'Thinking', title: 'Thinking', bodyLines: [],
-        step: request.step, tokens: request.tokens, open: open(request.id), railColor: railFor(message.ownerId),
-        ...(frame ? {parentFrame: frame} : {}),
-        renderBody(inner) {
-          if (request.step.note?.trim()) builder.pushProse(message.id + '-note', compactParagraphs(request.step.note), railFor(message.ownerId), 'body', inner, undefined, palette.muted);
-          if (message.text.trim()) builder.pushProse(message.id + '-body-0', compactParagraphs(message.text), railFor(message.ownerId), 'body', inner);
-          if (request.step.state === 'cancelled') builder.pushProse(request.id + '-stopped', 'Stopped', palette.muted, 'body', inner);
-          if (request.step.state === 'failed') {
-            const finalRequest = message.activityId ? grouped.get(message.activityId)?.findLast(item => item.kind === 'thinking') : undefined;
-            const detail = activity?.status === 'failed' && finalRequest?.id === message.id ? activity.detail : undefined;
-            if (detail) builder.pushProse(request.id + '-error', detail, palette.error, 'body', inner, undefined, palette.error);
-          }
-        }});
-      return;
-    }
+    // Thinking never draws between tools: each round (and each open actor card) folds it into one row under its header.
+    if (thinking.has(message.id)) return;
     const isUser = message.role === 'user' && inputKind(message) !== 'director' && inputKind(message) !== 'collaboration';
     const isSystem = message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system'));
     const actorColor = railFor(message.ownerId);
@@ -249,9 +234,133 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     flushRun();
   }
+  // --- Speaker rounds: one header per speaker turn, with the thinking of the round folded into one row under it. ---
+  interface Round {
+    readonly who: string; readonly id: string; readonly insertAt: number; readonly since: number;
+    readonly thinking: Message[]; readonly messages: Message[]; readonly actors: Map<string, RuntimeSnapshot['activities'][number]>;
+  }
+  let round: Round | null = null;
+  let lastUserTime: number | undefined;
+  const hiddenSteps = ['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress', 'Actor'];
+  const describeRound = (r: Round): {label: string; live: boolean} | undefined => {
+    if (r.messages.some(m => m.kind === 'thinking' && m.step?.state === 'running')) return {label: 'Thinking', live: true};
+    const tool = r.messages.findLast(m => m.kind === 'tool' && m.step && ['running', 'waiting'].includes(m.step.state) && !hiddenSteps.includes(m.step.call?.name ?? ''));
+    if (tool?.step) return {label: clipLine(tool.step.title.replace(/\s+/g, ' ').trim(), 48), live: tool.step.state === 'running'};
+    const waiting = [...r.actors.values()].filter(item => ['running', 'waiting_input', 'queued'].includes(item.status));
+    if (waiting.length) {
+      const names = waiting.map(item => roles[item.ownerId]?.name ?? item.ownerId);
+      return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', ')), live: waiting.some(animated)};
+    }
+    const live = r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') && activities.get(m.activityId)?.kind !== 'actor');
+    return live || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ? {label: 'Working', live: true} : undefined;
+  };
+  const pushMore = (target: RowBuilder, id: string, text: string, column: number, inner: FrameWrap) =>
+    target.pushFramedLine(id, viewColor, [{text: ' '.repeat(column) + text, color: faintColor()}], inner);
+  /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
+  const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
+    const requests = items.flatMap(item => {
+      const request = thinking.get(item.id);
+      if (!request) return [];
+      const live = request.step.state === 'running';
+      return live || item.text.trim() || request.tokens > 0 || request.step.note ? [{item, request}] : [];
+    });
+    if (!requests.length) return;
+    const id = requests[0]!.item.id; // the fold id is the first thought's message id, so the row maps back to its activity
+    const now = Date.now();
+    const live = requests.some(entry => entry.request.step.state === 'running');
+    const totalMs = requests.reduce((sum, entry) => sum + stepElapsed(entry.request.step, now), 0);
+    const tokens = requests.reduce((sum, entry) => sum + entry.request.tokens, 0);
+    const isOpen = open(id);
+    const lead = isOpen ? '▾ ' : '▸ ';
+    const duration = (ms: number) => { const total = Math.round(ms / 1000); return total < 60 ? total + 's' : Math.floor(total / 60) + 'm ' + String(total % 60).padStart(2, '0') + 's'; };
+    const tokenText = tokens > 0 ? tokens.toLocaleString('en-US') + ' tokens' : '';
+    const count = requests.length;
+    const label = live ? 'Thinking' : count === 1 ? 'Thought for ' + duration(totalMs) : `Thought ${count} times · ${duration(totalMs)}`;
+    const text = lead + label + (!live && tokenText ? ' · ' + tokenText : '');
+    const runningStep = live ? (() => {
+      const running = requests.filter(entry => entry.request.step.state === 'running').map(entry => entry.request.step);
+      const since = Math.min(...running.map(step => step.runningSince ?? now));
+      const done = requests.reduce((sum, entry) => sum + (entry.request.step.state === 'running' ? entry.request.step.elapsedMs : stepElapsed(entry.request.step, now)), 0);
+      return {title: text, state: 'running', elapsedMs: done, runningSince: since} as Step;
+    })() : undefined;
+    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: 'Tool', title: text, expandable: true, bodyLines: [], open: isOpen,
+      railColor: viewColor, ...(frame ? {parentFrame: frame} : {}), ...(runningStep ? {step: runningStep} : {}),
+      titleSegments: [{text, color: isOpen ? palette.fg : palette.muted, selectionKey: id + ':title', selectionOffset: 0}],
+      renderBody(inner) {
+        const faint = faintColor();
+        const labels = requests.map(entry => duration(stepElapsed(entry.request.step, now)));
+        const wanted = Math.max(...labels.map(label => label.length)) + 2;
+        const column = inner.innerWidth - wanted >= 16 ? wanted : 0;
+        const textWidth = Math.max(1, inner.innerWidth - column);
+        const maxRows = 10;
+        let used = 0;
+        for (const [index, entry] of requests.entries()) {
+          if (used >= maxRows) {
+            const left = requests.length - index;
+            pushMore(target, id + '-more', `… ${left} more thought${left === 1 ? '' : 's'}`, column, inner);
+            return;
+          }
+          if (entry.request.step.note?.trim()) target.pushProse(entry.item.id + '-note', compactParagraphs(entry.request.step.note), viewColor, 'body', inner, undefined, palette.muted);
+          if (!entry.item.text.trim() && entry.request.step.note?.trim()) continue;
+          const lines = wrapAnsi(compactParagraphs(entry.item.text) || '…', textWidth, {hard: true, trim: false}).split('\n');
+          const shown = lines.slice(0, maxRows - used);
+          for (const [lineIndex, line] of shown.entries()) {
+            target.pushFramedLine(`${id}-t${index}-${lineIndex}`, viewColor, [
+              {text: column && lineIndex === 0 ? labels[index]!.padEnd(column) : ' '.repeat(column), color: faint},
+              {text: line, color: palette.muted, italic: true}], inner);
+          }
+          used += shown.length;
+          if (lines.length > shown.length) {
+            const left = lines.length - shown.length;
+            pushMore(target, `${id}-t${index}-more`, `… ${left} more line${left === 1 ? '' : 's'}`, column, inner);
+            used = maxRows;
+          }
+        }
+      }});
+  };
+  const renderThinking = (items: readonly Message[], frame: FrameWrap, _activityId: string, ownerId: string) =>
+    pushThinking(builder, items, frame, ownerId);
+  const flushRound = () => {
+    if (!round) return;
+    const r: Round = round; round = null;
+    const chunk = createBuilder(width, hovered, roles, viewColor);
+    const state = describeRound(r);
+    chunk.pushTurnHeader(r.id + '-who', r.who, undefined, undefined, state ? {label: state.label, ...(state.live ? {since: r.since} : {})} : undefined);
+    pushThinking(chunk, r.thinking, undefined, r.who);
+    builder.rows.splice(r.insertAt, 0, ...chunk.rows);
+  };
+  const ensureRound = (who: string, message: Message): Round => {
+    if (round?.who === who) return round;
+    flushRound();
+    builder.pushBlank(viewColor);
+    round = {who, id: message.id, insertAt: builder.rows.length, since: lastUserTime ?? message.time ?? Date.now(), thinking: [], messages: [], actors: new Map()};
+    return round;
+  };
+  /** Blank row between prose and a card; consecutive folded cards and tool rows stack tightly. */
+  const gapBefore = (card: boolean): boolean => {
+    const last = builder.rows.at(-1);
+    const current: Round | null = round;
+    if (!last || last.tone === 'spacer' || (current && builder.rows.length === current.insertAt)) return false;
+    if (last.bg) return true;
+    if (last.action?.owner) return !card;
+    return !last.action;
+  };
   for (const message of messages) {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
     const actor = activity?.kind === 'actor';
+    const source = message.role === 'user' ? inputKind(message) : undefined;
+    const collaboration = source === 'collaboration' || source === 'collaboration_interrupt';
+    const humanLike = message.role === 'user' && !collaboration && !(view === 'logox' && actor);
+    const systemLike = !message.kind && (message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system')));
+    if (!humanLike && !systemLike) {
+      const who = actor && view === 'logox' ? 'logox' : message.ownerId || view;
+      const current = ensureRound(who, message);
+      if (actor && activity && view === 'logox') current.actors.set(activity.activityId, activity);
+      else {
+        current.messages.push(message);
+        if (message.kind === 'thinking') current.thinking.push(message);
+      }
+    }
     if (!actor && (absorbed.has(message.id) || groupAt.has(message.id))) {
       const group = groupAt.get(message.id);
       if (group) {
@@ -270,10 +379,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     if (view === 'logox' && actor && activity) {
       if (seen.has(activity.activityId)) continue;
       seen.add(activity.activityId);
-      if (!builder.rows.at(-1)?.action?.owner) builder.pushBlank(viewColor);
-      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, grouped.get(activity.activityId)), status: activityStatus(activity),
+      if (gapBefore(true)) builder.pushBlank(viewColor);
+      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId)), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
-        messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [],
+        messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [], renderThinking,
         thinking, originalPrompt: actorGoal(activity), detailed: true, renderMessage: body, renderInteraction: interaction});
       continue;
     }
@@ -282,16 +391,15 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (view !== 'logox' && activity.status === 'completed') {
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
-        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, grouped.get(activity.activityId)), status: activityStatus(activity),
+        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId)), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
-          messages: staged.get(activity.activityId) ?? [], pending: [], thinking, originalPrompt: actorGoal(activity),
+          messages: staged.get(activity.activityId) ?? [], pending: [], renderThinking, thinking, originalPrompt: actorGoal(activity),
           detailed: false, renderMessage: body, renderInteraction: interaction});
       }
     }
     if (actor && activity && view !== 'logox' && message.role === 'system' && ['failed', 'cancelled'].includes(activity.status)) continue;
     if (message.role === 'user') {
-      const source = inputKind(message);
-      if (source === 'collaboration' || source === 'collaboration_interrupt') {
+      if (collaboration) {
         const match = /^\[(?:Message|Broadcast) from ([^\]·]+?)(?: · ([^\]]+))?\]\r?\n?([\s\S]*)$/u.exec(message.text);
         const rawSender = (match?.[1]?.trim() || message.source || 'peer').toLowerCase();
         const role = roles[rawSender];
@@ -303,7 +411,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const senderColor = isInterrupt ? palette.directorIntervention : ownerColor(rawSender, roles);
         const prefix = isInterrupt ? 'Interrupt from ' : 'Message from ';
         const title = `${prefix}${senderLabel}${summary ? ` · ${summary}` : ''}`;
-        builder.pushBlank(viewColor);
+        if (gapBefore(true)) builder.pushBlank(viewColor);
         builder.pushOrdinaryCard({
           id: message.id,
           ownerId: rawSender,
@@ -324,24 +432,23 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         });
         continue;
       }
+      flushRound();
+      lastUserTime = message.time;
       builder.pushBlank(viewColor);
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' ? message.source ?? message.ownerId : 'user',
         queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source);
       body(message);
     } else {
-      if (!message.kind) {
+      if (systemLike) {
+        flushRound();
         builder.pushBlank(viewColor);
-        const isSystem = message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system'));
-        if (!isSystem) {
-          const who = message.ownerId || (view === 'logox' ? 'logox' : view);
-          builder.pushTurnHeader(message.id + '-who', who);
-        }
-      }
+      } else if (!message.kind && !(view === 'logox' && actor) && gapBefore(false)) builder.pushBlank(viewColor);
       body(message);
     }
     if (activity && !actor && grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
   }
+  flushRound();
   for (const request of pending.filter(item => !seen.has(item.activityId))) interaction(request);
   for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (view === 'logox' || item.ownerId === view))) {
     if (activity.kind === 'anamnesis') {

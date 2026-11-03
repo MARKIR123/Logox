@@ -23,8 +23,9 @@ class TerminalInput extends PassThrough {
 class TerminalOutput extends TerminalScreen {}
 function frame(output: TerminalOutput): string {return output.lines.join('\n');}
 function composerLine(output: TerminalOutput, draft: string): string {
-  // The original draft stays intact; the new action occupies only the far-right cells.
-  return draft + ' '.repeat(output.columns - 1 - COMPOSER_EXPAND_PADDING - stringWidth(draft) - stringWidth(COMPOSER_EXPAND_LABEL)) + COMPOSER_EXPAND_LABEL;
+  // The draft follows the `❯ ` prompt; the expand action occupies only the far-right cells.
+  const line = '❯ ' + draft;
+  return line + ' '.repeat(output.columns - 1 - COMPOSER_EXPAND_PADDING - stringWidth(line) - stringWidth(COMPOSER_EXPAND_LABEL)) + COMPOSER_EXPAND_LABEL;
 }
 async function press(input: TerminalInput, instance: ReturnType<typeof render>, value: string): Promise<void> {
   await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();

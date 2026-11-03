@@ -6,6 +6,7 @@ import type {Message} from '../../runtime/contracts.js';
 import type {ToolFrame, ToolRenderContext, ToolUI} from '../../tools/ui-types.js';
 import {formatToolTitle, formatToolCardTitle, formatToolCardBody} from '../../tools/ui-format.js';
 import {palette} from '../appearance/theme.js';
+import {faintColor} from '../appearance/colors.js';
 import {cast} from '../../actors/ensemble.js';
 import type {createBuilder, SceneSegment} from './scene.js';
 
@@ -114,27 +115,44 @@ export function renderEditDiff(
       const rowId = `${messageId}-diff-${lineCount}`;
 
       if (sigil === '-') {
-        const lineNumStr = String(oldLine++).padStart(4) + ' - ';
+        const lineNumStr = String(oldLine++).padStart(4) + ' ';
         builder.pushFramedLine(rowId, railColor, [
-          {text: lineNumStr, color: palette.diffRemovedGutter, bold: true},
+          {text: lineNumStr, color: faintColor()},
+          {text: '− ', color: palette.diffRemovedGutter, bold: true},
           {text: content, color: palette.diffRemoved},
         ], f, undefined, palette.diffRemovedBg);
       } else if (sigil === '+') {
-        const lineNumStr = String(newLine++).padStart(4) + ' + ';
+        const lineNumStr = String(newLine++).padStart(4) + ' ';
         builder.pushFramedLine(rowId, railColor, [
-          {text: lineNumStr, color: palette.diffAddedGutter, bold: true},
+          {text: lineNumStr, color: faintColor()},
+          {text: '+ ', color: palette.diffAddedGutter, bold: true},
           {text: content, color: palette.diffAdded},
         ], f, undefined, palette.diffAddedBg);
       } else {
         oldLine++;
         const lineNumStr = String(newLine++).padStart(4) + '   ';
         builder.pushFramedLine(rowId, railColor, [
-          {text: lineNumStr, color: palette.borderMuted},
-          {text: content, color: palette.diffContext},
+          {text: lineNumStr, color: faintColor()},
+          {text: content, color: palette.muted},
         ], f);
       }
     }
   }
+}
+
+const SHELL_BODY_LINES = 12;
+/** Shell body: `$ command`, then the output muted with error lines in the error color; long output shows its head and a faint remainder. */
+function renderShellBody(builder: ReturnType<typeof createBuilder>, id: string, accent: string, command: string, output: readonly string[], frame: ToolFrame): void {
+  const faint = faintColor();
+  command.split(/\r?\n/).filter(line => line.trim()).slice(0, 3).forEach((line, index) =>
+    builder.pushFramedLine(`${id}-cmd-${index}`, accent, [{text: index === 0 ? '$ ' : '  ', color: faint}, {text: line, color: palette.fg}], frame));
+  const shown = output.slice(0, SHELL_BODY_LINES);
+  const failureLine = /(error|failed|failure|exception|fatal|denied)|^\s*[✗×]/i;
+  for (const [index, line] of shown.entries()) {
+    const color = failureLine.test(line) ? palette.error : palette.muted;
+    builder.pushProse(`${id}-out-${index}`, line, accent, 'body', frame, undefined, color);
+  }
+  if (output.length > shown.length) builder.pushFramedLine(`${id}-more`, accent, [{text: `… ${output.length - shown.length} more lines`, color: faint}], frame);
 }
 
 export function renderDefaultTool(context: ToolRenderContext): void {
@@ -153,12 +171,17 @@ export function renderDefaultTool(context: ToolRenderContext): void {
     ? formatToolCardBody(message.step.call, message.text)
     : [message.text];
 
+  const shell = hasStructuredCall && message.step?.call && ['shell', 'bash'].includes(message.step.call.name.toLowerCase()) ? message.step.call : undefined;
+  let command = '';
+  try {const parsed: unknown = JSON.parse(shell?.arguments ?? '{}'); if (parsed && typeof parsed === 'object') command = String(Reflect.get(parsed, 'command') ?? '');} catch {}
+  const output = bodyLines.join('\n').replace(/\s+$/, '').split('\n');
   builder.pushOrdinaryCard({
     id: message.id,
     ownerId: message.ownerId,
     kind: 'Tool',
     title,
-    bodyLines: formattedBody,
+    bodyLines: shell ? [] : formattedBody,
+    ...(shell ? {renderBody: (inner: ToolFrame) => renderShellBody(builder, message.id, accent, command, bodyText.trim() ? output : [], inner)} : {}),
     ...(message.step ? {step: message.step} : {}),
     open,
     railColor: accent,

@@ -1,6 +1,7 @@
 import {useContext, useDeferredValue, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useStdout, useWindowSize, type DOMElement} from 'ink';
 import stringWidth from 'string-width';
+import {createRequire} from 'node:module';
 import {TerminalPlaneContext} from './terminal/terminal.js';
 import {RuntimeStore} from '../runtime/store.js';
 import {emptyCommandContext, type CommandContext} from '../commands.js';
@@ -42,10 +43,15 @@ import {ActivityCard} from './timeline/activity-card.js';
 import {InteractionCard} from './interactions/interaction-card.js';
 import {ownerColor, ownerHeader, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
 import {splashLines} from './appearance/emblem.js';
+
+/** The package version for the splash; dist/src/tui/app.js sits three levels below package.json. */
+const APP_VERSION = (() => { try { return (createRequire(import.meta.url)('../../../package.json') as {version?: string}).version; } catch { return undefined; } })();
 import {palette} from './appearance/theme.js';
+import {mixHex} from './appearance/colors.js';
 import {safeText} from './terminal/text.js';
 import {type QuestionDraft} from './interactions/choice-style.js';
-import {cursorAt, emptyDraft, erase, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, type Draft} from './input/editor.js';
+import {cursorAt, draftSelection, emptyDraft, erase, graphemes, InputHistory, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, moveWord, navigateDraft, removeDraftSelection, selectedText, type Draft} from './input/editor.js';
+import {inputKind} from '../runtime/provenance.js';
 import {
   hoveredCardAt,
   actionAt,
@@ -58,7 +64,7 @@ import {osc52Clipboard} from './terminal/clipboard.js';
 import {parseSgrMouse, type SgrMouseEvent} from './terminal/mouse.js';
 
 import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
-import {decorateRow, presentedSegments} from './timeline/row-presentation.js';
+import {decorateRow, presentedSegments, railCell} from './timeline/row-presentation.js';
 import {getInteractionUI} from '../tools/ui-registry.js';
 import {themeRevision} from '../config/theme-palette.js';
 import type {ToolInteractionAction} from '../tools/ui-types.js';
@@ -216,9 +222,26 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     }
     if (latest) flash(safeText(latest).replace(/\n/g, ' '), 1800);
   }, [store, sessionId, currentView, snapshot.messages]);
+  const inputHistories = useRef(new Map<string, InputHistory>());
+  const historyMessages = useRef(new Set<string>());
+  const historyFor = (ownerId: string) => {
+    const key = sessionId + ':' + ownerId;
+    let history = inputHistories.current.get(key);
+    if (!history) {history = new InputHistory(); inputHistories.current.set(key, history);}
+    return history;
+  };
+  for (const message of snapshot.messages) {
+    if (message.sessionId !== sessionId || historyMessages.current.has(message.id)) continue;
+    historyMessages.current.add(message.id);
+    if (message.role === 'user' && inputKind(message) === 'human') historyFor(message.ownerId).record(message.text);
+  }
+  const draftRevisions = useRef(new Map<string, number>());
+  const cancelledInputs = useRef(new Set<string>());
+  const inputDrag = useRef<{key: string; anchor: number} | null>(null);
   const draft = drafts[currentView] ?? emptyDraft;
   const anchor = anchors.current[currentView] ?? null;
   const setDraft = (fn: (current: Draft) => Draft) => {
+    draftRevisions.current.set(currentView, (draftRevisions.current.get(currentView) ?? 0) + 1);
     setDrafts(prev => ({...prev, [currentView]: fn(prev[currentView] ?? emptyDraft)}));
   };
   const setAnchor = (next: Anchor | null) => {
@@ -330,7 +353,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const questionPanel = dockQuestion && response ? request : undefined;
   const activeDraft = editingCustom ? customDraft : draft;
   const editableComposer = focus === 'input' || editingCustom;
-  const promptGlyph = editingCustom ? 'Extra preference › ' : '';
+  const windowColor = ownerColor(currentView, roles);
+  const promptGlyph = editingCustom ? 'Extra preference › ' : '❯ ';
+  const composerRule = mixHex(windowColor, palette.bg, 0.45), composerPrompt = mixHex(windowColor, palette.bg, 0.9);
   const promptWidth = stringWidth(promptGlyph);
   const showExpandButton = !closing && !composerExpanded && editableComposer && !editingCustom && !loginState && !surface && width >= 6;
   const expandButtonWidth = showExpandButton ? stringWidth(COMPOSER_EXPAND_LABEL) + COMPOSER_EXPAND_PADDING * 2 : 0;
@@ -343,7 +368,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const inputKey = currentView + ':' + (editingCustom ? 'custom' : freeAnswer ? request?.requestId : 'main');
   const inputView = inputViewport(inputLayout, inputHeight, inputStarts.current.get(inputKey) ?? 0);
   inputStarts.current.set(inputKey, inputView.start);
-  const placeholder = currentView === 'logox' ? '' : 'Add to ' + (roles[currentView]?.name ?? currentView) + '…';
+  const inputSelection = draftSelection(activeDraft);
   const choiceSummary = demoScene && inlineRequest
     ? request?.kind === 'permission' ? 'Permission: ' + (scene.permissionChoice === 'allow' ? 'Allow once' : 'Deny (default)') + ' · Enter Confirm'
       : 'Choice: ' + (scene.choice === 'minimal' ? 'Restrained text portfolio' : scene.choice === 'editorial' ? 'Warm editorial' : 'Free-form answer') + ' · Enter Confirm'
@@ -435,7 +460,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const splash = useMemo(() => {
     if (!welcome) return undefined;
     const lines = safeText(welcome.text).replace(/\t/g, '  ').split('\n');
-    return splashLines({width, height: timelineHeight, title: welcome.systemTitle, info: lines,
+    return splashLines({width, height: timelineHeight, title: welcome.systemTitle, info: lines, version: APP_VERSION,
       colors: {blue: roles.logox?.color ?? palette.accent, bone: palette.fg, title: palette.accent, muted: palette.muted}});
   }, [welcome, width, timelineHeight, roles, themeVersion]);
   const view = viewport(messageRows, timelineHeight, anchor);
@@ -479,7 +504,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
   const interrupt = () => {
     if (closing || surface?.kind === 'result') return;
-    const copied = !composerExpanded && !surface && !loginState ? copySelection() : '';
+    const copied = !composerExpanded && !surface && (!loginState || loginFolded)
+      ? (editableComposer ? selectedText(activeDraft) : '') || copySelection() : '';
     if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection to clipboard'); return;}
     const now = Date.now();
     if (exitDeadline.current > now) {close(); return;}
@@ -584,8 +610,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     setNotice('');
     const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
     const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
+    const revision = draftRevisions.current.get(currentView) ?? 0;
+    const history = historyFor(currentView);
     void onSubmit(payload, source, delivery).then(() => {
-      setDrafts(prev => ({...prev, [currentView]: prev[currentView]?.text === text ? emptyDraft : prev[currentView] ?? emptyDraft}));
+      history.record(text);
+      setDrafts(prev => ({...prev, [currentView]: prev[currentView]?.text === text && (draftRevisions.current.get(currentView) ?? 0) === revision ? emptyDraft : prev[currentView] ?? emptyDraft}));
       if (!text.trim().startsWith('/')) setAnchor(null);
     }, error => {flash(error instanceof Error ? error.message : String(error));}).finally(() => {submitting.current = false;});
   };
@@ -739,7 +768,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
   mouseHandlerRef.current = (event: SgrMouseEvent) => {
     for (const listener of mouseListeners.current) listener(event);
-    if (composerExpanded || loginState && !loginFolded || surface) return;
+    if (composerExpanded || loginState && !loginFolded || surface) {inputDrag.current = null; return;}
+    if (inputDrag.current && (event.action === 'drag' || event.action === 'release')) {
+      const drag = inputDrag.current;
+      if (drag.key === inputKey && editableComposer) {
+        const row = Math.max(0, Math.min(inputLayout.lines.length - 1, inputView.start + event.y - inputY));
+        const cursor = cursorAt(inputLayout, row, Math.max(0, Math.min(inputColumns, event.x - promptWidth)));
+        edit(current => ({text: current.text, cursor, anchor: drag.anchor}));
+      }
+      if (event.action === 'release') inputDrag.current = null;
+      return;
+    }
     if (event.action === 'wheel_up') { if (event.y < timelineHeight) scroll(-3); return; }
     if (event.action === 'wheel_down') { if (event.y < timelineHeight) scroll(3); return; }
     if (event.action === 'move') {
@@ -830,7 +869,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (event.y >= inputY && event.y < inputY + inputHeight) {
         if (editableComposer) {
           const cursor = cursorAt(inputLayout, inputView.start + event.y - inputY, Math.max(0, event.x - promptWidth));
-          edit(current => ({text: current.text, cursor}));
+          inputDrag.current = {key: inputKey, anchor: cursor};
+          edit(current => ({text: current.text, cursor, anchor: cursor}));
         } else { setEditingCustom(false); setFocus('input'); }
         clearSelection();
         return;
@@ -989,6 +1029,20 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (loginState && (!loginFolded || key.ctrl && input === 'k' || key.escape)) return;
     if (surface) return;
     if (key.ctrl && input === 't') {steerInput(); return;}
+    if (editableComposer && key.ctrl && input === 'a') {edit(current => ({text: current.text, cursor: graphemes(current.text).length, anchor: 0})); return;}
+    if (editableComposer && key.ctrl && input === 'x') {
+      const text = selectedText(activeDraft);
+      if (text) {stdout?.write(osc52Clipboard(text)); edit(removeDraftSelection);}
+      return;
+    }
+    if (editableComposer && key.ctrl && ['u', 'k', 'w'].includes(input)) {
+      edit(current => {
+        if (draftSelection(current)) return removeDraftSelection(current);
+        const edge = input === 'w' ? moveWord(current, -1).cursor : moveToLineEdge(current, input === 'k', inputColumns).cursor;
+        return removeDraftSelection({...current, anchor: edge});
+      }); return;
+    }
+    if (key.escape && editableComposer && draftSelection(activeDraft)) {edit(current => ({text: current.text, cursor: current.cursor})); return;}
     if (menuHeight && !key.ctrl && !key.meta && !key.shift) {
       if (key.upArrow || key.downArrow) {
         moveSuggestion(key.upArrow ? -1 : 1);
@@ -1116,7 +1170,19 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (focus === 'stop') {setFocus('input'); return;}
       if (selection) { clearSelection(); return; }
       const running = activities.find(item => item.ownerId === 'logox' && ['running', 'waiting_input', 'queued'].includes(item.status));
-      if (running) onCancel(running.activityId);
+      if (running && !cancelledInputs.current.has(running.activityId)) {
+        cancelledInputs.current.add(running.activityId);
+        onCancel(running.activityId);
+        const original = snapshot.messages.findLast(message => message.sessionId === sessionId && message.activityId === running.activityId &&
+          message.role === 'user' && inputKind(message) === 'human');
+        // Check the updater's draft, not the render's: typing and Esc can be batched.
+        // Bumping the revision also protects it from a pending submission acknowledgment.
+        setDraft(current => original && !current.text ? insert(emptyDraft, original.text) : current);
+        if (original) {
+          setCompletion({query: '', selected: 0, dismissed: true});
+          if (draft.text) flash('Task stopped. Your current draft was kept; use Up for earlier input.');
+        }
+      }
       return;
     }
     if (key.ctrl && (key.upArrow || key.downArrow) && request) {
@@ -1125,7 +1191,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (key.pageUp || key.pageDown) { scroll((key.pageUp ? -1 : 1) * Math.max(1, timelineHeight - 1)); return; }
     if (key.ctrl && input === 'e') { setAnchor(null); return; }
     if ((key.upArrow || key.downArrow) && editableComposer) {
-      const next = moveVertical(activeDraft, key.upArrow ? -1 : 1, inputColumns);
+      const direction = key.upArrow ? -1 : 1;
+      const atEdge = direction < 0 ? inputLayout.cursorRow === 0 : inputLayout.cursorRow === inputLayout.lines.length - 1;
+      if (!editingCustom && focus === 'input' && !key.shift && !key.ctrl && !key.meta && atEdge) {
+        const next = historyFor(currentView).browse(draft, direction);
+        edit(() => next);
+        const nextQuery = completionQuery(next, currentView);
+        setCompletion({query: nextQuery, selected: 0, dismissed: true});
+        return;
+      }
+      const next = navigateDraft(activeDraft, current => moveVertical(current, direction, inputColumns), Boolean(key.shift));
       if (!freeAnswer || next.cursor !== activeDraft.cursor) { edit(() => next); return; }
     }
     if (demoScene && inlineRequest && focus === 'question' && (key.upArrow || key.downArrow)) {
@@ -1194,8 +1269,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     }
     if (key.backspace) { edit(current => erase(current, true)); return; }
     if (key.delete) { edit(current => erase(current, false)); return; }
-    if (key.leftArrow || key.rightArrow) { edit(current => move(current, key.leftArrow ? -1 : 1)); return; }
-    if (key.home || key.end) { edit(current => key.ctrl ? move(current, key.home ? -Infinity : Infinity) : moveToLineEdge(current, Boolean(key.end), inputColumns)); return; }
+    if (key.leftArrow || key.rightArrow) {
+      const direction = key.leftArrow ? -1 : 1;
+      edit(current => navigateDraft(current, value => {
+        const range = draftSelection(value);
+        if (!key.shift && range) return {text: value.text, cursor: direction < 0 ? range.start : range.end};
+        return key.ctrl || key.meta ? moveWord(value, direction) : move(value, direction);
+      }, Boolean(key.shift))); return;
+    }
+    if (key.home || key.end) { edit(current => navigateDraft(current, value => key.ctrl ? move(value, key.home ? -Infinity : Infinity) : moveToLineEdge(value, Boolean(key.end), inputColumns), Boolean(key.shift))); return; }
     if (!key.ctrl && !key.meta && input) edit(current => insert(current, input));
   });
 
@@ -1227,7 +1309,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         <Text color={welcome.systemTitle && index === 0 ? palette.accent : palette.muted} wrap="truncate">{clipLine(line.text, width) || ' '}</Text>
       </Box>) : !plane && view.rows.map((rawRow, index) => {
         const row = rawRow as SceneRow;
-        const rail = row.gutterCols > 0 ? <Text color={row.railColor}>│ </Text> : null;
+        const railSeg = railCell(row);
+        const rail = row.gutterCols > 0 ? <Text {...(railSeg.color ? {color: railSeg.color} : {})} bold={Boolean(railSeg.bold)}>{railSeg.text}</Text> : null;
         return <Box key={index} height={1} flexShrink={0} overflow="hidden">
           {rail}
           <Text wrap="truncate">{presentedSegments(row, index, selection).map((seg, i) =>
@@ -1280,20 +1363,24 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         onPick={selected => setCompletion({query, selected, dismissed: false})}
         onWheelStep={moveSuggestion}/>
     </MouseContext.Provider>}
-    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
+    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
     <Box height={inputHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {editableComposer ? inputView.lines.map((line, index) => <Box key={index} height={1} flexShrink={0}>
-        <Box width={composerTextWidth} overflow="hidden"><Text wrap="truncate">
-          {promptWidth > 0 && <Text color={palette.user}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
-          <Text color={activeDraft.text ? palette.fg : palette.muted}>{activeDraft.text ? line.text : (placeholder ? clipLine(placeholder, inputColumns) : '')}</Text>
+        <Box width={composerTextWidth} overflow="hidden"><Text wrap="truncate" color={palette.composerFg}>
+          {promptWidth > 0 && <Text color={editingCustom ? palette.user : composerPrompt} bold={!editingCustom}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
+          {(() => {
+            if (!inputSelection || inputSelection.end <= line.start || inputSelection.start >= line.end) return line.text;
+            const parts = graphemes(line.text), low = Math.max(0, inputSelection.start - line.start), high = Math.min(parts.length, inputSelection.end - line.start);
+            return <>{parts.slice(0, low).join('')}<Text color={palette.selectionFg} backgroundColor={palette.selectionBg}>{parts.slice(low, high).join('')}</Text>{parts.slice(high).join('')}</>;
+          })()}
         </Text></Box>
         {showExpandButton && index === 0 && <Text color={expandHovered ? palette.strong : palette.muted}>{' '.repeat(COMPOSER_EXPAND_PADDING + 1) + COMPOSER_EXPAND_LABEL + ' '.repeat(COMPOSER_EXPAND_PADDING)}</Text>}
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
-    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={palette.line} wrap="truncate">{hairline}</Text></Box>}
+    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
     {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="row" justifyContent="space-between">
       <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
-        ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
+        ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.bold ? {bold: true} : {})} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
         : footerStatusText}</Text>
       {activePills.length > 0 ? <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
         <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
