@@ -1,7 +1,7 @@
 # Module: Test Suite (`tests/`)
 
 ## 1. Scope
-- **Owns**: All `tests/*.test.ts(x)` files, the shared helpers `runtime-fixture.ts`, `wait-for.ts`, `terminal-screen.ts`, `compression-fixture.ts`, and `fixtures/` (MCP server, permission worker, shipped-skill snapshot).
+- **Owns**: All `tests/*.test.ts(x)` files, the shared helpers `runtime-fixture.ts`, `wait-for.ts`, `tool-fixture.ts`, `terminal-screen.ts`, `compression-fixture.ts`, and `fixtures/` (MCP server, permission worker, shipped-skill snapshot).
 - **Does not own**: Production code under test; each subsystem signpost links back here for its group. Live provider, OAuth, real-terminal and headed-browser checks are manual (see section 6).
 - Tests compile with `tsc` to `dist/tests/`; run the compiled JavaScript there. The build is a prerequisite, not part of the fast run.
 

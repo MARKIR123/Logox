@@ -58,7 +58,7 @@ test('expanding one Thinking preserves sibling actions, selection and local reco
   assert.equal(body.bg, expandedTint(cast.techne!.color));
   assert.equal(actionAt(body, 80)?.foldId, f.first);
   const tool = rows.find(row => row.messageId === f.tool)!;
-  assert.equal(actionAt(tool, 80)?.foldId, 'a');
+  assert.equal(actionAt(tool, 80)?.foldId, f.tool, 'the right-aligned elapsed time belongs to the tool row');
   const index = rows.findIndex(row => row.messageId === f.first), heading = rows[index]!;
   const selection = {anchor: contentPoint(rows, index, heading.gutterCols), focus: contentPoint(rows, index, heading.gutterCols + 16)};
   const copied = extractSelection(rows, selectionRange(rows, selection));
@@ -72,7 +72,7 @@ test('runtime dispositions control Denied and Error styling without marking succ
     const id = f.steps.tool({id: disposition, name: 'read', arguments: '{"file_path":"README.md"}'});
     f.steps.finish(id, 'failed', 'read\n原始错误可展开查看', disposition);
     const row = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true}, null).find(row => row.messageId === id)!;
-    assert.match(row.text, disposition === 'denied' ? /Denied$/ : /Error$/);
+    assert.match(row.text, disposition === 'denied' ? /Denied +0\.0s$/ : /Error +0\.0s$/);
     assert.equal(row.segments!.find(part => part.selectionKey === id + ':icon')!.color, palette.error);
     const fault = row.segments!.find(part => part.selectionKey === id + ':fault')!;
     assert.equal(fault.color, palette.error); assert.equal(fault.bold, true);

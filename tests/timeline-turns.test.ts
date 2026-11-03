@@ -136,7 +136,7 @@ test('an open tool card tints with its surface owner color and indents its body 
   const head = rows.find(row => row.messageId === id)!;
   assert.equal(head.bg, expandedTint(palette.accent));
   assert.match(head.text, /^▾ Write\(a\.txt\)/);
-  const body = rows.find(row => row.text === 'written ok')!;
+  const body = rows.find(row => row.text === '1  hi')!; // the rendered view of what was written, not the raw result text
   assert.equal(body.bg, head.bg);
   assert.equal(body.gutterCols, head.gutterCols + 2, 'body is indented two columns under the title');
 });
@@ -149,17 +149,19 @@ test('the card subtitle takes the latest ⏵ narration of a running actor', () =
   assert.match(rows.find(row => row.messageId === 'k')!.text, /kalon task · Editing index\.html/);
 });
 
-test('shell output shows the command, muted output with error lines in red, and an overflow note', () => {
+test('shell output shows the command, then the tail with an expander above it; error lines in red', () => {
   const {store, steps} = round();
   const id = steps.tool({id: 'sh', name: 'Shell', arguments: JSON.stringify({command: 'npx playwright test'})}); steps.start(id);
-  steps.finish(id, 'failed', 'Shell\nExit code: 1\n' + ['Running 3 tests', 'Error: pedals stay in phase', ...Array.from({length: 20}, (_, i) => 'noise ' + i)].join('\n'), 'error');
+  steps.finish(id, 'failed', 'Shell\nExit code: 1\n' + ['early noise', ...Array.from({length: 10}, (_, i) => 'noise ' + i), 'Running 3 tests', 'Error: pedals stay in phase'].join('\n'), 'error');
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {[id]: true}, null);
   const at = rows.findIndex(row => row.text === '$ npx playwright test');
   assert.ok(at > 0, 'command row');
   const error = rows.find(row => row.text.startsWith('Error: pedals'))!;
   assert.equal(rows.find(row => row.text === 'Running 3 tests')!.color, palette.muted);
   assert.equal(error.color, palette.error);
-  assert.ok(rows.some(row => /^… \d+ more lines/.test(row.text)));
+  const more = rows.findIndex(row => /^… 1 more line$/.test(row.text));
+  assert.ok(more > at && more < rows.findIndex(row => row.text === 'Running 3 tests'), 'the expander sits above the tail, below the command');
+  assert.ok(!rows.some(row => row.text === 'early noise'));
 });
 
 test('paths inside the workspace show relative to the cwd; paths outside stay absolute', () => {

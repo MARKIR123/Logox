@@ -21,6 +21,7 @@ const mergedDefinitions = {
   effortOff: '#8b949e', effortLow: '#7ee7c4', effortMedium: '#5282b5', effortHigh: '#d97757', effortMax: '#e8a8dc', effortAuto: '#e5b567',
   permissionDefault: '#a8adb5', permissionAuto: '#70b7ff', permissionCreative: '#d49aff', directorIntervention: '#d97757',
   automa: '#8a95a0', oauthBg: '#18181b', oauthFg: '#f4f4f5', oauthSuccess: '$success',
+  path: '#A9BFE6', highlight: '#F0D58C', link: '#8FB4F0', syntaxKeyword: '#B3A0D4', syntaxString: '#A9C99A', syntaxNumber: '#E0BE7E',
 };
 const mergedPalette = {
   ...mergedDefinitions,
@@ -73,7 +74,7 @@ test('exactly five shipped themes load with logox-dark first and valid colors', 
 test('merged logox-dark preserves old mist colors and adds composer aliases without a root base', () => withThemeHome(() => {
   const data = JSON.parse(readFileSync(new URL('../src/config/themes/logox-dark.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(data), ['colors']);
-  assert.equal(Object.keys(mergedDefinitions).length, 53);
+  assert.equal(Object.keys(mergedDefinitions).length, 59);
   assert.deepEqual(Object.keys(mergedDefinitions).sort(), [...themeColorKeys].sort());
   assert.deepEqual(data.colors, mergedDefinitions);
   assert.deepEqual(defaultPalette, mergedPalette);

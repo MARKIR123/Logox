@@ -14,6 +14,7 @@ export const themeColorKeys = [
   'effortOff', 'effortLow', 'effortMedium', 'effortHigh', 'effortMax', 'effortAuto',
   'permissionDefault', 'permissionAuto', 'permissionCreative', 'directorIntervention',
   'automa', 'oauthBg', 'oauthFg', 'oauthSuccess',
+  'path', 'highlight', 'link', 'syntaxKeyword', 'syntaxString', 'syntaxNumber',
 ] as const;
 export type ThemeColorKey = typeof themeColorKeys[number];
 export type ThemePalette = Record<ThemeColorKey, string>;

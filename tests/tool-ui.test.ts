@@ -278,7 +278,9 @@ for (const state of ['queued', 'running', 'waiting', 'cancelled', 'failed', 'com
     const rows = buildStageRows(store.getSnapshot(), 's', 'techne', 200, {[id]: true}, id);
     const display = rows.map(row => row.text).join('\n');
     assert.doesNotMatch(display, /Added|removed|Removed|PROPOSED_OLD|PROPOSED_NEW|EXTRA_LINE/);
-    assert.ok(display.includes(reason), display);
+    // A call still in flight has no result yet: the header alone, never its raw arguments.
+    if (['queued', 'running', 'waiting'].includes(state)) assert.doesNotMatch(display, /old_string|file_path/);
+    else assert.ok(display.includes(reason), display);
     if (state === 'failed' || disposition) {
       const collapsed = buildStageRows(store.getSnapshot(), 's', 'techne', 200, {}, null);
       assert.ok(collapsed.some(row => row.text.includes(reason)), 'Failure reason should be visible without expanding the card');

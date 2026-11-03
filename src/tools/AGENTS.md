@@ -57,6 +57,12 @@ categories:
    - Tool that needs ensemble state (the `coordination/` and `orchestration/` tools): add the name to `src/actors/services.ts:serviceTools` and a branch in `ActorServices.execute()`.
 - Tests: `tests/tool-ui.test.ts` (iterates `schemas`; needs a UI entry), `tests/tools-registry.test.ts`, `tests/tools-claude-alignment.test.ts`; add a `tests/<name>-tool.test.ts` for execution.
 
+### Give a tool a rendered card body
+1. In `<Name>Tool/UI.ts` export a `<name>View(args, result)` returning a `ToolView` (`src/tui/timeline/tool-card.ts`): `summary` pieces only when they add information the title lacks, `body.lines` (`ToolLine` rows, built with the helpers in `src/tui/timeline/tool-code.ts` and `src/tools/GlobTool/UI.ts:pathSegments`), an `empty` line for no results, `tail: true` for output that reads from the end.
+2. Render with `renderToolCard(context, {title: cardTitle(context, call), view})`; the shared code owns the 12-line cap, the `… N more lines` expander, failures and the header. Colours come from palette tokens (`path`, `highlight`, `link`, `syntax*`).
+3. Data the UI needs but the result text lacks comes from a bounded side record or the call arguments, never from changing what the model sees (`WriteTool/record.ts:recordWrite` keeps the previous file text for the card).
+- Tests: `tests/tool-card.test.ts`, `tests/tool-views.test.ts`
+
 ### Add a tool category / tier
 1. Create the directory `src/tools/<category>/` (category names are directory paths; `metadata.ts:toolCategorySchema` allows nested paths).
 2. Add `<category>: <one-line English description>` to the frontmatter `categories:` of this file. That is the only runtime source of descriptions; no formatter code changes.

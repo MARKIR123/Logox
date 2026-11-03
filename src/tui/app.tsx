@@ -303,6 +303,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const foldIds = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
   const foldActivityId = (id: string | undefined) => {
     if (!id) return '';
+    id = id.replace(/-more$/, ''); // a body expander belongs to its card
     const direct = activities.find(item => item.activityId === id);
     if (direct) return direct.activityId;
     return snapshot.messages.findLast(message => message.id === id || message.step?.groupId === id)?.activityId ?? '';
@@ -1314,7 +1315,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return <Box key={index} height={1} flexShrink={0} overflow="hidden">
           {rail}
           <Text wrap="truncate">{presentedSegments(row, index, selection).map((seg, i) =>
-            <Text key={i} color={seg.color ?? palette.fg} {...(seg.bg ?? row.bg ? {backgroundColor: seg.bg ?? row.bg} : {})} bold={Boolean(seg.bold)} italic={Boolean(seg.italic)}>{seg.text}</Text>)}</Text>
+            <Text key={i} color={seg.color ?? palette.fg} {...(seg.bg ?? row.bg ? {backgroundColor: seg.bg ?? row.bg} : {})} bold={Boolean(seg.bold)} italic={Boolean(seg.italic)} underline={Boolean(seg.underline)}>{seg.text}</Text>)}</Text>
         </Box>;
       })}
     </Box>

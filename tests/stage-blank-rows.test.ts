@@ -42,10 +42,10 @@ test('trailing newlines in tool output never become an empty row, interior blank
   f.steps.finish(id, 'completed', 'Shell\nExit code: 0\nline one\n\nline three\n\n');
   const tool = f.store.getSnapshot().messages.find(m => m.kind === 'tool')!;
   const rows = f.rows({a: true, [tool.id]: true});
-  const first = rows.findIndex(r => text(r) === 'Exitcode:0');
+  const first = rows.findIndex(r => text(r) === 'lineone');
   assert.ok(first >= 0, 'tool body renders');
-  assert.deepEqual(rows.slice(first, first + 4).map(text), ['Exitcode:0', 'lineone', '', 'linethree']);
-  assert.ok(!rows[first + 4] || !blank(rows[first + 4]!) || /spacer|-bottom/.test(rows[first + 4]!.messageId) , 'nothing blank after the last output line unless it is card spacing');
+  assert.deepEqual(rows.slice(first, first + 3).map(text), ['lineone', '', 'linethree']);
+  assert.ok(!rows[first + 3] || !blank(rows[first + 3]!) || /spacer|-bottom/.test(rows[first + 3]!.messageId) , 'nothing blank after the last output line unless it is card spacing');
 });
 
 for (const owner of ['kalon', 'logox'] as const) {

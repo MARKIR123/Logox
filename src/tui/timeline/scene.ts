@@ -22,6 +22,8 @@ export interface SceneSegment {
   readonly bg?: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
+  /** Links, URLs and domains are always underlined. */
+  readonly underline?: boolean;
   /** Marks a ` · ` separator so adjacent segments never merge into it. */
   readonly separator?: true;
   readonly selectionKey?: string;
@@ -146,6 +148,12 @@ export interface RowBuilder {
     title: string;
     titleSegments?: readonly SceneSegment[] | undefined;
     summary?: string | undefined;
+    /** Shown after the title behind a muted ` · ` (tool cards: `lines 1–200 of 312`, `exit 1`); only when it adds information the title lacks. */
+    summarySegments?: readonly SceneSegment[] | undefined;
+    /** Right-aligns the elapsed time (faint) instead of appending it after a ` · `; falls back to inline when the row is too narrow. */
+    statusRight?: boolean;
+    /** A static one-row card (an image): no fold action, no hover. */
+    fixed?: boolean;
     faultLabel?: string;
     bodyLines: readonly string[];
     status?: string;
@@ -209,7 +217,7 @@ function wrapSegments(segments: readonly SceneSegment[], width: number): SceneSe
       const last = line.at(-1);
       const value = {...segment, text: part, selectionOffset: offset};
       offset += part.length;
-      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic && last.separator === value.separator && last.selectionKey === value.selectionKey) {
+      if (last && last.color === value.color && last.bg === value.bg && last.bold === value.bold && last.italic === value.italic && last.underline === value.underline && last.separator === value.separator && last.selectionKey === value.selectionKey) {
         line[line.length - 1] = {...last, text: last.text + part};
       } else line.push(value);
       used += stringWidth(part);
@@ -441,16 +449,29 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       const tokenText = (opts.tokens ?? 0) > 0 ? opts.tokens + ' Tokens' : '';
       const waitingText = opts.step?.state === 'waiting' ? opts.step.waiting ?? 'Waiting' : '';
       const hoverMuted = (color: string) => isHovered && color === palette.muted ? highlightColor : color;
+      // Tool summary: its own muted separator, then the caller's colored pieces (hover brightens the muted ones).
+      const summaryPieces: SceneSegment[] = opts.summarySegments?.length ? [separator(SEPARATOR, opts.id + ':summary_sep'),
+        ...opts.summarySegments.flatMap(splitSeparators).map((s, index) => ({...s, ...(isHovered && (!s.color || s.color === palette.muted) ? {color: highlightColor} : {}),
+          selectionKey: s.selectionKey ?? opts.id + ':summary:' + index, selectionOffset: s.selectionOffset ?? 0}))] : [];
+      const right = Boolean(opts.statusRight) && !thinking && Boolean(status);
       const pieces: SceneSegment[] = [
         ...(opts.expandable ? [] : [{text: icon + ' ', color: fault ? palette.error : opts.open && !live ? palette.fg : thinking && opts.step && !terminal ? highlightColor : palette.muted, selectionKey: opts.id + ':icon', selectionOffset: 0}]),
         ...titlePieces,
-        ...(statusSepText ? [separator(statusSepText, opts.id + ':status_sep')] : []),
-        ...(statusText ? [{text: statusText, color: fault ? palette.error : hoverMuted(palette.muted), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
+        ...summaryPieces,
+        ...(statusSepText && !right ? [separator(statusSepText, opts.id + ':status_sep')] : []),
+        ...(statusText && !right ? [{text: statusText, color: fault ? palette.error : hoverMuted(palette.muted), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
         ...(thinking && tokenText ? [separator(SEPARATOR, opts.id + ':tokens_sep'), {text: tokenText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
         ...(thinking && waitingText ? [separator(SEPARATOR, opts.id + ':waiting_sep'), {text: waitingText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':waiting', selectionOffset: 0}] : []),
         ...((opts.faultLabel ?? fault) ? [{text: '  ' + (opts.faultLabel ?? fault), color: palette.error, bold: true, selectionKey: opts.id + ':fault', selectionOffset: 0}] : []),
       ];
-      pushFramedLine(opts.id, opts.railColor, pieces, frame, action);
+      if (right) {
+        // Faint elapsed time at the right edge; the slot keeps its seven cells so the running clock never moves the row.
+        const used = pieces.reduce((sum, piece) => sum + stringWidth(piece.text), 0) ;
+        const room = frame.innerWidth - used - stringWidth(status);
+        if (room >= 1) pieces.push({text: ' '.repeat(room)}, {text: status, color: faintColor(), selectionKey: opts.id + ':status', selectionOffset: 0});
+        else pieces.push(separator(' · ', opts.id + ':status_sep'), {text: statusText, color: faintColor(), selectionKey: opts.id + ':status', selectionOffset: 0});
+      }
+      pushFramedLine(opts.id, opts.railColor, pieces, frame, opts.fixed ? undefined : action);
       if (opts.step) for (let index = firstRow; index < rows.length; index++) {
         const row = rows[index]!;
         const frames = opts.ownerId && roles[opts.ownerId]?.thinkingAnimation ? roles[opts.ownerId]?.thinkingAnimation : undefined;
@@ -475,7 +496,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     if (isDream) {
       pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, pf, action);
     }
-    for (let index = firstRow; index < rows.length; index++) {
+    for (let index = firstRow; index < rows.length && !opts.fixed; index++) {
       const row = rows[index]!;
       if (index >= subFrom && index < subTo) {
         rows[index] = {...row, hits: (row.hits ?? []).map(hit => ({...hit, action})), ...(row.hover ? {hover: {...row.hover, foldId: opts.id}} : {})};

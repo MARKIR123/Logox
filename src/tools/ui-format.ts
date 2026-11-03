@@ -387,3 +387,20 @@ export function formatToolSummary(toolName: string, rawText: string): string | u
 
 /** Compatibility for callers without a tool-specific UI adapter. */
 export const legacyToolTitle = (call: ToolCall): string => formatToolTitle(call, ['file_path', 'path', 'command', 'tool', 'to', 'actor', 'ownerId', 'name', 'url']);
+
+/** The card title without outcome parts (those belong to the summary): `Read(path)`, `Edit · intent (path)`, `Shell(command)`. */
+export function baseCardTitle(call: ToolCall, fallbackTitle?: string): string {
+  const title = formatToolCardTitle(call, undefined, false, fallbackTitle);
+  const name = call.name.toLowerCase();
+  if (name === 'read') return title.replace(/, lines \d+-\d+\)$/, ')').replace(/\) · (?:[\d.]+ \w+ )?[A-Z]{2,5}$/, ')');
+  if (name === 'write') return title.replace(/ · \d+ lines?$/, '');
+  return title;
+}
+
+/** Parsed JSON arguments of a call; `{}` when they are not an object. */
+export function callArgs(call: ToolCall | undefined): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(call?.arguments ?? '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {return {};}
+}

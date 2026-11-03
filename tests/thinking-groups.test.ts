@@ -4,7 +4,7 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {cast} from '../src/actors/ensemble.js';
 import {palette} from '../src/tui/appearance/theme.js';
-import {mixHex} from '../src/tui/appearance/colors.js';
+import {faintColor, mixHex} from '../src/tui/appearance/colors.js';
 import {thinkingRequests} from '../src/tui/timeline/thinking-groups.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {decorateRow} from '../src/tui/timeline/row-presentation.js';
@@ -96,7 +96,7 @@ test('一轮的所有思考合并为标题下的一行；工具是同级卡片�
   const inner = rows.find(row => row.messageId === tool)!;
   assert.equal(inner.segments!.find(segment => segment.selectionKey === tool + ':icon')!.color, palette.error);
   assert.equal(inner.segments!.find(segment => segment.selectionKey === tool + ':title')!.color, palette.fg, '展开的标题用正常前景色');
-  assert.equal(inner.segments!.find(segment => segment.selectionKey === tool + ':status')!.color, palette.error, '失败步骤的状态为红色');
+  assert.equal(inner.segments!.find(segment => segment.selectionKey === tool + ':status')!.color, faintColor(), '耗时靠右、保持淡色；失败由图标与 Error 标签表达');
   f.advance(10000); assert.equal(f.requests().get(first)!.step.elapsedMs, 500);
   const next = f.steps.thinking();
   assert.notEqual(f.steps.get(next).groupId, f.steps.get(first).groupId, '正文后重新建组');

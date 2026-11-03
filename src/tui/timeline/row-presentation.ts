@@ -35,7 +35,7 @@ function transform(segments: readonly SceneSegment[], fn: (glyph: SceneSegment, 
   let column = 0;
   for (const segment of segments) for (const {segment: text} of glyphs.segment(segment.text)) {
     const value = fn({...segment, text}, column), previous = result.at(-1);
-    if (previous && previous.color === value.color && previous.bg === value.bg && previous.bold === value.bold && previous.italic === value.italic && previous.selectionKey === value.selectionKey) result[result.length - 1] = {...previous, text: previous.text + value.text};
+    if (previous && previous.color === value.color && previous.bg === value.bg && previous.bold === value.bold && previous.italic === value.italic && previous.underline === value.underline && previous.selectionKey === value.selectionKey) result[result.length - 1] = {...previous, text: previous.text + value.text};
     else result.push(value);
     column += Math.max(1, stringWidth(text));
   }

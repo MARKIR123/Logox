@@ -90,6 +90,10 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 | 协作干预 | `directorIntervention` |
 | 机械工作者 | `automa`（保留的语义槽，目前无独立着色消费点） |
 | OAuth 完成页 | `oauthBg`、`oauthFg`、`oauthSuccess` |
+| 工具卡片：路径与文件名 | `path` |
+| 工具卡片：搜索命中高亮 | `highlight` |
+| 工具卡片：链接（始终带下划线） | `link` |
+| 工具卡片：代码片段的关键字、字符串、数字（注释使用淡化的 `muted`） | `syntaxKeyword`、`syntaxString`、`syntaxNumber` |
 
 聚焦使用 `accent`；已勾选但未聚焦使用 `checkedFg`；禁用项使用 `muted`，不会因为已经勾选而继续突出。默认主题中勾选色是白色。
 

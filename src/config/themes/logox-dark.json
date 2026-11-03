@@ -52,6 +52,12 @@
     "automa": "#8a95a0",
     "oauthBg": "#18181b",
     "oauthFg": "#f4f4f5",
-    "oauthSuccess": "$success"
+    "oauthSuccess": "$success",
+    "path": "#A9BFE6",
+    "highlight": "#F0D58C",
+    "link": "#8FB4F0",
+    "syntaxKeyword": "#B3A0D4",
+    "syntaxString": "#A9C99A",
+    "syntaxNumber": "#E0BE7E"
   }
 }

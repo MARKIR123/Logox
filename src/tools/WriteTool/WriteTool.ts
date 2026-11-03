@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
 import {normalizeAliases} from '../aliases.js';
+import {recordWrite} from './record.js';
 
 const writeArgs = z.strictObject({
   file_path: pathArg.describe('The absolute path to the file to write'),
@@ -40,6 +41,7 @@ export async function executeWrite(
     if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
 
     await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId);
+    recordWrite(canonicalPath, args.content, before);
     return {
       text: 'Updated ' + canonicalPath + '; use /undo to revert file changes from this round.',
       isError: false,

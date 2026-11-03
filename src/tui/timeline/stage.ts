@@ -112,10 +112,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const railFor = (ownerId: string) => ownerId === 'anamnesis' ? palette.anamnesis : viewColor;
   // Tool-owned nested folds (swarm jobs) change a message layout without changing the message.
   const nestedKey = (message: Message): string => {
+    // A tool body's `… N more lines` expander is a fold of its own (`<id>-more`) that also changes the layout.
+    const more = (open(message.id + '-more') ? 'm' : '') + (hovered === message.id + '-more' ? 'h' : '');
     const jobs = message.step?.swarm?.jobs;
-    if (!jobs) return '';
+    if (!jobs) return more;
     const prefix = message.id + '-job-';
-    return jobs.map((_, index) => open(prefix + index) ? '1' : '0').join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
+    return more + jobs.map((_, index) => open(prefix + index) ? '1' : '0').join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
   };
   const body = (message: Message, frame?: Frame) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;

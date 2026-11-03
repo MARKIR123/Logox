@@ -17,7 +17,7 @@ function rgb(color: string | undefined, background = false): string {
 function styled(segment: SceneSegment, color?: string, bg?: string): string {
   if (!segment.text) return '';
   return reset + rgb(segment.color ?? color) + rgb(segment.bg ?? bg, true) +
-    (segment.bold ? '\x1b[1m' : '') + (segment.italic ? '\x1b[3m' : '') + segment.text + reset;
+    (segment.bold ? '\x1b[1m' : '') + (segment.italic ? '\x1b[3m' : '') + (segment.underline ? '\x1b[4m' : '') + segment.text + reset;
 }
 const graphemes = new Intl.Segmenter('zh', {granularity: 'grapheme'});
 const widths = new Map<string, number>();
