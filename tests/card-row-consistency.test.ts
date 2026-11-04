@@ -78,7 +78,7 @@ for (const surface of ['kalon', 'logox'] as const) {
       assert.equal(hoveredCardAt(row, end - 1), id);
       assert.equal(hoveredCardAt(row, end), null, 'trailing blanks are outside');
 
-      // (c) hovering recolors muted segments (not separators) with the surface owner's color
+      // (c) hovering recolors the mark, the separators and muted segments with the surface owner's color
       const expected = surface === 'kalon' ? cast.kalon!.color : palette.accent;
       const hoveredRow = item.find(rows(id))!;
       const before = cells(row), after = cells(hoveredRow);
@@ -87,8 +87,8 @@ for (const surface of ['kalon', 'logox'] as const) {
       before.forEach((cell, index) => {
         const now = after[index]!;
         if (!cell.ch.trim() && !cell.sep) return;
-        if (cell.sep) return assert.equal(now.color, palette.muted, 'separators never recolor');
-        if (cell.color === palette.muted && cell.ch.trim() && !cell.key?.endsWith(':icon')) {
+        if (cell.sep) {recolored++; return assert.equal(now.color, expected, 'separators take the owner color on hover');}
+        if (cell.color === palette.muted && cell.ch.trim()) {
           assert.equal(now.color, expected, `muted ${JSON.stringify(cell.ch)} (${cell.key}) takes the surface color`);
           recolored++;
         } else if (cell.color && cell.color !== expected) assert.equal(now.color, cell.color, `semantic color kept for ${cell.key}`);

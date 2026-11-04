@@ -4,7 +4,7 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {cast} from '../src/actors/ensemble.js';
 import {palette} from '../src/tui/appearance/theme.js';
-import {faintColor, mixHex} from '../src/tui/appearance/colors.js';
+import {expandedTint, faintColor} from '../src/tui/appearance/colors.js';
 import {thinkingRequests} from '../src/tui/timeline/thinking-groups.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {decorateRow} from '../src/tui/timeline/row-presentation.js';
@@ -45,7 +45,7 @@ test('展开后每次思考一段：左列时长，正文次要色斜体；背�
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {[id]: true}, null);
   const head = thinkingRow(rows, id)!;
   assert.match(head.displayText!, /▾ Thought for 21s/);
-  assert.equal(head.bg, mixHex(cast.techne!.color, palette.bg, 0.07), '展开背景 = 所属角色色 7% 混入背景');
+  assert.equal(head.bg, expandedTint(cast.techne!.color, 1), '展开背景 = 所属角色色 6% 混入背景（深度 1）');
   const body = rows.find(row => row.text.includes('中文🙂 正文'))!;
   assert.equal(body.bg, head.bg);
   assert.match(body.text, /^21s +中文🙂 正文/);

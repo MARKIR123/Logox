@@ -20,7 +20,7 @@ test('WebFetch: domain title, underlined URL with bold domain, page title with f
   const {id, rows} = toolFixture('WebFetch', {url: 'https://example.com/docs/a'}, result);
   const all = rows();
   const header = all.find(row => row.messageId === id)!;
-  assert.match(rowText(header), /^▾ WebFetch\(example\.com\) +0\.0s$/, 'bare domain title, no summary');
+  assert.match(rowText(header), /^▾ WebFetch\(example\.com\) · 0\.0s\s*$/, 'bare domain title, no summary');
   const url = all.find(row => rowText(row).trim() === 'https://example.com/docs/a')!;
   assert.ok(url.segments!.filter(segment => segment.text.trim()).every(segment => segment.underline && segment.color === palette.link));
   assert.equal(url.segments!.find(segment => segment.text === 'example.com')!.bold, true, 'the domain is bold');
@@ -198,7 +198,7 @@ test('SendMessage: the replier\'s card shows the original question before its ow
   g.send('techne', {to: 'kalon', type: 'ask', message: 'Which palette?'});
   const follow = g.send('kalon', {to: 'techne', type: 'ask', message: 'Warm or cold?'});
   const followRows = g.view('kalon', {[follow]: true});
-  assert.match(rowText(followRows.find(row => row.messageId === follow)!), /· ask$|· ask +\d/);
+  assert.match(rowText(followRows.find(row => row.messageId === follow)!), /· ask · \d/);
   assert.deepEqual(texts(followRows).filter(row => /^\s+Q  /.test(row)).map(row => row.trim()), ['Q  Which palette?', 'Q  Warm or cold?']);
 });
 
@@ -289,7 +289,7 @@ for (const [name, args, label] of hiddenCases) {
     const hits = rows.filter(row => rowText(row).includes(label));
     assert.equal(hits.length, 1, joined(rows));
     const row = hits[0]!;
-    assert.match(rowText(row), new RegExp('^[▮▾] ' + label.replace(/[()]/g, '\\$&') + ' · Unknown actor kalon +0\\.0s$'));
+    assert.match(rowText(row), new RegExp('^[▮▾] ' + label.replace(/[()]/g, '\\$&') + ' · Unknown actor kalon · 0\\.0s\\s*$'));
     assert.equal(row.segments!.find(segment => segment.selectionKey?.endsWith(':icon'))!.color, palette.error);
     assert.equal(row.segments!.find(segment => segment.text.startsWith('Unknown actor'))!.color, palette.error);
     assert.ok(!rowText(row).includes('Error'), 'no separate Error label');

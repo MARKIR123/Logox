@@ -1,7 +1,7 @@
 import {structuredPatch} from 'diff';
 import type {ToolUI} from '../ui-types.js';
 import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
-import {cardTitle, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
+import {cardTitle, diffSummary, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
 import {codeLines, diffLines} from '../../tui/timeline/tool-code.js';
 import {callArgs} from '../ui-format.js';
 import {lookupWrite} from './record.js';
@@ -14,7 +14,7 @@ export function writeView(args: Record<string, unknown>): ToolView {
   if (record?.existed && record.before !== undefined) {
     const patch = structuredPatch(path || 'file', path || 'file', record.before.replace(/\r\n/g, '\n'), content.replace(/\r\n/g, '\n'), '', '', {context: 3});
     const {lines, stats} = diffLines(patch.hunks);
-    return {summary: [summaryPiece('+' + stats.added, 'added'), summaryPiece(' −' + stats.removed, 'removed')], body: {lines, empty: 'No changes'}};
+    return {summary: diffSummary(stats), body: {lines, empty: 'No changes'}};
   }
   const rows = content ? content.replace(/\n$/, '').split(/\r?\n/) : [];
   const count = rows.length;

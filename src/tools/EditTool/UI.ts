@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {structuredPatch} from 'diff';
 import type {ToolUI} from '../ui-types.js';
 import {messageToolCall} from '../../tui/timeline/tool-ui.js';
-import {cardTitle, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
+import {cardTitle, diffSummary, renderToolCard, type ToolView} from '../../tui/timeline/tool-card.js';
 import {diffLines} from '../../tui/timeline/tool-code.js';
 import {callArgs, formatToolCardTitle} from '../ui-format.js';
 
@@ -33,7 +33,7 @@ function editPatch(path: string, oldText: string, newText: string): {hunks: Retu
   return {hunks: patch.hunks, offset};
 }
 
-/** Edit card view: numbered diff hunks separated by `⋯`, `+3 −1`. */
+/** Edit card view: numbered diff hunks separated by `⋯`, `added 3 · removed 1`. */
 export function editView(args: Record<string, unknown>): ToolView {
   const path = String(args.file_path ?? args.path ?? '');
   const oldText = typeof args.old_string === 'string' ? args.old_string : typeof args.old_text === 'string' ? args.old_text : '';
@@ -41,7 +41,7 @@ export function editView(args: Record<string, unknown>): ToolView {
   const {hunks, offset} = editPatch(path, oldText, newText);
   const {lines, stats} = diffLines(hunks, offset);
   return {
-    summary: [summaryPiece('+' + stats.added, 'added'), summaryPiece(' −' + stats.removed, 'removed')],
+    summary: diffSummary(stats),
     body: {lines, empty: 'No changes'},
   };
 }

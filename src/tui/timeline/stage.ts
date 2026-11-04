@@ -4,7 +4,8 @@ import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
-import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow} from './scene.js';
+import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment} from './scene.js';
+import {CANCELLABLE_TOOLS, expanderId, pushExpander, TOOL_BODY_LINES} from './tool-card.js';
 import {faintColor} from '../appearance/colors.js';
 import wrapAnsi from 'wrap-ansi';
 import {getToolUI, isVisibleToolMessage} from '../../tools/ui-registry.js';
@@ -132,7 +133,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     const systemError = isTimelineError(message);
     const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
-    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null]);
+    // A running, stoppable tool draws its `■ Stop` state (stopping, focused, hovered) into the row.
+    const stoppable = message.step?.state === 'running' && Boolean(message.step.call) && CANCELLABLE_TOOLS.has(message.step.call!.name);
+    const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
+    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -150,7 +154,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const call = messageToolCall(message);
         const ui = getToolUI(call?.name ?? '');
         (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
-          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail, ...(pairs.has(message.id) ? {pairing: pairs.get(message.id)!} : {})});
+          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail, ...(stoppable ? {stop} : {}), ...(pairs.has(message.id) ? {pairing: pairs.get(message.id)!} : {})});
       } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),
@@ -259,8 +263,6 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const live = r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') && activities.get(m.activityId)?.kind !== 'actor');
     return live || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ? {label: 'Working', live: true} : undefined;
   };
-  const pushMore = (target: RowBuilder, id: string, text: string, column: number, inner: FrameWrap) =>
-    target.pushFramedLine(id, viewColor, [{text: ' '.repeat(column) + text, color: faintColor()}], inner);
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
     const requests = items.flatMap(item => {
@@ -297,30 +299,29 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const wanted = Math.max(...labels.map(label => label.length)) + 2;
         const column = inner.innerWidth - wanted >= 16 ? wanted : 0;
         const textWidth = Math.max(1, inner.innerWidth - column);
-        const maxRows = 10;
-        let used = 0;
+        // One body for all the thoughts: rows are counted across them and share the single `… N more lines` expander.
+        // A recovery note stays one selectable prose block counted as its wrapped lines; thought text counts one row per wrapped line.
+        const rows: {id: string; weight: number; segments?: SceneSegment[]; prose?: string}[] = [];
         for (const [index, entry] of requests.entries()) {
-          if (used >= maxRows) {
-            const left = requests.length - index;
-            pushMore(target, id + '-more', `… ${left} more thought${left === 1 ? '' : 's'}`, column, inner);
-            return;
-          }
-          if (entry.request.step.note?.trim()) target.pushProse(entry.item.id + '-note', compactParagraphs(entry.request.step.note), viewColor, 'body', inner, undefined, palette.muted);
-          if (!entry.item.text.trim() && entry.request.step.note?.trim()) continue;
+          const note = entry.request.step.note?.trim() ? compactParagraphs(entry.request.step.note) : '';
+          if (note) rows.push({id: entry.item.id + '-note', weight: wrapAnsi(note, inner.innerWidth, {hard: true, trim: false}).split('\n').length, prose: note});
+          if (!entry.item.text.trim() && note) continue;
           const lines = wrapAnsi(compactParagraphs(entry.item.text) || '…', textWidth, {hard: true, trim: false}).split('\n');
-          const shown = lines.slice(0, maxRows - used);
-          for (const [lineIndex, line] of shown.entries()) {
-            target.pushFramedLine(`${id}-t${index}-${lineIndex}`, viewColor, [
-              {text: column && lineIndex === 0 ? labels[index]!.padEnd(column) : ' '.repeat(column), color: faint},
-              {text: line, color: palette.muted, italic: true}], inner);
-          }
-          used += shown.length;
-          if (lines.length > shown.length) {
-            const left = lines.length - shown.length;
-            pushMore(target, `${id}-t${index}-more`, `… ${left} more line${left === 1 ? '' : 's'}`, column, inner);
-            used = maxRows;
-          }
+          lines.forEach((line, lineIndex) => rows.push({id: `${id}-t${index}-${lineIndex}`, weight: 1, segments: [
+            {text: column && lineIndex === 0 ? labels[index]!.padEnd(column) : ' '.repeat(column), color: faint},
+            {text: line, color: palette.muted, italic: true}]}));
         }
+        const expanded = open(expanderId(id));
+        const total = rows.reduce((sum, row) => sum + row.weight, 0);
+        const collapsible = total > TOOL_BODY_LINES;
+        let used = 0, shown = 0;
+        for (const row of rows) {
+          if (collapsible && !expanded && shown > 0 && used + row.weight > TOOL_BODY_LINES) break;
+          used += row.weight; shown++;
+          if (row.prose !== undefined) target.pushProse(row.id, row.prose, viewColor, 'body', inner, undefined, palette.muted);
+          else target.pushFramedLine(row.id, viewColor, row.segments ?? [], inner);
+        }
+        if (collapsible) pushExpander(target, id, viewColor, inner, total - used, expanded ? 'less' : 'lines');
       }});
   };
   const renderThinking = (items: readonly Message[], frame: FrameWrap, _activityId: string, ownerId: string) =>

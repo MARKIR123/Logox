@@ -72,12 +72,22 @@ export function cardTitle(context: ToolRenderContext, call: ToolCall): string {
   return step?.call ? baseCardTitle(call, step.title) : step?.title ?? baseCardTitle(call);
 }
 
+/** Tools whose single call can be stopped without ending the owner's step: they run a registered child process (`src/tools/process.ts:killActiveProcess`). */
+export const CANCELLABLE_TOOLS: ReadonlySet<string> = new Set(['Shell']);
+
 export const expanderId = (messageId: string): string => messageId + '-more';
 
 /** A muted summary piece; `tone` colors exit codes and counts. */
-export function summaryPiece(text: string, tone: 'muted' | 'error' | 'success' | 'added' | 'removed' = 'muted'): SceneSegment {
-  const color = tone === 'error' ? palette.error : tone === 'success' ? palette.success : tone === 'added' ? palette.diffAdded : tone === 'removed' ? palette.diffRemoved : palette.muted;
+export function summaryPiece(text: string, tone: 'muted' | 'faint' | 'error' | 'success' | 'added' | 'removed' = 'muted'): SceneSegment {
+  const color = tone === 'error' ? palette.error : tone === 'success' ? palette.success : tone === 'added' ? palette.diffAdded : tone === 'removed' ? palette.diffRemoved : tone === 'faint' ? faintColor() : palette.muted;
   return {text, color};
+}
+
+/** `added 16 · removed 16` in faint words (a zero side is left out; nothing when both are zero); the diff body keeps the colour. */
+export function diffSummary(stats: {readonly added: number; readonly removed: number}): SceneSegment[] {
+  return [stats.added ? summaryPiece(`added ${stats.added}`, 'faint') : undefined, stats.removed ? summaryPiece(`removed ${stats.removed}`, 'faint') : undefined]
+    .filter((piece): piece is SceneSegment => Boolean(piece))
+    .flatMap((piece, index) => index ? [{text: ' · ', color: palette.muted, separator: true as const}, piece] : [piece]);
 }
 
 const LINK = /https?:\/\/[^\s<>"'`)\]]+|www\.[^\s<>"'`)\]]+|localhost:\d+(?:\/[^\s<>"'`)\]]*)?|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|app|co|edu|gov|cn|info|xyz)\b(?:\/[^\s<>"'`)\]]*)?/gi;
@@ -112,18 +122,21 @@ export function clipSegments(segments: readonly SceneSegment[], width: number): 
   return result;
 }
 
-/** `… N more lines` (or `hunks`): italic faint; brighter and underlined while hovered. Click and keyboard toggle the fold `<id>-more`. */
-export function pushExpander(builder: ReturnType<typeof createBuilder>, id: string, accent: string, frame: ToolFrame, count: number, unit: 'lines' | 'hunks'): void {
+/**
+ * `… N more lines` (or `hunks`), and once expanded `… show less`: italic faint; brighter and underlined while hovered. Click and keyboard
+ * toggle the fold `<id>-more`; the hit region is the text only, so the card's blank tint still closes the card.
+ */
+export function pushExpander(builder: ReturnType<typeof createBuilder>, id: string, accent: string, frame: ToolFrame, count: number, unit: 'lines' | 'hunks' | 'less'): void {
   const foldId = expanderId(id);
   const hovered = builder.hoveredFoldId === foldId;
   const word = unit === 'hunks' ? (count === 1 ? 'hunk' : 'hunks') : (count === 1 ? 'line' : 'lines');
   const action: SceneAction = {kind: 'toggle_fold', foldId};
   const first = builder.rows.length;
-  builder.pushFramedLine(foldId, accent, [{text: `… ${count} more ${word}`, color: hovered ? palette.fg : faintColor(), italic: true, ...(hovered ? {underline: true} : {})}], frame, action);
+  builder.pushFramedLine(foldId, accent, [{text: unit === 'less' ? '… show less' : `… ${count} more ${word}`, color: hovered ? palette.fg : faintColor(), italic: true, ...(hovered ? {underline: true} : {})}], frame, action);
   for (let index = first; index < builder.rows.length; index++) {
     const row = builder.rows[index]!;
     const startCol = row.gutterCols, endCol = row.gutterCols + stringWidth(row.text.trimEnd());
-    builder.rows[index] = {...row, hover: {foldId, startCol, endCol}, hits: [{startCol, endCol, action}]};
+    builder.rows[index] = {...row, hover: {foldId, startCol, endCol}, hits: [{startCol, endCol, action}], ...(frame.surfaceColor ? {hoverColor: frame.surfaceColor} : {})};
   }
 }
 
@@ -142,6 +155,7 @@ export function pushToolBody(builder: ReturnType<typeof createBuilder>, id: stri
   }
   const limit = body.limit ?? TOOL_BODY_LINES;
   let shown = lines, hidden = 0, unit: 'lines' | 'hunks' = 'lines';
+  const collapsible = lines.length > limit;
   if (!expanded && lines.length > limit) {
     if (body.tail) {shown = lines.slice(lines.length - limit); hidden = lines.length - limit;}
     else {
@@ -155,15 +169,19 @@ export function pushToolBody(builder: ReturnType<typeof createBuilder>, id: stri
       } else {shown = lines.slice(0, limit); hidden = lines.length - limit;}
     }
   }
-  if (hidden > 0 && body.tail) pushExpander(builder, id, accent, frame, hidden, unit);
+  // Expanded bodies end with `… show less` (Shell's tail mode keeps its toggle above the lines).
+  if (body.tail && collapsible) pushExpander(builder, id, accent, frame, hidden, expanded ? 'less' : unit);
   const offset = body.tail ? lines.length - shown.length : 0;
   shown.forEach((line, index) => pushLine(builder, `${id}-b-${index + offset}`, accent, frame, line));
-  if (hidden > 0 && !body.tail) pushExpander(builder, id, accent, frame, hidden, unit);
+  if (!body.tail && collapsible) pushExpander(builder, id, accent, frame, hidden, expanded ? 'less' : unit);
 }
 
 /** Summary and body for a failed, denied or cancelled call: the first line in the summary, the full text below when it says more. */
 export function failureView(text: string, cancelled: boolean): ToolView {
+  // Markdown error envelopes (`### Error`, then `Error: reason`) never reach the screen: the reason is one clean line.
   const lines = text.replace(/\s+$/, '').split('\n');
+  while (lines.length && (!lines[0]!.trim() || /^#{1,6}\s*Error\s*$/i.test(lines[0]!.trim()))) lines.shift();
+  if (lines[0]) lines[0] = lines[0].replace(/^(?:Error:\s*)+/i, '');
   const first = (lines[0] ?? '').trim();
   const color = cancelled ? palette.muted : palette.error;
   const summary = clipLine(first, 80);
@@ -174,7 +192,7 @@ export function failureView(text: string, cancelled: boolean): ToolView {
 }
 
 /**
- * The one entry point for tool cards: header (`▮`/`▾`, title, summary, right-aligned time), then the body for the completed
+ * The one entry point for tool cards: header (`▮`/`▾`, title, summary, inline time, `■ Stop` at the far right while a stoppable tool runs), then the body for the completed
  * result. Running calls draw the header only; failures show the reason; empty results never render nothing.
  */
 export function renderToolCard(context: ToolRenderContext, options: ToolCardOptions): void {
@@ -190,9 +208,9 @@ export function renderToolCard(context: ToolRenderContext, options: ToolCardOpti
   else if (failed && !options.handlesFailure) view = {...failureView(result, state === 'cancelled'), ...(options.quietFailure ? {quietFault: true} : {})};
   else if (done || (failed && options.handlesFailure)) view = options.view?.(result);
   const expanded = context.isOpen?.(expanderId(message.id)) ?? false;
+  const stoppable = step?.state === 'running' && Boolean(step.call) && CANCELLABLE_TOOLS.has(step.call!.name) && context.stop;
   builder.pushOrdinaryCard({
     id: message.id, ownerId: message.ownerId, kind: 'Tool', title: options.title, bodyLines: [], open: view?.fixed ? false : open, railColor: accent,
-    statusRight: true,
     ...(options.titleSegments ? {titleSegments: options.titleSegments.map((segment, index) => ({...segment,
       selectionKey: segment.selectionKey ?? message.id + (index ? ':title_' + index : ':title'), selectionOffset: segment.selectionOffset ?? 0}))} : {}),
     ...(view?.markColor ? {markColor: view.markColor} : {}),
@@ -200,6 +218,7 @@ export function renderToolCard(context: ToolRenderContext, options: ToolCardOpti
     ...(view?.quietFault ? {faultLabel: ''} : {}),
     ...(view?.fixed ? {fixed: true} : {}),
     ...(step ? {step} : {}),
+    ...(stoppable ? {stop: {...stoppable, action: {kind: 'stop_actor', foldId: message.id, owner: message.ownerId}}} : {}),
     ...(frame ? {parentFrame: frame} : {}),
     renderBody: inner => {if (view?.body) pushToolBody(builder, message.id, accent, inner, view.body, expanded);},
   });

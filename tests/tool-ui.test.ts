@@ -389,8 +389,9 @@ test('SendMessage card turns leading square icon red on failure', () => {
   assert.ok(row);
   // Leading icon ▮ uses the default error color on failure
   assert.equal(row.segments?.find(s => s.selectionKey === failId + ':icon')?.color, '#DA8A93');
-  // Contains Error fault label
-  assert.ok(row.text.includes('Error'));
+  // The failure reason is shown once, inline; there is no trailing Error label
+  assert.ok(row.text.includes('Target actor not found'));
+  assert.ok(!row.text.includes('Error'));
 });
 
 test('expanded Edit card extracts surrounding file context lines when file exists', async () => {

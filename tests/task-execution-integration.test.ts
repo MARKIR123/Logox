@@ -109,7 +109,7 @@ test('permission denials retain a distinct disposition from execution errors', a
     assert.equal(failed.step?.disposition, 'error');
     const rows = buildStageRows(f.app.store.getSnapshot(), 'task-flow', 'logox', 100, {}, null);
     assert.ok(rows.some(row => row.text.includes('Denied')));
-    assert.ok(rows.some(row => row.text.includes('Error')));
+    assert.ok(!rows.some(row => /Error\s*$/.test(row.text)), 'errors show their reason inline, never a trailing Error label');
     assert.ok(!rows.some(row => row.text.includes('许可已拒绝')));
   } finally {await f.close();}
 });

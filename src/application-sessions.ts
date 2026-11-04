@@ -303,6 +303,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     commandContext: () => current.commandContext(), noteDraft: () => current.noteDraft(),
     getInputQueue: (ownerId?: string) => current.getInputQueue(ownerId),
     cancel: (activityId: string) => current.cancel(activityId),
+    cancelTool: (callId: string) => current.cancelTool(callId),
     async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       // Serialize only the entry checks and call start; long tasks stay protected by each module's busy state.
       // The async pending read must not let a later /new overtake the previous setting save.

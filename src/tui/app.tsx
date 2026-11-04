@@ -98,6 +98,8 @@ export interface AppProps {
   onSubmit(text: string, source?: string, delivery?: SubmitDelivery): Promise<void>;
   getQueuedCount?(ownerId: string): number;
   onCancel(activityId: string): void;
+  /** Stops one running tool call (`■ Stop` on a tool row) without ending the owner's step. */
+  onCancelTool?(callId: string): void;
   onDraft?(): void;
   onClose(): Promise<void>;
 }
@@ -106,7 +108,7 @@ const foldableDemoIds = ['main-thinking', 'main-tool', 'main-aletheia', 'main-al
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onClose, onDraft}: AppProps) {
+export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
   const themeVersion = themeRevision();
@@ -517,13 +519,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const stopActor = (activityId: string) => {
     if (stoppingIds.current.has(activityId)) return;
     const target = snapshot.activities.find(item => item.activityId === activityId && item.kind === 'actor' && ['queued', 'running', 'waiting_input', 'paused'].includes(item.status));
-    if (!target) return;
-    stoppingIds.current.add(activityId); setStopping(new Set(stoppingIds.current)); onCancel(activityId);
+    // A tool row's `■ Stop` carries the message id: it stops that one call only.
+    const tool = target ? undefined : snapshot.messages.find(item => item.id === activityId && item.step?.state === 'running' && item.step.call);
+    if (!target && !tool) return;
+    stoppingIds.current.add(activityId); setStopping(new Set(stoppingIds.current));
+    if (tool) onCancelTool?.(tool.step!.call!.id); else onCancel(activityId);
   };
   useEffect(() => {
-    const next = new Set([...stopping].filter(id => snapshot.activities.some(item => item.activityId === id && ['queued', 'running', 'waiting_input', 'paused'].includes(item.status))));
+    const next = new Set([...stopping].filter(id => snapshot.activities.some(item => item.activityId === id && ['queued', 'running', 'waiting_input', 'paused'].includes(item.status)) ||
+      snapshot.messages.some(item => item.id === id && item.step?.state === 'running')));
     if (next.size !== stopping.size) {stoppingIds.current = next; setStopping(next);}
-  }, [snapshot.activities, stopping]);
+  }, [snapshot.activities, snapshot.messages, stopping]);
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
     if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}

@@ -56,7 +56,7 @@ test('折叠只命中实际图标标题，展开灰底优先，露出背景命�
   assert.equal(actionAt(row, row.gutterCols + stringWidth(row.text.trimEnd()) - 1)?.foldId, id, 'the right-aligned elapsed time ends the region');
   const open = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true, [id]: true}, null);
   const body = open.find(row => row.text === '完整结果')!;
-  assert.equal(body.bg, expandedTint(cast.techne!.color)); assert.equal(actionAt(body, 76)?.foldId, id);
+  assert.equal(body.bg, expandedTint(cast.techne!.color, 2), 'a tool card inside an open actor card is depth 2'); assert.equal(actionAt(body, 76)?.foldId, id, 'blank tint of the open card closes it');
   assert.equal(actionAt(body, 2)?.foldId, 'actor');
   const header = open.findIndex(row => row.messageId === 'actor');
   assert.match(extractSelection(open, {anchor: {x: 2, y: header}, focus: {x: 78, y: header}}), /Techne.*整理布局.*Stop/);

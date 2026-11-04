@@ -144,7 +144,7 @@ test('failed call is split out as a normal error card between two groups', () =>
   const groups = lines.flatMap((l, i) => GROUP.test(l) ? [i] : []), failed = lines.findIndex(l => /▮ Read.*missing/.test(l));
   assert.equal(groups.length, 2);
   assert.ok(groups[0]! < failed && failed < groups[1]!);
-  assert.match(lines[failed]!, /Error/);
+  assert.ok(!/Error/.test(lines[failed]!), 'the failed row carries its reason once and no trailing Error label');
 });
 
 test('stage narration opens the group as a ⏵ header line', () => {

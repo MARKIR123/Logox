@@ -32,7 +32,7 @@ test('MCP titles read `mcp · server › tool`, for the generic tool and for dir
 test('MCP card body: aligned key/value arguments, then the rendered result, with the shared empty state', () => {
   const {rows} = render(invoke('find_records', {query: 'hello', limit: 5, filter: {a: 1, b: [1, 2]}}), '# Results\n\n- **first**\n- second', {open: true});
   const lines = rows.map(row => (row.displayText ?? row.text).trimEnd());
-  assert.match(lines[0]!, /^▾ mcp · inventory › find_records +0\.6s$/);
+  assert.match(lines[0]!, /^▾ mcp · inventory › find_records · 0\.6s\s*$/);
   assert.match(lines[1]!, /^ {2}query {3}hello$/);
   assert.match(lines[2]!, /^ {2}limit {3}5$/);
   assert.match(lines[3]!, /^ {2}filter {2}\{"a":1,"b":\[1,2\]\}$/);
@@ -62,7 +62,7 @@ test('MCP results use the 12-line cap with the shared expander and underline lin
 test('MCP cards state images in the summary and keep each call separate', () => {
   const {rows} = render(invoke('capture'), 'Screenshot captured\n[Image: image/png]');
   assert.equal(rows.length, 1);
-  assert.match(rows[0]!.text, /mcp · inventory › capture · 1 image +0\.6s/);
+  assert.match(rows[0]!.text, /mcp · inventory › capture · 1 image · 0\.6s/);
   const running = render(invoke('ping'), '{"server":"inventory"}', {state: 'running'});
   assert.ok(running.rows[0]!.text.includes('mcp · inventory › ping'));
   assert.doesNotMatch(running.rows[0]!.text, /Done|fields|server=/);
@@ -72,11 +72,13 @@ test('MCP failures use the shared failure view; outcomes follow execution status
   const success = render(invoke('search'), 'No failed jobs found');
   assert.doesNotMatch(success.rows[0]!.text, /Error/);
   const failure = render(invoke('click'), '### Error\nElement reference expired', {disposition: 'error'});
-  assert.ok(failure.rows[0]!.text.includes(' · ### Error'), failure.rows[0]!.text);
+  assert.ok(!failure.rows[0]!.text.includes('###'), failure.rows[0]!.text);
+  assert.ok(failure.rows[0]!.text.includes(' · Element reference expired'), failure.rows[0]!.text);
   const failed = render(invoke('click'), 'Error: Reference expired', {state: 'failed'});
-  assert.match(failed.rows[0]!.text, /· Error: Reference expired +Error +0\.6s/);
+  assert.match(failed.rows[0]!.text, /· Reference expired · 0\.6s/);
+  assert.doesNotMatch(failed.rows[0]!.text, /Error/);
   const denied = render(invoke('write'), 'Permission rejected', {disposition: 'denied'});
-  assert.match(denied.rows[0]!.text, /· Permission rejected +Denied +0\.6s/);
+  assert.match(denied.rows[0]!.text, /Denied · Permission rejected · 0\.6s/);
   assert.doesNotMatch(render(invoke('write'), '', {state: 'cancelled'}).rows[0]!.text, /Done/);
 });
 

@@ -28,10 +28,18 @@ test('a long body shows 12 lines and one italic faint expander that hovers, clic
   const hovered = rows({}, id + '-more').find(row => row.messageId === id + '-more')!;
   const bright = hovered.segments!.find(segment => segment.text.includes('more lines'))!;
   assert.equal(bright.color, palette.fg); assert.equal(bright.underline, true); assert.equal(bright.italic, true);
-  // click: the expander fold opens the whole body, no expander left
+  // click: the expander fold opens the whole body in place and becomes `… show less` at the end of the body
   const expanded = rows({[id + '-more']: true});
   assert.equal(expanded.filter(row => /file-\d+\.ts$/.test(row.text)).length, 30);
-  assert.ok(!expanded.some(row => row.messageId === id + '-more'));
+  const less = expanded.filter(row => row.messageId === id + '-more');
+  assert.equal(less.length, 1); assert.equal(less[0]!.text, '… show less');
+  assert.equal(expanded.at(-1), less[0], 'show less closes the body');
+  const lessPart = less[0]!.segments!.find(segment => segment.text.includes('show less'))!;
+  assert.equal(lessPart.italic, true); assert.equal(lessPart.color, faintColor());
+  assert.equal(hoveredCardAt(less[0], less[0]!.gutterCols + 2), id + '-more');
+  assert.equal(actionAt(less[0], less[0]!.gutterCols)?.foldId, id + '-more');
+  assert.equal(actionAt(less[0], less[0]!.gutterCols + 40)?.foldId, id, 'blank tint beside the toggle closes the card');
+  assert.equal(rows({[id + '-more']: false}).filter(row => /file-\d+\.ts$/.test(row.text)).length, 12, 'toggling again returns to the 12-line cap');
 });
 
 test('a body of exactly 12 lines has no expander', () => {
@@ -58,12 +66,12 @@ test('empty results render one italic faint line, never nothing, and the header 
   }
 });
 
-test('header anatomy: open ▾ with the title in fg, folded ▮ muted, elapsed time faint at the right edge', () => {
+test('header anatomy: open ▾ with the title in fg, folded ▮ muted, elapsed time faint and inline', () => {
   const {id, rows} = toolFixture('Glob', {pattern: 'src/*.ts'}, 'src/a.ts\nsrc/b.ts');
   const open = rows().find(row => row.messageId === id)!;
-  assert.match(open.text, /^▾ Glob\(src\/\*\.ts\) · 2 files {2,}0\.0s$/);
+  assert.match(open.text, /^▾ Glob\(src\/\*\.ts\) · 2 files · 0\.0s\s*$/);
   const folded = rows({[id]: false}).find(row => row.messageId === id)!;
-  assert.match(folded.text, /^▮ Glob\(src\/\*\.ts\) · 2 files {2,}0\.0s$/);
+  assert.match(folded.text, /^▮ Glob\(src\/\*\.ts\) · 2 files · 0\.0s\s*$/);
   const time = folded.segments!.find(segment => segment.selectionKey === id + ':status')!;
   assert.equal(time.color, faintColor());
   assert.equal(folded.segments!.find(segment => segment.selectionKey === id + ':title')!.color, palette.muted);
@@ -99,11 +107,12 @@ test('shell shows the command, then the output tail with the expander above it; 
   assert.equal(closed[more]!.text, '… 9 more lines');
   assert.ok(at('line 9') < 0 && at('line 10') > 0 && at('boom') > at('line 20'));
   assert.equal(closed.find(row => row.text === 'boom')!.color, palette.error, 'stderr in the error color');
-  assert.match(rowText(closed.find(row => row.messageId === id)!), /Shell\(npm test\) · exit 1 +0\.0s$/);
+  assert.match(rowText(closed.find(row => row.messageId === id)!), /Shell\(npm test\) · exit 1 · 0\.0s\s*$/);
   assert.ok(!rowText(closed.find(row => row.messageId === id)!).includes('Error'), 'exit code replaces the Error label');
   const expanded = rows({[id + '-more']: true});
   assert.ok(expanded.findIndex(row => row.text === 'line 1') < expanded.findIndex(row => row.text === 'line 20'));
-  assert.ok(!expanded.some(row => row.messageId === id + '-more'));
+  assert.equal(expanded.filter(row => row.messageId === id + '-more').length, 1, 'tail mode keeps the toggle above the tail');
+  assert.equal(expanded.find(row => row.messageId === id + '-more')!.text, '… show less');
 });
 
 test('an expanded tool group lists each member as its own folded row with its summary, each expandable with the same anatomy', async () => {
@@ -123,8 +132,8 @@ test('an expanded tool group lists each member as its own folded row with its su
   const group = snapshot.messages.find(message => message.kind === 'tool')!.id + '-group';
   const rows = (folds: Record<string, boolean>) => buildStageRows(snapshot, 's', 'logox', 90, folds, null).map(rowText);
   const folded = rows({[group]: true});
-  assert.ok(folded.some(text => /^ {2}▮ Read\(src\/a\.ts\) · 2 lines +0\.0s/.test(text)));
-  assert.ok(folded.some(text => /^ {2}▮ Grep\("x"\) · 1 match in 1 file +0\.0s/.test(text)));
+  assert.ok(folded.some(text => /^ {2}▮ Read\(src\/a\.ts\) · 2 lines · 0\.0s/.test(text)));
+  assert.ok(folded.some(text => /^ {2}▮ Grep\("x"\) · 1 match in 1 file · 0\.0s/.test(text)));
   const one = rows({[group]: true, [read]: true});
   assert.ok(one.some(text => /^ {2}▾ Read\(src\/a\.ts\)/.test(text)) && one.some(text => /^ {4}1 {2}x/.test(text)));
   assert.ok(one.some(text => /^ {2}▮ Grep/.test(text)), 'siblings stay folded');

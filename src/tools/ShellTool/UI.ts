@@ -7,7 +7,7 @@ import {callArgs} from '../ui-format.js';
 
 const failureLine = /(error|failed|failure|exception|fatal|denied)|^\s*[✗×]/i;
 
-/** Shell card view: `$ command`, the output tail (stderr and error-looking lines in the error color), `exit N`, `No output`. */
+/** Shell card view: `$ command`, the output tail (stderr and error-looking lines in the error color), red `exit N` only on failure, `No output`. */
 export function shellView(command: string, result: string): ToolView {
   const exit = /^Exit code:\s*(-?\d+)\s*\n?/i.exec(result);
   const output = (exit ? result.slice(exit[0].length) : result).replace(/\s+$/, '');
@@ -22,7 +22,8 @@ export function shellView(command: string, result: string): ToolView {
     ({segments: [{text: index === 0 ? '$ ' : '  ', color: faintColor()}, {text: line, color: palette.path}]}));
   const code = exit ? Number(exit[1]) : undefined;
   return {
-    ...(code !== undefined ? {summary: [summaryPiece('exit ' + code, code === 0 ? 'success' : 'error')]} : {}),
+    // Success is quiet: only a non-zero exit says anything.
+    ...(code !== undefined && code !== 0 ? {summary: [summaryPiece('exit ' + code, 'error')]} : {}),
     quietFault: true,
     body: {head, lines, tail: true, empty: 'No output'},
   };

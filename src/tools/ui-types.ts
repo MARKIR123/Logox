@@ -18,6 +18,8 @@ export interface ToolRenderContext {
   /** Fold state of ids the tool owns inside its card (for example swarm jobs). */
   isOpen?: (id: string) => boolean;
   accent: string;
+  /** Run state of the call's `■ Stop` control (stoppable running tools only). */
+  stop?: {readonly disabled: boolean; readonly focused: boolean; readonly hovered: boolean};
   /** SendMessage only: the question this message answers and the reply that closed it, from the whole session. */
   pairing?: SendPairing;
 }

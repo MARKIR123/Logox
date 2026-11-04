@@ -9,5 +9,5 @@ export function ApplicationStage({application, registerInterrupt}: {application:
     authentication={application.authentication} surfaces={application.surfaces} getCommandContext={application.commandContext}
     getActors={() => application.actors.list()}
     getStatus={application.status} getQueuedCount={owner => application.getInputQueue(owner === 'logox' ? undefined : owner).queued.length} statusbar={application.statusbar} {...(registerInterrupt ? {registerInterrupt} : {})}
-    onSubmit={application.submit} onDraft={application.noteDraft} onCancel={application.cancel} onClose={application.close}/>;
+    onSubmit={application.submit} onDraft={application.noteDraft} onCancel={application.cancel} onCancelTool={application.cancelTool} onClose={application.close}/>;
 }

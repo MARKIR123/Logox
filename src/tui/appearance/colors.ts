@@ -15,5 +15,7 @@ export const QUIET_RAIL = 0.55;
 export const quietRail = (color: string): string => mixHex(color, palette.bg, QUIET_RAIL);
 /** Faint text: muted mixed toward the background (line numbers, durations, overflow hints). */
 export const faintColor = (): string => mixHex(palette.muted, palette.bg, 0.6);
-/** Expanded-card tint: the owning actor color mixed ~7% into the background; background color only ever means "expanded". */
-export const expandedTint = (ownerColor: string): string => mixHex(ownerColor, palette.bg, 0.07);
+/** Mix share of the owner color per nesting depth: depth 1 is a block on the surface, deeper blocks step up so a child stays distinguishable from its parent. */
+export const TINT_STEPS: readonly number[] = [0.06, 0.11, 0.16];
+/** Expanded-card tint: the owning actor color mixed into the background by nesting depth (1 = outermost open card); background color only ever means "expanded". */
+export const expandedTint = (ownerColor: string, depth = 1): string => mixHex(ownerColor, palette.bg, TINT_STEPS[Math.min(Math.max(1, depth), TINT_STEPS.length) - 1]!);
