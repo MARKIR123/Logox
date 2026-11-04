@@ -33,10 +33,16 @@ import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {composeBaseSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/index.js';
 import {maybePersistLargeOutput} from './scratchpad.js';
+import {DIRECTOR_INTERRUPTED_TOOL_TEXT, TOOL_CANCELLED_TEXT, USER_INTERRUPTED_TOOL_TEXT} from '../prompts/runtime/interruption.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {extractNarration, stripNarration} from '../runtime/narration.js';
+
+/** The tool result for a call cut off by a stop: names the user or the Director, else the generic fallback. */
+export function interruptedToolText(reason: 'user' | 'shutdown' | 'interrupted' | 'director_cancel' | undefined, fallback: string): string {
+  return reason === 'user' ? USER_INTERRUPTED_TOOL_TEXT : reason === 'director_cancel' ? DIRECTOR_INTERRUPTED_TOOL_TEXT : fallback;
+}
 
 export class UserCancelledError extends Error {
   readonly stopReason = 'user' as const;
@@ -391,6 +397,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             throw error;
           }
         }
+        // The timeline message keeps the raw `⏵` line: stage.ts reads it to title the next tool group and strips it from prose.
+        const storedText = turn.message.text;
         const extracted = extractNarration(turn.message.text);
         if (extracted) {
           turn = {...turn, message: {...turn.message, text: extracted.cleanText}};
@@ -398,15 +406,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           options.store.activities.update(context.sessionId, context.activityId, {
             progress: {label: extracted.narration},
           });
-          if (textId) {
-            options.store.updateMessage(textId, {text: extracted.cleanText});
-          }
         }
         if (metadataOnly) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
-        if (turn.message.text && !textId && !metadataOnly) {
+        if (storedText && !textId && !metadataOnly) {
           if (steps.get(thinkingId).state === 'running') steps.finish(thinkingId, 'completed');
           steps.endGroup('completed'); steps.phase('text');
-          options.store.message(context.sessionId, context.ownerId, 'assistant', turn.message.text, {activityId: context.activityId});
+          options.store.message(context.sessionId, context.ownerId, 'assistant', storedText, {activityId: context.activityId});
         }
         if (turn.message.reasoning && !options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text) options.store.updateMessage(thinkingId, {text: turn.message.reasoning});
         const thinkingStep = steps.get(thinkingId).state === 'running' ? steps.finish(thinkingId, 'completed') : steps.get(thinkingId);
@@ -620,7 +625,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 }));
                 for (let index = 0; index < group.length; index++) {
                   const call = group[index]!, settled = results[index]!;
-                  const result: ToolResult = settled.status === 'fulfilled' ? settled.value : diagnoseToolError(call, {text: context.signal.aborted ? 'Tool cancelled.' : String(settled.reason), isError: true});
+                  const settledResult: ToolResult = settled.status === 'fulfilled' ? settled.value : diagnoseToolError(call, {text: context.signal.aborted ? TOOL_CANCELLED_TEXT : String(settled.reason), isError: true});
+                  // A deliberate stop says who stopped it; other cancellations keep the plain text.
+                  const result: ToolResult = context.signal.aborted && settledResult.isError && settledResult.text === TOOL_CANCELLED_TEXT
+                    ? {...settledResult, text: interruptedToolText(context.stopReason?.(), TOOL_CANCELLED_TEXT)} : settledResult;
                   const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId);
                   const step = steps.get(toolIds.get(call.id)!);
                   const toolMessage: ModelMessage = {
@@ -641,7 +649,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           } finally {
             for (const call of calls) if (!completed.has(call.id)) {
               const step = steps.finish(toolIds.get(call.id)!, 'cancelled', call.name + '\nTool execution was interrupted before a complete result was obtained.');
-              await persist({role: 'tool', callId: call.id, name: call.name, text: 'Tool execution was interrupted before a complete result was obtained.', isError: true}, step);
+              await persist({role: 'tool', callId: call.id, name: call.name, text: interruptedToolText(context.stopReason?.(), 'Tool execution was interrupted before a complete result was obtained.'), isError: true}, step);
             }
           }
           if (truncated) await recoverOutput('truncated_tools', thinkingId);

@@ -19,7 +19,9 @@ export interface ToolGroup {
   readonly active?: {readonly label: string; readonly elapsedMs: number};
   readonly stage?: string;
 }
-export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup;
+/** A `⏵` stage that titles no group (it precedes a tool that is not collapsible): drawn as one intent row before message `before`. */
+export interface StageLine {readonly type: 'stage'; readonly id: string; readonly stage: string; readonly before: string}
+export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup | StageLine;
 
 const categoryOrder: readonly ToolGroupCategory[] = ['search', 'read', 'list', 'browse', 'command'];
 
@@ -189,7 +191,8 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
   let stage: string | undefined;
 
   const flush = () => {
-    if (callCount >= (runKind === 'browser' ? 1 : 2)) items.push(buildGroup(calls, stage, now, runKind ?? 'explore'));
+    // A stage titles its group even for a single call, so the intent is never lost; without one, two calls are the smallest group.
+    if (callCount >= (runKind === 'browser' || stage ? 1 : 2)) items.push(buildGroup(calls, stage, now, runKind ?? 'explore'));
     else for (const message of calls) items.push({type: 'message', message});
     if (callCount > 0) stage = undefined;
     for (const message of pending) items.push({type: 'message', message});
@@ -219,8 +222,9 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
         continue;
       }
       flush();
+      if (stage) items.push({type: 'stage', id: message.id + '-stage', stage, before: message.id});
+      stage = undefined;
       emit(message);
-      if (!category) stage = undefined;
       continue;
     }
     flush();

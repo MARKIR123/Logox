@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import type {ToolResult} from '../types.js';
-import {runProcess} from '../process.js';
+import {ProcessStoppedError, runProcess} from '../process.js';
+import {SHELL_CUT_SHORT_LINE, SHELL_STOPPED_BY_USER, shellStoppedByDirector} from './prompt.js';
 
 export const shellSchema = z.preprocess(
   // Legacy callers used seconds; values <= 600 are treated as seconds and converted to milliseconds.
@@ -31,7 +32,8 @@ export async function executeShell(
 
   const timeoutMs = args.timeout ?? DEFAULT_TIMEOUT_MS;
 
-  const result = await runProcess(
+  let result;
+  try {result = await runProcess(
     process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',
     process.platform === 'win32'
       ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]
@@ -43,7 +45,13 @@ export async function executeShell(
     undefined,
     undefined,
     metadata,
-  );
+  );} catch (error) {
+    // A deliberate stop keeps the partial output; every other failure keeps its own text.
+    if (!(error instanceof ProcessStoppedError) || error.by === 'system') throw error;
+    const opening = error.by === 'user' ? SHELL_STOPPED_BY_USER : shellStoppedByDirector(error.reason);
+    const stderr = error.stderr ? '\nStderr:\n' + error.stderr : '';
+    return {text: opening + '\n\n' + SHELL_CUT_SHORT_LINE + '\n' + error.stdout + stderr, isError: true};
+  }
 
   return {
     text: 'Exit code: ' + result.code + '\n' + result.stdout + (result.stderr ? '\nStderr:\n' + result.stderr : ''),

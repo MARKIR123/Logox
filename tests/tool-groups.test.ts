@@ -153,3 +153,15 @@ test('group id is stable and derived from the first message', () => {
   const [g] = groupToolMessages([first, read('b')]) as ToolGroup[];
   assert.equal(g!.id, first.id + '-group');
 });
+
+test('stages: a single call is a group when a stage opened it; a stage before a non-collapsible tool becomes a stage line', () => {
+  const single = groupToolMessages([msg('assistant', '⏵ Checking colors'), read('a')], {stages: true});
+  assert.deepEqual(shape(single), ['M', 'G1']);
+  assert.equal((single[1] as ToolGroup).stage, 'Checking colors');
+  assert.deepEqual(shape(groupToolMessages([read('a')], {stages: true})), ['M'], 'no stage, no group of one');
+  const edit = tool('Edit', {file_path: 'a.ts'});
+  const lone = groupToolMessages([msg('assistant', '⏵ Fixing phase'), edit], {stages: true});
+  assert.deepEqual(lone.map(item => item.type), ['message', 'stage', 'message']);
+  assert.deepEqual(lone[1], {type: 'stage', id: edit.id + '-stage', stage: 'Fixing phase', before: edit.id});
+  assert.equal((groupToolMessages([msg('assistant', '⏵ A'), edit, read('a'), read('b')], {stages: true}).at(-1) as ToolGroup).stage, undefined, 'a consumed stage does not leak to the next run');
+});

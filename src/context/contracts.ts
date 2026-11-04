@@ -2,6 +2,7 @@ import {z} from 'zod';
 import type {ModelMessage} from '../runtime/messages.js';
 import {executionEnvironmentSchema} from '../runtime/context-updates.js';
 import {roundMemorySchema, taskDeliverySchema} from './round-memory.js';
+import {DIRECTOR_STOP_LABEL, USER_INTERRUPT_LABEL} from '../prompts/runtime/interruption.js';
 
 import {roundSummarySchema as summarySchema, type RoundSummary} from '../runtime/contracts.js';
 export {summarySchema, type RoundSummary};
@@ -41,6 +42,13 @@ export function memoryFocusInstruction(contract?: string): string {
   return contract?.trim() ? '\nRole memory focus (guidance under the round memory contract):\n' + contract.trim() : '';
 }
 
+/** The label of a deliberate stop recorded in these messages, if any (`Interrupted by user` / `Stopped by Director`). */
+export function deliberateStopLabel(messages: readonly ModelMessage[]): string | undefined {
+  const marker = messages.findLast(message => message.role === 'context' && message.kind === 'interruption');
+  if (marker?.role !== 'context') return undefined;
+  return marker.data?.by === 'user' ? USER_INTERRUPT_LABEL : marker.data?.by === 'director' ? DIRECTOR_STOP_LABEL : undefined;
+}
+
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
   messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly);
   const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
@@ -56,7 +64,7 @@ export function summarizeRound(messages: readonly ModelMessage[], status: RoundS
   const goal = messages.find(message => message.role === 'user')?.text ?? '';
   const tools = messages.filter(message => message.role === 'tool').slice(-4)
     .map(message => message.role === 'tool' ? message.name + ': ' + (message.isError ? 'failed/not executed; ' : '') + message.text.slice(0, 140) : '');
-  const label = status === 'completed' ? 'Completed' : status === 'cancelled' ? 'Interrupted; follow-up work needs checking' : 'Failed; needs further handling';
+  const label = status === 'completed' ? 'Completed' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Interrupted; follow-up work needs checking' : 'Failed; needs further handling';
   return {title: (status === 'completed' ? final.split('\n')[0]?.trim() || label : label).slice(0, 100),
     report: ['Goal: ' + goal.slice(0, 350), 'Status: ' + label, final ? 'Reply: ' + final.slice(-850) : 'No complete assistant reply.',
       ...tools].join('\n').slice(0, 2000), source: 'local'};

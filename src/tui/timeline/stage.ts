@@ -18,8 +18,8 @@ import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
-import {groupToolMessages, type ToolGroup} from './tool-groups.js';
-import {pushGroupStage, pushToolGroupCard} from './group-row.js';
+import {groupToolMessages, type StageLine, type ToolGroup} from './tool-groups.js';
+import {pushStageLine, pushToolGroupCard} from './group-row.js';
 
 export interface StageControls {readonly stopping?: ReadonlySet<string>; readonly focusedStop?: string; readonly hoveredStop?: string; readonly focusedQuestionId?: string}
 
@@ -225,18 +225,22 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // An actor card draws once, at its activity's first message, so only that message splits a run; later ones draw nothing here.
   const groupAt = new Map<string, ToolGroup>();
   const absorbed = new Set<string>();
+  const lineAt = new Map<string, StageLine>(); // a stage before a tool that is not collapsible, keyed by that tool's message id
   {
     let run: Message[] = [];
     const drawnCards = new Set<string>();
     const flushRun = () => {
-      for (const item of groupToolMessages(run, {stages: true})) if (item.type === 'group') {
-        groupAt.set(item.messages[0]!.id, item);
-        for (const member of item.messages.slice(1)) absorbed.add(member.id);
+      for (const item of groupToolMessages(run, {stages: true})) {
+        if (item.type === 'stage') lineAt.set(item.before, item);
+        else if (item.type === 'group') {
+          groupAt.set(item.messages[0]!.id, item);
+          for (const member of item.messages.slice(1)) absorbed.add(member.id);
+        }
       }
       run = [];
     };
     for (const message of candidates) {
-      if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor') { run.push(message); continue; }
+      if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor' || view !== 'logox') { run.push(message); continue; }
       if (drawnCards.has(message.activityId)) continue;
       drawnCards.add(message.activityId);
       flushRun();
@@ -254,7 +258,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const describeRound = (r: Round): {label: string; live: boolean} | undefined => {
     if (r.messages.some(m => m.kind === 'thinking' && m.step?.state === 'running')) return {label: 'Thinking', live: true};
     const tool = r.messages.findLast(m => m.kind === 'tool' && m.step && ['running', 'waiting'].includes(m.step.state) && !hiddenSteps.includes(m.step.call?.name ?? ''));
-    if (tool?.step) return {label: clipLine(tool.step.title.replace(/\s+/g, ' ').trim(), 48), live: tool.step.state === 'running'};
+    // The current `⏵` stage says what the speaker is doing better than the one running tool does.
+    const stage = tool ? candidates.findLast(m => m.ownerId === r.who && m.role === 'assistant' && !m.kind && (m.time ?? 0) >= r.since && extractNarration(m.text))?.text : undefined;
+    const intent = stage ? extractNarration(stage)?.narration : undefined;
+    if (tool?.step) return {label: clipLine((intent ?? tool.step.title).replace(/\s+/g, ' ').trim(), 48), live: tool.step.state === 'running'};
     const waiting = [...r.actors.values()].filter(item => ['running', 'waiting_input', 'queued'].includes(item.status));
     if (waiting.length) {
       const names = waiting.map(item => roles[item.ownerId]?.name ?? item.ownerId);
@@ -367,11 +374,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         if (message.kind === 'thinking') current.thinking.push(message);
       }
     }
-    if (!actor && (absorbed.has(message.id) || groupAt.has(message.id))) {
+    const lone = actor && view === 'logox' ? undefined : lineAt.get(message.id);
+    if (lone) pushStageLine(builder, lone, railFor(message.ownerId), ownerColor(message.ownerId, roles), roles[message.ownerId]?.symbol ?? '◈');
+    if ((!actor || view !== 'logox') && (absorbed.has(message.id) || groupAt.has(message.id))) {
       const group = groupAt.get(message.id);
       if (group) {
         const rail = railFor(message.ownerId);
-        pushGroupStage(builder, group, rail, ownerColor(message.ownerId, roles), roles[message.ownerId]?.symbol ?? '◈');
         pushToolGroupCard(builder, group, {ownerId: message.ownerId, open: open(group.id), railColor: rail, verbs: roles[message.ownerId]?.activityVerbs,
           renderChild: (child, inner) => body(child, inner)});
       }

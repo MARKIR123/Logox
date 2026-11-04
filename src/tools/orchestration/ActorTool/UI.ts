@@ -12,7 +12,7 @@ import type {ToolUI} from '../../ui-types.js';
 import {callLabel, createToolUI, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
 import {stripNarration} from '../../../runtime/narration.js';
 import {groupToolMessages} from '../../../tui/timeline/tool-groups.js';
-import {pushGroupStage, pushToolGroupCard} from '../../../tui/timeline/group-row.js';
+import {pushStageLine, pushToolGroupCard} from '../../../tui/timeline/group-row.js';
 
 export interface ActorActivityContext {
   builder: ReturnType<typeof createBuilder>;
@@ -92,7 +92,7 @@ export function renderActivity(context: ActorActivityContext): void {
       }
       const lastAssistantMessage = messages.filter(m => m.role === 'assistant' && !m.kind && stripNarration(m.text).trim()).at(-1);
       const isReportDeliveredInTranscript = lastAssistantMessage && activity.summary?.report &&
-        (lastAssistantMessage.text.trim() === activity.summary.report.trim() ||
+        (stripNarration(lastAssistantMessage.text).trim() === activity.summary.report.trim() ||
          lastAssistantMessage.text.includes(activity.summary.report.trim().slice(0, 80)));
 
       if (activity.summary && !isReportDeliveredInTranscript) {
@@ -114,12 +114,7 @@ export function renderActivity(context: ActorActivityContext): void {
         const nextItem = renderableItems[i + 1];
 
         if (item.type === 'group') {
-          if (item.stage) {
-            // The stage (the model's `⏵` line) is the only intent shown; nothing is invented when it is absent.
-            pushGroupStage(builder, item, color, roleColor, roles[activity.ownerId]?.symbol || '◈', frame);
-            currentPhaseFrame = insetRailFrame(frame, roleColor);
-            inPhase = true;
-          }
+          // The stage (the model's `⏵` line) titles the group itself; nothing is invented when it is absent.
           pushToolGroupCard(builder, item, {
             ownerId: activity.ownerId, open: context.isOpen ? context.isOpen(item.id) : false,
             railColor: roleColor, parentFrame: inPhase ? currentPhaseFrame : actorTreeFrame,
@@ -129,6 +124,13 @@ export function renderActivity(context: ActorActivityContext): void {
           continue;
         }
 
+        if (item.type === 'stage') {
+          // A stage before a tool that is not collapsible (Edit, Write, ...) stays visible as one intent row; what follows nests under it.
+          pushStageLine(builder, item, color, roleColor, roles[activity.ownerId]?.symbol || '◈', frame);
+          currentPhaseFrame = insetRailFrame(frame, roleColor);
+          inPhase = true;
+          continue;
+        }
         const message = item.message;
         if (message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()) continue; // stage marker only; it labels the next group
         if (message.inputKind === 'collaboration_interrupt' || message.inputKind === 'collaboration') {
@@ -163,7 +165,7 @@ export function renderActivity(context: ActorActivityContext): void {
         } else if (message.role === 'assistant' && !message.kind && message.text.trim()) {
           const lines = message.text.trim().split(/\r?\n/);
           const firstLine = lines[0]!.trim();
-          const isNextTool = nextItem && (nextItem.type === 'group' || (nextItem.type === 'message' && (nextItem.message.kind === 'tool' || (nextItem.message.role as string) === 'tool')));
+          const isNextTool = nextItem && (nextItem.type === 'group' || (nextItem.type === 'stage' || nextItem.type === 'message' && (nextItem.message.kind === 'tool' || (nextItem.message.role as string) === 'tool')));
           const symbol = roles[activity.ownerId]?.symbol || '◈';
           const isExplicitPhase = firstLine.startsWith(symbol) || /^#{1,4}\s+/.test(firstLine);
           if (isNextTool && isExplicitPhase && firstLine.length <= 80) {

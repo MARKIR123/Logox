@@ -3,7 +3,7 @@ import {palette} from '../appearance/theme.js';
 import type {ActivityVerbs} from '../appearance/actor-style.js';
 import {clipLine} from '../terminal/text.js';
 import type {Message, Step} from '../../runtime/contracts.js';
-import type {ToolGroup, ToolGroupCategory} from './tool-groups.js';
+import type {StageLine, ToolGroup, ToolGroupCategory} from './tool-groups.js';
 import {insetFrame, type createBuilder, type FrameWrap, type SceneRow, type SceneSegment} from './scene.js';
 
 /** A running tool row stays on screen at least this long so fast calls do not flicker. */
@@ -108,6 +108,8 @@ export function toolGroupRow(group: ToolGroup, opts: {id: string; open: boolean;
   });
   const room = Math.max(1, opts.width - reserve - lead.length);
   const kept = new Set(parts.map(part => part.category));
+  const intent = group.stage?.trim();
+  if (intent) return stagedRow(group, {id: opts.id, lead, status, room, parts, kept, intent});
   const joined = () => parts.filter(part => kept.has(part.category)).map(part => part.text).join(SEP) + (kept.size < parts.length ? SEP + '…' : '');
   for (const category of dropOrder) {
     if (kept.size <= 1 || stringWidth(joined()) <= room) break;
@@ -120,6 +122,23 @@ export function toolGroupRow(group: ToolGroup, opts: {id: string; open: boolean;
   return {titleSegments, status, ...(running ? {step: runningStep(group, lead + body)} : {})};
 }
 
+/** A stage-titled header: the intent at normal weight, then the faint verb summary; whole categories drop first, the intent last. */
+function stagedRow(group: ToolGroup, opts: {id: string; lead: string; status: string; room: number; parts: readonly {category: VerbCategory; text: string}[]; kept: Set<VerbCategory>; intent: string}): ToolGroupRow {
+  const {lead, room, parts, kept, intent} = opts;
+  const summary = () => parts.filter(part => kept.has(part.category)).map(part => part.text).join(SEP) + (kept.size < parts.length ? SEP + '…' : '');
+  const intentWidth = stringWidth(intent);
+  for (const category of dropOrder) {
+    if (kept.size <= 1 || intentWidth + SEP.length + stringWidth(summary()) <= room) break;
+    kept.delete(category);
+  }
+  const fits = parts.length > 0 && intentWidth + SEP.length + stringWidth(summary()) <= room;
+  const head = lead + fit(intent, fits ? intentWidth : room);
+  const titleSegments: SceneSegment[] = [{text: head, color: palette.fg, selectionKey: opts.id + ':title', selectionOffset: 0}];
+  if (fits) titleSegments.push({text: SEP + summary(), color: palette.muted, italic: true, selectionKey: opts.id + ':title', selectionOffset: head.length});
+  const text = titleSegments.map(segment => segment.text).join('');
+  return {titleSegments, status: opts.status, ...(group.running ? {step: runningStep(group, text)} : {})};
+}
+
 /**
  * Header of a browser group: `▸ Browser · 5 actions · 2.4s`. Opening, inspecting, interacting, screenshotting and closing
  * are one sequence, so every consecutive page action of one actor lives in this one card.
@@ -128,11 +147,13 @@ export function browserGroupRow(group: ToolGroup, opts: {id: string; open: boole
   const running = group.running;
   const count = group.counts.browse ?? group.messages.filter(message => message.kind === 'tool').length;
   const status = running ? '' : group.elapsedMs > 0 ? seconds(group.elapsedMs) : '';
-  const title = (opts.open ? '▾ ' : '▸ ') + 'Browser';
-  const tone = running ? palette.fg : palette.muted;
+  const intent = group.stage?.trim();
+  const title = (opts.open ? '▾ ' : '▸ ') + (intent ?? 'Browser');
+  const tone = running || intent ? palette.fg : palette.muted;
+  const actions = `${count} ${count === 1 ? 'action' : 'actions'}`;
   return {
-    titleSegments: [{text: title, color: tone, italic: true, selectionKey: opts.id + ':title', selectionOffset: 0}],
-    summary: [{text: `${count} ${count === 1 ? 'action' : 'actions'}`, color: palette.muted, italic: true}],
+    titleSegments: [{text: title, color: tone, ...(intent ? {} : {italic: true}), selectionKey: opts.id + ':title', selectionOffset: 0}],
+    summary: [{text: intent ? 'Browser · ' + actions : actions, color: palette.muted, italic: true}],
     status, ...(running ? {step: runningStep(group, title)} : {}),
   };
 }
@@ -175,12 +196,11 @@ export function pushToolGroupCard(builder: ReturnType<typeof createBuilder>, gro
   });
 }
 
-/** Stage line above the group a `⏵` narration opened; the model's `⏵` marker never reaches the screen, the role symbol leads instead. */
-export function pushGroupStage(builder: ReturnType<typeof createBuilder>, group: ToolGroup, railColor: string, accent: string, symbol: string, frame?: FrameWrap): void {
-  if (!group.stage) return;
+/** A stage that titles no group (it precedes a tool drawn as its own card): one intent row led by the owner's symbol; the `⏵` marker never reaches the screen. */
+export function pushStageLine(builder: ReturnType<typeof createBuilder>, line: StageLine, railColor: string, accent: string, symbol: string, frame?: FrameWrap): void {
   const f: FrameWrap = frame ?? {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth};
-  builder.pushFramedLine(group.id + '-stage', railColor, [
-    {text: symbol + ' ', color: accent, bold: true, selectionKey: group.id + ':stage_symbol'},
-    {text: fit(group.stage, Math.max(1, f.innerWidth - stringWidth(symbol) - 1)), color: palette.fg, selectionKey: group.id + ':stage_text'},
+  builder.pushFramedLine(line.id, railColor, [
+    {text: symbol + ' ', color: accent, bold: true, selectionKey: line.id + ':symbol'},
+    {text: fit(line.stage, Math.max(1, f.innerWidth - stringWidth(symbol) - 1)), color: palette.fg, selectionKey: line.id + ':text'},
   ], f);
 }

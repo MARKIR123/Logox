@@ -43,7 +43,7 @@ export type {SubmitDelivery} from './runtime/delivery.js';
 import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools} from './tools/tools.js';
-import {killActiveProcess} from './tools/process.js';
+import {USER_STOP_REASON, killActiveProcess} from './tools/process.js';
 import {markInterruptedJobs} from './tools/orchestration/AutomaTool/AutomaTool.js';
 import {chooseAutomaModel} from './tools/orchestration/AutomaTool/preset.js';
 import {finishRoundTool} from './tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
@@ -182,7 +182,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     cancelTool: (actorId, toolId, reason) => ensemble.cancelTool(actorId, toolId, reason),
     cancelActor: (actorId, scope, toolId, reason) => ensemble.cancelActor(actorId, scope, toolId, reason),
-    cancelActivity: (activityId, reason) => ensemble.cancel(activityId, 'director_cancel'),
+    cancelActivity: (activityId, reason) => ensemble.cancel(activityId, 'director_cancel', reason),
     getSnapshot: () => store.getSnapshot(),
     projectDir: cwd,
     pauseBatch: batch => ensemble.pauseBatch(batch),
@@ -1003,7 +1003,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     noteDraft() {},
     /** Stops one running tool call (its child process) without ending the owner's step; false when the call is not cancellable or already done. */
-    cancelTool(callId: string): boolean {return killActiveProcess(callId, 'Stopped by user');},
+    cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user');},
     cancel(activityId: string) {if (compactTask?.activityId === activityId) compactTask.controller.abort(); else {
       if (store.activities.get(session, activityId)?.ownerId === 'logox') actorServices.stopDirector(activityId); else actorServices.stopActor(activityId);
       ensemble.cancel(activityId, 'user');

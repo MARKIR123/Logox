@@ -7,6 +7,7 @@ import {extractNarration, stripNarration} from '../src/runtime/narration.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
+import {buildStageRows} from '../src/tui/timeline/stage.js';
 
 test('extractNarration extracts leading ⏵ line and strips it from text', () => {
   const sample = '⏵ 正在检查配置文件\n已经定位到配置文件位于 config.toml。';
@@ -44,7 +45,7 @@ test('extractNarration strips trailing punctuation from narration and cleans exc
   assert.equal(extracted.cleanText, '修复代码已提交。');
 });
 
-test('agent loop extracts ⏵ narration into activity progress and preserves clean text in message store', async () => {
+test('agent loop extracts ⏵ narration into activity progress and keeps the stage line in the stored message (root cause: it used to be stripped, so the timeline never saw it)', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-narration-test-'));
   const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const turns: ModelTurn[] = [
@@ -73,8 +74,11 @@ test('agent loop extracts ⏵ narration into activity progress and preserves cle
 
     const msg = app.store.getSnapshot().messages.find(m => m.activityId === task.activityId && m.role === 'assistant' && !m.kind);
     assert.ok(msg);
-    assert.equal(msg.text, '已为您找到核心文件。');
-    assert.doesNotMatch(msg.text, /⏵/);
+    assert.equal(msg.text, '⏵ 正在检索项目结构\n已为您找到核心文件。', 'the stored message keeps its stage line for stage.ts and tool-groups.ts');
+    assert.equal(stripNarration(msg.text), '已为您找到核心文件。');
+    const rows = buildStageRows(app.store.getSnapshot(), 's', 'logox', 100, {}, null).map(row => row.displayText ?? row.text);
+    assert.ok(rows.some(row => row.includes('已为您找到核心文件。')));
+    assert.ok(!rows.some(row => row.includes('⏵')), 'the marker never reaches the screen');
   } finally {
     await app.close();
     await rm(cwd, {recursive: true, force: true});

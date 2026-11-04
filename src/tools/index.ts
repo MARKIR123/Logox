@@ -57,6 +57,7 @@ import type {ModelTurn} from '../runtime/messages.js';
 import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './orchestration/AutomaTool/prompt.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
+import {TOOL_CANCELLED_TEXT} from '../prompts/runtime/interruption.js';
 
 export {
   pathArg,
@@ -585,7 +586,7 @@ export class Tools {
     } catch (error) {
       return {
         text: context.signal.aborted
-          ? 'Tool cancelled.'
+          ? TOOL_CANCELLED_TEXT
           : error instanceof z.ZodError
           ? 'Invalid tool arguments: ' + error.issues.map(issue => issue.path.join('.') + ' ' + issue.message).join('; ')
           : error instanceof Error

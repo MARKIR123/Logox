@@ -175,3 +175,12 @@ test('paths inside the workspace show relative to the cwd; paths outside stay ab
   assert.equal(formatToolCardTitle({id: '3', name: 'Grep', arguments: JSON.stringify({pattern: 'x', path: join(process.cwd(), 'src')})}), 'Grep("x" in src)');
   assert.ok(formatToolCardTitle({id: '4', name: 'Read', arguments: JSON.stringify({file_path: outside})}).includes('elsewhere'));
 });
+
+test('the live header shows the current stage instead of the single running tool', () => {
+  const {store, steps} = round();
+  store.message('s', 'logox', 'assistant', '⏵ Tracing the pedal phase', {activityId: 'main'});
+  const id = steps.tool({id: 'rd', name: 'Read', arguments: JSON.stringify({file_path: 'G:/p/a.ts'})}); steps.start(id);
+  const header = headers(buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null)).at(-1)!;
+  assert.match(strip(header.displayText ?? header.text), /Tracing the pedal phase/);
+  assert.doesNotMatch(strip(header.displayText ?? header.text), /Read/);
+});

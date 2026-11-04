@@ -2,11 +2,26 @@ import {spawn, type ChildProcess} from 'node:child_process';
 
 export interface ProcessResult {code: number; stdout: string; stderr: string}
 
+/** Kill reason recorded when the user presses `■ Stop` on a running command. */
+export const USER_STOP_REASON = 'Stopped by user';
+/** Who ended a process on purpose; `system` covers timeouts, steering interrupts and other runtime kills. */
+export type StopSource = 'user' | 'director' | 'system';
+
+/** A process ended on purpose (not by itself). Carries what it had printed so the caller can still report it. */
+export class ProcessStoppedError extends Error {
+  stdout = '';
+  stderr = '';
+  constructor(readonly reason: string, readonly by: StopSource = 'system') {
+    super(reason);
+    this.name = 'ProcessStoppedError';
+  }
+}
+
 export interface ActiveToolExecution {
   pid: number;
   activityId?: string | undefined;
   toolId?: string | undefined;
-  kill(reason?: string): void;
+  kill(reason?: string, by?: StopSource): void;
 }
 
 const activeExecutions = new Map<string, ActiveToolExecution>();
@@ -20,19 +35,19 @@ export function registerActiveProcess(id: string, execution: ActiveToolExecution
   };
 }
 
-export function killActiveProcess(id: string, reason = 'Terminated by director'): boolean {
+export function killActiveProcess(id: string, reason = 'Terminated by director', by: StopSource = 'system'): boolean {
   const execution = activeExecutions.get(id);
   if (!execution) return false;
-  execution.kill(reason);
+  execution.kill(reason, by);
   activeExecutions.delete(id);
   return true;
 }
 
-export function killActivityProcesses(activityId: string, reason = 'Terminated by director'): number {
+export function killActivityProcesses(activityId: string, reason = 'Terminated by director', by: StopSource = 'system'): number {
   let count = 0;
   for (const [id, exec] of [...activeExecutions.entries()]) {
     if (exec.activityId === activityId) {
-      exec.kill(reason);
+      exec.kill(reason, by);
       activeExecutions.delete(id);
       count++;
     }
@@ -85,6 +100,11 @@ export function runProcess(
 
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
 
+    const withOutput = (reason: Error) => {
+      if (reason instanceof ProcessStoppedError) {reason.stdout = stdout; reason.stderr = stderr;}
+      return reason;
+    };
+
     const stop = (reason: Error) => {
       if (stopped) return;
       stopped = reason;
@@ -98,7 +118,7 @@ export function runProcess(
             try { child.stderr?.destroy(); } catch {}
             try { child.kill('SIGKILL'); } catch {}
             cleanup();
-            reject(reason);
+            reject(withOutput(reason));
           }
         }, 1500);
         forceTimer.unref?.();
@@ -111,7 +131,7 @@ export function runProcess(
         pid: child.pid,
         activityId: metadata.activityId,
         toolId: metadata.toolId,
-        kill: (msg) => stop(new Error(msg || 'Process killed')),
+        kill: (msg, by) => stop(new ProcessStoppedError(msg || 'Process killed', by)),
       });
       child.once('close', () => unregister());
     }
@@ -170,7 +190,7 @@ export function runProcess(
       if (settled) return;
       settled = true;
       cleanup();
-      if (stopped) reject(stopped);
+      if (stopped) reject(withOutput(stopped));
       else resolve({code: limited ? 0 : code ?? -1, stdout, stderr});
     });
 

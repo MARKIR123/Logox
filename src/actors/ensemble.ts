@@ -12,6 +12,8 @@ import {DeliveryQueue} from './delivery-queue.js';
 import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
+import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
+import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker} from '../prompts/runtime/interruption.js';
 
 import {builtinActors} from './builtins.js';
 
@@ -30,6 +32,13 @@ export const cast = immutable({
 });
 export type ActorId = keyof typeof cast;
 export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel';
+
+/** The ledger marker for a deliberate stop, or nothing for shutdown and crash recovery (their wording lives in runtime recovery texts). */
+export function stopNotice(reason: StopReason | undefined, detail: string | undefined, activityId: string): RuntimeContextMessage | undefined {
+  if (reason === 'user') return createRuntimeContextMessage('interruption', USER_INTERRUPT_MARKER, {activityId, slot: 'interruption', by: 'user'});
+  if (reason === 'director_cancel') return createRuntimeContextMessage('interruption', directorStopMarker(detail?.trim() || DIRECTOR_STOP_DEFAULT_REASON), {activityId, slot: 'interruption', by: 'director'});
+  return undefined;
+}
 export interface TaskOrigin extends Omit<TaskOriginData, 'authorization' | 'stopReason'> {
   authorization?: readonly string[] | undefined;
   priority?: boolean;
@@ -59,6 +68,8 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly history: readonly HistoryEntry[];
   readonly reviewMessages?: () => readonly ModelMessage[];
   readonly signal: AbortSignal;
+  /** Why this run is being stopped, once it is (`user` for Esc / Ctrl+C, `director_cancel` for CancelActor). */
+  readonly stopReason?: () => StopReason | undefined;
   report(stage: string, detail: string): void;
   say(text: string): void;
   record(message: ModelMessage, step?: Step): Promise<void>;
@@ -80,7 +91,7 @@ export interface TaskHandle {readonly activityId: string; readonly done: Promise
 interface Task<Id extends string> {ownerId: Id; prompt: string}
 interface QueuedTask<Id extends string> extends Task<Id> {
   activityId: string; source: string; origin: TaskOrigin; controller: AbortController;
-  ready: Promise<void>; resolve(): void; stopReason?: StopReason;
+  ready: Promise<void>; resolve(): void; stopReason?: StopReason; stopDetail?: string;
   progress?: TaskProgressSnapshot;
 }
 export class EnsembleRuntime<Id extends string> {
@@ -196,7 +207,7 @@ export class EnsembleRuntime<Id extends string> {
     const active = this.getActiveTask(actorId);
     if (!active) return {success: false, message: `No active running task found for actor '${actorId}'.`};
     const targetId = toolId || active.activityId;
-    const killed = toolId ? killActiveProcess(toolId, reason) : killActivityProcesses(active.activityId, reason) > 0;
+    const killed = toolId ? killActiveProcess(toolId, reason, 'director') : killActivityProcesses(active.activityId, reason, 'director') > 0;
     if (killed) {
       return {success: true, message: `Successfully cancelled tool process for ${actorId} (target: ${targetId}): ${reason}`};
     }
@@ -211,7 +222,7 @@ export class EnsembleRuntime<Id extends string> {
     if (!active) {
       return {success: false, message: `No active running activity found for actor '${actorId}'.`};
     }
-    const cancelled = this.cancel(active.activityId, 'director_cancel');
+    const cancelled = this.cancel(active.activityId, 'director_cancel', reason);
     return {
       success: cancelled,
       message: cancelled
@@ -219,11 +230,12 @@ export class EnsembleRuntime<Id extends string> {
         : `Activity ${active.activityId} was already finalized.`,
     };
   }
-  cancel(activityId: string, reason: StopReason = 'user'): boolean {
+  cancel(activityId: string, reason: StopReason = 'user', detail?: string): boolean {
     const task = this.tasks.get(activityId);
     if (!task) return false;
     if (['completed', 'failed', 'cancelled'].includes(this.store.activities.get(this.sessionId, activityId)?.status ?? '')) return false;
     task.stopReason = reason;
+    if (detail) task.stopDetail = detail;
     this.store.activities.update(this.sessionId, activityId, {stopReason: reason});
     task.controller.abort();
     const index = this.queue.indexOf(task);
@@ -402,6 +414,7 @@ export class EnsembleRuntime<Id extends string> {
           return incoming;
         },
         acceptRoundMemory: callId => {acceptedFinalizer = callId;},
+        stopReason: () => task.stopReason,
         ...(task.progress ? {progress: task.progress} : {}),
         saveProgress: async progress => {
           signal.throwIfAborted();
@@ -463,6 +476,9 @@ export class EnsembleRuntime<Id extends string> {
       if (isUserCancel) task.stopReason = 'user';
       const status: RoundStatus = signal.aborted || isUserCancel ? 'cancelled' : 'failed';
       const detail = error instanceof Error ? error.message : String(error);
+      // Tell the stopped actor's own ledger who stopped it, once, before the round is closed.
+      const stopMarker = status === 'cancelled' ? stopNotice(task.stopReason, task.stopDetail, activityId) : undefined;
+      if (stopMarker) await this.history.append({version: 1, ...identity, role: 'context', text: stopMarker.text, message: stopMarker}).catch(() => {});
       const summary = await finish(status);
       try {await checkpoint(status, signal.aborted || isUserCancel ? undefined : detail);}
       catch {this.store.message(this.sessionId, ownerId, 'notice', 'Failed to save final activity state; restart will mark it interrupted and will not run tools automatically', {activityId});}

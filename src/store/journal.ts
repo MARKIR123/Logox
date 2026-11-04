@@ -7,7 +7,7 @@ import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnaps
 import {inputKindSchema} from '../runtime/provenance.js';
 import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
-import {contextStateSchema, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
+import {contextStateSchema, deliberateStopLabel, roundSchema, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
 import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
@@ -310,7 +310,7 @@ export class Journal implements HistoryStore {
     const modernClosure = finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
       (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
     const memory: RoundMemory = accepted ?? {
-      title: legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? 'Execution cancelled' : 'Execution failed',
+      title: legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
       verification: null,
       carryForward: [legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'],
       source: modernClosure ? 'runtime' : 'legacy',
