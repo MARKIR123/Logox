@@ -112,12 +112,10 @@ export interface FrameWrap {
   readonly depth?: number;
 }
 
-/** The speaker header activity: spinner, stage text and clock while the round runs (drawn by `decorateRow`); a faint total once it is done. */
+/** The speaker header activity: the current stage or a temporary wait state, as quiet text after a separator. */
 export interface TurnActivity {
   /** The stage text (or a temporary state such as `Awaiting approval`); quiet muted text once the round is done. */
   readonly label?: string;
-  /** Round start: a spinner draws after the separator (animated by `decorateRow`); absent for a static wait or a finished round. */
-  readonly since?: number;
 }
 
 export interface RowBuilder {
@@ -291,23 +289,21 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const railColor = railColorFor(who, roles);
     const pieces: SceneSegment[] = [{text: whoName(who, roles), color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
     if (origin) pieces.push({text: ' · ' + origin, color: palette.muted, selectionKey: id + ':origin'});
-    const since = activity?.since;
-    if (activity && (activity.label || since !== undefined)) {
-      // `Name · <spinner> <stage>`: no clock. The stage is clipped to the room left on the header row.
-      const spinning = since !== undefined;
+    if (activity?.label) {
+      // `Name · <stage>`: quiet text, no spinner and no clock (folded actor cards and running rows animate). The stage is clipped to the room left on the header row.
       const used = pieces.reduce((sum, p) => sum + stringWidth(p.text), 0);
-      const room = contentWidth - used - SEPARATOR.length - (spinning ? 2 : 0);
-      const label = activity.label && room >= 4 ? clipLine(activity.label, room) : '';
-      if (label || spinning) pieces.push({text: SEPARATOR, color: faintColor(), separator: true, selectionKey: id + ':activity_sep', selectionOffset: 0});
-      if (spinning) pieces.push({text: '⠋', color: railColor, selectionKey: id + ':activity_icon', selectionOffset: 0});
-      if (label) pieces.push({text: (spinning ? ' ' : '') + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0});
+      const room = contentWidth - used - SEPARATOR.length;
+      const label = room >= 4 ? clipLine(activity.label, room) : '';
+      if (label) {
+        pieces.push({text: SEPARATOR, color: faintColor(), separator: true, selectionKey: id + ':activity_sep', selectionOffset: 0});
+        pieces.push({text: label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0});
+      }
     }
     const used = pieces.reduce((sum, s) => sum + stringWidth(s.text), 0);
     if (clock && used + stringWidth(clock) + 2 <= contentWidth) pieces.push({text: ' '.repeat(contentWidth - used - stringWidth(clock)) + clock, color: palette.muted});
     const first = rows.length;
     pushFramedLine(id, railColor, pieces, topFrame());
-    rows[first] = {...rows[first]!, railGlyph: whoGlyph(who, roles),
-      ...(since !== undefined && pieces.some(p => p.selectionKey === id + ':activity_icon') ? {animation: {step: {title: '', state: 'running', elapsedMs: 0, runningSince: since} as Step, actorColor: railColor}} : {})};
+    rows[first] = {...rows[first]!, railGlyph: whoGlyph(who, roles)};
   };
 
   const pushProse: RowBuilder['pushProse'] = (id, text, railColor, tone = 'body', frame, action, color) => {

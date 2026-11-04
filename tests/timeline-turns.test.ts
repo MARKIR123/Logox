@@ -85,17 +85,17 @@ test('the Logox header shows the macro state only: no tool title, no Thinking; W
   const {store, steps} = round();
   const think = steps.thinking(); store.appendMessage(think, 'hmm');
   const header = (hover: string | null = null) => headers(buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, hover)).find(row => row.railGlyph === '◈')!;
-  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*$/);
+  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox\s*$/);
   steps.finish(think, 'completed');
   const tool = steps.tool({id: 'r', name: 'Read', arguments: JSON.stringify({file_path: 'index.html'})}); steps.start(tool);
-  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*$/, 'a running tool title never reaches the header');
+  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox\s*$/, 'a running tool title never reaches the header');
   steps.finish(tool, 'completed', 'Read\nok');
   addActor(store, 'k', 'kalon');
   const waiting = decorateRow(header(), Date.now());
-  assert.match(waiting.displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting on Kalon\s*$/);
-  assert.equal(waiting.segments!.find(segment => segment.selectionKey?.endsWith(':activity_icon'))!.color, palette.accent);
+  assert.match(waiting.displayText!, /^Logox · Waiting on Kalon\s*$/);
+  assert.equal(waiting.animation, undefined, 'the header carries no spinner animation');
   store.activities.update('s', 'k', {status: 'completed'}); steps.close('completed'); store.activities.update('s', 'main', {status: 'completed'});
-  assert.equal(header().animation, undefined, 'a finished round shows no spinner');
+  assert.equal(header().animation, undefined, 'header rows never animate');
   assert.equal(header().text.trim(), 'Logox', 'no stage was written: just the name');
 });
 

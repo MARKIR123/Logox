@@ -9,8 +9,8 @@ import {palette} from '../src/tui/appearance/theme.js';
 import {faintColor} from '../src/tui/appearance/colors.js';
 import type {SceneRow} from '../src/tui/timeline/scene.js';
 
-const SPIN = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
-const spun = (name: string, rest = '') => new RegExp('^' + name + ' · ' + SPIN + rest + '\\s*$');
+/** The header reads `Name · <text>` (or just `Name`): quiet text, never a spinner glyph. */
+const spun = (name: string, rest = '') => new RegExp('^' + name + (rest ? ' · ' + rest.trim() : '') + '\\s*$');
 
 function fixture() {
   const store = new RuntimeStore();
@@ -30,9 +30,9 @@ const ask = (store: RuntimeStore, activityId: string, ownerId: string) => store.
   questions: [{id: 'q', header: 'Pick', question: 'Which?', options: [{id: 'a', label: 'A', description: 'a'}, {id: 'b', label: 'B', description: 'b'}]}]});
 const approve = (store: RuntimeStore, activityId: string, ownerId: string) => store.interactions.open({sessionId: 's', activityId, ownerId, kind: 'permission', title: 'Write',
   tool: 'Write', arguments: {file_path: 'a.ts'}, reason: 'Write a.ts'});
-const iconOf = (row: SceneRow) => decorateRow(row, Date.now()).segments!.find(segment => segment.selectionKey?.endsWith(':activity_icon'));
+const iconOf = (row: SceneRow) => decorateRow(row, Date.now()).segments!.find(segment => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(segment.text) || segment.selectionKey?.endsWith(':activity_icon'));
 
-test('the header reads `Name · spinner stage`; without a stage it is the spinner alone, never a tool title, Thinking or a clock', () => {
+test('the header reads `Name · stage`; without a stage it is the name alone, never a tool title, Thinking or a clock', () => {
   const f = fixture();
   const think = f.steps.thinking(); f.store.appendMessage(think, 'hmm');
   assert.match(f.header(), spun('Logox'), 'no stage yet while thinking');
@@ -43,7 +43,8 @@ test('the header reads `Name · spinner stage`; without a stage it is the spinne
   const text = f.header();
   assert.match(text, spun('Logox', ' Verifying the build'));
   assert.ok(!/npm run|Shell|Thinking|\d+(\.\d)?s\b/.test(text), 'no tool title, no Thinking, no elapsed time: ' + text);
-  assert.equal(iconOf(f.headerRow())!.color, palette.accent, 'spinner in the speaker colour');
+  assert.equal(iconOf(f.headerRow()), undefined, 'no spinner in the header');
+  assert.equal(f.headerRow().animation, undefined, 'the header carries no animation');
   assert.equal(f.headerRow().segments!.find(s => s.selectionKey?.endsWith(':activity_sep'))!.color, faintColor(), 'the separator is faint');
   f.stage('Packaging the result');
   assert.match(f.header(), spun('Logox', ' Packaging the result'), 'the latest stage wins');
@@ -92,7 +93,7 @@ test('temporary states replace the stage text and the stage comes back afterward
   g.tool('Read', {file_path: 'a.ts'});
   const readId = g.store.getSnapshot().messages.findLast(m => m.kind === 'tool')!.id;
   g.steps.finish(readId, 'completed', 'Read\nok');
-  assert.match(g.header(), /^Logox · (⠋|[⠙⠹⠸⠼⠴⠦⠧⠇⠏])? ?Waiting on Kalon\s*$/);
+  assert.match(g.header(), /^Logox · Waiting on Kalon\s*$/);
   g.store.activities.update('s', 'k', {status: 'completed'});
   assert.match(g.header(), spun('Logox', ' Handing out the work'));
 });

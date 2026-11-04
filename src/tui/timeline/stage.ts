@@ -112,15 +112,15 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     !['approval', 'question', 'retry'].includes(activity.phase ?? '') && !requests.has(activity.activityId) &&
     !(grouped.get(activity.activityId) ?? []).some(message => message.step?.state === 'waiting');
   /** A temporary state that replaces the stage text while it holds: pending answer/approval, provider retry, compaction. */
-  const temporaryState = (ownerId: string, activityId?: string): {label: string; spinner: boolean} | undefined => {
+  const temporaryState = (ownerId: string, activityId?: string): {label: string} | undefined => {
     const asked = pending.find(request => activityId ? request.activityId === activityId : request.ownerId === ownerId);
-    if (asked) return {label: asked.kind === 'permission' ? 'Awaiting approval' : 'Awaiting your answer', spinner: false};
+    if (asked) return {label: asked.kind === 'permission' ? 'Awaiting approval' : 'Awaiting your answer'};
     const mine = snapshot.activities.filter(item => item.sessionId === sessionId && ['running', 'waiting_input'].includes(item.status) &&
       (activityId ? item.activityId === activityId : item.ownerId === ownerId));
     const compacting = mine.find(item => item.phase === 'compacting' || item.stage === 'Compacting context');
-    if (compacting) return {label: 'Compacting context', spinner: true};
+    if (compacting) return {label: 'Compacting context'};
     const retrying = mine.find(item => item.phase === 'retry');
-    if (retrying) return {label: retryLabel(retrying.detail), spinner: true};
+    if (retrying) return {label: retryLabel(retrying.detail)};
     return undefined;
   };
   const seen = new Set<string>();
@@ -303,12 +303,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const intent = stage ? extractNarration(stage)?.narration.replace(/\s+/g, ' ').trim() : undefined;
     if (!live) return intent ? {label: intent} : undefined;
     const temporary = temporaryState(r.who);
-    if (temporary) return {label: temporary.label, ...(temporary.spinner ? {since: r.since} : {})};
+    if (temporary) return {label: temporary.label};
     if (!thinkingNow && !tool && waiting.length) {
       const names = waiting.map(item => roles[item.ownerId]?.name ?? item.ownerId);
-      return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', ')), ...(waiting.some(animated) ? {since: r.since} : {})};
+      return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', '))};
     }
-    return {...(intent ? {label: intent} : {}), since: r.since};
+    return intent ? {label: intent} : undefined;
   };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {

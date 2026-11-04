@@ -94,8 +94,8 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
     const cell = mappedCells.get(column);
     if (running && cell?.key.endsWith(':status') && cell.offset < status.length)
       segment = {...segment, text: status[cell.offset] ?? segment.text};
-    if (running && animation.step && /:(swarm|activity)_icon$/.test(cell?.key ?? '') && cell?.offset === 0) segment = {...segment, text: stepIcon(animation.step, now, motion, animation.frames), color: actorColor};
-    if (running && animation.step && /:(swarm|activity)_time$/.test(cell?.key ?? '')) segment = {...segment, text: swarmElapsed(stepElapsed(animation.step, now))[cell?.offset ?? 0] ?? ' '};
+    if (running && animation.step && /:swarm_icon$/.test(cell?.key ?? '') && cell?.offset === 0) segment = {...segment, text: stepIcon(animation.step, now, motion, animation.frames), color: actorColor};
+    if (running && animation.step && /:swarm_time$/.test(cell?.key ?? '')) segment = {...segment, text: swarmElapsed(stepElapsed(animation.step, now))[cell?.offset ?? 0] ?? ' '};
     if (isWorking && cell?.key.endsWith(':icon') && cell.offset === 0) {
       if (!activeActor || !animation.open) {
         segment = {...segment, text: stepIcon(animation.step ?? ({state: 'running'} as Step), now, motion, animation.frames), color: actorColor};
