@@ -16,7 +16,7 @@ const shell = (command: string, step?: Partial<NonNullable<Message['step']>>) =>
 const msg = (role: Message['role'], text: string, extra: Partial<Message> = {}): Message =>
   ({id: `m${++counter}`, sessionId: 's', ownerId: 'logox', role, text, ...extra});
 const thinking = (text = 'hmm') => msg('assistant', text, {kind: 'thinking'});
-const shape = (items: ReturnType<typeof groupToolMessages>) => items.map(item => item.type === 'group' ? `G${item.messages.length}` : 'M');
+const shape = (items: ReturnType<typeof groupToolMessages>) => items.map(item => item.type === 'group' ? `G${item.messages.length}` : item.type === 'stage' ? 'S' : item.type === 'edits' ? `E${item.messages.length}` : 'M');
 
 test('categorizeToolMessage covers the collapsible tools', () => {
   assert.equal(categorizeToolMessage(read('a.ts')), 'read');
@@ -124,12 +124,12 @@ test('empty or narration-only assistant text does not break; real text does', ()
   assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '⏵ Scanning\nReal words'), read('b')])), ['M', 'M', 'M']);
 });
 
-test('stage option: a narration message flushes and labels the next run', () => {
+test('stage option: a narration message flushes and becomes its own stage item where it changed', () => {
   const stage = msg('assistant', '⏵ Mapping the repo');
   const items = groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')], {stages: true});
-  assert.deepEqual(shape(items), ['G2', 'M', 'G2']);
-  assert.equal((items[0] as ToolGroup).stage, undefined);
-  assert.equal((items[2] as ToolGroup).stage, 'Mapping the repo');
+  assert.deepEqual(shape(items), ['G2', 'S', 'M', 'G2']);
+  assert.deepEqual(items[1], {type: 'stage', id: stage.id + '-stage', stage: 'Mapping the repo'});
+  assert.ok(items.every(item => item.type !== 'group' || !('stage' in item)), 'groups never carry the stage');
   const without = groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')]);
   assert.deepEqual(shape(without), ['G5']);
 });
@@ -154,14 +154,22 @@ test('group id is stable and derived from the first message', () => {
   assert.equal(g!.id, first.id + '-group');
 });
 
-test('stages: a single call is a group when a stage opened it; a stage before a non-collapsible tool becomes a stage line', () => {
+test('stages: no group of one; a stage stays its own item before whatever follows', () => {
   const single = groupToolMessages([msg('assistant', '⏵ Checking colors'), read('a')], {stages: true});
-  assert.deepEqual(shape(single), ['M', 'G1']);
-  assert.equal((single[1] as ToolGroup).stage, 'Checking colors');
-  assert.deepEqual(shape(groupToolMessages([read('a')], {stages: true})), ['M'], 'no stage, no group of one');
+  assert.deepEqual(shape(single), ['S', 'M', 'M'], 'a lone call is never a group, the stage is its own row');
   const edit = tool('Edit', {file_path: 'a.ts'});
   const lone = groupToolMessages([msg('assistant', '⏵ Fixing phase'), edit], {stages: true});
-  assert.deepEqual(lone.map(item => item.type), ['message', 'stage', 'message']);
-  assert.deepEqual(lone[1], {type: 'stage', id: edit.id + '-stage', stage: 'Fixing phase', before: edit.id});
-  assert.equal((groupToolMessages([msg('assistant', '⏵ A'), edit, read('a'), read('b')], {stages: true}).at(-1) as ToolGroup).stage, undefined, 'a consumed stage does not leak to the next run');
+  assert.deepEqual(lone.map(item => item.type), ['stage', 'message', 'message']);
+});
+
+test('consecutive edits of one file by one owner fold into one edits item; other rows, files or owners break it', () => {
+  const edit = (path: string, owner = 'logox') => ({...tool('Edit', {file_path: path, old_string: 'a', new_string: 'b'}), ownerId: owner});
+  const a1 = edit('a.css'), a2 = edit('a.css'), a3 = edit('a.css');
+  const items = groupToolMessages([a1, thinking(), a2, a3]);
+  assert.deepEqual(shape(items), ['E3', 'M'], 'thinking draws nothing and does not break the run');
+  assert.deepEqual((items[0] as unknown as {messages: Message[]}).messages.map(m => m.id), [a1.id, a2.id, a3.id]);
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('b.css'), edit('b.css')])), ['M', 'E2']);
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('a.css', 'techne')])), ['M', 'M'], 'another owner never merges');
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), read('x'), edit('a.css')])), ['M', 'M', 'M']);
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next'), edit('a.css')], {stages: true})), ['M', 'S', 'M', 'M'], 'a stage breaks the run');
 });

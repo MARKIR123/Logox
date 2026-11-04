@@ -18,8 +18,12 @@ import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
-import {groupToolMessages, type StageLine, type ToolGroup} from './tool-groups.js';
+import {groupToolMessages, type EditRun, type StageLine, type ToolGroup} from './tool-groups.js';
+import {renderEditRun} from '../../tools/EditTool/UI.js';
 import {pushStageLine, pushToolGroupCard} from './group-row.js';
+
+/** Opens each thought in a thinking body (Claude Code's thinking marker); continuation rows hang under the text. */
+const THOUGHT_MARK = '∴ ';
 
 export interface StageControls {readonly stopping?: ReadonlySet<string>; readonly focusedStop?: string; readonly hoveredStop?: string; readonly focusedQuestionId?: string}
 
@@ -123,7 +127,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const prefix = message.id + '-job-';
     return more + jobs.map((_, index) => (open(prefix + index) ? '1' : '0') + (open(prefix + index + '-more') ? 'm' : '')).join('') + '|' + (hovered?.startsWith(prefix) ? hovered : '');
   };
-  const body = (message: Message, frame?: Frame) => {
+  const body = (message: Message, frame?: Frame, runArg?: readonly Message[]) => {
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
     // Thinking never draws between tools: each round (and each open actor card) folds it into one row under its header.
     if (thinking.has(message.id)) return;
@@ -136,7 +140,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     // A running, stoppable tool draws its `■ Stop` state (stopping, focused, hovered) into the row.
     const stoppable = message.step?.state === 'running' && Boolean(message.step.call) && CANCELLABLE_TOOLS.has(message.step.call!.name);
     const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
-    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null]);
+    const run = runArg ?? editRuns.get(message.id)?.messages;
+    const runKey = run ? run.map(item => item.id + ':' + (item.step?.state ?? '') + ':' + (item.step?.elapsedMs ?? 0) + ':' + item.text.length).join('|') : null;
+    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -150,6 +156,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
           title: clipLine(summary, Math.max(0, innerWidth - stringWidth(kind) - 3)), bodyLines: [],
           open: open(message.id), railColor: rail, toneColor: palette.error, ...(frame ? {parentFrame: frame} : {}),
           renderBody(inner) {chunk.pushProse(message.id, message.text, rail, 'body', inner, undefined, palette.error);}});
+      } else if (run && run.length > 1) {
+        renderEditRun({builder: chunk, message, ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail}, run);
       } else if (message.kind === 'tool' || (message.role as string) === 'tool') {
         const call = messageToolCall(message);
         const ui = getToolUI(call?.name ?? '');
@@ -225,25 +233,39 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // An actor card draws once, at its activity's first message, so only that message splits a run; later ones draw nothing here.
   const groupAt = new Map<string, ToolGroup>();
   const absorbed = new Set<string>();
-  const lineAt = new Map<string, StageLine>(); // a stage before a tool that is not collapsible, keyed by that tool's message id
+  const stageAt = new Map<string, StageLine[]>(); // `⏵` stages, keyed by the first drawn message they precede
+  const editRuns = new Map<string, EditRun>(); // merged same-file edits, keyed by the first edit's message id
+  const editAbsorbed = new Set<string>();
   {
+    const drawn = new Set(messages.map(message => message.id));
     let run: Message[] = [];
     const drawnCards = new Set<string>();
-    const flushRun = () => {
+    const flushRun = (boundary?: string) => {
+      let waiting: StageLine[] = [];
+      const attach = (id: string) => {
+        if (!waiting.length) return;
+        stageAt.set(id, [...stageAt.get(id) ?? [], ...waiting]); waiting = [];
+      };
       for (const item of groupToolMessages(run, {stages: true})) {
-        if (item.type === 'stage') lineAt.set(item.before, item);
+        if (item.type === 'stage') waiting.push(item);
         else if (item.type === 'group') {
+          attach(item.messages[0]!.id);
           groupAt.set(item.messages[0]!.id, item);
           for (const member of item.messages.slice(1)) absorbed.add(member.id);
-        }
+        } else if (item.type === 'edits') {
+          attach(item.messages[0]!.id);
+          editRuns.set(item.messages[0]!.id, item);
+          for (const member of item.messages.slice(1)) editAbsorbed.add(member.id);
+        } else if (drawn.has(item.message.id)) attach(item.message.id);
       }
+      if (boundary) attach(boundary); // a stage right before an actor card
       run = [];
     };
     for (const message of candidates) {
       if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor' || view !== 'logox') { run.push(message); continue; }
       if (drawnCards.has(message.activityId)) continue;
       drawnCards.add(message.activityId);
-      flushRun();
+      flushRun(message.id);
     }
     flushRun();
   }
@@ -297,26 +319,34 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       const done = requests.reduce((sum, entry) => sum + (entry.request.step.state === 'running' ? entry.request.step.elapsedMs : stepElapsed(entry.request.step, now)), 0);
       return {title: text, state: 'running', elapsedMs: done, runningSince: since} as Step;
     })() : undefined;
-    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: 'Tool', title: text, expandable: true, bodyLines: [], open: isOpen,
+    // A finished row is an italic summary (`Thought 6 times · …`); a running one keeps the actor's own thinking glyph, `Thinking` with the shimmer and the live clock.
+    const summary: readonly SceneSegment[] = [{text, color: isOpen ? palette.fg : palette.muted, italic: true, selectionKey: id + ':title', selectionOffset: 0}];
+    const liveSegments: readonly SceneSegment[] = [{text: 'Thinking', selectionKey: id + ':title', selectionOffset: 0}];
+    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: live ? 'Thinking' : 'Tool', title: live ? 'Thinking' : text, expandable: !live, bodyLines: [], open: isOpen,
       railColor: viewColor, ...(frame ? {parentFrame: frame} : {}), ...(runningStep ? {step: runningStep} : {}),
-      titleSegments: [{text, color: isOpen ? palette.fg : palette.muted, selectionKey: id + ':title', selectionOffset: 0}],
+      titleSegments: live ? liveSegments : summary,
       renderBody(inner) {
         const faint = faintColor();
-        const labels = requests.map(entry => duration(stepElapsed(entry.request.step, now)));
-        const wanted = Math.max(...labels.map(label => label.length)) + 2;
-        const column = inner.innerWidth - wanted >= 16 ? wanted : 0;
-        const textWidth = Math.max(1, inner.innerWidth - column);
         // One body for all the thoughts: rows are counted across them and share the single `… N more lines` expander.
-        // A recovery note stays one selectable prose block counted as its wrapped lines; thought text counts one row per wrapped line.
-        const rows: {id: string; weight: number; segments?: SceneSegment[]; prose?: string}[] = [];
+        // Each thought opens with a faint `∴ ` and wraps under a hanging indent; a blank row separates one thought from the next.
+        // A recovery note stays one selectable prose block counted as its wrapped lines.
+        const rows: {id: string; weight: number; segments?: SceneSegment[]; prose?: string; blank?: true}[] = [];
+        const textWidth = Math.max(1, inner.innerWidth - THOUGHT_MARK.length);
+        let first = true;
         for (const [index, entry] of requests.entries()) {
           const note = entry.request.step.note?.trim() ? compactParagraphs(entry.request.step.note) : '';
+          if (!entry.item.text.trim() && !note) continue;
+          if (!first) rows.push({id: `${id}-gap${index}`, weight: 1, blank: true});
+          first = false;
           if (note) rows.push({id: entry.item.id + '-note', weight: wrapAnsi(note, inner.innerWidth, {hard: true, trim: false}).split('\n').length, prose: note});
-          if (!entry.item.text.trim() && note) continue;
-          const lines = wrapAnsi(compactParagraphs(entry.item.text) || '…', textWidth, {hard: true, trim: false}).split('\n');
-          lines.forEach((line, lineIndex) => rows.push({id: `${id}-t${index}-${lineIndex}`, weight: 1, segments: [
-            {text: column && lineIndex === 0 ? labels[index]!.padEnd(column) : ' '.repeat(column), color: faint},
-            {text: line, color: palette.muted, italic: true}]}));
+          if (!entry.item.text.trim()) continue;
+          let lineIndex = 0;
+          for (const paragraph of compactParagraphs(entry.item.text).split('\n')) for (const line of wrapAnsi(paragraph, textWidth, {hard: true, trim: false}).split('\n')) {
+            rows.push({id: `${id}-t${index}-${lineIndex}`, weight: 1, segments: [
+              {text: lineIndex === 0 ? THOUGHT_MARK : ' '.repeat(THOUGHT_MARK.length), color: faint},
+              {text: line, color: palette.muted, italic: true}]});
+            lineIndex++;
+          }
         }
         const expanded = open(expanderId(id));
         const total = rows.reduce((sum, row) => sum + row.weight, 0);
@@ -325,7 +355,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         for (const row of rows) {
           if (collapsible && !expanded && shown > 0 && used + row.weight > TOOL_BODY_LINES) break;
           used += row.weight; shown++;
-          if (row.prose !== undefined) target.pushProse(row.id, row.prose, viewColor, 'body', inner, undefined, palette.muted);
+          if (row.blank) target.pushBlank(viewColor, inner);
+          else if (row.prose !== undefined) target.pushProse(row.id, row.prose, viewColor, 'body', inner, undefined, palette.muted);
           else target.pushFramedLine(row.id, viewColor, row.segments ?? [], inner);
         }
         if (collapsible) pushExpander(target, id, viewColor, inner, total - used, expanded ? 'less' : 'lines');
@@ -374,8 +405,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         if (message.kind === 'thinking') current.thinking.push(message);
       }
     }
-    const lone = actor && view === 'logox' ? undefined : lineAt.get(message.id);
-    if (lone) pushStageLine(builder, lone, railFor(message.ownerId), ownerColor(message.ownerId, roles), roles[message.ownerId]?.symbol ?? '◈');
+    if (!humanLike && !systemLike) for (const line of stageAt.get(message.id) ?? []) pushStageLine(builder, line, railFor(message.ownerId));
+    if (editAbsorbed.has(message.id)) continue;
     if ((!actor || view !== 'logox') && (absorbed.has(message.id) || groupAt.has(message.id))) {
       const group = groupAt.get(message.id);
       if (group) {
@@ -439,7 +470,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
           status: lines > 0 ? `${lines} line${lines === 1 ? '' : 's'}` : '',
           bodyLines: [],
           open: open(message.id),
-          railColor: senderColor,
+          railColor: viewColor,
           renderBody(inner) {
             if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner);
           },

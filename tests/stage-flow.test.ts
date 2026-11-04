@@ -39,8 +39,8 @@ test('Actor labels stay on the card while legacy stage snapshots create no body 
     assert.match(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/);
     assert.ok(!rows.some(row => /\d\/\d/.test(row.text)));
     assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
-    assert.equal(rows.filter(row => /^[▸▾] Thinking|^[▸▾] Thought/.test(row.text)).length, 1, 'one live thinking row, no per-request rows');
-    assert.ok(rows.some(row => row.messageId === f.first && /▸ Thinking/.test(row.text)));
+    assert.equal(rows.filter(row => /^[·▸▾] Thinking|^[▸▾] Thought/.test(row.text) && row.messageId === f.first).length, 1, 'one live thinking row, no per-request rows');
+    assert.ok(rows.some(row => row.messageId === f.first && /^· Thinking/.test(row.text)));
     assert.match(rows.find(row => row.messageId === f.tool)!.text, /write[\s(]pelican\.html/i);
     assert.ok(!rows.some(row => row.text.includes('核对传动比例')));
     assert.equal(f.steps.get(f.first).stage?.id, skeleton.id, 'Historical step snapshots remain unchanged');

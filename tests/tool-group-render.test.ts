@@ -149,20 +149,22 @@ test('failed call is split out as a normal error card between two groups', () =>
   assert.ok(!/Error/.test(lines[failed]!), 'the failed row carries its reason once and no trailing Error label');
 });
 
-test('a stage titles the Logox group: the intent leads, the verb summary follows faintly, no extra row', () => {
+test('a stage is its own prose row before its tools; the group title stays the verb summary', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ Reading the sources\nLooking now.', {activityId: 'a'});
   standard(f);
   const rows = f.rows(100), lines = rows.map(text);
-  const title = rows.find(row => TITLED('Reading the sources').test(text(row)))!;
-  assert.ok(title, lines.join(' | '));
-  assert.equal(lines.filter(l => l.includes('Reading the sources')).length, 1, 'the intent is not repeated as a separate row');
-  assert.ok(!lines.some(l => l.includes('⏵')));
-  const intent = title.segments!.find(segment => segment.text.includes('Reading the sources'))!;
-  assert.equal(intent.color, palette.fg);
-  const summary = title.segments!.find(segment => /\d+ (?:files?|patterns?)/.test(segment.text) && !segment.separator)!;
-  assert.equal(summary.color, palette.muted, 'the verb summary is faint');
-  assert.match(text(title), /· \d+\.\ds/, 'the elapsed time closes the title');
+  const stage = rows.findIndex(row => /^\s*Reading the sources$/.test(text(row).replace(/[│]/g, '').trimEnd()));
+  assert.ok(stage >= 0, lines.join(' | '));
+  assert.ok(!lines.some(l => l.includes('⏵') || /^\s*◈ Reading/.test(l)), 'no marker and no glyph');
+  const row = rows[stage]!;
+  assert.equal(row.color, palette.fg, 'normal foreground');
+  assert.ok(!row.segments?.some(segment => segment.italic) && row.tone !== 'direction', 'upright');
+  const title = rows.find(r => GROUP.test(text(r)))!;
+  assert.ok(!text(title).includes('Reading the sources'), 'the intent is never part of the group title');
+  assert.ok(rows.indexOf(title) > stage, 'the stage precedes its tools');
+  assert.ok(lines.some(l => l.includes('Looking now.')), 'the remaining prose still shows');
+  assert.equal(title.segments![0]!.italic, true, 'group titles are italic');
 });
 
 test('without a stage the group falls back to its verb list', () => {
@@ -171,60 +173,61 @@ test('without a stage the group falls back to its verb list', () => {
   assert.ok(lines.some(l => /^\s*[▸▾] [A-Z][\w' -]* 1 pattern/.test(l)), lines.join(' | '));
 });
 
-test('a stage with a single collapsible call is a one-member group titled by the intent', () => {
+test('a stage before a single call keeps that call a normal row, the stage a row above it', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ Looking at the palette', {activityId: 'a'});
   f.call('Read', {file_path: 'G:/p/colors.css'});
   const lines = f.rows(100).map(text);
-  assert.ok(lines.some(l => /[▸▾] Looking at the palette · [A-Z][\w' -]* 1 file/.test(l)), lines.join(' | '));
-  assert.equal(lines.filter(l => l.includes('Looking at the palette')).length, 1);
-});
-
-test('a stage before a tool that is not collapsible stays visible as one intent row', () => {
-  const f = fixture();
-  f.store.message('s', 'logox', 'assistant', '⏵ Fixing the pedal phase', {activityId: 'a'});
-  f.call('Edit', {file_path: 'G:/p/a.ts', old_string: 'a', new_string: 'b'});
-  const lines = f.rows(100).map(text), at = lines.findIndex(l => /^\s*◈ Fixing the pedal phase/.test(l));
+  const at = lines.findIndex(l => /^\s*Looking at the palette\s*$/.test(l.replace(/[│]/g, '')));
   assert.ok(at >= 0, lines.join(' | '));
-  assert.match(lines[at + 1]!, /▮ Edit/);
+  assert.match(lines.slice(at + 1).join('\n'), /▮ Read/);
+  assert.ok(!lines.some(l => GROUP.test(l)));
 });
 
-test('a long intent keeps the title and sheds the verb summary first', () => {
+test('stages interleave with the groups around them: intent, its tools, next intent, its tools', () => {
+  const f = fixture();
+  f.store.message('s', 'logox', 'assistant', '⏵ First look', {activityId: 'a'});
+  f.call('Read', {file_path: 'G:/p/a.ts'}); f.call('Read', {file_path: 'G:/p/b.ts'});
+  f.store.message('s', 'logox', 'assistant', '⏵ Then change it', {activityId: 'a'});
+  f.call('Edit', {file_path: 'G:/p/a.ts', old_string: 'a', new_string: 'b'});
+  f.store.message('s', 'logox', 'assistant', '⏵ Verify', {activityId: 'a'});
+  f.call('Shell', {command: 'npm test'}); f.call('Shell', {command: 'ls'});
+  const lines = f.rows(100).map(text);
+  const at = (re: RegExp) => lines.findIndex(l => re.test(l.replace(/[│]/g, '')));
+  const order = [at(/^\s*First look\s*$/), at(/[▸▾] [A-Z][\w' -]* 2 files/), at(/^\s*Then change it\s*$/), at(/▮ Edit/), at(/^\s*Verify\s*$/), at(/[▸▾] [A-Z][\w' -]* 1 directory/)];
+  assert.ok(order.every(index => index >= 0), lines.join(' | '));
+  assert.deepEqual(order, [...order].sort((x, y) => x - y), lines.join(' | '));
+});
+
+test('a long intent wraps like prose inside the row width', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ Tracing why the resumed session drops every queued human input', {activityId: 'a'});
   standard(f);
-  const narrow = f.rows(48).map(text).find(l => l.includes('Tracing why'))!;
-  assert.ok(narrow && stringWidth(narrow) <= 48, narrow);
+  const rows = f.rows(48);
+  const intent = rows.filter(row => row.messageId.endsWith('-stage'));
+  assert.ok(intent.length >= 2, 'wrapped over rows');
+  assert.ok(intent.every(row => stringWidth(text(row)) <= 48));
+  assert.equal(intent.map(row => row.text).join(' ').replace(/\s+/g, ' ').trim(), 'Tracing why the resumed session drops every queued human input');
 });
 
-test('an actor window titles its groups by the stage too', () => {
+test('an actor window shows the stage as its own row and keeps verb-titled groups', () => {
   const f = fixture('kalon');
   f.store.message('s', 'kalon', 'assistant', '⏵ Checking the gradients', {activityId: 'a'});
   standard(f);
   const lines = buildStageRows(f.store.getSnapshot(), 's', 'kalon', 100, {}, null).map(text);
-  assert.ok(lines.some(l => TITLED('Checking the gradients').test(l)), lines.join(' | '));
-  assert.equal(lines.filter(l => l.includes('Checking the gradients') && !l.includes('Pelican animation')).length, 1, 'only the group title; the card subtitle carries the stage too');
+  assert.ok(lines.some(l => /^\s*Checking the gradients\s*$/.test(l.replace(/[│]/g, ''))), lines.join(' | '));
+  assert.ok(!lines.some(l => TITLED('Checking the gradients').test(l)));
 });
 
-test('a lone ⏵ line followed by tool calls becomes the stage header, without showing ⏵', () => {
-  const f = fixture();
-  f.store.message('s', 'logox', 'assistant', '⏵ Checking the pelican sources', {activityId: 'a'});
-  f.call('Read', {file_path: 'G:/p/a.ts'}); f.call('Read', {file_path: 'G:/p/b.ts'});
-  const lines = f.rows(100).map(text), stage = lines.findIndex(l => TITLED('Checking the pelican sources').test(l));
-  assert.ok(stage >= 0, lines.join(' | '));
-  assert.equal(lines.filter(l => l.includes('Checking the pelican sources')).length, 1);
-});
-
-test('actor cards invent no intent; with a stage the group title is the intent', () => {
-  const f = fixture('kalon'); standard(f);
-  assert.ok(!f.rows(100, {a: true}).some(r => /relevant files|Starting operation|Implementing and adjusting|Running commands/.test(text(r))));
+test('actor cards: the stage is a prose row inside the card and groups keep verb titles', () => {
   const g = fixture('kalon');
   g.store.message('s', 'kalon', 'assistant', '⏵ Reading the sources', {activityId: 'a'});
   standard(g);
-  const lines = g.rows(100, {a: true}).map(text);
-  assert.ok(lines.some(l => TITLED('Reading the sources').test(l)), lines.join(' | '));
-  assert.ok(!lines.some(l => /^\s*\S\s+Reading the sources\s*$/.test(l)), 'no separate intent row above the group');
-  assert.ok(!lines.some(l => l.includes('⏵')));
+  const rows = g.rows(100, {a: true}), lines = rows.map(text);
+  const stage = lines.findIndex(l => /^\s*[│ ]*Reading the sources\s*$/.test(l));
+  assert.ok(stage >= 0, lines.join(' | '));
+  assert.ok(!lines.some(l => TITLED('Reading the sources').test(l) || l.includes('⏵')));
+  assert.ok(lines.slice(stage).some(l => GROUP.test(l)));
 });
 
 test('shell command names are not group targets', () => {
@@ -334,7 +337,7 @@ test('running thinking title is white and finished thinking is muted', () => {
   store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'logox', kind: 'director', title: 't', status: 'running', stage: 'x', detail: ''});
   const steps = new Steps(store, {sessionId: 's', activityId: 'a', ownerId: 'logox'}, () => now);
   const id = steps.thinking(); store.appendMessage(id, 'pondering');
-  const find = () => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null).find(r => /▸ Thinking|▸ Thought for/.test(text(r)))!;
+  const find = () => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null).find(r => r.messageId === id)!;
   const last = (row: SceneRow) => decorateRow(row, 2_000_000, true).segments!.filter(s => s.selectionKey?.endsWith(':title')).at(-1)!.color;
   // The running title shimmers (it is never the muted finished color).
   assert.notEqual(last(find()), palette.muted);

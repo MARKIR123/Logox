@@ -6,6 +6,15 @@ import {codeLines, diffLines} from '../../tui/timeline/tool-code.js';
 import {callArgs} from '../ui-format.js';
 import {lookupWrite} from './record.js';
 
+/** The diff of a Write that replaced a file whose previous text is known; undefined for a new file or an unknown record. */
+export function writeDiff(args: Record<string, unknown>): ReturnType<typeof diffLines> | undefined {
+  const path = String(args.file_path ?? args.path ?? '');
+  const content = typeof args.content === 'string' ? args.content : '';
+  const record = lookupWrite(path, content);
+  if (!record?.existed || record.before === undefined) return undefined;
+  return diffLines(structuredPatch(path || 'file', path || 'file', record.before.replace(/\r\n/g, '\n'), content.replace(/\r\n/g, '\n'), '', '', {context: 3}).hunks);
+}
+
 /** Write card view: a new file shows its head like Read (`new file · N lines`); an overwrite shows the diff against the previous text when it is known. */
 export function writeView(args: Record<string, unknown>): ToolView {
   const path = String(args.file_path ?? args.path ?? '');

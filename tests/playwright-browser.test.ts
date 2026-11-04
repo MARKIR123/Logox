@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp, readdir, rm} from 'node:fs/promises';
+import {mkdtemp, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
 import {playwrightServer} from '../src/extensions/playwright.js';
@@ -68,6 +69,33 @@ test('local Playwright preserves page state and returns screenshots while offlin
     await extensions.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+
+test('local Playwright launch allows file URLs and keeps an isolated headless profile', () => {
+  const args = playwrightServer(tmpdir()).args;
+  for (const flag of ['--headless', '--isolated', '--allow-unrestricted-file-access']) assert.ok(args.includes(flag), flag);
+});
+
+test('local Playwright opens file URLs from the workspace and scratchpad', {skip: !enabled, timeout: 120_000}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-playwright-file-'));
+  const page = join(cwd, 'page.html');
+  await writeFile(page, '<!doctype html><title>File page</title><h1>File URL works</h1>');
+  const config = await loadConfig(cwd, {}, {}, cwd, cwd);
+  config.mcp.servers.playwright = playwrightServer(cwd);
+  const extensions = new ProjectExtensions(cwd, config, {home: cwd, boundary: cwd}, async () => true);
+  const context: ActorContext = {sessionId: 'browser-file', activityId: 'verify', ownerId: 'logox', history: [],
+    signal: new AbortController().signal, report() {}, say() {}, record: async () => {},
+    permission: async () => false, ask: async () => ({status: 'cancelled', reason: 'test'})};
+  try {
+    const result = await extensions.mcp.execute({id: 'nav', name: 'mcp', arguments: JSON.stringify({
+      server: 'playwright', action: 'call', tool: 'browser_navigate', arguments: {url: pathToFileURL(page).href},
+    })}, context);
+    assert.equal(result.isError, false, result.text);
+    assert.match(result.text, /File URL works|File page/);
+  } finally {
+    await extensions.close();
     await rm(cwd, {recursive: true, force: true});
   }
 });

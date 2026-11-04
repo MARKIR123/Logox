@@ -4,6 +4,7 @@ import {classifyShellCommand, shellExecutable} from '../../tools/ShellTool/class
 import {shellWords} from '../../permissions/shell.js';
 import type {ToolCall} from '../../runtime/messages.js';
 import {messageToolCall} from './tool-ui.js';
+import {mergeableEditPath} from '../../tools/EditTool/UI.js';
 
 export type ToolGroupCategory = 'search' | 'read' | 'list' | 'browse' | 'command';
 export interface ToolGroup {
@@ -17,11 +18,12 @@ export interface ToolGroup {
   readonly elapsedMs: number;
   readonly running: boolean;
   readonly active?: {readonly label: string; readonly elapsedMs: number};
-  readonly stage?: string;
 }
-/** A `⏵` stage that titles no group (it precedes a tool that is not collapsible): drawn as one intent row before message `before`. */
-export interface StageLine {readonly type: 'stage'; readonly id: string; readonly stage: string; readonly before: string}
-export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup | StageLine;
+/** A `⏵` stage: one prose row (the intent) drawn exactly where the stage changed, between the rows and groups around it. */
+export interface StageLine {readonly type: 'stage'; readonly id: string; readonly stage: string}
+/** Consecutive Edit calls (and Write overwrites) of one actor on one file with nothing between them: one `Edit(a.css) ×4` row. */
+export interface EditRun {readonly type: 'edits'; readonly id: string; readonly path: string; readonly messages: readonly Message[]}
+export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup | StageLine | EditRun;
 
 const categoryOrder: readonly ToolGroupCategory[] = ['search', 'read', 'list', 'browse', 'command'];
 
@@ -156,7 +158,7 @@ function isNeutral(message: Message): boolean {
   return message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim();
 }
 
-function buildGroup(messages: readonly Message[], stage: string | undefined, now: number, kind: ToolGroup['kind']): ToolGroup {
+function buildGroup(messages: readonly Message[], now: number, kind: ToolGroup['kind']): ToolGroup {
   const counts: Partial<Record<ToolGroupCategory, number>> = {};
   const targets: string[] = [];
   let elapsedMs = 0, running = false;
@@ -178,7 +180,29 @@ function buildGroup(messages: readonly Message[], stage: string | undefined, now
     }
   }
   return {type: 'group', kind, id: messages[0]!.id + '-group', messages, counts, targets, elapsedMs, running,
-    ...(active ? {active} : {}), ...(stage ? {stage} : {})};
+    ...(active ? {active} : {})};
+}
+
+/** Folds runs of mergeable edits (same owner, same file, nothing drawn between them) into one `edits` item; neutral rows draw nothing and do not break a run. */
+function mergeEdits(items: readonly TimelineItem[]): TimelineItem[] {
+  const result: TimelineItem[] = [];
+  let run: Message[] = [], path = '', held: TimelineItem[] = [];
+  const flush = () => {
+    if (run.length > 1) result.push({type: 'edits', id: run[0]!.id + '-edits', path, messages: run});
+    else for (const message of run) result.push({type: 'message', message});
+    result.push(...held);
+    run = []; held = []; path = '';
+  };
+  for (const item of items) {
+    const target = item.type === 'message' ? mergeableEditPath(item.message) : undefined;
+    if (item.type === 'message' && target !== undefined) {
+      if (run.length && (target !== path || item.message.ownerId !== run[0]!.ownerId)) flush();
+      run.push(item.message); path = target;
+    } else if (run.length && item.type === 'message' && isNeutral(item.message)) held.push(item);
+    else {flush(); result.push(item);}
+  }
+  flush();
+  return result;
 }
 
 export function groupToolMessages(messages: readonly Message[], options: {stages?: boolean} = {}): TimelineItem[] {
@@ -188,13 +212,11 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
   let runKind: ToolGroup['kind'] | undefined; // browser actions never mix with reads, searches and commands
   let callCount = 0;
   let pending: Message[] = []; // neutral messages after the last call, not yet known to be inside the group
-  let stage: string | undefined;
 
   const flush = () => {
-    // A stage titles its group even for a single call, so the intent is never lost; without one, two calls are the smallest group.
-    if (callCount >= (runKind === 'browser' || stage ? 1 : 2)) items.push(buildGroup(calls, stage, now, runKind ?? 'explore'));
+    // Two calls are the smallest explore group; every browser sequence is one.
+    if (callCount >= (runKind === 'browser' ? 1 : 2)) items.push(buildGroup(calls, now, runKind ?? 'explore'));
     else for (const message of calls) items.push({type: 'message', message});
-    if (callCount > 0) stage = undefined;
     for (const message of pending) items.push({type: 'message', message});
     calls = [];
     runKind = undefined;
@@ -222,17 +244,16 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
         continue;
       }
       flush();
-      if (stage) items.push({type: 'stage', id: message.id + '-stage', stage, before: message.id});
-      stage = undefined;
       emit(message);
       continue;
     }
     flush();
+    // A stage is its own row where it changed (the narration message itself draws only its remaining prose, if any).
+    if (narration) items.push({type: 'stage', id: message.id + '-stage', stage: narration});
     emit(message);
-    stage = narration;
   }
   flush();
-  return items;
+  return mergeEdits(items);
 }
 
 export function summarizeGroup(group: ToolGroup): string {

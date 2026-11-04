@@ -33,7 +33,8 @@ export interface ActorActivityContext {
   stop: {disabled: boolean; focused: boolean; hovered: boolean};
   /** Folds all thinking of the card into one row (first row inside an open card). */
   renderThinking?: ((messages: readonly Message[], frame: ToolFrame, activityId: string, ownerId: string) => void) | undefined;
-  renderMessage(message: Message, frame: ToolFrame): void;
+  /** `run` (merged same-file edits) renders as one row; the first message carries the card. */
+  renderMessage(message: Message, frame: ToolFrame, run?: readonly Message[]): void;
   renderInteraction(request: Interaction, frame: ToolFrame): void;
 }
 
@@ -114,10 +115,9 @@ export function renderActivity(context: ActorActivityContext): void {
         const nextItem = renderableItems[i + 1];
 
         if (item.type === 'group') {
-          // The stage (the model's `⏵` line) titles the group itself; nothing is invented when it is absent.
           pushToolGroupCard(builder, item, {
             ownerId: activity.ownerId, open: context.isOpen ? context.isOpen(item.id) : false,
-            railColor: roleColor, parentFrame: inPhase ? currentPhaseFrame : actorTreeFrame,
+            railColor: color, parentFrame: inPhase ? currentPhaseFrame : actorTreeFrame,
             verbs: roles[activity.ownerId]?.activityVerbs,
             renderChild: (m, inner) => context.renderMessage(m, inner),
           });
@@ -125,10 +125,12 @@ export function renderActivity(context: ActorActivityContext): void {
         }
 
         if (item.type === 'stage') {
-          // A stage before a tool that is not collapsible (Edit, Write, ...) stays visible as one intent row; what follows nests under it.
-          pushStageLine(builder, item, color, roleColor, roles[activity.ownerId]?.symbol || '◈', frame);
-          currentPhaseFrame = insetRailFrame(frame, roleColor);
-          inPhase = true;
+          // The model's `⏵` line is its own prose row between the rows around it; the outer rail keeps the surface colour.
+          pushStageLine(builder, item, color, inPhase ? currentPhaseFrame : actorTreeFrame);
+          continue;
+        }
+        if (item.type === 'edits') {
+          context.renderMessage(item.messages[0]!, inPhase ? currentPhaseFrame : actorTreeFrame, item.messages);
           continue;
         }
         const message = item.message;
@@ -156,7 +158,7 @@ export function renderActivity(context: ActorActivityContext): void {
             status: lines > 0 ? `${lines} line${lines === 1 ? '' : 's'}` : '',
             bodyLines: [],
             open: cardOpen,
-            railColor: senderColor,
+            railColor: color,
             parentFrame: actorTreeFrame,
             renderBody(inner) {
               if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner);
@@ -165,7 +167,7 @@ export function renderActivity(context: ActorActivityContext): void {
         } else if (message.role === 'assistant' && !message.kind && message.text.trim()) {
           const lines = message.text.trim().split(/\r?\n/);
           const firstLine = lines[0]!.trim();
-          const isNextTool = nextItem && (nextItem.type === 'group' || (nextItem.type === 'stage' || nextItem.type === 'message' && (nextItem.message.kind === 'tool' || (nextItem.message.role as string) === 'tool')));
+          const isNextTool = nextItem && (nextItem.type === 'group' || nextItem.type === 'edits' || (nextItem.type === 'stage' || nextItem.type === 'message' && (nextItem.message.kind === 'tool' || (nextItem.message.role as string) === 'tool')));
           const symbol = roles[activity.ownerId]?.symbol || '◈';
           const isExplicitPhase = firstLine.startsWith(symbol) || /^#{1,4}\s+/.test(firstLine);
           if (isNextTool && isExplicitPhase && firstLine.length <= 80) {

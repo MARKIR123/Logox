@@ -101,7 +101,7 @@ test('nested open cards tint at stepped strengths in the owner colour: a child n
   assert.equal(bgOf(logox.rows({[lg]: true, [l1]: true}), l1), expandedTint(palette.accent, 2));
 });
 
-test('thinking has one expander that counts lines across thoughts and toggles to show less', () => {
+test('thinking has one expander that counts lines (and the blank row between thoughts) across thoughts and toggles to show less', () => {
   const store = new RuntimeStore();
   store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'logox', kind: 'director', title: 'Main', status: 'running', stage: 'x', detail: ''});
   store.message('s', 'user', 'user', 'Go.', {activityId: 'a', inputKind: 'human'});
@@ -113,7 +113,7 @@ test('thinking has one expander that counts lines across thoughts and toggles to
   const closed = build({});
   const expanders = closed.filter(row => /… \d+ more/.test(row.text));
   assert.equal(expanders.length, 1, 'one expander for the whole body');
-  assert.equal(expanders[0]!.text, '… 6 more lines');
+  assert.equal(expanders[0]!.text, '… 7 more lines');
   assert.ok(!closed.some(row => /more thoughts?/.test(row.text)));
   assert.equal(expanders[0]!.messageId, first + '-more');
   assert.equal(actionAt(expanders[0], expanders[0]!.gutterCols)?.foldId, first + '-more');

@@ -19,14 +19,14 @@ const text = (row: SceneRow) => (row.displayText ?? row.text).replace(/[│\s]/g
 const blank = (row: SceneRow) => text(row) === '';
 const reply = (store: RuntimeStore, owner: string, body: string) => store.message('s', owner, 'assistant', body, {activityId: 'a'});
 
-test('thinking text drops blank lines at the edges and between paragraphs, keeping paragraphs on separate lines', () => {
+test('thinking text drops blank lines at the edges and between paragraphs, keeping paragraphs on separate rows under the thought marker', () => {
   const raw = '\n\nFirst paragraph.\n\n\nSecond paragraph.\n\nThird.\n\n';
   assert.equal(compactParagraphs(raw), 'First paragraph.\nSecond paragraph.\nThird.');
   const f = fixture();
   const id = f.steps.thinking(); f.store.appendMessage(id, raw); f.advance(2000); f.steps.finish(id, 'completed'); f.steps.endGroup('completed');
   const message = f.store.getSnapshot().messages.find(m => m.kind === 'thinking')!;
   const rows = f.rows({a: true, [message.id]: true});
-  const first = rows.findIndex(r => /^\d+sFirstparagraph\.$/.test(text(r)));
+  const first = rows.findIndex(r => /^∴Firstparagraph\.$/.test(text(r)));
   assert.ok(first >= 0, 'thinking body renders');
   assert.deepEqual(rows.slice(first + 1, first + 3).map(text), ['Secondparagraph.', 'Third.']);
   assert.equal(rows[first - 1] && blank(rows[first - 1]!), false, 'no empty row between the header and the body');

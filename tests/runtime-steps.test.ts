@@ -177,7 +177,7 @@ test('model requests retain independent Thinking identities and visible tool pee
     assert.equal(new Set(snapshot.messages.filter(message => message.kind === 'thinking').map(message => message.step?.groupId)).size, 3);
     assert.equal(snapshot.messages.filter(message => message.kind === 'tool' && message.step?.groupId === id).length, 1);
     const folded = buildStageRows(snapshot, 's', 'logox', 99, {}, null);
-    assert.equal(folded.filter(row => /▸ Thinking/.test(row.text)).length, 1, 'All the thinking of the round is one live row');
+    assert.equal(folded.filter(row => /^· Thinking/.test(row.text)).length, 1, 'All the thinking of the round is one live row');
     const midGroup = snapshot.messages.find(message => message.kind === 'tool')!.id + '-group';
     assert.ok(folded.some(row => /\b1 file\b/.test(row.text)), 'The collapsed group counts the read');
     assert.ok(buildStageRows(snapshot, 's', 'logox', 99, {[midGroup]: true}, null).some(row => /read.*sample\.txt/i.test(row.text)), 'Expanded, tools remain independently readable beside Thinking');

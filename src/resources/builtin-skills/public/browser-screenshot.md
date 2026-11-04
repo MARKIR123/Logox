@@ -11,7 +11,7 @@ Use the local `playwright` MCP server for HTML, SVG, canvas, and browser UI veri
 ## 2. Boundaries
 - Keep navigation, interaction, assertions, and screenshots in the same page session.
 - Every actor has its own isolated browser instance. Never wait for another actor to release a browser, and never send "browser free" handoffs.
-- The server blocks `file://` URLs. Serve local HTML/SVG over HTTP (for example `python -m http.server <free-port>` or `npx -y serve -l <free-port> .`) and confirm the port is listening before navigating.
+- Local files open directly with `file:///` URLs (for example `file:///G:/project/index.html`, forward slashes, three slashes); the server runs with unrestricted file access, so workspace and scratchpad paths both work. Prefer this over starting an HTTP server. Use HTTP only when the page needs a real origin (fetch, ES modules, service workers).
 - Save temporary screenshots and other artifacts in scratchpad. Omit a screenshot filename to use the server's isolated scratchpad output directory.
 - Never replace real clicks with synthetic DOM events to claim an interaction passed.
 - Ordinary screenshots capture the current state; they do not promise deterministic animation time or byte-identical images.
@@ -23,7 +23,7 @@ Use the local `playwright` MCP server for HTML, SVG, canvas, and browser UI veri
 4. Click, type, or press keys using the listed parameter schema and current element references. Call `browser_snapshot` again to observe the resulting state.
 5. Verify the expected visible state, then take a screenshot without reopening the page.
 6. Inspect the image returned by MCP directly. Use `Read` only if the result provides a saved image path instead of image content.
-7. Close your browser and stop the preview server when verification finishes.
+7. Close your browser and stop any preview server you started when verification finishes.
 
 ## 4. Verification & Done Criteria
 Report the action performed, observed state, screenshot evidence, and any unverified behavior. A rendered page or simulated DOM test alone does not prove real interaction. If browser prerequisites are missing, report the setup requirement rather than downloading a browser during an offline task.

@@ -10,7 +10,7 @@ export function playwrightServer(cwd: string): McpServerConfig {
   return mcpServerSchema.parse({
     command: process.execPath,
     args: [cli, '--browser', 'chromium', '--headless', '--isolated', '--image-responses', 'allow',
-      '--output-dir', dirname(getScratchpadDir(cwd, 'browser-' + randomUUID())), '--codegen', 'none', '--no-webmcp'],
+      '--output-dir', dirname(getScratchpadDir(cwd, 'browser-' + randomUUID())), '--codegen', 'none', '--no-webmcp', '--allow-unrestricted-file-access'],
     description: 'Local Playwright browser: observe, interact and capture screenshots in your own isolated browser window.',
     timeout: 90,
   });

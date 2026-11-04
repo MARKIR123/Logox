@@ -13,7 +13,7 @@ import {extractSelection} from '../src/tui/timeline/viewport.js';
 
 type Rows = ReturnType<typeof buildStageRows>;
 const thinkingRow = (rows: Rows, id: string) => rows.find(row => row.messageId === id);
-const anyThinkingRow = (rows: Rows) => rows.find(row => /^[▸▾] Thinking|^[▸▾] Thought/.test(row.text));
+const anyThinkingRow = (rows: Rows) => rows.find(row => /^[·▸▾] Thinking|^[▸▾] Thought/.test(row.text));
 
 function fixture(ownerId = 'logox') {
   const store = new RuntimeStore(); let now = 100;
@@ -29,7 +29,7 @@ test('一轮只有一行 Thinking：运行中携带实时时钟，结束后为�
   const row = thinkingRow(rowsOf({}, null), id)!;
   assert.equal(row.animation!.step!.state, 'running');
   assert.equal(thinkingRow(rowsOf({[id]: true}, id), id)!.animation!.step!.state, 'running');
-  assert.match(row.displayText!, /▸ Thinking/);
+  assert.match(row.displayText!, /^· Thinking · /, '运行中：角色思考点阵 + Thinking + 实时时钟');
   f.store.appendMessage(id, '再确认');
   f.steps.close('failed');
   const done = thinkingRow(buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {}, null), id)!;
@@ -39,7 +39,7 @@ test('一轮只有一行 Thinking：运行中携带实时时钟，结束后为�
   assert.ok(!thinkingRow(buildStageRows(f.store.getSnapshot(), 'other', 'logox', 99, {}, null), id));
 });
 
-test('展开后每次思考一段：左列时长，正文次要色斜体；背景只是所属角色色的淡染', () => {
+test('展开后每次思考一段：以 ∴ 开头悬挂缩进、没有时长列，正文次要色斜体；背景只是所属角色色的淡染', () => {
   const f = fixture('techne'), id = f.steps.thinking(); f.store.appendMessage(id, '中文🙂 正文');
   f.advance(21000); f.steps.finish(id, 'completed'); f.steps.endGroup('completed');
   const rows = buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {[id]: true}, null);
@@ -48,7 +48,9 @@ test('展开后每次思考一段：左列时长，正文次要色斜体；背�
   assert.equal(head.bg, expandedTint(cast.techne!.color, 1), '展开背景 = 所属角色色 6% 混入背景（深度 1）');
   const body = rows.find(row => row.text.includes('中文🙂 正文'))!;
   assert.equal(body.bg, head.bg);
-  assert.match(body.text, /^21s +中文🙂 正文/);
+  assert.match(body.text, /^∴ 中文🙂 正文/);
+  assert.ok(!/\d+s/.test(body.text), '没有逐段时长列');
+  assert.equal(body.segments!.find(segment => segment.text === '∴ ')!.color, faintColor(), '∴ 为淡色标记');
   const text = body.segments!.find(segment => segment.text === '中文🙂 正文')!;
   assert.equal(text.color, palette.muted); assert.equal(text.italic, true);
   assert.equal(decorateRow(body, 100000), body, '没有动画的正文不重绘');
@@ -104,7 +106,8 @@ test('一轮的所有思考合并为标题下的一行；工具是同级卡片�
 
 test('实时思考：标题行显示 Thinking 与旋转点阵，思考行保留并流光；点阵取角色色', () => {
   const f = fixture('techne'), id = f.steps.thinking(), theme = '#59a1e8';
-  const roles = {...cast, techne: {...cast.techne!, color: theme}};
+  const frames = ['▖', '▌', '▘', '▀'];
+  const roles = {...cast, techne: {...cast.techne!, color: theme, thinkingAnimation: frames}};
   const rowsOf = (hovered: string | null = null) => buildStageRows(f.store.getSnapshot(), 's', 'techne', 99, {}, hovered, {}, roles);
   const rows = rowsOf();
   const header = rows.find(row => row.messageId.endsWith('-who'))!;
@@ -114,7 +117,9 @@ test('实时思考：标题行显示 Thinking 与旋转点阵，思考行保留�
   assert.equal(early.segments!.find(segment => segment.selectionKey?.endsWith(':activity_icon'))!.color, theme);
   assert.notDeepEqual(early.segments, later.segments);
   const row = thinkingRow(rows, id)!;
-  assert.match(decorateRow(row, f.now()).displayText!, /▸ Thinking/);
+  const glyph = decorateRow(row, f.now()).displayText!.trimStart()[0]!;
+  assert.ok(frames.includes(glyph), '运行中思考行使用角色自己的思考动画帧：' + glyph);
+  assert.match(decorateRow(row, f.now()).displayText!, /^\S Thinking · /);
   const hovered = thinkingRow(rowsOf(id), id)!;
   for (const now of [f.now(), f.now() + 320]) {
     const highlighted = decorateRow(hovered, now);
