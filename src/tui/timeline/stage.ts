@@ -321,7 +321,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     })() : undefined;
     // A finished row is an italic summary (`Thought 6 times · …`); a running one keeps the actor's own thinking glyph, `Thinking` with the shimmer and the live clock.
     const summary: readonly SceneSegment[] = [{text, color: isOpen ? palette.fg : palette.muted, italic: true, selectionKey: id + ':title', selectionOffset: 0}];
-    const liveSegments: readonly SceneSegment[] = [{text: 'Thinking', selectionKey: id + ':title', selectionOffset: 0}];
+    const liveSegments: readonly SceneSegment[] = [{text: 'Thinking', italic: true, selectionKey: id + ':title', selectionOffset: 0}];
     target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: live ? 'Thinking' : 'Tool', title: live ? 'Thinking' : text, expandable: !live, bodyLines: [], open: isOpen,
       railColor: viewColor, ...(frame ? {parentFrame: frame} : {}), ...(runningStep ? {step: runningStep} : {}),
       titleSegments: live ? liveSegments : summary,
@@ -376,7 +376,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const ensureRound = (who: string, message: Message): Round => {
     if (round?.who === who) return round;
     flushRound();
-    builder.pushBlank(viewColor);
+    builder.pushBlank(); // between rounds: no rail, no speaker owns it
     round = {who, id: message.id, insertAt: builder.rows.length, since: lastUserTime ?? message.time ?? Date.now(), thinking: [], messages: [], actors: new Map()};
     return round;
   };
@@ -479,7 +479,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       }
       flushRound();
       lastUserTime = message.time;
-      builder.pushBlank(viewColor);
+      builder.pushBlank();
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' ? message.source ?? message.ownerId : 'user',
         queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source);
@@ -487,7 +487,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     } else {
       if (systemLike) {
         flushRound();
-        builder.pushBlank(viewColor);
+        builder.pushBlank();
       } else if (!message.kind && !(view === 'logox' && actor) && gapBefore(false)) builder.pushBlank(viewColor);
       body(message);
     }
@@ -505,5 +505,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       failure(activity.activityId);
     }
   }
-  return builder.rows;
+  // The timeline never opens with spacer rows (a gap only separates content).
+  let lead = 0;
+  while (lead < builder.rows.length && builder.rows[lead]!.tone === 'spacer') lead++;
+  return lead ? builder.rows.slice(lead) : builder.rows;
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {decorateRow} from '../src/tui/timeline/row-presentation.js';
 import {compactParagraphs, trimTrailingBlankLines, type SceneRow} from '../src/tui/timeline/scene.js';
 
 function fixture(owner: 'kalon' | 'logox' = 'kalon') {
@@ -70,3 +71,38 @@ for (const owner of ['kalon', 'logox'] as const) {
     assert.ok(!rows.some(r => messageIds.includes(r.messageId) && blank(r)), 'no empty rows owned by empty assistant messages');
   });
 }
+
+for (const owner of ['kalon', 'logox'] as const) {
+  test(`the timeline never opens with spacer rows and blank rows between rounds carry no rail (${owner})`, () => {
+    const f = fixture(owner);
+    reply(f.store, owner, 'First answer.');
+    f.store.message('s', 'logox', 'user', 'Again?', {inputKind: 'human'});
+    reply(f.store, owner, 'Second answer.');
+    const rows = f.rows();
+    assert.notEqual(rows[0]!.tone, 'spacer', 'first row is content');
+    assert.ok(rows.some(r => r.tone === 'spacer'), 'rounds are still separated by a gap');
+    const header = rows.findIndex((r, i) => i > 0 && r.railGlyph === '❯');
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      if (row.tone === 'spacer' && rows[i + 1]?.railGlyph) assert.ok(!row.railColor && row.gutterCols === 0, 'a gap before a header has no rail');
+    }
+    assert.ok(header === -1 || rows.slice(0, header).some(r => r.tone !== 'spacer'));
+  });
+}
+
+test('the running thinking row stays italic through the shimmer and the live clock', () => {
+  const f = fixture('logox');
+  const id = f.steps.thinking(); f.store.appendMessage(id, 'pondering');
+  const rows = f.rows();
+  const row = rows.find(r => r.segments?.some(s => s.selectionKey?.endsWith(':title') && s.text.startsWith('Thinking')) && r.animation?.thinking);
+  assert.ok(row, 'running thinking row exists');
+  for (const now of [Date.now(), Date.now() + 120, Date.now() + 480, Date.now() + 5000]) {
+    const decorated = decorateRow(row!, now, true);
+    const title = decorated.segments!.filter(s => s.selectionKey?.endsWith(':title'));
+    assert.ok(title.length > 0 && title.every(s => s.italic), 'every shimmered Thinking cell is italic');
+    assert.equal(title.map(s => s.text).join(''), 'Thinking');
+    const clock = decorated.segments!.filter(s => s.selectionKey?.endsWith(':status'));
+    assert.ok(clock.every(s => s.italic), 'the live clock is italic');
+  }
+  assert.ok(decorateRow(row!, Date.now(), false).segments!.filter(s => s.selectionKey?.endsWith(':title')).every(s => s.italic), 'static (no motion) row is italic');
+});

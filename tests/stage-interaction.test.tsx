@@ -82,7 +82,7 @@ test('内容端点在滚动、追加和缩放后保持正文与角色标题位�
 
 test('长历史会话中选区高亮计算保持亚毫秒级性能且结果精确', () => {
   const store = new RuntimeStore();
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 240; i++) {
     store.message('s', 'logox', 'assistant', `第 ${i} 条消息：` + '测试内容中文🙂 English words. '.repeat(8));
   }
   const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {}, null);
