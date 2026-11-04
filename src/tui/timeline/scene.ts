@@ -112,9 +112,13 @@ export interface FrameWrap {
   readonly depth?: number;
 }
 
-/** Live activity after the speaker name: spinner, current action and elapsed time (the spinner and clock are drawn by `decorateRow`). */
-/** Without `since` the activity is static text (waiting on an answer or approval): no spinner, no clock. */
-export interface TurnActivity {readonly label: string; readonly since?: number}
+/** The speaker header activity: spinner, stage text and clock while the round runs (drawn by `decorateRow`); a faint total once it is done. */
+export interface TurnActivity {
+  /** The stage text (or a temporary state such as `Awaiting approval`); quiet muted text once the round is done. */
+  readonly label?: string;
+  /** Round start: a spinner draws after the separator (animated by `decorateRow`); absent for a static wait or a finished round. */
+  readonly since?: number;
+}
 
 export interface RowBuilder {
   rows: SceneRow[];
@@ -288,18 +292,15 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const pieces: SceneSegment[] = [{text: whoName(who, roles), color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
     if (origin) pieces.push({text: ' · ' + origin, color: palette.muted, selectionKey: id + ':origin'});
     const since = activity?.since;
-    if (activity) {
-      // The live part (spinner, action, clock) only shows when it fits on the header row; the label is clipped to the room left.
-      const fixed = since !== undefined ? 2 + 1 + 1 + SEPARATOR.length + 6 : 2;
-      const room = contentWidth - pieces.reduce((sum, p) => sum + stringWidth(p.text), 0) - fixed;
-      const label = room >= 4 ? clipLine(activity.label, room) : '';
-      if (label && since !== undefined) pieces.push(
-        {text: '  ', selectionKey: id + ':activity_gap', selectionOffset: 0},
-        {text: '⠋', color: railColor, selectionKey: id + ':activity_icon', selectionOffset: 0},
-        {text: ' ' + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0},
-        {text: SEPARATOR, color: faintColor(), separator: true, selectionKey: id + ':activity_sep', selectionOffset: 0},
-        {text: swarmElapsed(Date.now() - since), color: faintColor(), selectionKey: id + ':activity_time', selectionOffset: 0});
-      else if (label) pieces.push({text: '  ' + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0});
+    if (activity && (activity.label || since !== undefined)) {
+      // `Name · <spinner> <stage>`: no clock. The stage is clipped to the room left on the header row.
+      const spinning = since !== undefined;
+      const used = pieces.reduce((sum, p) => sum + stringWidth(p.text), 0);
+      const room = contentWidth - used - SEPARATOR.length - (spinning ? 2 : 0);
+      const label = activity.label && room >= 4 ? clipLine(activity.label, room) : '';
+      if (label || spinning) pieces.push({text: SEPARATOR, color: faintColor(), separator: true, selectionKey: id + ':activity_sep', selectionOffset: 0});
+      if (spinning) pieces.push({text: '⠋', color: railColor, selectionKey: id + ':activity_icon', selectionOffset: 0});
+      if (label) pieces.push({text: (spinning ? ' ' : '') + label, color: palette.muted, selectionKey: id + ':activity', selectionOffset: 0});
     }
     const used = pieces.reduce((sum, s) => sum + stringWidth(s.text), 0);
     if (clock && used + stringWidth(clock) + 2 <= contentWidth) pieces.push({text: ' '.repeat(contentWidth - used - stringWidth(clock)) + clock, color: palette.muted});

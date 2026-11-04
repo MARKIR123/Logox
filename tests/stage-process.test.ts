@@ -145,7 +145,7 @@ test('the live header activity and the card subtitle still use the current stage
   const g = fixture();
   g.stage('Verifying the build');
   g.call('Shell', {command: 'sleep 9'}, {run: true});
-  assert.ok(g.rows().some(row => /Logox +\S Verifying the build/.test(text(row))), 'live header uses the stage');
+  assert.ok(g.rows().some(row => /^Logox · \S Verifying the build/.test(text(row))), 'live header uses the stage');
 });
 
 // --- Same-file edit merge ---

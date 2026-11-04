@@ -81,22 +81,22 @@ test('an actor window groups its own turn under one header with the role symbol'
   assert.match(own[0]!.text, /^Kalon/);
 });
 
-test('the Logox header shows live activity: Thinking, the running tool, Waiting on actors; nothing when the round is done', () => {
+test('the Logox header shows the macro state only: no tool title, no Thinking; Waiting on actors; quiet when the round is done', () => {
   const {store, steps} = round();
   const think = steps.thinking(); store.appendMessage(think, 'hmm');
   const header = (hover: string | null = null) => headers(buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, hover)).find(row => row.railGlyph === '◈')!;
-  assert.match(decorateRow(header(), Date.now()).displayText!, /Logox +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking · \d/);
+  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*$/);
   steps.finish(think, 'completed');
   const tool = steps.tool({id: 'r', name: 'Read', arguments: JSON.stringify({file_path: 'index.html'})}); steps.start(tool);
-  assert.match(decorateRow(header(), Date.now()).displayText!, /Logox +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Read\(?.*index\.html/);
+  assert.match(decorateRow(header(), Date.now()).displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*$/, 'a running tool title never reaches the header');
   steps.finish(tool, 'completed', 'Read\nok');
   addActor(store, 'k', 'kalon');
   const waiting = decorateRow(header(), Date.now());
-  assert.match(waiting.displayText!, /Waiting on Kalon/);
+  assert.match(waiting.displayText!, /^Logox · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting on Kalon\s*$/);
   assert.equal(waiting.segments!.find(segment => segment.selectionKey?.endsWith(':activity_icon'))!.color, palette.accent);
   store.activities.update('s', 'k', {status: 'completed'}); steps.close('completed'); store.activities.update('s', 'main', {status: 'completed'});
-  assert.equal(header().animation, undefined, 'a finished round shows no activity');
-  assert.ok(!/Waiting|Thinking/.test(header().text));
+  assert.equal(header().animation, undefined, 'a finished round shows no spinner');
+  assert.equal(header().text.trim(), 'Logox', 'no stage was written: just the name');
 });
 
 test('consecutive folded actor cards stack tightly; one blank separates prose from the first card', () => {

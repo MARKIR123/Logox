@@ -26,6 +26,8 @@ export interface ContextOptions {
   anchors?(identity: Identity): Promise<readonly ModelMessage[]>;
   report?(identity: Identity, text: string): void;
   beforeCompact?(identity: Identity, tokens: number): void;
+  /** Brackets a running compaction so the UI can show `Compacting context` for that owner. */
+  compacting?(identity: Identity, active: boolean): void;
 }
 export class ContextBudgetError extends Error {}
 /** Upper bound for a model-written overview or progress summary. */
@@ -198,6 +200,7 @@ export class ContextManager {
     let compacted = false, request = requestFor(state);
     if (force || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
+      this.options.compacting?.(identity, true);
       try {
         // A compacted view never sends thinking from before this point, including in the request built right now.
         const candidate: ContextState = {...structuredClone(state), ...contextSnapshot(sourceMessages), thinkingCut: entries.length};
@@ -266,6 +269,8 @@ export class ContextManager {
         request = requestFor(original);
         this.options.report?.(identity, '[Context] Compaction failed; retaining the previous view: ' + (error instanceof Error ? error.message : 'Could not save or summarize history'));
         if (force) throw error;
+      } finally {
+        this.options.compacting?.(identity, false);
       }
     }
     const input = meter.estimate(request, model);

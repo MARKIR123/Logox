@@ -214,6 +214,13 @@ export async function createSessionApplication(options: SessionApplicationOption
           text: `[Direct conversation] ${task.ownerId} (${task.activityId}) · ${task.status}. Use ReadActor for details if needed.`})) : [],
     report: (identity, text) => notice(text, 'task_notice', identity.ownerId, identity.activityId),
     beforeCompact: (identity, tokens) => extensions.hooks.emit('pre_compact', {session_id: identity.sessionId, owner_id: identity.ownerId, tokens}),
+    // The activity phase is what the timeline reads for `Compacting context`; the next model round restores its own phase.
+    compacting: (identity, active) => {
+      const current = identity.activityId ? store.activities.get(identity.sessionId, identity.activityId) : undefined;
+      if (!current || !['running', 'waiting_input'].includes(current.status)) return;
+      if (active) store.activities.update(identity.sessionId, current.activityId, {phase: 'compacting'});
+      else if (current.phase === 'compacting') store.activities.update(identity.sessionId, current.activityId, {phase: 'model'});
+    },
   });
   const surfaces = new CommandSurfaces((result, completion) => {
     if (result.message && !closed) notice(result.message, result.kind ?? 'command_result', completion.ownerId ?? commandOwner, undefined,

@@ -113,7 +113,7 @@ test('实时思考：标题行显示 Thinking 与旋转点阵，思考行保留�
   const header = rows.find(row => row.messageId.endsWith('-who'))!;
   assert.equal(header.railGlyph, roles.techne!.symbol);
   const early = decorateRow(header, f.now()), later = decorateRow(header, f.now() + 320);
-  assert.match(early.displayText!, /Techne +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking · /);
+  assert.match(early.displayText!, /^Techne · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*$/, 'no stage yet: spinner only, no Thinking, no clock');
   assert.equal(early.segments!.find(segment => segment.selectionKey?.endsWith(':activity_icon'))!.color, theme);
   assert.notDeepEqual(early.segments, later.segments);
   const row = thinkingRow(rows, id)!;
@@ -130,8 +130,10 @@ test('实时思考：标题行显示 Thinking 与旋转点阵，思考行保留�
     assert.ok(rgb(segment.color!).every((channel, index) => channel >= Math.min(rgb(theme)[index]!, rgb(palette.fg)[index]!) && channel <= Math.max(rgb(theme)[index]!, rgb(palette.fg)[index]!)));
   }
   f.advance(1000); f.steps.finish(id, 'completed'); f.store.appendMessage(id, '想完了'); f.steps.endGroup('completed');
+  assert.ok(rowsOf().find(row => row.messageId.endsWith('-who'))!.animation, 'between steps the running activity keeps the header spinner');
+  f.store.activities.update('s', 'a', {status: 'completed'});
   const finished = rowsOf().find(row => row.messageId.endsWith('-who'))!;
-  assert.ok(!finished.animation, '思考结束且没有其他进行中的步骤时，标题行不再显示实时活动');
+  assert.ok(!finished.animation, '活动结束后标题行不再显示旋转点阵');
 });
 
 test('工具运行中呈现角色流光动效，完成恢复浅灰，异常红方块；展开后 ▾ 加正常前景色标题', () => {

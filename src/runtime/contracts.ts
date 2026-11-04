@@ -61,7 +61,7 @@ export const activitySchema = z.strictObject({
   kind: z.enum(['director', 'actor', 'anamnesis']),
   title: z.string().min(1), status: activityStatusSchema,
   stage: z.string(), detail: z.string(), version: z.number().int().nonnegative(),
-  phase: z.enum(['model', 'text', 'tool', 'approval', 'question', 'retry', 'finalizing']).optional(),
+  phase: z.enum(['model', 'text', 'tool', 'approval', 'question', 'retry', 'compacting', 'finalizing']).optional(),
   summary: roundSummarySchema.optional(),
   progress: taskProgressSchema.optional(),
   taskModel: taskModelSchema.optional(),

@@ -4,7 +4,7 @@ import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
-import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment} from './scene.js';
+import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment, type TurnActivity} from './scene.js';
 import {CANCELLABLE_TOOLS, expanderId, pushExpander, TOOL_BODY_LINES} from './tool-card.js';
 import {faintColor} from '../appearance/colors.js';
 import wrapAnsi from 'wrap-ansi';
@@ -35,22 +35,22 @@ function isTimelineError(message: Message): boolean {
   return message.role === 'system' && !message.activityId && message.systemPresentation === 'timeline' &&
     (message.systemEventKind === 'command_error' || message.systemEventKind === 'model_error');
 }
-function activityTitle(activity: RuntimeSnapshot['activities'][number], activityMessages?: readonly Message[]): string {
+/** `<main title> · <subtitle>`: while running the subtitle is a temporary state (`override`) or else the current `⏵` stage; once finished it keeps the last stage. Never a tool title. */
+function activityTitle(activity: RuntimeSnapshot['activities'][number], activityMessages?: readonly Message[], override?: string): string {
   const reason = activity.status === 'failed' ? activity.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() : '';
   if (reason) return reason;
-  const current = currentTaskProgress(activity.progress);
+  const running = ['running', 'waiting_input', 'paused'].includes(activity.status);
   const mainTitle = activity.taskTitle?.trim();
-  if (['running', 'waiting_input', 'paused'].includes(activity.status)) {
-    const activeTool = activityMessages?.findLast(m => (m.kind === 'tool' || (m.role as string) === 'tool') && m.step &&
-      ['running', 'waiting'].includes(m.step.state) &&
-      !['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress'].includes(m.step.call?.name ?? ''))?.step?.title;
-    const narrated = activityMessages?.findLast(m => m.role === 'assistant' && !m.kind && extractNarration(m.text))?.text;
-    const narration = narrated ? extractNarration(narrated)?.narration : undefined;
-    const subTitle = narration || current?.label?.trim() || (mainTitle ? activeTool?.trim().slice(0, 60) : undefined);
-    if (mainTitle && subTitle && subTitle !== mainTitle) return `${mainTitle} · ${subTitle}`;
-    return mainTitle || subTitle || activity.summary?.title || activity.title;
-  }
-  return mainTitle || activity.summary?.title || activity.title;
+  const narrated = activityMessages?.findLast(m => m.role === 'assistant' && !m.kind && extractNarration(m.text))?.text;
+  const subTitle = (running ? override : undefined) || (narrated ? extractNarration(narrated)?.narration : undefined) ||
+    (running ? currentTaskProgress(activity.progress)?.label?.trim() : undefined);
+  if (mainTitle && subTitle && subTitle !== mainTitle) return `${mainTitle} · ${subTitle}`;
+  return mainTitle || (running ? subTitle : undefined) || activity.summary?.title || activity.title;
+}
+/** The retry counter the agent loop reports as `Connection interrupted. Retrying (1/5)...`. */
+function retryLabel(detail: string): string {
+  const counter = /Retrying \((\d+)\/(\d+)\)/i.exec(detail) ?? /retrying \((\d+)\)/i.exec(detail);
+  return counter ? `Retrying (${counter[1]}${counter[2] ? '/' + counter[2] : ''})` : 'Retrying';
 }
 function activityStatus(activity: RuntimeSnapshot['activities'][number]): string {
   return activity.status === 'running' && ['Resuming', 'Adjusting'].includes(activity.stage)
@@ -111,6 +111,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   const animated = (activity: RuntimeSnapshot['activities'][number]) => activity.status === 'running' &&
     !['approval', 'question', 'retry'].includes(activity.phase ?? '') && !requests.has(activity.activityId) &&
     !(grouped.get(activity.activityId) ?? []).some(message => message.step?.state === 'waiting');
+  /** A temporary state that replaces the stage text while it holds: pending answer/approval, provider retry, compaction. */
+  const temporaryState = (ownerId: string, activityId?: string): {label: string; spinner: boolean} | undefined => {
+    const asked = pending.find(request => activityId ? request.activityId === activityId : request.ownerId === ownerId);
+    if (asked) return {label: asked.kind === 'permission' ? 'Awaiting approval' : 'Awaiting your answer', spinner: false};
+    const mine = snapshot.activities.filter(item => item.sessionId === sessionId && ['running', 'waiting_input'].includes(item.status) &&
+      (activityId ? item.activityId === activityId : item.ownerId === ownerId));
+    const compacting = mine.find(item => item.phase === 'compacting' || item.stage === 'Compacting context');
+    if (compacting) return {label: 'Compacting context', spinner: true};
+    const retrying = mine.find(item => item.phase === 'retry');
+    if (retrying) return {label: retryLabel(retrying.detail), spinner: true};
+    return undefined;
+  };
   const seen = new Set<string>();
   type Frame = Parameters<typeof insetFrame>[0];
   const open = (id: string) => stageFoldOpen(snapshot, id, folds);
@@ -277,20 +289,26 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   let round: Round | null = null;
   let lastUserTime: number | undefined;
   const hiddenSteps = ['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress', 'Actor'];
-  const describeRound = (r: Round): {label: string; live: boolean} | undefined => {
-    if (r.messages.some(m => m.kind === 'thinking' && m.step?.state === 'running')) return {label: 'Thinking', live: true};
+  let finalRound = false;
+  const describeRound = (r: Round, until: number): TurnActivity | undefined => {
+    const thinkingNow = r.messages.some(m => m.kind === 'thinking' && m.step?.state === 'running');
     const tool = r.messages.findLast(m => m.kind === 'tool' && m.step && ['running', 'waiting'].includes(m.step.state) && !hiddenSteps.includes(m.step.call?.name ?? ''));
-    // The current `⏵` stage says what the speaker is doing better than the one running tool does.
-    const stage = tool ? candidates.findLast(m => m.ownerId === r.who && m.role === 'assistant' && !m.kind && (m.time ?? 0) >= r.since && extractNarration(m.text))?.text : undefined;
-    const intent = stage ? extractNarration(stage)?.narration : undefined;
-    if (tool?.step) return {label: clipLine((intent ?? tool.step.title).replace(/\s+/g, ' ').trim(), 48), live: tool.step.state === 'running'};
     const waiting = [...r.actors.values()].filter(item => ['running', 'waiting_input', 'queued'].includes(item.status));
-    if (waiting.length) {
+    // The activity-level check covers the gaps between steps (context compaction, a pending model call) but only for the newest round.
+    const live = thinkingNow || !!tool || waiting.length > 0 || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ||
+      (finalRound && r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') &&
+        (activities.get(m.activityId)?.kind !== 'actor' || view !== 'logox')));
+    // The round's latest `⏵` stage (quiet text once the round is done).
+    const stage = candidates.findLast(m => m.ownerId === r.who && m.role === 'assistant' && !m.kind && (m.time ?? 0) >= r.since && (m.time ?? 0) <= until && extractNarration(m.text))?.text;
+    const intent = stage ? extractNarration(stage)?.narration.replace(/\s+/g, ' ').trim() : undefined;
+    if (!live) return intent ? {label: intent} : undefined;
+    const temporary = temporaryState(r.who);
+    if (temporary) return {label: temporary.label, ...(temporary.spinner ? {since: r.since} : {})};
+    if (!thinkingNow && !tool && waiting.length) {
       const names = waiting.map(item => roles[item.ownerId]?.name ?? item.ownerId);
-      return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', ')), live: waiting.some(animated)};
+      return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', ')), ...(waiting.some(animated) ? {since: r.since} : {})};
     }
-    const live = r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') && activities.get(m.activityId)?.kind !== 'actor');
-    return live || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ? {label: 'Working', live: true} : undefined;
+    return {...(intent ? {label: intent} : {}), since: r.since};
   };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
@@ -364,18 +382,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   };
   const renderThinking = (items: readonly Message[], frame: FrameWrap, _activityId: string, ownerId: string) =>
     pushThinking(builder, items, frame, ownerId);
-  const flushRound = () => {
+  const flushRound = (until = Infinity) => {
     if (!round) return;
     const r: Round = round; round = null;
     const chunk = createBuilder(width, hovered, roles, viewColor);
-    const state = describeRound(r);
-    chunk.pushTurnHeader(r.id + '-who', r.who, undefined, undefined, state ? {label: state.label, ...(state.live ? {since: r.since} : {})} : undefined);
+    const state = describeRound(r, until);
+    chunk.pushTurnHeader(r.id + '-who', r.who, undefined, undefined, state);
     pushThinking(chunk, r.thinking, undefined, r.who);
     builder.rows.splice(r.insertAt, 0, ...chunk.rows);
   };
   const ensureRound = (who: string, message: Message): Round => {
     if (round?.who === who) return round;
-    flushRound();
+    flushRound(message.time);
     builder.pushBlank(); // between rounds: no rail, no speaker owns it
     round = {who, id: message.id, insertAt: builder.rows.length, since: lastUserTime ?? message.time ?? Date.now(), thinking: [], messages: [], actors: new Map()};
     return round;
@@ -425,7 +443,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (seen.has(activity.activityId)) continue;
       seen.add(activity.activityId);
       if (gapBefore(true)) builder.pushBlank(viewColor);
-      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId)), status: activityStatus(activity),
+      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId), temporaryState(activity.ownerId, activity.activityId)?.label), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
         messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [], renderThinking,
         thinking, originalPrompt: actorGoal(activity), detailed: true, renderMessage: body, renderInteraction: interaction});
@@ -436,7 +454,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (view !== 'logox' && activity.status === 'completed') {
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
-        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId)), status: activityStatus(activity),
+        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId), temporaryState(activity.ownerId, activity.activityId)?.label), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
           messages: staged.get(activity.activityId) ?? [], pending: [], renderThinking, thinking, originalPrompt: actorGoal(activity),
           detailed: false, renderMessage: body, renderInteraction: interaction});
@@ -477,7 +495,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         });
         continue;
       }
-      flushRound();
+      flushRound(message.time);
       lastUserTime = message.time;
       builder.pushBlank();
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
@@ -486,14 +504,16 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       body(message);
     } else {
       if (systemLike) {
-        flushRound();
+        flushRound(message.time);
         builder.pushBlank();
       } else if (!message.kind && !(view === 'logox' && actor) && gapBefore(false)) builder.pushBlank(viewColor);
       body(message);
     }
     if (activity && !actor && grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
   }
+  finalRound = true;
   flushRound();
+  finalRound = false;
   for (const request of pending.filter(item => !seen.has(item.activityId))) interaction(request);
   for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (view === 'logox' || item.ownerId === view))) {
     if (activity.kind === 'anamnesis') {

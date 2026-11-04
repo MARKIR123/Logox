@@ -112,3 +112,17 @@ test('/rewind names each round by its _FinishRound title and outcome', async () 
     app.surfaces.cancel();
   } finally { await app.close(); await rm(cwd, {recursive: true, force: true}); }
 });
+
+test('compaction is bracketed by the compacting hook, which closes even when the summary fails', async () => {
+  const f = await history();
+  const events: string[] = [];
+  const provider: Provider = {async respond() { throw new Error('summary unavailable'); }};
+  const model = {identity: 'fixture', window: 16384};
+  const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
+    compacting: (identity, active) => events.push(identity.activityId + ':' + active),
+    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0, keep_index_lines: 2})});
+  try {
+    await contexts.prepare({sessionId: 's', ownerId: 'techne', activityId: 'open'}, {system: 'rules', tools: []}, new AbortController().signal, true).catch(() => undefined);
+    assert.deepEqual(events, ['open:true', 'open:false']);
+  } finally { await rm(f.root, {recursive: true, force: true}); }
+});
