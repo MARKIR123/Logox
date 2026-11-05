@@ -17,6 +17,7 @@ import {inputKind} from '../../runtime/provenance.js';
 import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
+import {userLabelRevision} from '../../config/user-profile.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
 import {groupToolMessages, type EditRun, type StageLine, type ToolGroup} from './tool-groups.js';
 import {renderEditRun} from '../../tools/EditTool/UI.js';
@@ -155,7 +156,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
     const run = runArg ?? editRuns.get(message.id)?.messages;
     const runKey = run ? run.map(item => item.id + ':' + (item.step?.state ?? '') + ':' + (item.step?.elapsedMs ?? 0) + ':' + item.text.length).join('|') : null;
-    const key = JSON.stringify([themeRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
+    const key = JSON.stringify([themeRevision(), userLabelRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);

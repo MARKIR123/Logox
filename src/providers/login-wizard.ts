@@ -87,6 +87,14 @@ function fromRow(row: WizardProviderRow): WizardProviderRecord {
   };
 }
 
+/** Optional first-run step: returns the typed name, or undefined when skipped (empty Enter or Esc). */
+export async function askPreferredName(ask: WizardAsk): Promise<string | undefined> {
+  const answer = await ask({title: 'Welcome', question: 'What should Logox call you?', allowEmpty: true,
+    detail: 'Optional. Enter or Esc skips; change it later with /name.'});
+  if (answer.status !== 'answered' || answer.value === '__cancel') return undefined;
+  return answer.value.trim() || undefined;
+}
+
 /** Local orchestration only: credentials remain in local variables until the explicit save boundary. */
 export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizardOutcome> {
   const ask = async (question: WizardQuestion): Promise<Answered | null> => {

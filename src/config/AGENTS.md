@@ -16,6 +16,7 @@
 | Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |
 | Statusbar modules, styles, palettes | `statusbar-preferences.ts:StatusbarPreferences` | `statusbar-palettes.json`, `~/.logox/statusbar.json` |
 | Theme files, `base` chains, user overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/logox-dark.json` |
+| Preferred user name (`/name`, onboarding step, live timeline label) | `user-profile.ts:sanitizeUserName()` | `user-profile.ts:saveUserName()`, `src/context/environment.ts:formatEnvironment()` |
 | First-run onboarding flag | `onboarding-preferences.ts:shouldOfferOnboarding()` | `~/.logox/` onboarding file |
 
 ## 3. Common Changes
@@ -60,5 +61,5 @@
 - **Used by**: `src/cli.tsx` and `src/application.ts` (load and apply), `src/providers/` (`modelSettings()`, `presets`), `src/kernel/agent.ts` (kernel limits), `src/actors/` (task models, recovery), `src/context/` (policy, usage), `src/tui/` (theme palette, statusbar).
 
 ## 6. Verification & Gaps
-- Fast run: `node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js dist/tests/fresh-directory-models.test.js dist/tests/theme-*.test.js dist/tests/color-literals.test.js dist/tests/model-grouping.test.js dist/tests/statusbar-modules.test.js dist/tests/onboarding-preferences.test.js`
+- Fast run: `node --test dist/tests/config.test.js dist/tests/model-preferences-usage.test.js dist/tests/state-file-lock.test.js dist/tests/fresh-directory-models.test.js dist/tests/theme-*.test.js dist/tests/color-literals.test.js dist/tests/model-grouping.test.js dist/tests/statusbar-modules.test.js dist/tests/onboarding-preferences.test.js dist/tests/user-name.test.js`
 - Not covered offline: live provider availability; recovering an unknown previous user selection; true color fidelity of themes in real terminals.

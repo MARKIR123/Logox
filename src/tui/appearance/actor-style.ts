@@ -1,5 +1,6 @@
 import {cast} from '../../actors/ensemble.js';
 import {deriveActorCardColors} from '../../actors/definitions.js';
+import {userLabel} from '../../config/user-profile.js';
 import {palette} from './theme.js';
 
 export interface ActivityVerbs {
@@ -36,7 +37,7 @@ export function ownerColor(ownerId: string, roles: ActorStyles = cast): string {
   return roles[ownerId]?.color ?? palette.accent;
 }
 export function ownerHeader(ownerId: string, roles: ActorStyles = cast): string {
-  if (ownerId === 'user') return 'You';
+  if (ownerId === 'user') return userLabel();
   if (ownerId === 'anamnesis') return 'Anamnesis';
   const actor = roles[ownerId];
   return actor ? `${actor.symbol} ${actor.name}` : ownerId;

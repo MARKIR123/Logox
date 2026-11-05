@@ -68,6 +68,7 @@ import {contentPoint, selectionRange, selectionInViewport, type ContentSelection
 import {decorateRow, presentedSegments, railCell} from './timeline/row-presentation.js';
 import {getInteractionUI} from '../tools/ui-registry.js';
 import {themeRevision} from '../config/theme-palette.js';
+import {userLabelRevision} from '../config/user-profile.js';
 import type {ToolInteractionAction} from '../tools/ui-types.js';
 
 interface ResponseDraft extends QuestionDraft {answers: Record<string, Answer>; editor: Draft}
@@ -116,7 +117,7 @@ const noLoginSnapshot = () => null;
 export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
-  const themeVersion = themeRevision();
+  const themeVersion = themeRevision() * 1000 + userLabelRevision();
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
     if (!definitions) return cast;

@@ -5,6 +5,7 @@ import {expandedTint, faintColor, quietRail} from '../appearance/colors.js';
 import {clipSegments} from './tool-card.js';
 import {palette} from '../appearance/theme.js';
 import {clipLine, safeText} from '../terminal/text.js';
+import {userLabel} from '../../config/user-profile.js';
 import {ownerColor, ownerHeader, ownerSurface, type ActorStyle, type ActorStyles} from '../appearance/actor-style.js';
 import {cast} from '../../actors/ensemble.js';
 import {type Row} from './viewport.js';
@@ -70,7 +71,7 @@ function railColorFor(who: string, roles: ActorStyles = cast): string {
 }
 
 function whoName(who: string, roles: ActorStyles = cast): string {
-  if (who === 'user') return 'You';
+  if (who === 'user') return userLabel();
   if (who === 'system') return '';
   if (who === 'logox') return 'Logox';
   if (who === 'anamnesis') return 'Anamnesis';

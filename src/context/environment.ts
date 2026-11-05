@@ -7,10 +7,12 @@ export type {ExecutionEnvironment} from '../runtime/context-updates.js';
 const labels: Record<keyof ExecutionEnvironment, string> = {
   model: 'Task model', effort: 'Thinking effort', permission: 'Permission and action boundary', directory: 'Working directory',
   scratchpad: 'Scratchpad directory', rules: 'Rules version', services: 'Service connections', language: 'Conversation language',
+  userName: "User's preferred name",
 };
 export function formatEnvironment(value: ExecutionEnvironment, keys = Object.keys(labels) as Array<keyof ExecutionEnvironment>): string {
-  return keys.filter(key => value[key] !== undefined).map(key => labels[key] + ': ' +
-    (key === 'language' ? conversationLanguage(value.language!) : Array.isArray(value[key]) ? (value[key] as readonly string[]).join(', ') || 'none' : value[key])).join('\n');
+  const explicit = keys.length !== Object.keys(labels).length;
+  return keys.filter(key => value[key] !== undefined || key === 'userName' && explicit).map(key => labels[key] + ': ' +
+    (key === 'language' ? conversationLanguage(value.language!) : key === 'userName' ? (value.userName ? value.userName + ' (address the user by it)' : 'none (no preferred name set)') : Array.isArray(value[key]) ? (value[key] as readonly string[]).join(', ') || 'none' : value[key])).join('\n');
 }
 /** Delivery is determined by the effective ledger, never by a preparation attempt. */
 export class EnvironmentState {

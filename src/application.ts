@@ -25,8 +25,9 @@ import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
 import {getScratchpadDir, ensureScratchpadDir, getActorScratchpadDir, ensureActorScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
-import {runLoginWizard, type WizardProviderRow} from './providers/login-wizard.js';
+import {askPreferredName, runLoginWizard, type WizardProviderRow} from './providers/login-wizard.js';
 import {presets} from './config/config.js';
+import {loadUserName, saveUserName, sanitizeUserName, setUserLabel, USER_NAME_MAX_CELLS} from './config/user-profile.js';
 import {
   readOnboardingPrefs,
   markOnboardingDone,
@@ -142,6 +143,10 @@ export async function createSessionApplication(options: SessionApplicationOption
   let reloadTask: Promise<void> | undefined;
   let permissionTask: Promise<void> | undefined;
   const homeDir = options.resourceOptions?.home ?? homedir();
+  // The preferred name is application-owned; the timeline label is synced from it (renderers read the live label).
+  let userName: string | undefined;
+  setUserLabel(undefined);
+  const profileReady = loadUserName(homeDir).then(name => {userName = name; setUserLabel(name);});
   const toolRegistry = new ToolRegistry(cwd, homeDir);
   await toolRegistry.reloadUserConfigs();
   tools.setRegistry(toolRegistry);
@@ -366,6 +371,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
     assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}) => {
     await configureMeter(context.ownerId);
+    await profileReady;
     const role = actorServices.definition(context);
     const model = taskModels.selection(context), thinking = taskModels.thinking(context);
     const policy = actorServices.skills(context);
@@ -381,7 +387,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         '\nExplicit rules (still adjudicated per call): ' + permissionRules,
       directory: cwd, scratchpad: actorScratchpad,
       rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort(),
-      ...(language ? {language} : {})}, history);
+      ...(language ? {language} : {}), ...(userName ? {userName} : {})}, history);
     const extensionRegistrations: ToolRegistration[] = extensions.mcp.definitions().map(definition => ({definition,
       metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
     const base = await agentRequestBase(cwd, context.ownerId, extensionRegistrations,
@@ -1017,6 +1023,9 @@ export async function createSessionApplication(options: SessionApplicationOption
         void (async () => {
           if (!ensemble.isBusy() && !authentication.getSnapshot()) {
             loginOwner = 'logox';
+            // Optional first step: Enter on an empty field or Esc skips it and setup continues.
+            const preferred = await askPreferredName(authentication.ask);
+            if (preferred) {userName = await saveUserName(homeDir, preferred).catch(() => userName); setUserLabel(userName);}
             const outcome = await loginWizard('logox');
             if (outcome === 'added' || outcome === 'signed-in') {
               markOnboardingDone(ONBOARDING_VERSION, homeDir);
@@ -1177,6 +1186,22 @@ export async function createSessionApplication(options: SessionApplicationOption
         const resolved = modelPool.resolveShorthand(model, settings.provider);
         await saveSelection(registry.candidate(resolved.provider, resolved.model));
         receipt('Current model: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
+        return;
+      }
+      if (text === '/name' || text.startsWith('/name ')) {
+        const arg = text.slice(5).trim();
+        if (!arg) {
+          receipt(userName ? 'Preferred name: ' + userName : 'No preferred name set (shown as You). Use /name <new name> to set one.', 'status', undefined, source);
+          return;
+        }
+        const reset = arg === '--reset';
+        const next = reset ? undefined : sanitizeUserName(arg);
+        if (!reset && !next) throw new Error('Usage: /name <new name> | /name --reset');
+        await profileReady;
+        try {userName = await saveUserName(homeDir, next);}
+        catch {throw new Error('Could not save the preferred name; it is unchanged.');}
+        setUserLabel(userName);
+        receipt(userName ? 'Preferred name set to ' + userName + '.' + (sanitizeUserName(arg) !== arg ? ' (Limited to ' + USER_NAME_MAX_CELLS + ' cells, control characters removed.)' : '') : 'Preferred name cleared.', 'status', undefined, source);
         return;
       }
       if (text === '/help' || text === '/commands') {

@@ -27,6 +27,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'reload', usage: '/reload', description: 'Reload personas, guidelines, skills, and template commands', argument: 'none'},
   {name: 'skills', usage: '/skills', description: 'View available skill names, descriptions, and file paths', argument: 'none'},
   {name: 'ensemble', usage: '/ensemble', description: 'View and inspect ensemble actor roster and personas', argument: 'none'},
+  {name: 'name', usage: '/name [new name | --reset]', description: 'Show, set or clear the name Logox calls you', argument: 'text'},
   {name: 'setup', usage: '/setup', description: 'Re-run initial setup guide (connect providers and enable models)', argument: 'none'},
 ] as const;
 

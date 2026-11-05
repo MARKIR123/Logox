@@ -3,7 +3,7 @@ import {z} from 'zod';
 export const executionEnvironmentSchema = z.strictObject({
   model: z.string(), effort: z.string(), permission: z.string(), directory: z.string(),
   scratchpad: z.string(), rules: z.string(), services: z.array(z.string()).readonly(),
-  language: z.string().optional(),
+  language: z.string().optional(), userName: z.string().optional(),
 });
 export type ExecutionEnvironment = z.infer<typeof executionEnvironmentSchema>;
 export const runtimeContextMessageSchema = z.strictObject({
