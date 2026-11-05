@@ -22,6 +22,7 @@ import {extractStatusBarSlice} from './status/statusbar.js';
 import {MouseContext, type MouseSubscriber} from './terminal/mouse.js';
 import {LoginDialog} from './login/login.js';
 import {useContentHeight} from './terminal/metrics.js';
+import {PENDING_VISIBLE_MAX, pendingRowLayout} from './input/input-delivery.js';
 import {CommandMenu, commandMenuLayout} from './commands/command-menu.js';
 import {ProductionQuestionPanel} from './interactions/production-question.js';
 import type {PortfolioActivities} from '../demo/portfolio.js';
@@ -97,6 +98,10 @@ export interface AppProps {
   scenario?: PortfolioActivities;
   onSubmit(text: string, source?: string, delivery?: SubmitDelivery): Promise<void>;
   getQueuedCount?(ownerId: string): number;
+  /** Steers a pending message into its target's running round (`Send now`). */
+  onSendPending?(id: string): Promise<void> | void;
+  /** Takes a pending message back and returns its text (`×`). */
+  onDiscardPending?(id: string): string | undefined;
   onCancel(activityId: string): void;
   /** Stops one running tool call (`■ Stop` on a tool row) without ending the owner's step. */
   onCancelTool?(callId: string): void;
@@ -108,7 +113,7 @@ const foldableDemoIds = ['main-thinking', 'main-tool', 'main-aletheia', 'main-al
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
+export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
   const themeVersion = themeRevision();
@@ -140,6 +145,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   const [activeWindow, setActiveWindow] = useState('logox');
   const [expandHovered, setExpandHovered] = useState(false);
+  const [pendingHover, setPendingHover] = useState<{id: string; control: 'send' | 'discard'} | null>(null);
   const [composerMode, setComposerMode] = useState<{sessionId: string; ownerId: string; scrollOffset: number | null} | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => ({
     logox: demoScene ? insert(emptyDraft, INITIAL_DEMO_DRAFT) : emptyDraft,
@@ -367,6 +373,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const inputLayout = layoutInput(activeDraft, inputColumns);
   const inputMaxHeight = Math.max(1, Math.min(5, screenRows - footerHeight - hairlineHeight - 1));
   const inputHeight = editableComposer ? Math.min(inputMaxHeight, inputLayout.lines.length) : 1;
+  const pendingAll = stage && !demoScene ? snapshot.pending.filter(item => item.sessionId === sessionId && (item.ownerId === currentView || item.windowId === currentView)) : [];
+  const pendingHeight = pendingAll.length && !closing && !loginState && !surface
+    ? Math.min(PENDING_VISIBLE_MAX, pendingAll.length, Math.max(0, screenRows - inputHeight - hairlineHeight - footerHeight - 2)) : 0;
+  /** The newest rows sit nearest the composer. */
+  const pendingShown = pendingAll.slice(pendingAll.length - pendingHeight);
   const inputStarts = useRef(new Map<string, number>());
   const inputKey = currentView + ':' + (editingCustom ? 'custom' : freeAnswer ? request?.requestId : 'main');
   const inputView = inputViewport(inputLayout, inputHeight, inputStarts.current.get(inputKey) ?? 0);
@@ -386,7 +397,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     ? commandSuggestions(draft, getCommandContext?.() ?? emptyCommandContext) : [];
   const suggestionIndex = completion.query === query ? Math.min(completion.selected, Math.max(0, suggestions.length - 1)) : 0;
   const {count: menuCount, height: menuHeight, showCounts: menuShowCounts} = commandMenuLayout(suggestions.length,
-    Math.max(0, screenRows - inputHeight - hairlineHeight - footerHeight - (screenRows >= 8 ? 1 : 0)));
+    Math.max(0, screenRows - inputHeight - pendingHeight - hairlineHeight - footerHeight - (screenRows >= 8 ? 1 : 0)));
   const moveSuggestion = (direction: number) => {
     if (!suggestions.length) return;
     setCompletion(previous => {
@@ -452,7 +463,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const pickerHeight = surface?.kind === 'picker'
     ? Math.min(screenRows, (groupedPicker ? (pickerHasEffort ? 10 : 8) : (pickerHasEffort ? 7 : 5)) + pickerListRows)
     : 0;
-  const fixedHeight = pickerHeight || (loginState && !loginFolded ? loginHeight : (loginFolded ? loginHeight : 0) + inputHeight + hairlineHeight + footerHeight + menuHeight);
+  const fixedHeight = pickerHeight || (loginState && !loginFolded ? loginHeight : (loginFolded ? loginHeight : 0) + inputHeight + pendingHeight + hairlineHeight + footerHeight + menuHeight);
   const activityHeight = !loginState && !surface && !demoScene && !stage && activity ? Math.max(0, Math.min(activityContentHeight || (expanded ? 6 : 4), screenRows - fixedHeight)) : 0;
   const questionAvailable = Math.max(0, screenRows - fixedHeight - activityHeight);
   const questionHeight = questionPanel
@@ -468,7 +479,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   }, [welcome, width, timelineHeight, roles, themeVersion]);
   const view = viewport(messageRows, timelineHeight, anchor);
   const selection = selectionInViewport(selectionRange(messageRows, contentSelection.current), view.start);
-  const inputY = timelineHeight + (loginFolded ? loginHeight : 0) + activityHeight + questionHeight + menuHeight + (hairlineHeight ? 1 : 0);
+  const inputY = timelineHeight + (loginFolded ? loginHeight : 0) + activityHeight + questionHeight + menuHeight + pendingHeight + (hairlineHeight ? 1 : 0);
+  const pendingY = inputY - (hairlineHeight ? 1 : 0) - pendingHeight;
+  const pendingAt = (point: {x: number; y: number}) => {
+    const index = point.y - pendingY;
+    const item = pendingShown[index];
+    if (!item || index < 0) return undefined;
+    const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId);
+    const control = row.send && point.x >= row.send.x0 && point.x < row.send.x1 ? 'send' as const : row.discard && point.x >= row.discard.x0 && point.x < row.discard.x1 ? 'discard' as const : undefined;
+    return {item, control};
+  };
   const atExpandButton = (point: {x: number; y: number}) => showExpandButton && point.y === inputY &&
     point.x >= width - expandButtonWidth && point.x < width;
   useEffect(() => {setExpandHovered(false);}, [showExpandButton, currentView, sessionId, inputY, width]);
@@ -610,13 +630,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
 
   const submitting = useRef(false);
-  const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'auto'}) => {
+  const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'queue'}) => {
     if (!text.trim() || submitting.current) return;
     submitting.current = true;
     setComposerMode(null);
     setNotice('');
     const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
-    const payload = delivery.mode !== 'steer' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
+    const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
     const revision = draftRevisions.current.get(currentView) ?? 0;
     const history = historyFor(currentView);
     void onSubmit(payload, source, delivery).then(() => {
@@ -791,6 +811,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (event.action === 'move') {
       const nextExpandHover = atExpandButton(event);
       setExpandHovered(previous => previous === nextExpandHover ? previous : nextExpandHover);
+      const overPending = pendingAt(event);
+      const nextPending = overPending?.control ? {id: overPending.item.id, control: overPending.control} : null;
+      setPendingHover(previous => previous?.id === nextPending?.id && previous?.control === nextPending?.control ? previous : nextPending);
       if (event.y >= screenRows - footerHeight) {
         const hovered = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
         const nextHoveredPill = hovered ? hovered.ownerId : null;
@@ -866,6 +889,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         }
         clearSelection();
         statusSelectionRef.current = {startX: event.x, currentX: event.x, active: true, text: footerStatusText};
+        return;
+      }
+      const pressedPending = pendingAt(event);
+      if (pressedPending) {
+        if (pressedPending.control === 'send') sendPending(pressedPending.item.id);
+        else if (pressedPending.control === 'discard') takePendingBack(pressedPending.item.id);
         return;
       }
       if (atExpandButton(event)) {
@@ -1012,15 +1041,27 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       onDraft?.();
     }
   };
+  const sendPending = (id: string) => {
+    setPendingHover(null);
+    void Promise.resolve(onSendPending?.(id)).catch(error => flash(error instanceof Error ? error.message : String(error)));
+  };
+  /** The `×` control: the message leaves the pending list and returns to the composer for editing (appended when the draft holds text). */
+  const takePendingBack = (id: string) => {
+    setPendingHover(null);
+    const text = onDiscardPending?.(id);
+    if (text) edit(current => current.text ? insert({...current, cursor: graphemes(current.text).length, anchor: graphemes(current.text).length}, '\n' + text) : insert(emptyDraft, text));
+  };
   const steerInput = () => {
-    if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
+    if (focus !== 'input' || editingCustom) return;
+    if (!draft.text.trim()) {
+      // Nothing typed: Ctrl+T sends the newest pending message of this window now.
+      const newest = pendingAll[pendingAll.length - 1];
+      if (newest) sendPending(newest.id);
+      return;
+    }
     if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.'); return;}
     if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
     sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId});
-  };
-  const queueInput = () => {
-    if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
-    sendSceneInput(draft.text, {mode: 'queue'});
   };
   usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
   useInput((input, key) => {
@@ -1040,7 +1081,6 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (loginState && (!loginFolded || key.ctrl && input === 'k' || key.escape)) return;
     if (surface) return;
     if (key.ctrl && input === 't') {steerInput(); return;}
-    if (key.ctrl && input === 'q') {queueInput(); return;}
     if (editableComposer && key.ctrl && input === 'a') {edit(current => ({text: current.text, cursor: graphemes(current.text).length, anchor: 0})); return;}
     if (editableComposer && key.ctrl && input === 'x') {
       const text = selectedText(activeDraft);
@@ -1297,7 +1337,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
       onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
       onCollapse={() => {setComposerMode(null); exitDeadline.current = 0;}}
-      onSubmit={() => sendSceneInput()} onSteer={steerInput} onQueue={queueInput}
+      onSubmit={() => sendSceneInput()} onSteer={steerInput}
       onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}
       onInterrupt={interrupt} onClose={close} onCursor={setCursorPosition}
       scrollOffset={composerMode?.scrollOffset ?? null}
@@ -1375,6 +1415,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         onPick={selected => setCompletion({query, selected, dismissed: false})}
         onWheelStep={moveSuggestion}/>
     </MouseContext.Provider>}
+    {pendingHeight > 0 && <Box height={pendingHeight} flexShrink={0} flexDirection="column" overflow="hidden">
+      {pendingShown.map(item => {
+        const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId);
+        const hover = (control: 'send' | 'discard') => pendingHover?.id === item.id && pendingHover.control === control;
+        return <Box key={item.id} height={1} flexShrink={0} overflow="hidden"><Text wrap="truncate">
+          <Text color={palette.muted}>{row.left + ' '.repeat(row.gap) + row.badge}</Text>
+          {row.send && <Text color={hover('send') ? windowColor : palette.fg} bold={hover('send')} underline={hover('send')}>{row.send.text}</Text>}
+          {row.send && row.discard && <Text>{'  '}</Text>}
+          {row.discard && <Text color={hover('discard') ? windowColor : palette.muted} bold={hover('discard')}>{row.discard.text}</Text>}
+        </Text></Box>;
+      })}
+    </Box>}
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
     <Box height={inputHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {editableComposer ? inputView.lines.map((line, index) => <Box key={index} height={1} flexShrink={0}>

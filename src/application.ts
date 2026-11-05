@@ -965,7 +965,39 @@ export async function createSessionApplication(options: SessionApplicationOption
       ...(previous?.ownerId === owner && previous.progress ? {resumeTaskId: previous.activityId} : {})});
     return task;
   };
+  const ownerIsBusy = (owner: string) => store.getSnapshot().activities.some(item => item.sessionId === session && item.ownerId === owner && ['running', 'waiting_input'].includes(item.status));
+  /** The oldest pending message of an owner is delivered once its round has ended and no earlier human task waits; the rest stay pending until then. */
+  let settling = false;
+  const settlePending = () => {
+    if (settling || closed) return;
+    const snapshot = store.getSnapshot();
+    const next = snapshot.pending.find(item => item.sessionId === session && !ownerIsBusy(item.ownerId) &&
+      !snapshot.activities.some(activity => activity.sessionId === session && activity.ownerId === item.ownerId && activity.status === 'queued' && activity.inputKind === 'human'));
+    if (!next) return;
+    settling = true;
+    queueMicrotask(() => {
+      settling = false;
+      if (closed || !store.takePending(next.id)) return;
+      dispatchInput(next.ownerId, next.text, next.ownerId === 'logox' ? next.windowId : 'direct')
+        .catch(error => {notice(error instanceof Error ? error.message : String(error), 'command_error', next.windowId);});
+    });
+  };
+  const stopPending = store.subscribe(settlePending);
+  const sendPendingNow = async (pendingId: string): Promise<void> => {
+    const item = store.getSnapshot().pending.find(entry => entry.id === pendingId);
+    if (!item || closed) return;
+    const active = ensemble.getActiveTask(item.ownerId);
+    if (!active) {settlePending(); return;}
+    store.takePending(pendingId);
+    if (!await ensemble.injectTaskMessage(item.ownerId, item.text, 'steered', undefined, 'queue',
+      {activityId: active.activityId, inputKind: 'human', kind: 'human_steer'})) {
+      await dispatchInput(item.ownerId, item.text, item.ownerId === 'logox' ? item.windowId : 'direct');
+    }
+  };
+  /** Takes a pending message back (cancel or edit) and returns its text. */
+  const discardPending = (pendingId: string): string | undefined => store.takePending(pendingId)?.text;
   return {
+    sendPendingNow, discardPending,
     sessionId: session, store, ensemble, journal, tools, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar, status, isBusy: busy,
     systemNotice: notice,
     getInputQueue: (ownerId?: string) => ({queued: ensemble.queuedInputs(ownerId), steering: deliveries.snapshot().filter(item =>
@@ -1023,9 +1055,9 @@ export async function createSessionApplication(options: SessionApplicationOption
       try {
         await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
-      } finally {stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopSurfaceErrors(); stopLoginErrors();}
+      } finally {stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
-    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'auto'}): Promise<void> {
+    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();
       if (!text || closed) return;
       if (permissionTask) throw new Error('Permissions are saving, please wait...');
@@ -1371,12 +1403,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /actors to view available members, then dispatch tasks with @<actor> <task>.');
       const owner = mention ? mention[1]! : source;
       await beginTask();
-      if (delivery.mode === 'auto') {
-        // Steering: a plain message to a window whose task is mid-run joins that run at its next step boundary; Ctrl+Q ('queue') opts out.
-        const active = ensemble.getActiveTask(owner);
-        if (active && store.activities.get(session, active.activityId)?.status === 'running' &&
-          await ensemble.injectTaskMessage(owner, mention ? mention[2]! : text, 'steered', undefined, 'queue',
-            {activityId: active.activityId, inputKind: 'human', kind: 'human_steer'})) return;
+      if (ownerIsBusy(owner)) {
+        // The target is mid-round: hold the message above the composer (not in the timeline) until the round ends or Send now steers it.
+        store.addPending({sessionId: session, ownerId: owner, windowId: source, text: mention ? mention[2]! : text});
+        return;
       }
       await dispatchInput(owner, mention ? mention[2]! : text, owner === 'logox' ? source : 'direct');
     },

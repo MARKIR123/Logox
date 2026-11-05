@@ -35,7 +35,7 @@ async function editorFixture(initial: Draft = {text: '', cursor: 0}, columns = 6
       scrollOffset={scrollOffset} onScroll={setScrollOffset}
       onEdit={update => setValue(current => {draft = update(current); return draft;})}
       onCollapse={() => {collapsed++;}} onSubmit={() => {submitted.push(draft);}}
-      onSteer={() => {steered++;}} onQueue={() => {}} onCopy={text => {copied.push(text);}}
+      onSteer={() => {steered++;}} onCopy={text => {copied.push(text);}}
       onInterrupt={() => {interrupted++;}} onClose={() => {closed++;}}/>;
   }
   let instance!: ReturnType<typeof renderTerminal>;

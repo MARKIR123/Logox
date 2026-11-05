@@ -1,13 +1,14 @@
 import {randomUUID} from 'node:crypto';
 import {Activities} from './activities.js';
 import {Interactions} from './interactions.js';
-import {immutable, type Message, type RuntimeSnapshot} from './contracts.js';
+import {immutable, type Message, type PendingInput, type RuntimeSnapshot} from './contracts.js';
 import type {SystemEvent} from './system-events.js';
 
 export class RuntimeStore {
   private readonly listeners = new Set<() => void>();
   private readonly messages: Message[] = [];
-  private snapshot: RuntimeSnapshot = immutable({revision: 0, activities: [], interactions: [], messages: []});
+  private pending: readonly PendingInput[] = [];
+  private snapshot: RuntimeSnapshot = immutable({revision: 0, pending: [], activities: [], interactions: [], messages: []});
   private publishTimer: ReturnType<typeof setTimeout> | undefined;
 
   readonly activities = new Activities(() => this.publish());
@@ -49,6 +50,7 @@ export class RuntimeStore {
     this.messages[index] = immutable({...message, text: message.text + text});
     this.snapshot = immutable({
       revision: this.snapshot.revision + 1,
+      pending: this.pending,
       activities: [...this.activities.list()],
       interactions: [...this.interactions.list()],
       messages: [...this.messages],
@@ -67,7 +69,22 @@ export class RuntimeStore {
     if (!message) throw new Error('Message not found: ' + id);
     this.messages[index] = immutable({...message, ...patch}); this.publish();
   }
+  /** Messages waiting for a busy target (shown above the composer, never in the timeline). */
+  addPending(input: Pick<PendingInput, 'sessionId' | 'ownerId' | 'windowId' | 'text'>): string {
+    const id = randomUUID();
+    this.pending = [...this.pending, immutable({id, time: Date.now(), ...input})];
+    this.publish();
+    return id;
+  }
+  takePending(id: string): PendingInput | undefined {
+    const item = this.pending.find(entry => entry.id === id);
+    if (!item) return undefined;
+    this.pending = this.pending.filter(entry => entry.id !== id);
+    this.publish();
+    return item;
+  }
   clearTimeline(sessionId: string): void {
+    this.pending = this.pending.filter(item => item.sessionId !== sessionId);
     this.activities.clearSession(sessionId);
     for (let index = this.messages.length - 1; index >= 0; index--) if (this.messages[index]?.sessionId === sessionId) this.messages.splice(index, 1);
     this.publish();
@@ -76,6 +93,7 @@ export class RuntimeStore {
     this.flush();
     this.snapshot = immutable({
       revision: this.snapshot.revision + 1,
+      pending: this.pending,
       activities: [...this.activities.list()],
       interactions: [...this.interactions.list()],
       messages: [...this.messages],

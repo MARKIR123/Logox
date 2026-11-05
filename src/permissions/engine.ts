@@ -108,7 +108,9 @@ export class PermissionEngine {
       })()
       : target.paths.some(path => globMatch(rule.pattern, path))));
     if (this.rules.some(rule => rule.decision === 'deny' && matches(rule))) return {decision: 'deny', reason: 'Matched an explicit deny rule'};
-    if (this.scratchpadDir && target.paths.length > 0 && target.paths.every(p => isScratchpadPath(p, this.scratchpadDir!))) {
+    // Paths are listed both absolute and workspace-relative; a `../` form of an outside path is only the twin of an absolute entry that is checked too.
+    const scratchPaths = target.paths.filter(p => !/^\.\.(?:[\/]|$)/.test(p));
+    if (this.scratchpadDir && scratchPaths.length > 0 && scratchPaths.every(p => isScratchpadPath(p, this.scratchpadDir!))) {
       return {decision: 'allow', reason: 'Scratchpad directory is allowed for temporary operations'};
     }
     const danger = target.danger ?? (impact?.kind === 'danger' ? impact.reason : undefined);

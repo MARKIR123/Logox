@@ -9,7 +9,8 @@ Example: {"jobs": [{"brief": "List every caller of parseConfig under src/ as pat
 Only \`brief\` is required: goal, scope, what not to touch, what to report. It must stand alone. Every other field is optional and must be left out, not filled with a placeholder such as "n/a" or "none".
 - Jobs are read-only unless you list \`files\` (paths or globs they may write; disjoint across jobs, not the whole workspace). Add \`commands\` (prefixes such as "npm test") only if a job must run them. The preset is chosen for you.
 - Grants only narrow what you already have; every worker call still passes the permission engine under your name, and an out-of-grant call is refused. The \`changed\` line of a receipt is measured from real writes (not files changed by commands): review it before accepting.
-- Jobs are single-use. \`persistence\`, \`instance\` and \`release\` are for the rare case where one worker must run again on material it already loaded: set \`persistence: true\`, then continue with the \`instance\` id from its receipt and release it when done (at most two kept).`;
+- Single-use by default; \`keep: true\` keeps a worker's context for a follow-up: continue it with \`continue: "<id from the receipt>"\` (it ends with your task; at most two).
+- Workers may also write scratch scripts in your scratchpad, never elsewhere in the workspace beyond \`files\`.`;
 
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;
 

@@ -325,7 +325,7 @@ export class ActorServices {
         const roles = this.options.catalog.snapshot().definitions.reduce((acc, a) => ({...acc, [a.id]: {name: a.name, title: a.title}}), {});
         return executeListActors({}, {
           caller: context.ownerId,
-          getSnapshot: this.options.getSnapshot ?? (() => ({revision: 0, activities: [], interactions: [], messages: []})),
+          getSnapshot: this.options.getSnapshot ?? (() => ({revision: 0, pending: [], activities: [], interactions: [], messages: []})),
           roles,
           memo: this.listActorsMemo,
         });

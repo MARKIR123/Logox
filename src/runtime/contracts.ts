@@ -164,8 +164,18 @@ export const stepSchema = z.strictObject({title: z.string(), callId: z.string().
   state: z.enum(['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled']),
   elapsedMs: z.number().nonnegative(), runningSince: z.number().optional(), waiting: z.string().optional()});
 export type Step = z.infer<typeof stepSchema>;
+/** A human message held back because its target was mid-round; it is not part of the timeline until it is delivered or steered. */
+export interface PendingInput {
+  readonly id: string; readonly sessionId: string;
+  /** The actor that will receive it. */
+  readonly ownerId: string;
+  /** The window it was typed in. */
+  readonly windowId: string;
+  readonly text: string; readonly time: number;
+}
 export interface RuntimeSnapshot {
   readonly revision: number;
+  readonly pending: readonly PendingInput[];
   readonly activities: readonly Activity[];
   readonly interactions: readonly Interaction[];
   readonly messages: readonly Message[];

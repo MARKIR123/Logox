@@ -24,7 +24,7 @@ const label = () => ({stop: 'tools' as const, message: {role: 'assistant' as con
   toolCalls: [{id: 'label', name: 'UpdateTaskProgress', arguments: '{"label":"Checking the current work"}'}]}});
 async function idle(app: Awaited<ReturnType<typeof createTestApplication>>) {
   const end = Date.now() + 5000;
-  while (app.ensemble.isBusy()) {if (Date.now() > end) throw new Error('Input delivery did not settle'); await new Promise(resolve => setTimeout(resolve, 5));}
+  while (app.ensemble.isBusy() || app.store.getSnapshot().pending.length) {if (Date.now() > end) throw new Error('Input delivery did not settle'); await new Promise(resolve => setTimeout(resolve, 5));}
 }
 
 test('public Queue and Steer survive the managed-session wrapper and reach different model requests', {timeout: 10000}, async () => {
@@ -38,8 +38,9 @@ test('public Queue and Steer survive the managed-session wrapper and reach diffe
     await f.app.submit('original human goal'); await started.promise;
     const target = f.app.store.activities.list().find(activity => activity.ownerId === 'logox' && activity.status === 'running')!;
     await f.app.submit('later independent goal', 'logox', {mode: 'queue'});
+    assert.equal(f.app.store.getSnapshot().pending.length, 1, 'Enter holds the message while the round runs');
     await steer(f.app, 'correct the current path', target.activityId);
-    assert.equal(f.app.store.activities.list().length, 2, 'Steering must not create another task');
+    assert.equal(f.app.store.activities.list().length, 1, 'Steering and the pending message must not create another task yet');
     release.resolve(); await idle(f.app);
     assert.ok(requests[1]?.messages.some(message => message.text.includes('correct the current path')));
     assert.ok(!requests[1]?.messages.some(message => message.text === 'later independent goal'));
@@ -122,7 +123,7 @@ test('retry boundaries consume new steering instead of resampling a stale reques
   } finally {await f.close();}
 });
 
-test('a plain message during a running Logox round steers the same round at the next boundary', {timeout: 10000}, async () => {
+test('Enter during a running round holds the message pending: nothing in the timeline, no request change, delivered as the next round', {timeout: 10000}, async () => {
   const started = gate(), release = gate(); const requests: ModelRequest[] = [];
   const f = await fixture(async request => {
     requests.push(request);
@@ -131,22 +132,22 @@ test('a plain message during a running Logox round steers the same round at the 
   });
   try {
     await f.app.submit('original human goal'); await started.promise;
-    await f.app.submit('actually use the other path');
+    await f.app.submit('wait your turn');
+    const snapshot = f.app.store.getSnapshot();
+    assert.deepEqual(snapshot.pending.map(item => [item.ownerId, item.windowId, item.text]), [['logox', 'logox', 'wait your turn']]);
+    assert.ok(!snapshot.messages.some(message => message.text.includes('wait your turn')), 'A pending message never reaches the timeline');
     assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 1, 'No second round is created');
-    assert.deepEqual(f.app.getInputQueue('logox').queued, [], 'The message is not a queued badge');
     release.resolve(); await idle(f.app);
-    const seen = requests[1]?.messages.find(message => message.text.includes('actually use the other path'));
-    assert.ok(seen, 'The next request carries the steered message');
-    assert.ok(seen.text.startsWith('[The user sent this while you were working.'));
-    assert.equal(requests.length, 2, 'The round continued instead of starting another');
-    const entry = (await f.app.journal.load('s', 'logox')).find(item => item.text.includes('actually use the other path'));
-    assert.equal(entry?.source, 'steered'); assert.equal(entry?.inputKind, 'human'); assert.equal(entry?.role, 'user');
-    const row = f.app.store.getSnapshot().messages.find(message => message.text === 'actually use the other path');
-    assert.equal(row?.source, 'steered');
+    assert.ok(!requests[1]?.messages.some(message => message.text.includes('wait your turn')), 'The running round never sees it');
+    assert.ok(requests.at(-1)?.messages.some(message => message.text === 'wait your turn'), 'The next round carries it');
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 2);
+    assert.equal(f.app.store.getSnapshot().pending.length, 0, 'Delivered messages leave the pending list');
+    await f.app.submit('fresh idle goal'); await idle(f.app);
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 3, 'Idle target starts a new round');
   } finally {release.resolve(); await f.close();}
 });
 
-test('an idle target starts a round and Ctrl+Q queue waits for a later round', {timeout: 10000}, async () => {
+test('Send now steers a pending message into the running round at the next boundary and removes it from the pending list', {timeout: 10000}, async () => {
   const started = gate(), release = gate(); const requests: ModelRequest[] = [];
   const f = await fixture(async request => {
     requests.push(request);
@@ -154,19 +155,43 @@ test('an idle target starts a round and Ctrl+Q queue waits for a later round', {
     return done();
   });
   try {
-    await f.app.submit('first goal'); await started.promise;
-    await f.app.submit('wait your turn', 'logox', {mode: 'queue'});
-    assert.equal(f.app.getInputQueue('logox').queued.length, 1);
+    await f.app.submit('original human goal'); await started.promise;
+    await f.app.submit('first queued'); await f.app.submit('actually use the other path');
+    const [first, second] = f.app.store.getSnapshot().pending;
+    await f.app.sendPendingNow(second!.id);
+    assert.deepEqual(f.app.store.getSnapshot().pending.map(item => item.id), [first!.id], 'Only the sent message leaves the list');
+    const row = f.app.store.getSnapshot().messages.find(message => message.text === 'actually use the other path');
+    assert.equal(row?.source, 'steered'); assert.equal(row?.activityId, f.app.store.activities.list()[0]!.activityId);
     release.resolve(); await idle(f.app);
-    assert.ok(!requests[1]?.messages.some(message => message.text.includes('wait your turn')));
-    assert.ok(requests.at(-1)?.messages.some(message => message.text === 'wait your turn'));
-    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 2);
-    await f.app.submit('fresh idle goal'); await idle(f.app);
-    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 3, 'Idle target starts a new round');
+    const seen = requests[1]?.messages.find(message => message.text.includes('actually use the other path'));
+    assert.ok(seen, 'The next request of the same round carries the steered message');
+    assert.ok(seen.text.startsWith('[The user sent this while you were working.'));
+    assert.ok(!requests[1]?.messages.some(message => message.text.includes('first queued')));
+    assert.ok(requests.at(-1)?.messages.some(message => message.text === 'first queued'), 'The rest is delivered after the round');
+    const entry = (await f.app.journal.load('s', 'logox')).find(item => item.text.includes('actually use the other path'));
+    assert.equal(entry?.source, 'steered'); assert.equal(entry?.inputKind, 'human'); assert.equal(entry?.role, 'user');
   } finally {release.resolve(); await f.close();}
 });
 
-test('a message to a running actor window steers that actor and is persisted with its delivery id', {timeout: 10000}, async () => {
+test('discarding a pending message returns its text and nothing is delivered', {timeout: 10000}, async () => {
+  const started = gate(), release = gate(); const requests: ModelRequest[] = [];
+  const f = await fixture(async request => {
+    requests.push(request);
+    if (requests.length === 1) {started.resolve(); await release.promise; return done();}
+    return done();
+  });
+  try {
+    await f.app.submit('original human goal'); await started.promise;
+    await f.app.submit('take me back');
+    const id = f.app.store.getSnapshot().pending[0]!.id;
+    assert.equal(f.app.discardPending(id), 'take me back');
+    assert.equal(f.app.discardPending(id), undefined);
+    release.resolve(); await idle(f.app);
+    assert.equal(requests.length, 1);
+  } finally {release.resolve(); await f.close();}
+});
+
+test('an actor window keeps its own pending message and Send now steers that actor with a persisted delivery id', {timeout: 10000}, async () => {
   const started = gate(), release = gate(); const requests: ModelRequest[] = [];
   const f = await fixture(async request => {
     requests.push(request);
@@ -177,6 +202,9 @@ test('a message to a running actor window steers that actor and is persisted wit
     await f.app.submit('@kalon design the panel'); await started.promise;
     await f.app.submit('@kalon make it darker', 'logox');
     assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'kalon').length, 1);
+    const [pending] = f.app.store.getSnapshot().pending;
+    assert.deepEqual([pending!.ownerId, pending!.windowId], ['kalon', 'logox']);
+    await f.app.sendPendingNow(pending!.id);
     release.resolve(); await idle(f.app);
     assert.ok(requests[1]?.messages.some(message => message.text.includes('make it darker') && message.text.includes('while you were working')));
     const entry = (await f.app.journal.load('s', 'kalon')).find(item => item.text.includes('make it darker'));
@@ -194,6 +222,7 @@ test('resume restores the steered message as a steered row with the human text, 
   try {
     await f.app.submit('resume goal'); await started.promise;
     await f.app.submit('resume correction');
+    await f.app.sendPendingNow(f.app.store.getSnapshot().pending[0]!.id);
     release.resolve(); await idle(f.app);
     await f.app.close(); closed = true;
     const config = await loadConfig(f.cwd, {provider: {model: 'fixture', context_window: 131072}, permissions: {mode: 'creative'}}, {}, f.cwd, f.cwd);

@@ -6,7 +6,7 @@ import {diffLines} from 'diff';
 import {z} from 'zod';
 import type {AutomaSwarm, AutomaJobState} from '../../../runtime/contracts.js';
 import type {ModelMessage, ModelTurn, Provider, ToolCall, ToolDefinition} from '../../../runtime/messages.js';
-import {maybePersistLargeOutput} from '../../../kernel/scratchpad.js';
+import {ensureActorScratchpadDir, getActorScratchpadDir, maybePersistLargeOutput} from '../../../kernel/scratchpad.js';
 import type {ToolResult} from '../../types.js';
 import {readSchema} from '../../ReadTool/ReadTool.js';
 import {READ_DESCRIPTION} from '../../ReadTool/prompt.js';
@@ -27,21 +27,21 @@ import {grantTools, titleFrom, type JobGrant, type PlannedJob} from './grant.js'
 const pathList = (description: string) => z.array(z.string().min(1)).min(1).max(64).optional().describe(description);
 
 const automaJobSchema = z.strictObject({
-  brief: z.string().trim().min(1).describe('What the worker must do. Stands alone: goal, scope, what not to touch, what to report. When resuming an instance, only the next step'),
+  brief: z.string().trim().min(1).describe('What the worker must do. Stands alone: goal, scope, what not to touch, what to report. When continuing a kept worker, only the next step'),
   title: z.string().trim().min(1).max(80).optional().describe('Short label for the stage; omit to use the start of the brief'),
   read: pathList('Narrow the paths or globs the job may read. Omit for the whole workspace'),
   files: pathList('Paths or globs the job may write. Omit for a read-only job; never a placeholder'),
   commands: pathList('Command prefixes the job may run, such as "npm test". Omit unless the job must run commands'),
   output: z.enum(['text', 'json']).optional().describe('Set json only when the report must be a JSON value'),
-  persistence: z.boolean().optional().describe('Rare: keep this worker for follow-up runs. Omit for single use'),
-  instance: z.string().min(1).optional().describe('Rare: id of a kept instance (looks like w1a2b3c4) to continue. Omit for a new job'),
+  keep: z.boolean().optional().describe('Rare: true keeps this worker\'s context after the job; the receipt gives its id. Omit for single use'),
+  continue: z.string().min(1).optional().describe('Rare: id a receipt returned for a kept worker, to give it a next step. Omit for a new job'),
 });
 
 export const automaArgs = z.strictObject({
   jobs: z.array(automaJobSchema).min(1).max(8).optional().describe('Independent jobs to run in parallel; one per question or file set'),
   preset: z.string().min(1).optional().describe('Omit: the right preset is chosen from the files and commands you grant'),
   parallel: z.number().int().min(1).max(8).optional().describe('Omit unless you need fewer at once'),
-  release: z.array(z.string().min(1)).min(1).max(8).optional().describe('Ids of kept instances to end, once finished'),
+  release: z.array(z.string().min(1)).min(1).max(8).optional().describe('Rare: ids of kept workers to end early; they also end with your task'),
 });
 
 export type AutomaArgs = z.infer<typeof automaArgs>;
@@ -49,7 +49,6 @@ export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
 const WORKSPACE_READ = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+)$/;
-const INSTANCE_ID = /^w[0-9a-f]+$/;
 
 function cleanList(value: unknown, extra?: RegExp, keep?: RegExp): unknown {
   if (!Array.isArray(value)) return value;
@@ -77,16 +76,26 @@ export function normalizeAutomaInput(input: unknown): unknown {
       if (typeof job.title === 'string' && !job.title.trim()) delete job.title;
       if (job.title === undefined && typeof job.brief === 'string' && job.brief.trim()) job.title = titleFrom(job.brief);
       job.read = cleanList(job.read, WORKSPACE_READ); job.files = cleanList(job.files, undefined, /^[./]$/); job.commands = cleanList(job.commands);
-      if (typeof job.instance === 'string' && !INSTANCE_ID.test(job.instance.trim())) delete job.instance;
+      // Old names stay accepted: persistence -> keep, instance -> continue.
+      if (job.keep === undefined && job.persistence !== undefined) job.keep = job.persistence;
+      if (job.continue === undefined && job.instance !== undefined) job.continue = job.instance;
+      delete job.persistence; delete job.instance;
+      if (job.keep === 'true' || job.keep === 'false') job.keep = job.keep === 'true';
+      if (typeof job.keep !== 'boolean') delete job.keep;
+      if (typeof job.continue !== 'string' || PLACEHOLDER.test(job.continue.trim())) delete job.continue; else job.continue = job.continue.trim();
       if (job.output !== 'json') delete job.output;
-      if (job.persistence === false && !job.instance) delete job.persistence;
+      if (job.keep === false && !job.continue) delete job.keep;
       for (const key of Object.keys(job)) if (job[key] === undefined) delete job[key];
       return job;
     });
   }
   if (Array.isArray(raw.release)) {
-    const ids = raw.release.filter(id => typeof id === 'string' && INSTANCE_ID.test(id.trim()));
+    // Unknown ids are not filtered here: the planner ignores them with a note.
+    const ids = raw.release.filter(id => typeof id === 'string' && !PLACEHOLDER.test(id.trim())).map(id => (id as string).trim());
     if (ids.length) raw.release = ids; else delete raw.release;
+  } else if (typeof raw.release === 'string' && !PLACEHOLDER.test(raw.release.trim())) raw.release = [raw.release.trim()];
+  else if (raw.release !== undefined) {
+    delete raw.release;
   }
   if (typeof raw.preset === 'string' && PLACEHOLDER.test(raw.preset.trim())) delete raw.preset;
   if (raw.parallel === 0 || raw.parallel === null) delete raw.parallel;
@@ -195,11 +204,12 @@ function changeLine(files: ReadonlyMap<string, {before: Buffer | null; after: Bu
   return parts.join(', ');
 }
 
-function briefText(planned: PlannedJob): string {
+function briefText(planned: PlannedJob, scratch: string): string {
   const {job, grant} = planned;
   return [job.brief, '', 'Grant:',
     '- read: ' + (grant.read ? [...grant.read, ...grant.files].join(', ') : 'the whole workspace'),
-    '- write: ' + (grant.files.join(', ') || 'nothing; this job is read-only'),
+    '- write: ' + (grant.files.join(', ') || 'no workspace files; this job is read-only'),
+    `- scratchpad: ${scratch} (you may write scratch scripts and notes here; nothing else outside the write list)`,
     '- commands: ' + (grant.commands.join(', ') || 'none'),
     ...(job.output === 'json' ? ['', 'Make the summary a single valid JSON value.'] : [])].join('\n');
 }
@@ -262,7 +272,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     const planned = jobs[index]!, started = Date.now();
     if (planned.denial) {await finish(index, 'denied', started, [['summary', planned.denial]]); return;}
     if (signal.aborted) {await finish(index, 'cancelled', started, []); return;}
-    const kept = planned.job.instance ? options.instance(planned.job.instance) : undefined;
+    const kept = planned.job.continue ? options.instance(planned.job.continue) : undefined;
     const workerId = kept?.workerId ?? 'automa:' + options.activityId + ':' + randomUUID().slice(0, 8);
     const grant = planned.grant;
     const written = new Map<string, {before: Buffer | null; after: Buffer}>();
@@ -271,7 +281,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     });
     const ran: string[] = [], refused: string[] = [];
     let succeeded = 0, lastInput = 0;
-    const messages: ModelMessage[] = kept ? [...kept.messages, {role: 'user', text: planned.job.brief}] : [{role: 'user', text: briefText(planned)}];
+    const messages: ModelMessage[] = kept ? [...kept.messages, {role: 'user', text: planned.job.brief}] : [{role: 'user', text: briefText(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal))}];
     states[index] = {...states[index]!, state: 'running', startedAt: started};
     publish();
     await journal(index, 'start', {title: planned.job.title, brief: planned.job.brief, grant, workerId, ...(kept ? {instance: kept.id} : {})});
@@ -325,19 +335,19 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
         try {JSON.parse(report.summary);} catch {notes.push('The summary is not valid JSON as requested.');}
       }
       const allDenied = refused.length > 0 && succeeded === 0 && written.size === 0;
-      const wantsKeep = kept ? planned.job.persistence !== false : planned.job.persistence === true;
-      let instanceLine = '';
+      const wantsKeep = kept ? planned.job.keep !== false : planned.job.keep === true;
+      let keptLine = '';
       if (wantsKeep && !allDenied && lastInput < AUTOMA_RETAINED_INPUT_LIMIT) {
         const id = kept?.id ?? 'w' + randomUUID().slice(0, 8);
         options.retain({id, workerId, grant, messages, resolved});
-        instanceLine = `${id} (kept; continue with \`instance\`, and \`release\` it once the work is finished)`;
+        keptLine = `${id} · continue with {"continue": "${id}"} and the next step as its brief; it ends with your task, or earlier with {"release": ["${id}"]}`;
       } else {
         if (kept) options.forget(kept.id);
         if (wantsKeep && !allDenied) notes.push(`Instance closed: its context reached ${lastInput} input tokens. Dispatch a fresh job with a complete brief.`);
       }
       await finish(index, allDenied ? 'denied' : 'done', started, [
         ['summary', report.summary], ['changed', changeLine(written, options.root)], ['ran', ran.join(', ')], ['denied', refused.join(', ')],
-        ['evidence', report.evidence], ['notes', [report.notes, ...notes].filter(Boolean).join('\n')], ['instance', instanceLine]]);
+        ['evidence', report.evidence], ['notes', [report.notes, ...notes].filter(Boolean).join('\n')], ['kept', keptLine]]);
     } catch (error) {
       stopTracking();
       if (kept) options.forget(kept.id);
@@ -347,6 +357,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     }
   };
 
+  await ensureActorScratchpadDir(options.cwd, options.sessionId, options.principal).catch(() => {});
   publish();
   let next = 0;
   await Promise.all(Array.from({length: Math.min(options.parallel, jobs.length)}, async () => {

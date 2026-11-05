@@ -38,6 +38,6 @@ automa:
     scout: {tools: read}
     probe:
       tools: read
-      commands: ["npm test", "npx tsc --noEmit"]
+      commands: ["npm test", "npx tsc --noEmit", "python", "python3", "py", "node"]
       exclusive: ["npm test"]
       model: sonnet

@@ -50,11 +50,9 @@ test('production footer omits noisy Queue text while maintaining queue and steer
     assert.equal(f.output.lines.join('\n').includes('Enter Queue'), false, 'Footer must not render Enter Queue hint');
     assert.equal(f.output.lines.join('\n').includes('Queued 2'), false, 'Footer must not render Queued hint');
     await f.key('later work'); await f.key('\r');
-    assert.deepEqual(submissions[0], {text: 'later work', source: 'logox', delivery: {mode: 'auto'}});
-    await f.key('queued later'); await f.key('\x11');
-    assert.deepEqual(submissions[1], {text: 'queued later', source: 'logox', delivery: {mode: 'queue'}});
+    assert.deepEqual(submissions[0], {text: 'later work', source: 'logox', delivery: {mode: 'queue'}});
     await f.select(thinking); await f.key('current correction'); await f.key('\x14');
-    assert.deepEqual(submissions[2], {text: 'current correction', source: 'logox', delivery: {mode: 'steer', activityId: 'director-a'}});
+    assert.deepEqual(submissions[1], {text: 'current correction', source: 'logox', delivery: {mode: 'steer', activityId: 'director-a'}});
     assert.deepEqual(cancelled, []);
   } finally {await f.close();}
 });
@@ -70,7 +68,7 @@ test('stale selected tasks retain the draft and never steer another live task', 
     assert.equal(submissions.length, 0);
     assert.match(f.output.lines.join('\n'), /keep this draft/);
     assert.match(f.output.lines.join('\n'), /no longer active|Select an active/i);
-    await f.key('\r'); assert.deepEqual(submissions[0], {text: 'keep this draft', delivery: {mode: 'auto'}});
+    await f.key('\r'); assert.deepEqual(submissions[0], {text: 'keep this draft', delivery: {mode: 'queue'}});
   } finally {await f.close();}
 });
 
@@ -140,5 +138,91 @@ test('footer remains clean without noisy queue counters across menu navigation a
     assert.doesNotMatch(f.output.lines.join('\n'), /Queued 1/);
     queued = 0; await act(async () => {f.store.message('s', 'logox', 'notice', 'Queue empty.');}); await f.flush();
     assert.doesNotMatch(f.output.lines.join('\n'), /Queued 0/);
+  } finally {await f.close();}
+});
+
+function addPending(store: RuntimeStore, text: string, ownerId = 'logox', windowId = 'logox') {
+  return store.addPending({sessionId: 's', ownerId, windowId, text});
+}
+const rowOf = (f: Awaited<ReturnType<typeof fixture>>, needle: string) => f.output.lines.findIndex(line => line.includes(needle));
+const click = async (f: Awaited<ReturnType<typeof fixture>>, x: number, y: number) => {
+  await f.key('\x1b[<0;' + (x + 1) + ';' + (y + 1) + 'M'); await f.key('\x1b[<0;' + (x + 1) + ';' + (y + 1) + 'm');
+};
+
+test('pending messages sit directly above the composer with Queued · Send now controls and stay out of the timeline', {timeout: 10000}, async () => {
+  const store = new RuntimeStore(); addDirector(store, 'run');
+  addPending(store, 'first queued'); addPending(store, 'second queued');
+  const sent: string[] = [];
+  const f = await fixture({store, onSendPending: id => {sent.push(id);}});
+  try {
+    const a = rowOf(f, 'first queued'), b = rowOf(f, 'second queued');
+    assert.ok(a >= 0 && b === a + 1, 'one row per message, oldest first');
+    assert.match(f.output.lines[b]!, /Queued · Send now\s+×\s*$/);
+    const compose = f.output.lines.findLastIndex(line => line.startsWith('❯'));
+    assert.equal(compose - b, 2, 'Only the composer hairline separates the list from the composer');
+    const timeline = buildStageRows(store.getSnapshot(), 's', 'logox', 119, {}, null).map(row => row.text).join('\n');
+    assert.doesNotMatch(timeline, /first queued|second queued/);
+    const x = f.output.lines[b]!.indexOf('Send now');
+    await click(f, x + 2, b);
+    assert.deepEqual(sent, [store.getSnapshot().pending[1]!.id]);
+    await click(f, 3, b);
+    assert.equal(sent.length, 1, 'Clicking the message text does nothing');
+  } finally {await f.close();}
+});
+
+test('Ctrl+T with an empty composer sends the newest pending message now; a typed draft keeps the exact steer', {timeout: 10000}, async () => {
+  const store = new RuntimeStore(); const thinking = addDirector(store, 'director-a');
+  addPending(store, 'older'); const newest = addPending(store, 'newest');
+  const sent: string[] = [], submissions: SubmitDelivery[] = [];
+  const f = await fixture({store, onSendPending: id => {sent.push(id);}, onSubmit: async (_text, _source, delivery) => {if (delivery) submissions.push(delivery);}});
+  try {
+    await f.key('\x14');
+    assert.deepEqual(sent, [newest]);
+    await f.select(thinking); await f.key('typed'); await f.key('\x14');
+    assert.deepEqual(sent, [newest], 'A typed draft is steered, not the pending message');
+    assert.deepEqual(submissions[0], {mode: 'steer', activityId: 'director-a'});
+    await f.key('\x11');
+    assert.equal(submissions.length, 1, 'Ctrl+Q is no longer bound');
+  } finally {await f.close();}
+});
+
+test('the x control returns the message to the composer and leaves the list', {timeout: 10000}, async () => {
+  const store = new RuntimeStore(); addDirector(store, 'run');
+  addPending(store, 'edit me');
+  const f = await fixture({store, onDiscardPending: pendingId => store.takePending(pendingId)?.text});
+  try {
+    const row = rowOf(f, 'edit me');
+    await click(f, f.output.lines[row]!.indexOf('×'), row);
+    assert.equal(rowOf(f, 'Send now'), -1);
+    assert.ok(f.output.lines.some(line => line.startsWith('❯ edit me')), 'The text is back in the composer');
+    assert.equal(store.getSnapshot().pending.length, 0);
+  } finally {await f.close();}
+});
+
+test('pending rows shrink the timeline by their height, clip on narrow terminals and follow the window', {timeout: 10000}, async () => {
+  const store = new RuntimeStore(); addDirector(store, 'run');
+  addPending(store, 'for techne', 'techne', 'logox'); addPending(store, 'own thread');
+  const f = await fixture({store, getActors: () => [{id: 'techne', name: 'Techne', title: 'Craft', role: 'worker', symbol: '◈', color: '#88aaff'} as never]});
+  try {
+    assert.match(f.output.lines[rowOf(f, 'for techne')]!, /^→ techne · for techne/i);
+    await act(async () => {f.output.resize(24, 12);}); await f.flush();
+    const row = f.output.lines[rowOf(f, 'own thread')]!;
+    assert.ok(row.length <= 24 && /Send now/.test(row), row);
+    await act(async () => {f.output.resize(12, 12);}); await f.flush();
+    assert.ok(f.output.lines.every(line => line.length <= 12));
+    assert.ok(rowOf(f, 'own') >= 0);
+  } finally {await f.close();}
+});
+
+test('queued rows are capped at three and the commands menu leaves room for them', {timeout: 10000}, async () => {
+  const store = new RuntimeStore(); addDirector(store, 'run');
+  for (const n of ['p1', 'p2', 'p3', 'p4', 'p5']) addPending(store, 'pending ' + n);
+  const f = await fixture({store});
+  try {
+    assert.equal(rowOf(f, 'pending p2'), -1, 'Older rows beyond the cap are hidden');
+    assert.ok(rowOf(f, 'pending p3') >= 0 && rowOf(f, 'pending p5') >= 0);
+    await f.key('/');
+    assert.ok(rowOf(f, 'pending p5') >= 0, 'The list stays visible with the command menu open');
+    assert.ok(f.output.lines.some(line => line.startsWith('❯ /')));
   } finally {await f.close();}
 });

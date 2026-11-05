@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, writeFile, readFile, rm} from 'node:fs/promises';
+import {mkdtemp, realpath, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {automaSchema, automaToolDefinitions, markInterruptedJobs, parseReport, AUTOMA_SYSTEM_PROMPT, AUTOMA_RETAINED_INPUT_LIMIT, type AutomaProvider} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
@@ -8,6 +8,8 @@ import {automaProfileSchema, chooseAutomaModel, type AutomaProfile} from '../src
 import {AUTOMA_ANIMATION_FRAMES, AUTOMA_COLOR_TOKEN, AUTOMA_DESCRIPTION} from '../src/tools/orchestration/AutomaTool/prompt.js';
 import {metadata} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
 import {patternsOverlap} from '../src/tools/ownership.js';
+import {pathDenial} from '../src/tools/orchestration/AutomaTool/grant.js';
+import {getActorScratchpadDir, getScratchpadDir} from '../src/kernel/scratchpad.js';
 import {Tools, validateToolCall, type AutomaEnvironment} from '../src/tools/index.js';
 import {PermissionEngine, type PermissionMode} from '../src/permissions/engine.js';
 import {RuntimeStore} from '../src/runtime/store.js';
@@ -80,9 +82,10 @@ test('Automa is open to every actor and loads eagerly, with no defaulted model-f
 
 test('A job only ever receives the tools its grant implies', () => {
   const names = (grant: Parameters<typeof automaToolDefinitions>[0]) => automaToolDefinitions(grant).map(tool => tool.name);
-  assert.deepEqual(names({files: [], commands: [], exclusive: []}), ['Read', 'Glob', 'Grep', 'WebFetch']);
+  // Edit and Write are always offered; without `files` they are confined to the dispatcher's scratchpad by pathDenial.
+  assert.deepEqual(names({files: [], commands: [], exclusive: []}), ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write']);
   assert.deepEqual(names({files: ['a'], commands: [], exclusive: []}), ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write']);
-  assert.deepEqual(names({files: [], commands: ['npm test'], exclusive: []}), ['Read', 'Glob', 'Grep', 'WebFetch', 'Shell']);
+  assert.deepEqual(names({files: [], commands: ['npm test'], exclusive: []}), ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write', 'Shell']);
 });
 
 test('Worker reads pass the permission guard: a credential path asks in default mode, labelled with the swarm', async () => {
@@ -141,7 +144,7 @@ test('Workers never reach orchestration tools, questions or tools outside their 
     const results = toolResults(requests);
     assert.equal(results.length, 7);
     assert.ok(results.every(item => item.isError), JSON.stringify(results));
-    assert.deepEqual(requests.at(-1)!.tools, ['Read', 'Glob', 'Grep', 'WebFetch']);
+    assert.deepEqual(requests.at(-1)!.tools, ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write']);
     assert.equal(await readFile(join(cwd, 'plain.txt'), 'utf8'), 'hello\n');
   } finally {await done();}
 });
@@ -352,7 +355,7 @@ test('A dispatch is refused whole for overlaps, read-only presets, wide grants a
     await refused({preset: 'edit', jobs: [job('p', {files: ['../x']})]}, /inside the workspace/);
     await refused({preset: 'scout', jobs: [job('p', {files: ['a.txt']})]}, /read-only.*Writable presets: edit/);
     await refused({preset: 'edit', jobs: [job('p', {commands: ['rm -rf']})]}, /does not allow the command prefix: rm -rf/);
-    await refused({jobs: [job('p', {files: ['/tmp/scratch/x.py']})]}, /inside the workspace.*scratchpad/);
+    await refused({jobs: [job('p', {files: ['/tmp/scratch/x.py']})]}, /inside the workspace/);
     await refused({}, /needs `jobs`/);
     assert.equal(started, 0);
   } finally {await done();}
@@ -436,19 +439,20 @@ test('Exclusive commands run one at a time across jobs', async () => {
   } finally {await done();}
 });
 
-test('Persistence: single use by default; a kept worker resumes with its context and original grant, then is released', async () => {
+test('Keeping: single use by default; keep returns a real id, continue resumes with context and the original grant, release ends it', async () => {
   const {cwd, tools, done} = await project();
   try {
     const requests: Parameters<typeof workers>[1] = [];
-    tools.setAutomaEnvironment(environment(workers({Once: ['summary: once'], Loop: [['Read', {file_path: 'a.txt'}], 'summary: first pass', ['Write', {file_path: 'a.txt', content: 'fixed\n'}], ['Write', {file_path: 'b.txt', content: 'no\n'}], 'summary: second pass', 'summary: third']}, requests)));
+    tools.setAutomaEnvironment(environment(workers({Once: ['summary: once'], More: ['summary: fresh'], Loop: [['Read', {file_path: 'a.txt'}], 'summary: first pass', ['Write', {file_path: 'a.txt', content: 'fixed\n'}], ['Write', {file_path: 'b.txt', content: 'no\n'}], 'summary: second pass', 'summary: third']}, requests)));
     const single = await tools.execute(dispatch({jobs: [job('Once')]}), principal());
-    assert.doesNotMatch(single.text, /instance:/);
-    const first = await tools.execute(dispatch({preset: 'edit', jobs: [job('Loop', {files: ['a.txt'], persistence: true})]}), principal());
-    const id = /^instance: (w[0-9a-f]+) /m.exec(first.text)?.[1];
+    assert.doesNotMatch(single.text, /^kept:/m);
+    const first = await tools.execute(dispatch({preset: 'edit', jobs: [job('Loop', {files: ['a.txt'], keep: true})]}), principal());
+    const id = /^kept: (w[0-9a-f]+) /m.exec(first.text)?.[1];
     assert.ok(id, first.text);
-    const second = await tools.execute(dispatch({jobs: [{title: 'Next', brief: 'Apply the fix now', instance: id}]}), principal());
+    assert.ok(first.text.includes(`{"continue": "${id}"}`) && first.text.includes(`{"release": ["${id}"]}`), 'the receipt says how to continue and release');
+    const second = await tools.execute(dispatch({jobs: [{title: 'Next', brief: 'Apply the fix now', continue: id}]}), principal());
     assert.match(second.text, /^changed: a\.txt \(\+1 −2\)$/m);
-    assert.match(second.text, new RegExp('^instance: ' + id, 'm'));
+    assert.match(second.text, new RegExp('^kept: ' + id, 'm'));
     const resumed = requests.at(-1)!;
     assert.equal(resumed.messages.filter(message => message.role === 'user').length, 2);
     assert.ok(resumed.messages.some(message => message.role === 'tool' && /one/.test(message.text)), 'keeps what it read');
@@ -458,44 +462,63 @@ test('Persistence: single use by default; a kept worker resumes with its context
     const released = await tools.execute(dispatch({release: [id]}), principal());
     assert.equal(released.isError, false);
     assert.match(released.text, new RegExp('Released ' + id));
-    const gone = await tools.execute(dispatch({jobs: [{title: 'Again', brief: 'More', instance: id}]}), principal());
-    assert.equal(gone.disposition, 'denied');
-    assert.match(gone.text, /does not exist/);
+    // A released id is simply not live any more: the job runs fresh, with a note, and is never an error.
+    const gone = await tools.execute(dispatch({jobs: [{title: 'Again', brief: 'More', continue: id}]}), principal());
+    assert.equal(gone.isError, false, gone.text);
+    assert.match(gone.text, /summary: fresh/);
+    assert.match(gone.text, /is not a live kept worker of yours.*fresh single-use job/);
+    assert.doesNotMatch(gone.text, /^kept:/m);
   } finally {await done();}
 });
 
-test('Persistence boundaries: fixed grant, kept-instance cap, owner only, one per task', async () => {
+test('Keeping boundaries: fixed grant, cap, owner only, one per task, junk ids ignored with a note', async () => {
   const {tools, done} = await project();
   try {
-    tools.setAutomaEnvironment(environment(workers({K: ['summary: k', 'summary: k2'], L: ['summary: l'], M: ['summary: m'], N: ['summary: n']})));
-    const keep = async (brief: string, context = principal()) => /^instance: (w[0-9a-f]+) /m.exec((await tools.execute(dispatch({jobs: [job(brief, {persistence: true})]}), context)).text)?.[1];
+    tools.setAutomaEnvironment(environment(workers({K: ['summary: k', 'summary: k2', 'summary: k3'], L: ['summary: l'], M: ['summary: m'], N: ['summary: n1', 'summary: n2', 'summary: n3', 'summary: n4', 'summary: n5', 'summary: n6']})));
+    const run = (args: unknown, context = principal()) => tools.execute(dispatch(args), context);
+    const keep = async (brief: string, context = principal()) => /^kept: (w[0-9a-f]+) /m.exec((await run({jobs: [job(brief, {keep: true})]}, context)).text)?.[1];
     const k = await keep('K'), l = await keep('L');
     assert.ok(k && l);
-    const capped = await tools.execute(dispatch({jobs: [job('M', {persistence: true})]}), principal());
-    assert.match(capped.text, /At most 2 persistent/);
-    const widened = await tools.execute(dispatch({jobs: [{title: 'x', brief: 'y', instance: k, files: ['a.txt']}]}), principal());
+    const capped = await run({jobs: [job('M', {keep: true})]});
+    assert.equal(capped.isError, false, capped.text);
+    assert.match(capped.text, /was not kept: at most 2 workers/);
+    assert.doesNotMatch(capped.text, /^kept:/m);
+    const widened = await run({jobs: [{title: 'x', brief: 'y', continue: k, files: ['a.txt']}]});
+    assert.equal(widened.isError, false, widened.text);
     assert.match(widened.text, /keeps the grant it was created with/);
-    const twice = await tools.execute(dispatch({jobs: [{title: 'x', brief: 'y', instance: k}, {title: 'z', brief: 'y', instance: k}]}), principal());
-    assert.match(twice.text, /appears twice/);
-    const both = await tools.execute(dispatch({release: [k], jobs: [{title: 'x', brief: 'y', instance: k}]}), principal());
-    assert.match(both.text, /resumed and released/);
-    const stolen = await tools.execute(dispatch({jobs: [{title: 'x', brief: 'y', instance: k}]}), principal(undefined, {ownerId: 'kalon', activityId: 'k'}));
-    assert.match(stolen.text, /does not exist/);
-    const stolenRelease = await tools.execute(dispatch({release: [k]}), principal(undefined, {ownerId: 'kalon', activityId: 'k'}));
-    assert.match(stolenRelease.text, /not found/);
+    const twice = await run({jobs: [{title: 'x', brief: 'next', continue: k}, {title: 'z', brief: 'N second', continue: k}]});
+    assert.match(twice.text, /already continued by an earlier job/);
+    assert.match(twice.text, /2\/2 done/);
+    const both = await run({release: [k], jobs: [{title: 'x', brief: 'next', continue: k}]});
+    assert.match(both.text, /Release of "[^"]+" ignored: it is continued/);
+    assert.match(both.text, new RegExp('^kept: ' + k, 'm'));
+    const stolen = await run({jobs: [{title: 'x', brief: 'N third', continue: k}]}, principal(undefined, {ownerId: 'kalon', activityId: 'k'}));
+    assert.equal(stolen.isError, false, stolen.text);
+    assert.match(stolen.text, /not a live kept worker of yours/);
+    const stolenRelease = await run({release: [k]}, principal(undefined, {ownerId: 'kalon', activityId: 'k'}));
+    assert.equal(stolenRelease.isError, false);
+    assert.match(stolenRelease.text, /Release ignored.*not a live kept worker/);
+    const junk = await run({release: ['banana', 'none', 'n/a']});
+    assert.equal(junk.isError, false);
+    assert.match(junk.text, /Released nothing\./);
+    assert.match(junk.text, /"banana" is not a live kept worker/);
+    assert.doesNotMatch(junk.text, /"none"|"n\/a"/);
+    const junkContinue = await run({jobs: [{brief: 'N fourth', continue: 'wdeadbeef'}, {brief: 'N fifth', continue: 'new'}]});
+    assert.equal(junkContinue.isError, false, junkContinue.text);
+    assert.match(junkContinue.text, /"wdeadbeef" is not a live kept worker/);
     // A release in the same dispatch frees the slot.
-    const swap = await tools.execute(dispatch({release: [l], jobs: [job('M', {persistence: true})]}), principal());
+    const swap = await run({release: [l], jobs: [job('M', {keep: true})]});
     assert.match(swap.text, /released/);
-    assert.match(swap.text, /instance: w/);
-    // The next task of the same actor finds nothing: instances end with their task.
+    assert.match(swap.text, /^kept: w/m);
+    // The next task of the same actor finds nothing: kept workers end with their task.
     const next = principal(undefined, {activityId: 'next-task'});
-    const later = await tools.execute(dispatch({jobs: [{title: 'x', brief: 'y', instance: k}]}), next);
-    assert.match(later.text, /does not exist/);
+    const later = await run({jobs: [{title: 'x', brief: 'N sixth', continue: k}]}, next);
+    assert.match(later.text, /not a live kept worker/);
     assert.ok(await keep('N', next));
   } finally {await done();}
 });
 
-test('Persistence: false on resume, failure, and oversized context all end the instance', async () => {
+test('Keeping: keep false on continue, failure and oversized context all end the worker; the old field names still work', async () => {
   const {tools, done} = await project();
   try {
     let input = 10, fail = false;
@@ -503,34 +526,114 @@ test('Persistence: false on resume, failure, and oversized context all end the i
       if (fail) throw new Error('boom');
       return {message: {role: 'assistant', text: 'summary: ok'}, stop: 'complete', usage: {input, output: 1}} satisfies ModelTurn;
     }}));
-    const keep = async () => /^instance: (w[0-9a-f]+) /m.exec((await tools.execute(dispatch({jobs: [job('K', {persistence: true})]}), principal())).text)![1]!;
-    const resume = (id: string, extra = {}) => tools.execute(dispatch({jobs: [{title: 'x', brief: 'next', instance: id, ...extra}]}), principal());
+    const keep = async () => /^kept: (w[0-9a-f]+) /m.exec((await tools.execute(dispatch({jobs: [job('K', {keep: true})]}), principal())).text)![1]!;
+    const resume = (id: string, extra = {}) => tools.execute(dispatch({jobs: [{title: 'x', brief: 'next', continue: id, ...extra}]}), principal());
+    const live = (text: string) => !/not a live kept worker/.test(text);
     const closing = await keep();
-    assert.doesNotMatch((await resume(closing, {persistence: false})).text, /instance:/);
-    assert.match((await resume(closing)).text, /does not exist/);
+    assert.doesNotMatch((await resume(closing, {keep: false})).text, /^kept:/m);
+    assert.ok(!live((await resume(closing)).text));
     const failing = await keep();
     fail = true;
     assert.match((await resume(failing)).text, /· failed/);
     fail = false;
-    assert.match((await resume(failing)).text, /does not exist/);
+    assert.ok(!live((await resume(failing)).text));
     const large = await keep();
     input = AUTOMA_RETAINED_INPUT_LIMIT;
     const closed = await resume(large);
     assert.match(closed.text, /Instance closed: its context reached/);
-    assert.doesNotMatch(closed.text, /^instance:/m);
+    assert.doesNotMatch(closed.text, /^kept:/m);
     input = 10;
-    assert.match((await resume(large)).text, /does not exist/);
-    const notKept = await tools.execute(dispatch({jobs: [job('K', {persistence: true})]}), principal());
-    assert.match(notKept.text, /^instance: /m);
+    assert.ok(!live((await resume(large)).text));
+    // Old names: persistence -> keep, instance -> continue, release stays.
+    const old = await tools.execute(dispatch({jobs: [{brief: 'K', persistence: true}]}), principal());
+    const oldId = /^kept: (w[0-9a-f]+) /m.exec(old.text)?.[1];
+    assert.ok(oldId, old.text);
+    const viaAlias = await tools.execute(dispatch({jobs: [{brief: 'next', instance: oldId, persistence: false}]}), principal());
+    assert.ok(live(viaAlias.text), viaAlias.text);
+    assert.doesNotMatch(viaAlias.text, /^kept:/m);
   } finally {await done();}
 });
 
-test('The tool contract states when persistence applies and how it ends', () => {
-  assert.match(AUTOMA_DESCRIPTION, /Jobs are single-use/);
-  assert.match(AUTOMA_DESCRIPTION, /rare case where one worker must run again/);
-  assert.match(AUTOMA_DESCRIPTION, /release it when done/);
+test('The tool contract states keep and continue concisely', () => {
+  assert.match(AUTOMA_DESCRIPTION, /`keep: true`/);
+  assert.match(AUTOMA_DESCRIPTION, /continue: "<id from the receipt>"/);
+  assert.match(AUTOMA_DESCRIPTION, /ends with your task/);
   assert.match(AUTOMA_DESCRIPTION, /Example: \{"jobs"/);
   assert.ok(AUTOMA_DESCRIPTION.length < 2200);
+  const keys = Object.keys((automaSchema.toJSONSchema() as unknown as {properties: {jobs: {items: {properties: object}}}}).properties.jobs.items.properties);
+  assert.ok(keys.includes('keep') && keys.includes('continue') && !keys.includes('persistence') && !keys.includes('instance'));
+});
+
+test('Scratchpad: a worker writes only inside its dispatcher\'s own scratchpad subdirectory, never the workspace or another actor\'s', async () => {
+  // The permission engine compares canonical paths with the scratchpad string, so the temp root must be in canonical form (Windows 8.3 names differ).
+  const saved = {TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR};
+  const canonicalTemp = await realpath(tmpdir());
+  Object.assign(process.env, {TEMP: canonicalTemp, TMP: canonicalTemp, TMPDIR: canonicalTemp});
+  const {cwd, tools, done} = await project('default');
+  const mine = getActorScratchpadDir(cwd, 's', 'techne'), theirs = getActorScratchpadDir(cwd, 's', 'kalon');
+  try {
+    tools.permissions.setScratchpadDir(getScratchpadDir(cwd, 's'));
+    const requests: Parameters<typeof workers>[1] = [];
+    tools.setAutomaEnvironment(environment(workers({Scratch: [
+      ['Write', {file_path: join(mine, 'probe.py'), content: 'print(1)\n'}],
+      ['Edit', {file_path: join(mine, 'probe.py'), old_string: '1', new_string: '2'}],
+      ['Write', {file_path: join(theirs, 'x.py'), content: 'x'}],
+      ['Write', {file_path: join(mine, '..', 'kalon', 'y.py'), content: 'y'}],
+      ['Write', {file_path: 'plain.txt', content: 'hacked'}],
+      ['Write', {file_path: join(cwd, 'b.txt'), content: 'hacked'}],
+      'summary: done']}, requests)));
+    // A read-only dispatch (no files, no commands) still gets scratch writes, and nothing else.
+    const result = await tools.execute(dispatch({jobs: [job('Scratch')]}), principal());
+    const early = toolResults(requests).slice(0, 2).map(item => item.text).join(" / ");
+    assert.equal(result.isError, false, early);
+    const [write, edit, other, dotdot, workspace, absolute] = toolResults(requests);
+    assert.equal(write?.isError, false, write?.text);
+    assert.equal(edit?.isError, false, edit?.text);
+    assert.equal(await readFile(join(mine, 'probe.py'), 'utf8'), 'print(2)\n');
+    for (const refused of [other, dotdot, workspace, absolute]) {
+      assert.equal(refused?.isError, true);
+      assert.match(refused!.text, /outside this job's write grant.*No workspace files are writable and your scratchpad/);
+    }
+    await assert.rejects(readFile(join(theirs, 'x.py')));
+    await assert.rejects(readFile(join(theirs, 'y.py')));
+    assert.equal(await readFile(join(cwd, 'plain.txt'), 'utf8'), 'hello\n');
+    assert.equal(await readFile(join(cwd, 'b.txt'), 'utf8'), 'three\n');
+    assert.ok(requests[0]!.messages[0]!.text.includes(mine), 'the brief names the worker\'s scratchpad');
+    // The workspace grant is unchanged: `files` still limits workspace writes even while the scratchpad is open.
+    assert.match(pathDenial('Write', {files: ['a.txt'], commands: [], exclusive: []}, {lexical: join(cwd, 'b.txt'), cwd, canonical: join(cwd, 'b.txt'), root: cwd, scratch: {lexical: mine, canonical: mine}})!, /Writable: a\.txt/);
+  } finally {
+    await rm(getScratchpadDir(cwd, 's'), {recursive: true, force: true});
+    for (const [key, value] of Object.entries(saved)) {if (value === undefined) delete process.env[key]; else process.env[key] = value;}
+    await done();
+  }
+});
+
+test('Shipped Aletheia probe: read-only workspace plus python and node commands, still gated by the dispatcher', async () => {
+  const aletheia = builtinActors.find(actor => actor.id === 'aletheia')!.automa!;
+  const probe = aletheia.presets.probe!;
+  assert.equal(probe.tools, 'read');
+  for (const command of ['python', 'python3', 'py', 'node']) assert.ok(probe.commands!.includes(command), command);
+  const {cwd, tools, done} = await project('default');
+  try {
+    const requests: Parameters<typeof workers>[1] = [];
+    const asked: string[] = [];
+    tools.setAutomaEnvironment(environment(workers({Check: [['Shell', {command: 'python -c "print(1)"'}], ['Write', {file_path: 'a.txt', content: 'x'}], 'summary: tried']}, requests), {profile: () => aletheia}));
+    // The preset is chosen from the requested command; no preset name is given.
+    const result = await tools.execute(dispatch({jobs: [job('Check', {commands: ['python -c']})]}), principal(undefined, {ownerId: 'aletheia', async permission(input) {asked.push(input.title); return false;}}));
+    assert.doesNotMatch(result.text, /does not allow the command prefix/);
+    const [shell, write] = toolResults(requests);
+    assert.ok(asked.some(title => /allow/.test(title)), 'the dispatcher\'s permission engine is still consulted: ' + JSON.stringify(asked));
+    assert.equal(shell?.isError, true);
+    assert.equal(write?.isError, true);
+    assert.match(write!.text, /outside this job's write grant/);
+    assert.equal(await readFile(join(cwd, 'a.txt'), 'utf8'), 'one\ntwo\n');
+    // A dispatcher without the Shell tool cannot hand it to a worker through any preset.
+    tools.setRegistry({getToolsForActor: () => [{name: 'Automa'}, {name: 'Read'}]} as never);
+    const blocked: Parameters<typeof workers>[1] = [];
+    tools.setAutomaEnvironment(environment(workers({Check: [['Shell', {command: 'node --version'}], 'summary: no']}, blocked), {profile: () => aletheia}));
+    await tools.execute(dispatch({jobs: [job('Check', {commands: ['node']})]}), principal(undefined, {ownerId: 'aletheia'}));
+    assert.match(toolResults(blocked)[0]!.text, /unavailable for this actor/);
+  } finally {await done();}
 });
 
 test('Models write the minimum: tasks, bare strings, task for brief, no title, and placeholders in optional fields all work', async () => {
@@ -546,7 +649,7 @@ test('Models write the minimum: tasks, bare strings, task for brief, no title, a
     const junk = await tools.execute(dispatch({jobs: [{brief: 'Gamma scan', files: ['__no_writes_allowed__'], commands: ['n/a'], read: ['.'], output: 'text', persistence: false, instance: 'n/a'}], preset: 'default', parallel: 1, release: ['none']}), principal());
     assert.equal(junk.isError, false, junk.text);
     assert.match(junk.text, /summary: c/);
-    assert.deepEqual(requests.at(-1)!.tools, ['Read', 'Glob', 'Grep', 'WebFetch']);
+    assert.deepEqual(requests.at(-1)!.tools, ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write']);
     // Files without a preset pick the writable one; an unknown preset falls back with a note instead of failing.
     const picked = await tools.execute(dispatch({preset: 'nope', jobs: [{brief: 'Delta edit', files: ['a.txt']}]}), principal());
     assert.equal(picked.isError, false, picked.text);

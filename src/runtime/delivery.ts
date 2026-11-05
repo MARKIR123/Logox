@@ -3,10 +3,9 @@ import {taskOriginSchema} from './contracts.js';
 import {inputKindSchema} from './provenance.js';
 
 export const submitDeliverySchema = z.discriminatedUnion('mode', [
-  /** Enter: steer the target window's running task at its next step boundary, otherwise start a new round. */
-  z.strictObject({mode: z.literal('auto')}),
-  /** Ctrl+Q: always wait for a later round, never join the running one. */
+  /** Enter: a running target keeps the message in the pending list until its round ends (or Send now steers it); an idle target starts a round. */
   z.strictObject({mode: z.literal('queue')}),
+  /** Ctrl+T and Send now: join an exact running activity at its next step boundary. */
   z.strictObject({mode: z.literal('steer'), activityId: z.string().min(1)}),
 ]);
 export type SubmitDelivery = z.infer<typeof submitDeliverySchema>;

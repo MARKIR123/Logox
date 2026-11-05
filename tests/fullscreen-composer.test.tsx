@@ -312,7 +312,7 @@ test('normal composer adds only a right-aligned expand button and keeps Shift+En
     assert.ok(f.output.lines[first.y]!.startsWith('❯ left'));
     assert.equal(f.output.lines[first.y + 1], '  second');
     await f.key('\r');
-    assert.deepEqual(f.submissions, [{text: 'left\nsecond', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'left\nsecond', source: 'logox', delivery: {mode: 'queue'}}]);
     await f.resize(6, 8);
     assert.ok(!f.text().includes(COMPOSER_EXPAND_LABEL), 'Widths below six editor columns omit the entry');
     await f.resize(90, 24);
@@ -385,7 +385,7 @@ test('opening shares the exact draft/cursor, hides the timeline plane and Esc do
     assert.deepEqual(f.cancelled, [], 'Fullscreen Esc is not a task cancellation');
     assert.equal(store.interactions.list()[0]!.status, 'pending');
     await f.key('Y'); await f.key('\r');
-    assert.deepEqual(f.submissions, [{text: 'abXYcd', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'abXYcd', source: 'logox', delivery: {mode: 'queue'}}]);
     assert.equal(store.interactions.list()[0]!.status, 'pending');
   } finally {await f.close();}
 });
@@ -400,7 +400,7 @@ test('fullscreen newline keys never submit or steer; Ctrl+Enter queues exactly o
     assert.deepEqual(f.submissions, []);
     assertCaretVisible(f.output);
     await f.key('\x1b[13;5:1u'); await f.key('\x1b[13;5:3u');
-    assert.deepEqual(f.submissions, [{text: 'one\ntwo\nthree\nfour', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'one\ntwo\nthree\nfour', source: 'logox', delivery: {mode: 'queue'}}]);
     assert.doesNotMatch(f.text(), /Compose ·/);
     await f.expand();
     assert.match(f.text(), /Compose · Logox/, 'Ctrl+Enter must not leak to the parent Actor-card shortcut');
@@ -434,7 +434,7 @@ test('mouse Send/collapse preserve failed drafts and never activate the pending 
     reject = false; await f.expand();
     await f.click(g.sendX + 1, g.footerY);
     assert.deepEqual(f.submissions.map(item => item.text), ['retain me', 'retain me']);
-    assert.ok(f.submissions.every(item => item.source === 'logox' && item.delivery?.mode === 'auto'));
+    assert.ok(f.submissions.every(item => item.source === 'logox' && item.delivery?.mode === 'queue'));
     assert.equal(store.interactions.list()[0]!.status, 'pending');
     assert.deepEqual(f.cancelled, []);
   } finally {await f.close();}
@@ -469,7 +469,7 @@ test('fullscreen paste is not duplicated by the parent, survives resizing and su
       assertCaretVisible(f.output);
     }
     await f.key('!'); await f.key('\x1b[13;5u');
-    assert.deepEqual(f.submissions, [{text: 'A' + lines.join('\n') + '!B', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'A' + lines.join('\n') + '!B', source: 'logox', delivery: {mode: 'queue'}}]);
   } finally {await f.close();}
 });
 
@@ -486,7 +486,7 @@ test('fullscreen Ctrl+T keeps the exact selected activity and stale targets reta
     assert.match(f.text(), /keep this correction/);
     assert.match(f.text(), /no longer active|Select an active/i);
     await f.key('\x1b[13;5u');
-    assert.deepEqual(f.submissions[1], {text: 'keep this correction', source: 'logox', delivery: {mode: 'auto'}});
+    assert.deepEqual(f.submissions[1], {text: 'keep this correction', source: 'logox', delivery: {mode: 'queue'}});
     assert.deepEqual(f.cancelled, []);
   } finally {await f.close();}
 });
@@ -501,10 +501,10 @@ test('Actor drafts and cursors remain independent when expanding, collapsing and
     await f.key('X'); await f.key('\x1b');
     assert.doesNotMatch(f.text(), /director draft/, 'Esc collapses the Actor editor without returning to Logox');
     await f.key('Y'); await f.key('\r');
-    assert.deepEqual(f.submissions[0], {text: 'actor drafXYt', source: 'techne', delivery: {mode: 'auto'}});
+    assert.deepEqual(f.submissions[0], {text: 'actor drafXYt', source: 'techne', delivery: {mode: 'queue'}});
     await f.key('\x1b'); assert.match(f.text(), /director draft!/);
     await f.key('\r');
-    assert.deepEqual(f.submissions[1], {text: 'director draft!', source: 'logox', delivery: {mode: 'auto'}});
+    assert.deepEqual(f.submissions[1], {text: 'director draft!', source: 'logox', delivery: {mode: 'queue'}});
     assert.deepEqual(f.cancelled, []);
   } finally {await f.close();}
 });
@@ -527,7 +527,7 @@ test('question answer editing has no expand entry and does not share the normal 
     else assert.fail('The pending question must receive a question answer');
     assert.deepEqual(f.submissions, []);
     await f.key('\r');
-    assert.deepEqual(f.submissions, [{text: 'normal draft!', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'normal draft!', source: 'logox', delivery: {mode: 'queue'}}]);
   } finally {await f.close();}
 });
 
@@ -551,7 +551,7 @@ test('local authentication keeps secret drafts outside the fullscreen composer a
     assert.match(f.text(), /ordinary draft/);
     assert.doesNotMatch(f.text(), /fixture-secret|Synthetic key/);
     await f.key('\x1b[13;5u');
-    assert.deepEqual(f.submissions, [{text: 'ordinary draft', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'ordinary draft', source: 'logox', delivery: {mode: 'queue'}}]);
   } finally {
     await act(async () => {authentication.cancel();});
     await f.close(); await rm(directory, {recursive: true, force: true});
@@ -573,7 +573,7 @@ test('fullscreen selection copies through OSC52 and Esc clears selection before 
     assert.doesNotMatch(f.text(), /Compose ·/);
     assert.deepEqual(f.cancelled, []);
     await f.key('\r');
-    assert.deepEqual(f.submissions, [{text: 'A🙂e\u0301Z!', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: 'A🙂e\u0301Z!', source: 'logox', delivery: {mode: 'queue'}}]);
   } finally {await f.close();}
 });
 
@@ -593,7 +593,7 @@ test('fullscreen wheel hides an offscreen native caret and restores it without m
     await f.mouse(64, 3, 3); await f.key('!');
     assert.match(f.text(), /row29!/); assertCaretVisible(f.output);
     await f.key('\x1b[13;5u');
-    assert.deepEqual(f.submissions, [{text: text + '!', source: 'logox', delivery: {mode: 'auto'}}]);
+    assert.deepEqual(f.submissions, [{text: text + '!', source: 'logox', delivery: {mode: 'queue'}}]);
   } finally {await f.close();}
 });
 

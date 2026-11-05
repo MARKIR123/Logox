@@ -16,7 +16,8 @@ export interface JobGrant {
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'] as const;
 
 export function grantTools(grant: JobGrant): readonly string[] {
-  return [...READ_TOOLS, ...(grant.files.length ? ['Edit', 'Write'] : []), ...(grant.commands.length ? ['Shell'] : [])];
+  // Edit and Write are always offered: without `files` they are confined to the dispatcher's own scratchpad subdirectory.
+  return [...READ_TOOLS, 'Edit', 'Write', ...(grant.commands.length ? ['Shell'] : [])];
 }
 
 function matchesCommand(prefix: string, command: string): boolean {
@@ -42,13 +43,17 @@ export interface GrantPath {
   readonly cwd: string;
   readonly canonical: string;
   readonly root: string;
+  /** The dispatcher's own scratchpad subdirectory (lexical and canonical): the only place outside the grant where a worker may write. */
+  readonly scratch?: {readonly lexical: string; readonly canonical: string};
 }
 
 export function pathDenial(tool: string, grant: JobGrant, path: GrantPath): string | undefined {
   const both = (check: (target: string, base: string) => boolean) => check(path.lexical, path.cwd) && check(path.canonical, path.root);
   if (tool === 'Edit' || tool === 'Write') {
+    const scratch = path.scratch;
+    if (scratch && inside(scratch.lexical, path.lexical) && inside(scratch.canonical, path.canonical)) return undefined;
     return both((target, base) => inside(base, target) && ownsPath(grant.files, target, base)) ? undefined
-      : `Path is outside this job's write grant: ${path.lexical}. Report it in notes instead.`;
+      : `Path is outside this job's write grant: ${path.lexical}. ${grant.files.length ? `Writable: ${grant.files.join(', ')}` : 'No workspace files are writable'}${scratch ? ` and your scratchpad ${scratch.lexical}` : ''}. Put scratch scripts in the scratchpad and report anything else in notes.`;
   }
   if (!inside(path.root, path.canonical)) return `Path is outside the workspace: ${path.lexical}.`;
   if (!grant.read) return undefined;
@@ -66,8 +71,10 @@ export interface AutomaJobArgs {
   readonly files?: readonly string[] | undefined;
   readonly commands?: readonly string[] | undefined;
   readonly output?: 'text' | 'json' | undefined;
-  readonly persistence?: boolean | undefined;
-  readonly instance?: string | undefined;
+  /** Keep this worker's context after the job so a later job can continue it. */
+  readonly keep?: boolean | undefined;
+  /** Id of a live kept worker to continue; anything else is ignored with a note. */
+  readonly continue?: string | undefined;
 }
 
 export interface RetainedGrant {
@@ -94,7 +101,7 @@ export function titleFrom(brief: string): string {
 function filesError(pattern: string, cwd: string): string | undefined {
   const text = pattern.trim().replaceAll('\\', '/');
   if (WORKSPACE_WIDE.test(text) || text === '/') return `\`files\` must name specific paths, not the whole workspace: ${pattern}`;
-  if (text.split('/').includes('..') || !inside(cwd, resolve(cwd, text.replace(/[*?].*$/, '')))) return `\`files\` must stay inside the workspace: ${pattern}. Workers cannot write to the scratchpad; have a command print to stdout, or write the file yourself.`;
+  if (text.split('/').includes('..') || !inside(cwd, resolve(cwd, text.replace(/[*?].*$/, '')))) return `\`files\` must stay inside the workspace: ${pattern}.`;
   return undefined;
 }
 
@@ -108,44 +115,59 @@ export function planDispatch(input: {
   readonly retained: readonly RetainedGrant[];
   /** Who currently holds a write pattern, when it is not the principal. */
   readonly holder: (pattern: string) => string | undefined;
-}): {ok: true; jobs: readonly PlannedJob[]; note?: string} | {ok: false; error: string} {
+}): {ok: true; jobs: readonly PlannedJob[]; /** Ids this dispatch really releases. */ release: readonly string[]; note?: string} | {ok: false; error: string} {
   const {profile, cwd} = input;
   const refuse = (error: string) => ({ok: false as const, error});
-  const needsWrite = input.jobs.some(job => !job.instance && job.files?.length);
-  const wanted = input.jobs.flatMap(job => job.instance ? [] : job.commands ?? []);
+  const live = new Set(input.retained.map(item => item.id));
+  const notes: string[] = [];
+  // Only real ids of this dispatcher's kept workers are honoured; anything else is dropped with a note, never an error.
+  const continuing = new Set<string>();
+  const wantsContinue = (job: AutomaJobArgs): string | undefined => {
+    if (!job.continue) return undefined;
+    const label = job.title ?? titleFrom(job.brief);
+    if (live.has(job.continue) && !continuing.has(job.continue)) {continuing.add(job.continue); return job.continue;}
+    notes.push(continuing.has(job.continue) ? `Kept worker "${job.continue}" is already continued by an earlier job in this dispatch; "${label}" ran as a fresh single-use job.`
+      : `"${job.continue}" is not a live kept worker of yours (they end with your task); "${label}" ran as a fresh single-use job, so its brief must stand alone.`);
+    return undefined;
+  };
+  const resolved = input.jobs.map(job => ({job, resume: wantsContinue(job)}));
+  const release = [...new Set(input.release)].filter(id => {
+    if (!live.has(id)) {notes.push(`Release ignored: "${id}" is not a live kept worker of yours.`); return false;}
+    if (continuing.has(id)) {notes.push(`Release of "${id}" ignored: it is continued in this dispatch.`); return false;}
+    return true;
+  });
+  const fresh = resolved.filter(item => !item.resume);
+  const needsWrite = fresh.some(item => item.job.files?.length);
+  const wanted = fresh.flatMap(item => item.job.commands ?? []);
   const fits = (name: string) => {
     const item = profile.presets[name]!;
     return (!needsWrite || item.tools === 'write') && wanted.every(command => (item.commands ?? []).some(prefix => matchesCommand(prefix, command)));
   };
-  let note: string | undefined;
   let presetName = input.preset ?? '';
   if (!Object.hasOwn(profile.presets, presetName)) {
     // Presets are a means, not a decision: pick the first one that covers the files and commands the jobs ask for.
     const chosen = [profile.default_preset, ...Object.keys(profile.presets)].find(fits) ?? profile.default_preset;
-    if (input.preset) note = `Preset "${input.preset}" does not exist (available: ${Object.keys(profile.presets).join(', ')}); used "${chosen}".`;
+    if (input.preset) notes.push(`Preset "${input.preset}" does not exist (available: ${Object.keys(profile.presets).join(', ')}); used "${chosen}".`);
     presetName = chosen;
   }
   const preset = profile.presets[presetName]!;
   const planned: PlannedJob[] = [];
-  const resumed = new Set<string>();
-  let fresh = 0;
-  for (const raw of input.jobs) {
-    const job = {...raw, title: raw.title ?? titleFrom(raw.brief)};
-    if (job.instance) {
-      const instance = input.retained.find(item => item.id === job.instance);
-      if (!instance) return refuse(`Automa instance "${job.instance}" does not exist. Instances end with your task, on failure, on cancel and on release; dispatch a fresh job with a complete brief.`);
-      if (input.release.includes(job.instance)) return refuse(`Automa instance "${job.instance}" cannot be resumed and released in one dispatch.`);
-      if (resumed.has(job.instance)) return refuse(`Automa instance "${job.instance}" appears twice in one dispatch.`);
-      if (job.read || job.files || job.commands) return refuse(`Automa instance "${job.instance}" keeps the grant it was created with; drop read, files and commands, or dispatch a fresh job.`);
-      resumed.add(job.instance);
-      const held = instance.grant.files.flatMap(pattern => {
-        const holder = input.holder(pattern);
-        return holder ? [`${pattern} is held by ${holder}`] : [];
-      });
-      planned.push({job, grant: instance.grant, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
+  let slots = AUTOMA_MAX_RETAINED - input.retained.filter(item => !release.includes(item.id)).length;
+  const heldBy = (files: readonly string[]) => files.flatMap(pattern => {
+    const holder = input.holder(pattern);
+    return holder ? [`${pattern} is held by ${holder}`] : [];
+  });
+  for (const {job: raw, resume} of resolved) {
+    const {continue: _requested, ...base} = raw;
+    const job = {...base, title: raw.title ?? titleFrom(raw.brief)};
+    if (resume) {
+      const instance = input.retained.find(item => item.id === resume)!;
+      if (job.read || job.files || job.commands) notes.push(`Kept worker "${resume}" keeps the grant it was created with; read, files and commands on "${job.title}" were ignored.`);
+      const {read: _read, files: _files, commands: _commands, ...rest} = job;
+      const held = heldBy(instance.grant.files);
+      planned.push({job: {...rest, continue: resume}, grant: instance.grant, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
       continue;
     }
-    if (job.persistence) fresh++;
     if (job.files?.length && preset.tools !== 'write') {
       const writable = Object.entries(profile.presets).filter(([, item]) => item.tools === 'write').map(([name]) => name);
       return refuse(`Preset "${presetName}" is read-only, so \`files\` cannot be granted. ${writable.length ? 'Writable presets: ' + writable.join(', ') + '.' : 'This actor has no writable preset.'}`);
@@ -160,18 +182,16 @@ export function planDispatch(input: {
       const others = Object.entries(profile.presets).filter(([name, item]) => name !== presetName && (item.commands?.length)).map(([name, item]) => `${name} (${item.commands!.join(', ')})`);
       return refuse(`Preset "${presetName}" does not allow the command prefix: ${outside.join(', ')}. Allowed: ${allowed.join(', ') || 'none'}.${others.length ? ' Other presets: ' + others.join('; ') + '.' : ''} Put the command in a Shell call of your own if no preset fits.`);
     }
+    let keep = job.keep;
+    if (keep) {
+      if (slots > 0) slots--;
+      else {keep = false; notes.push(`"${job.title}" was not kept: at most ${AUTOMA_MAX_RETAINED} workers may be kept at once. Release one with \`release\`, or let it end with your task.`);}
+    }
     const commands = job.commands ?? allowed;
     const exclusive = (preset.exclusive ?? []).filter(prefix => commands.some(command => matchesCommand(prefix, command)));
     const grant: JobGrant = {...(job.read?.length ? {read: job.read} : {}), files: job.files ?? [], commands, exclusive};
-    const held = (job.files ?? []).flatMap(pattern => {
-      const holder = input.holder(pattern);
-      return holder ? [`${pattern} is held by ${holder}`] : [];
-    });
-    planned.push({job, grant, model: preset.model ?? profile.model, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
-  }
-  const keeping = input.retained.filter(item => !input.release.includes(item.id)).length;
-  if (keeping + fresh > AUTOMA_MAX_RETAINED) {
-    return refuse(`At most ${AUTOMA_MAX_RETAINED} persistent Automa instances may be kept at once (${keeping} kept, ${fresh} requested). Release one first, or leave persistence off.`);
+    const held = heldBy(job.files ?? []);
+    planned.push({job: {...job, keep}, grant, model: preset.model ?? profile.model, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
   }
   for (let left = 0; left < planned.length; left++) {
     for (let right = left + 1; right < planned.length; right++) {
@@ -180,5 +200,5 @@ export function planDispatch(input: {
       }
     }
   }
-  return {ok: true, jobs: planned, ...(note ? {note} : {})};
+  return {ok: true, jobs: planned, release, ...(notes.length ? {note: notes.join('\n')} : {})};
 }

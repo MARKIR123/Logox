@@ -52,7 +52,7 @@ import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
 import {grantTools, isExclusiveCommand, pathDenial, planDispatch, shellDenial} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
-import {getScratchpadDir} from '../kernel/scratchpad.js';
+import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
 import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './orchestration/AutomaTool/prompt.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
@@ -320,7 +320,9 @@ export class Tools {
     const lexical = target ? resolve(this.cwd, target) : this.cwd;
     const canonical = await resolvedPath(lexical), root = await realpath(this.cwd);
     if (name === 'Read' && inside(getScratchpadDir(this.cwd, context.sessionId), lexical)) return undefined;
-    const denial = pathDenial(name, grant, {lexical, cwd: this.cwd, canonical, root});
+    const scratchDir = getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId);
+    const scratch = {lexical: resolve(scratchDir), canonical: await resolvedPath(scratchDir)};
+    const denial = pathDenial(name, grant, {lexical, cwd: this.cwd, canonical, root, scratch});
     if (denial || (name !== 'Edit' && name !== 'Write')) return denial;
     const owner = this.activities ? overreach(this.activities(), context.ownerId, canonical, root) : undefined;
     if (!owner) return undefined;
@@ -334,23 +336,20 @@ export class Tools {
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
     const {sessionId, ownerId, activityId} = context;
-    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, for example {"jobs": [{"brief": "Find every caller of parseConfig and list path:line"}]}, or `release` with kept instance ids.');
+    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, for example {"jobs": [{"brief": "Find every caller of parseConfig and list path:line"}]}, or `release` with ids of kept workers.');
     const key = JSON.stringify([sessionId, ownerId]);
     if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
     const mine = (instance: OwnedInstance) => instance.sessionId === sessionId && instance.ownerId === ownerId;
     // An instance belongs to one task: anything left over from an earlier task of this actor ends here.
     for (const [id, instance] of this.instances) if (mine(instance) && instance.activityId !== activityId) this.instances.delete(id);
-    const release = args.release ?? [];
-    const unknown = release.filter(id => !(this.instances.has(id) && mine(this.instances.get(id)!)));
     const retained = [...this.instances.values()].filter(mine);
     const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
-    const plan = planDispatch({jobs: args.jobs ?? [], preset: args.preset, release, profile, cwd: this.cwd, retained,
+    const plan = planDispatch({jobs: args.jobs ?? [], preset: args.preset, release: args.release ?? [], profile, cwd: this.cwd, retained,
       holder: pattern => this.patternHolder(ownerId, pattern)});
     if (!plan.ok) return refuse(plan.error);
-    const released = release.filter(id => !unknown.includes(id));
+    const released = plan.release;
     for (const id of released) this.instances.delete(id);
-    const unknownNote = unknown.length ? ` · not found: ${unknown.join(', ')}` : '';
-    if (!plan.jobs.length) return {text: `Released ${released.join(', ') || 'nothing'}${unknownNote}.`, isError: false};
+    if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, plan.note].filter(Boolean).join('\n'), isError: false};
     const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
     const {startTool: _principalStep, reportSwarm, ...principal} = context;
     const parallel = args.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
@@ -369,8 +368,7 @@ export class Tools {
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
       });
-      const notes = [plan.note, unknownNote && unknownNote.slice(3)].filter(Boolean);
-      return notes.length ? {...result, text: result.text + '\n\n' + notes.join('\n')} : result;
+      return plan.note ? {...result, text: result.text + '\n\n' + plan.note} : result;
     } finally {
       this.dispatches.delete(key);
     }
