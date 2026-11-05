@@ -50,9 +50,11 @@ test('production footer omits noisy Queue text while maintaining queue and steer
     assert.equal(f.output.lines.join('\n').includes('Enter Queue'), false, 'Footer must not render Enter Queue hint');
     assert.equal(f.output.lines.join('\n').includes('Queued 2'), false, 'Footer must not render Queued hint');
     await f.key('later work'); await f.key('\r');
-    assert.deepEqual(submissions[0], {text: 'later work', source: 'logox', delivery: {mode: 'queue'}});
+    assert.deepEqual(submissions[0], {text: 'later work', source: 'logox', delivery: {mode: 'auto'}});
+    await f.key('queued later'); await f.key('\x11');
+    assert.deepEqual(submissions[1], {text: 'queued later', source: 'logox', delivery: {mode: 'queue'}});
     await f.select(thinking); await f.key('current correction'); await f.key('\x14');
-    assert.deepEqual(submissions[1], {text: 'current correction', source: 'logox', delivery: {mode: 'steer', activityId: 'director-a'}});
+    assert.deepEqual(submissions[2], {text: 'current correction', source: 'logox', delivery: {mode: 'steer', activityId: 'director-a'}});
     assert.deepEqual(cancelled, []);
   } finally {await f.close();}
 });
@@ -68,7 +70,7 @@ test('stale selected tasks retain the draft and never steer another live task', 
     assert.equal(submissions.length, 0);
     assert.match(f.output.lines.join('\n'), /keep this draft/);
     assert.match(f.output.lines.join('\n'), /no longer active|Select an active/i);
-    await f.key('\r'); assert.deepEqual(submissions[0], {text: 'keep this draft', delivery: {mode: 'queue'}});
+    await f.key('\r'); assert.deepEqual(submissions[0], {text: 'keep this draft', delivery: {mode: 'auto'}});
   } finally {await f.close();}
 });
 
@@ -108,6 +110,21 @@ test('later human task rows carry a Queued label until execution actually starts
   assert.match(text(), /Queued/);
   store.activities.update('s', 'later', {status: 'running'});
   assert.doesNotMatch(text(), /Queued/);
+});
+
+test('a steered message is a faint "steered" row inside the running round, not a queue badge or a new round', () => {
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'run', ownerId: 'logox', kind: 'director', title: 'Run', status: 'running', stage: 'Working', detail: ''});
+  store.message('s', 'logox', 'user', 'Original goal', {activityId: 'run', inputKind: 'human'});
+  store.message('s', 'logox', 'assistant', 'First thought', {activityId: 'run', kind: 'thinking', step: {title: 'Thinking', state: 'completed', elapsedMs: 1}});
+  store.message('s', 'logox', 'user', 'Take the other route', {activityId: 'run', inputKind: 'human', source: 'steered'});
+  store.message('s', 'logox', 'assistant', 'Second thought', {activityId: 'run', kind: 'thinking', step: {title: 'Thinking', state: 'running', elapsedMs: 0}});
+  const lines = buildStageRows(store.getSnapshot(), 's', 'logox', 80, {}, null).map(row => row.text);
+  const text = lines.join('\n');
+  assert.match(text, /· steered/);
+  assert.match(text, /Take the other route/);
+  assert.doesNotMatch(text, /Queued/);
+  assert.equal(lines.filter(line => /^\s*\S*\s*(user|You)\b/i.test(line) && !/steered/.test(line)).length <= 1, true);
 });
 
 test('footer remains clean without noisy queue counters across menu navigation and narrow widths', {timeout: 10000}, async () => {

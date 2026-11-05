@@ -22,30 +22,76 @@ import {editSchema} from '../../EditTool/EditTool.js';
 import {EDIT_DESCRIPTION} from '../../EditTool/prompt.js';
 import {shellSchema} from '../../ShellTool/ShellTool.js';
 import {SHELL_DESCRIPTION} from '../../ShellTool/prompt.js';
-import {grantTools, type JobGrant, type PlannedJob} from './grant.js';
+import {grantTools, titleFrom, type JobGrant, type PlannedJob} from './grant.js';
 
 const pathList = (description: string) => z.array(z.string().min(1)).min(1).max(64).optional().describe(description);
 
 const automaJobSchema = z.strictObject({
-  title: z.string().trim().min(1).max(80).describe('A 3-6 word label shown on the stage'),
-  brief: z.string().trim().min(1).describe('Stands alone: goal, scope, what not to touch, what done looks like, what to report. When resuming an instance, only the next step'),
-  read: pathList('Paths or globs the job may read; omit for the whole workspace'),
-  files: pathList('Paths or globs the job may write; omit for read-only. Needs a writable preset, and must not overlap other jobs'),
-  commands: pathList('Command prefixes the job may run, narrowing the preset; omit to use the preset\'s own'),
-  output: z.enum(['text', 'json']).optional().describe('Format of the report body; omit for text'),
-  persistence: z.boolean().optional().describe('Keep this worker\'s context after it returns, for a task that must run again and builds on what it already loaded. Omit for single use. When resuming, false ends the instance after this run'),
-  instance: z.string().min(1).optional().describe('Id of an instance you kept, to continue it. It keeps its original grant, so omit read, files and commands'),
+  brief: z.string().trim().min(1).describe('What the worker must do. Stands alone: goal, scope, what not to touch, what to report. When resuming an instance, only the next step'),
+  title: z.string().trim().min(1).max(80).optional().describe('Short label for the stage; omit to use the start of the brief'),
+  read: pathList('Narrow the paths or globs the job may read. Omit for the whole workspace'),
+  files: pathList('Paths or globs the job may write. Omit for a read-only job; never a placeholder'),
+  commands: pathList('Command prefixes the job may run, such as "npm test". Omit unless the job must run commands'),
+  output: z.enum(['text', 'json']).optional().describe('Set json only when the report must be a JSON value'),
+  persistence: z.boolean().optional().describe('Rare: keep this worker for follow-up runs. Omit for single use'),
+  instance: z.string().min(1).optional().describe('Rare: id of a kept instance (looks like w1a2b3c4) to continue. Omit for a new job'),
 });
 
 export const automaArgs = z.strictObject({
-  jobs: z.array(automaJobSchema).min(1).max(8).optional().describe('Jobs to run at once; each has its own brief and grant'),
-  preset: z.string().min(1).optional().describe('Grant template from your actor profile; omit for your default'),
-  parallel: z.number().int().min(1).max(8).optional().describe('Jobs to run at the same time; omit for the configured default'),
-  release: z.array(z.string().min(1)).min(1).max(8).optional().describe('Ids of kept instances to destroy, once their work is finished'),
+  jobs: z.array(automaJobSchema).min(1).max(8).optional().describe('Independent jobs to run in parallel; one per question or file set'),
+  preset: z.string().min(1).optional().describe('Omit: the right preset is chosen from the files and commands you grant'),
+  parallel: z.number().int().min(1).max(8).optional().describe('Omit unless you need fewer at once'),
+  release: z.array(z.string().min(1)).min(1).max(8).optional().describe('Ids of kept instances to end, once finished'),
 });
 
 export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
+
+const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
+const WORKSPACE_READ = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+)$/;
+const INSTANCE_ID = /^w[0-9a-f]+$/;
+
+function cleanList(value: unknown, extra?: RegExp, keep?: RegExp): unknown {
+  if (!Array.isArray(value)) return value;
+  const kept = value.filter(item => typeof item !== 'string' || keep?.test(item.trim()) || !(PLACEHOLDER.test(item.trim()) || extra?.test(item.trim())));
+  return kept.length ? kept : undefined;
+}
+
+/**
+ * Forgiving front door for what models naturally write: `tasks` or bare strings for `jobs`, `task` for `brief`, a missing title,
+ * and the placeholders ("n/a", "none", "new", "default") they put in optional fields. Real values pass through untouched.
+ */
+export function normalizeAutomaInput(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const raw = {...(input as Record<string, unknown>)};
+  if (raw.jobs === undefined && raw.tasks !== undefined) raw.jobs = raw.tasks;
+  delete raw.tasks;
+  if (typeof raw.jobs === 'string') raw.jobs = [raw.jobs];
+  if (Array.isArray(raw.jobs)) {
+    raw.jobs = raw.jobs.map(item => {
+      const job: Record<string, unknown> = typeof item === 'string' ? {brief: item} : item && typeof item === 'object' ? {...item as Record<string, unknown>} : {};
+      for (const alias of ['task', 'prompt', 'instructions']) {
+        if (job.brief === undefined && job[alias] !== undefined) job.brief = job[alias];
+        delete job[alias];
+      }
+      if (typeof job.title === 'string' && !job.title.trim()) delete job.title;
+      if (job.title === undefined && typeof job.brief === 'string' && job.brief.trim()) job.title = titleFrom(job.brief);
+      job.read = cleanList(job.read, WORKSPACE_READ); job.files = cleanList(job.files, undefined, /^[./]$/); job.commands = cleanList(job.commands);
+      if (typeof job.instance === 'string' && !INSTANCE_ID.test(job.instance.trim())) delete job.instance;
+      if (job.output !== 'json') delete job.output;
+      if (job.persistence === false && !job.instance) delete job.persistence;
+      for (const key of Object.keys(job)) if (job[key] === undefined) delete job[key];
+      return job;
+    });
+  }
+  if (Array.isArray(raw.release)) {
+    const ids = raw.release.filter(id => typeof id === 'string' && INSTANCE_ID.test(id.trim()));
+    if (ids.length) raw.release = ids; else delete raw.release;
+  }
+  if (typeof raw.preset === 'string' && PLACEHOLDER.test(raw.preset.trim())) delete raw.preset;
+  if (raw.parallel === 0 || raw.parallel === null) delete raw.parallel;
+  return raw;
+}
 
 export const AUTOMA_SYSTEM_PROMPT = `You are Automa, a stateless worker in LOGOX. You have no personality and nobody to talk to: the brief is everything you know, and your final message is the only thing your dispatcher reads.
 Do exactly what the brief asks, inside the grant it lists. Your tools are checked on every call. If a call is refused, do not look for another way around it; report it.

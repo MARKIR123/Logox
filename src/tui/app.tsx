@@ -610,13 +610,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
 
   const submitting = useRef(false);
-  const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'queue'}) => {
+  const sendSceneInput = (text = draft.text, delivery: SubmitDelivery = {mode: 'auto'}) => {
     if (!text.trim() || submitting.current) return;
     submitting.current = true;
     setComposerMode(null);
     setNotice('');
     const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
-    const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
+    const payload = delivery.mode !== 'steer' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
     const revision = draftRevisions.current.get(currentView) ?? 0;
     const history = historyFor(currentView);
     void onSubmit(payload, source, delivery).then(() => {
@@ -1018,6 +1018,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
     sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId});
   };
+  const queueInput = () => {
+    if (focus !== 'input' || editingCustom || !draft.text.trim()) return;
+    sendSceneInput(draft.text, {mode: 'queue'});
+  };
   usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
   useInput((input, key) => {
     plane?.noteInput();
@@ -1036,6 +1040,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (loginState && (!loginFolded || key.ctrl && input === 'k' || key.escape)) return;
     if (surface) return;
     if (key.ctrl && input === 't') {steerInput(); return;}
+    if (key.ctrl && input === 'q') {queueInput(); return;}
     if (editableComposer && key.ctrl && input === 'a') {edit(current => ({text: current.text, cursor: graphemes(current.text).length, anchor: 0})); return;}
     if (editableComposer && key.ctrl && input === 'x') {
       const text = selectedText(activeDraft);
@@ -1181,7 +1186,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         cancelledInputs.current.add(running.activityId);
         onCancel(running.activityId);
         const original = snapshot.messages.findLast(message => message.sessionId === sessionId && message.activityId === running.activityId &&
-          message.role === 'user' && inputKind(message) === 'human');
+          message.role === 'user' && inputKind(message) === 'human' && message.source !== 'steered');
         // Check the updater's draft, not the render's: typing and Esc can be batched.
         // Bumping the revision also protects it from a pending submission acknowledgment.
         setDraft(current => original && !current.text ? insert(emptyDraft, original.text) : current);
@@ -1292,7 +1297,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
       onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
       onCollapse={() => {setComposerMode(null); exitDeadline.current = 0;}}
-      onSubmit={() => sendSceneInput()} onSteer={steerInput}
+      onSubmit={() => sendSceneInput()} onSteer={steerInput} onQueue={queueInput}
       onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}
       onInterrupt={interrupt} onClose={close} onCursor={setCursorPosition}
       scrollOffset={composerMode?.scrollOffset ?? null}

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {steeredText} from '../src/prompts/runtime/interruption.js';
 import assert from 'node:assert/strict';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -85,8 +86,8 @@ test('human steering is persisted outside model history until boundary consumpti
     assert.equal(f.current.signal.aborted, false);
     const messages = await f.current.drainInbox?.();
     assert.equal(messages?.length, 1);
-    assert.equal(messages?.[0]?.text, 'correct the current path');
-    const entry = (await f.journal.load('s', 'logox')).find(entry => entry.text === 'correct the current path');
+    assert.equal(steeredText(messages?.[0]?.text ?? ''), 'correct the current path'); assert.ok(messages?.[0]?.text.startsWith('[The user sent this while you were working.'));
+    const entry = (await f.journal.load('s', 'logox')).find(entry => entry.text.endsWith('correct the current path'));
     assert.equal(entry?.inputKind, 'human');
     assert.ok(f.current.authorization?.includes('correct the current path'));
     assert.deepEqual(await f.current.drainInbox?.(), []);
@@ -100,11 +101,11 @@ test('human steering precedes collaboration while equal-priority messages remain
     await f.ensemble.injectTaskMessage('logox', 'peer second', 'kalon');
     await inject(f.ensemble, 'human correction', {activityId: f.task.activityId, inputKind: 'human', kind: 'human_steer'});
     const messages = await f.current.drainInbox?.();
-    assert.equal(messages?.[0]?.text, 'human correction');
+    assert.equal(steeredText(messages?.[0]?.text ?? ''), 'human correction');
     assert.ok(messages?.slice(1).map(message => message.text).join('\n').indexOf('peer first')! <
       messages?.slice(1).map(message => message.text).join('\n').indexOf('peer second')!);
     const history = await f.journal.load('s', 'logox');
-    const humanIndex = history.findIndex(entry => entry.text === 'human correction');
+    const humanIndex = history.findIndex(entry => entry.text.endsWith('human correction'));
     assert.ok(humanIndex > 0);
     assert.ok(history.slice(humanIndex + 1).some(entry => entry.text.includes('peer first')));
   } finally {await f.close();}
@@ -167,7 +168,7 @@ test('admitted steering survives a pending write at the terminal sealing boundar
     assert.equal(await inject(f.ensemble, 'after sealing', {activityId: f.task.activityId, inputKind: 'human', kind: 'human_steer'}), false);
     releaseWrite.resolve();
     assert.equal(await accepted, true);
-    assert.equal((await closing)[0]?.text, 'boundary correction');
+    assert.equal(steeredText((await closing)[0]?.text ?? ''), 'boundary correction');
     assert.equal(f.ensemble.canReceiveMessage('logox'), true);
   } finally {releaseWrite.resolve(); await f.close();}
 });
@@ -181,7 +182,7 @@ test('failed consumption receipt can retry without appending a second copy to th
     await assert.rejects(async () => f.current.drainInbox!(), /receipt unavailable/);
     f.journal.saveDeliveries = save;
     await f.current.drainInbox!();
-    assert.equal((await f.journal.load('s', 'logox')).filter(entry => entry.text === 'receipt correction').length, 1);
+    assert.equal((await f.journal.load('s', 'logox')).filter(entry => entry.text.endsWith('receipt correction')).length, 1);
     assert.equal(f.ensemble.deliveries.pending('logox', f.task.activityId).length, 0);
   } finally {await f.close();}
 });

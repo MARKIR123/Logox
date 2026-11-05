@@ -185,7 +185,8 @@ const eventSchema = z.object({
     finish_reason: z.string().nullable().optional(),
     delta: z.object({
       content: z.string().nullable().optional(), reasoning_content: z.string().nullable().optional(),
-      reasoning: z.string().nullable().optional(),
+      reasoning: z.string().nullable().optional(), thinking: z.string().nullable().optional(),
+      reasoning_details: z.array(z.object({text: z.string().nullish(), summary: z.string().nullish()}).passthrough()).nullish(),
       tool_calls: z.array(z.object({
         index: z.number().int().nonnegative(), id: z.string().optional(),
         function: z.object({name: z.string().optional(), arguments: z.string().optional()}).optional(),
@@ -202,7 +203,7 @@ function hasProgress(event: StreamEvent): boolean {
   if (typeof event.delta === 'object' && event.delta && (event.delta.text || event.delta.thinking || event.delta.signature || event.delta.partial_json || event.delta.stop_reason)) return true;
   if (event.usage && Object.values(event.usage).some(value => typeof value === 'number')) return true;
   return event.choices?.some(choice => !!choice.finish_reason || !!choice.delta &&
-    (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning ||
+    (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning || !!choice.delta.thinking || !!choice.delta.reasoning_details?.length ||
       !!choice.delta.tool_calls?.some(call => !!call.id || !!call.function?.name || !!call.function?.arguments))) ?? false;
 }
 export function responsesInput(input: readonly ModelMessage[], supportsVision = false, maxImages = 2,
@@ -263,6 +264,21 @@ export function responsesInput(input: readonly ModelMessage[], supportsVision = 
   }
   return result;
 }
+/** Readable text of a Responses `reasoning` item: summary parts first, then raw reasoning content parts. */
+function reasoningItemText(item: Record<string, unknown>): string {
+  const parts = (value: unknown) => (Array.isArray(value) ? value : []).map(part =>
+    typeof part === 'string' ? part : part && typeof part === 'object' && typeof (part as {text?: unknown}).text === 'string' ? (part as {text: string}).text : '').filter(Boolean);
+  const summary = parts(item.summary);
+  return (summary.length ? summary : parts(item.content)).join('\n\n');
+}
+
+/** Gateways (OpenRouter style) return reasoning as `reasoning_details: [{text|summary}]`. */
+function chatReasoningDetails(details: unknown): string {
+  if (!Array.isArray(details)) return '';
+  return details.map(part => part && typeof part === 'object' ? (part as {text?: unknown; summary?: unknown}).text ?? (part as {summary?: unknown}).summary : '')
+    .filter((value): value is string => typeof value === 'string' && !!value).join('');
+}
+
 export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
   const messages = portableMessages(input);
   const imageIndices = messages
@@ -407,6 +423,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const native = settings.kind === 'anthropic';
     const oauthResponses = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' &&
       (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
+    const officialOpenAI = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1';
     const isResponsesApi = !native && (oauthResponses || settings.api === 'responses' || capabilities.toolDiscovery === 'openai-responses');
     const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : isResponsesApi ? '/responses' : '/chat/completions');
     const headers: Record<string, string> = {'content-type': 'application/json'};
@@ -466,7 +483,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             input: responsesInput(request.messages, supportsVision, 2,
               request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined),
             ...(tools.length ? {tools} : {}),
-            ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort}} : {}),
+            ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort,
+              ...(officialOpenAI ? {summary: 'auto'} : {})}} : {}),
           }
         : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature,
           ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
@@ -491,6 +509,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       let stop: ModelTurn['stop'] = 'other';
       let usage: ModelTurn['usage'];
       const calls = new Map<number, ToolCall>();
+      let pendingBreak = false;
+      const streamedReasoning = new Set<number>();
       const append = (kind: Delta['kind'], value: unknown) => {
         if (typeof value !== 'string' || !value) return;
         if (kind === 'text') text += value; else reasoning += value;
@@ -540,7 +560,10 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             if (!item.success) continue;
             const search = decodeSearchCall(item.data);
             if (search) calls.set(calls.size, search);
-            else if (item.data.type === 'function_call') {
+            else if (item.data.type === 'reasoning') {
+              const text = reasoningItemText(item.data);
+              if (text) append('reasoning', (reasoning ? '\n\n' : '') + text);
+            } else if (item.data.type === 'function_call') {
               if (typeof item.data.call_id !== 'string' || !item.data.call_id) throw new ProviderError('Function call requires call_id.');
               calls.set(calls.size, {id: item.data.call_id, name: String(item.data.name ?? ''), arguments: String(item.data.arguments ?? '')});
             } else if (item.data.type === 'message' && Array.isArray(item.data.content)) {
@@ -560,8 +583,9 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           const msg = first?.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : undefined;
           if (msg) {
             if (typeof msg.content === 'string') append('text', msg.content);
-            const r = msg.reasoning_content ?? msg.reasoning;
+            const r = [msg.reasoning_content, msg.reasoning, msg.thinking].find(value => typeof value === 'string' && value);
             if (typeof r === 'string') append('reasoning', r);
+            else if (Array.isArray(msg.reasoning_details)) append('reasoning', chatReasoningDetails(msg.reasoning_details));
             if (Array.isArray(msg.tool_calls)) {
               for (let i = 0; i < msg.tool_calls.length; i++) {
                 const tc = msg.tool_calls[i] as {id?: string; function?: {name?: string; arguments?: string}};
@@ -592,8 +616,16 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             if (event.type === 'error' || event.error) throw providerFailure(200, {error: event.error ?? event});
             if (event.type === 'response.output_text.delta') {
               if (typeof event.delta === 'string') append('text', event.delta);
-            } else if (event.type === 'response.reasoning.delta' || event.type === 'response.reasoning_text.delta') {
-              if (typeof event.delta === 'string') append('reasoning', event.delta);
+            } else if (event.type === 'response.reasoning.delta' || event.type === 'response.reasoning_text.delta' ||
+              event.type === 'response.reasoning_summary_text.delta' || event.type === 'response.reasoning_summary.delta') {
+              if (typeof event.delta === 'string' && event.delta) {
+                if (pendingBreak && reasoning) append('reasoning', '\n\n');
+                pendingBreak = false;
+                append('reasoning', event.delta);
+                streamedReasoning.add(event.output_index ?? 0);
+              }
+            } else if (event.type === 'response.reasoning_summary_part.added') {
+              pendingBreak = streamedReasoning.has(event.output_index ?? 0);
             } else if (event.type === 'response.function_call_arguments.delta') {
               const idx = event.output_index ?? 0;
               const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
@@ -611,7 +643,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
                 calls.set(idx, call);
               }
             } else if (event.type === 'response.output_item.done') {
-              if (event.item?.type === 'tool_search_call') {
+              if (event.item?.type === 'reasoning') {
+                if (!streamedReasoning.has(event.output_index ?? 0)) {
+                  const text = reasoningItemText(event.item);
+                  if (text) append('reasoning', (reasoning ? '\n\n' : '') + text);
+                }
+              } else if (event.item?.type === 'tool_search_call') {
                 const call = decodeSearchCall(event.item);
                 if (call) calls.set(event.output_index ?? calls.size, call);
               } else if (event.item?.type === 'function_call') {
@@ -670,7 +707,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             const choice = event.choices?.[0];
             const delta = choice?.delta;
             append('text', delta?.content);
-            append('reasoning', delta?.reasoning_content || delta?.reasoning);
+            append('reasoning', delta?.reasoning_content || delta?.reasoning || delta?.thinking || chatReasoningDetails(delta?.reasoning_details));
             for (const item of delta?.tool_calls ?? []) {
               const call = calls.get(item.index) ?? {id: '', name: '', arguments: ''};
               if (item.id) call.id += item.id;

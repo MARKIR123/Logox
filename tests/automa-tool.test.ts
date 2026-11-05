@@ -347,12 +347,12 @@ test('A dispatch is refused whole for overlaps, read-only presets, wide grants a
       assert.match(result.text, pattern);
     };
     await refused({preset: 'edit', jobs: [job('p', {files: ['src/a.css']}), job('q', {files: ['src/*.css']})]}, /overlapping files: src\/a\.css and src\/\*\.css/);
-    await refused({jobs: [job('p', {files: ['a.txt']})]}, /read-only.*Writable presets: edit/);
     await refused({preset: 'edit', jobs: [job('p', {files: ['**/*']})]}, /not the whole workspace/);
     await refused({preset: 'edit', jobs: [job('p', {files: ['.']})]}, /not the whole workspace/);
     await refused({preset: 'edit', jobs: [job('p', {files: ['../x']})]}, /inside the workspace/);
-    await refused({preset: 'nope', jobs: [job('p')]}, /Unknown preset "nope"\. Available: scout, edit/);
-    await refused({preset: 'edit', jobs: [job('p', {commands: ['rm -rf']})]}, /does not allow: rm -rf/);
+    await refused({preset: 'scout', jobs: [job('p', {files: ['a.txt']})]}, /read-only.*Writable presets: edit/);
+    await refused({preset: 'edit', jobs: [job('p', {commands: ['rm -rf']})]}, /does not allow the command prefix: rm -rf/);
+    await refused({jobs: [job('p', {files: ['/tmp/scratch/x.py']})]}, /inside the workspace.*scratchpad/);
     await refused({}, /needs `jobs`/);
     assert.equal(started, 0);
   } finally {await done();}
@@ -526,10 +526,45 @@ test('Persistence: false on resume, failure, and oversized context all end the i
 });
 
 test('The tool contract states when persistence applies and how it ends', () => {
-  assert.match(AUTOMA_DESCRIPTION, /single-use by default/);
-  assert.match(AUTOMA_DESCRIPTION, /only when the same worker must run again on this task/);
-  assert.match(AUTOMA_DESCRIPTION, /Do not use persistence for/);
-  assert.match(AUTOMA_DESCRIPTION, /Release it with `release`/);
+  assert.match(AUTOMA_DESCRIPTION, /Jobs are single-use/);
+  assert.match(AUTOMA_DESCRIPTION, /rare case where one worker must run again/);
+  assert.match(AUTOMA_DESCRIPTION, /release it when done/);
+  assert.match(AUTOMA_DESCRIPTION, /Example: \{"jobs"/);
+  assert.ok(AUTOMA_DESCRIPTION.length < 2200);
+});
+
+test('Models write the minimum: tasks, bare strings, task for brief, no title, and placeholders in optional fields all work', async () => {
+  const {tools, done} = await project();
+  try {
+    const requests: Parameters<typeof workers>[1] = [];
+    tools.setAutomaEnvironment(environment(workers({Alpha: ['summary: a'], Beta: ['summary: b'], Gamma: ['summary: c'], Delta: ['summary: d']}, requests)));
+    const alias = await tools.execute(dispatch({tasks: ['Alpha one', {task: 'Beta two'}]}), principal());
+    assert.equal(alias.isError, false, alias.text);
+    assert.match(alias.text, /\[job 1\/2 · done · [\d.]+s\] Alpha one/);
+    assert.match(alias.text, /\[job 2\/2 · done · [\d.]+s\] Beta two/);
+    // The exact junk a strong model produced in a real session: every optional field filled with a placeholder.
+    const junk = await tools.execute(dispatch({jobs: [{brief: 'Gamma scan', files: ['__no_writes_allowed__'], commands: ['n/a'], read: ['.'], output: 'text', persistence: false, instance: 'n/a'}], preset: 'default', parallel: 1, release: ['none']}), principal());
+    assert.equal(junk.isError, false, junk.text);
+    assert.match(junk.text, /summary: c/);
+    assert.deepEqual(requests.at(-1)!.tools, ['Read', 'Glob', 'Grep', 'WebFetch']);
+    // Files without a preset pick the writable one; an unknown preset falls back with a note instead of failing.
+    const picked = await tools.execute(dispatch({preset: 'nope', jobs: [{brief: 'Delta edit', files: ['a.txt']}]}), principal());
+    assert.equal(picked.isError, false, picked.text);
+    assert.ok(requests.at(-1)!.tools.includes('Write'));
+    assert.match(picked.text, /Preset "nope" does not exist \(available: scout, edit\); used "edit"/);
+    assert.equal(validateToolCall(dispatch({jobs: ['just a string']})).valid, true);
+    assert.equal(validateToolCall(dispatch({jobs: [{brief: 'x', files: ['__none__']}]})).valid, true);
+  } finally {await done();}
+});
+
+test('A missing dispatch explains the minimal shape', async () => {
+  const {tools, done} = await project();
+  try {
+    tools.setAutomaEnvironment(environment(workers({})));
+    const result = await tools.execute(dispatch({}), principal());
+    assert.equal(result.disposition, 'denied');
+    assert.match(result.text, /needs `jobs`, for example \{"jobs": \[\{"brief"/);
+  } finally {await done();}
 });
 
 test('The journal records the whole process under the principal; usage is charged to it; progress is live', async () => {

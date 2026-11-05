@@ -49,7 +49,7 @@ import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
-import {automaSchema, executeAutomaDispatch, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
+import {automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
 import {grantTools, isExclusiveCommand, pathDenial, planDispatch, shellDenial} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getScratchpadDir} from '../kernel/scratchpad.js';
@@ -185,7 +185,7 @@ export function validateToolCall(call: ToolCall): {valid: true; data: unknown} |
     }
   }
   const toolName = canonical as ToolName;
-  const result = schemas[toolName].safeParse(args);
+  const result = schemas[toolName].safeParse(toolName === 'Automa' ? normalizeAutomaInput(args) : args);
   if (result.success) return {valid: true, data: result.data};
 
   const missingParams = result.error.issues
@@ -334,7 +334,7 @@ export class Tools {
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
     const {sessionId, ownerId, activityId} = context;
-    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, `release`, or both.');
+    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, for example {"jobs": [{"brief": "Find every caller of parseConfig and list path:line"}]}, or `release` with kept instance ids.');
     const key = JSON.stringify([sessionId, ownerId]);
     if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
     const mine = (instance: OwnedInstance) => instance.sessionId === sessionId && instance.ownerId === ownerId;
@@ -369,7 +369,8 @@ export class Tools {
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
       });
-      return unknownNote ? {...result, text: result.text + '\n\n' + unknownNote.slice(3)} : result;
+      const notes = [plan.note, unknownNote && unknownNote.slice(3)].filter(Boolean);
+      return notes.length ? {...result, text: result.text + '\n\n' + notes.join('\n')} : result;
     } finally {
       this.dispatches.delete(key);
     }
@@ -459,7 +460,7 @@ export class Tools {
       }
       const name = canonical as ToolName;
       const raw: unknown = JSON.parse(call.arguments);
-      const parsed = schemas[name].parse(raw);
+      const parsed = schemas[name].parse(name === 'Automa' ? normalizeAutomaInput(raw) : raw);
 
       if (context.via) {
         const denial = await this.workerDenial(name, parsed, context);
@@ -484,7 +485,7 @@ export class Tools {
       }
 
       if (name === 'Automa') {
-        const args = schemas.Automa.parse(parsed);
+        const args = schemas.Automa.parse(normalizeAutomaInput(parsed));
         if (!await this.permissionGuard(context).authorize({tool: 'automa', paths: [], risky: false, effect: 'read'}, JSON.parse(JSON.stringify(args)), context)) {
           return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }

@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {deliverySchema, deliveryPriority, type Delivery, type DeliveryInput} from '../runtime/delivery.js';
 import {immutable, type TaskOriginData} from '../runtime/contracts.js';
+import {steeredModelText} from '../prompts/runtime/interruption.js';
 import {inputMessage} from '../runtime/provenance.js';
 import type {ModelMessage} from '../runtime/messages.js';
 import type {HistoryStore, TaskCheckpoint} from '../store/journal.js';
@@ -76,9 +77,11 @@ export class DeliveryQueue {
         const source = group.length === 1 ? first.source : 'coordination';
         const kind = human ? 'human' : group.every(item => item.inputKind === first.inputKind) ? first.inputKind : 'actor';
         const text = human ? first.text : group.map(item => `[Event ${item.id}; ${item.kind}; source ${item.source}; activity ${item.sourceActivityId ?? 'unspecified'}; root ${item.rootActivityId ?? 'unspecified'}]\n${item.text}`).join('\n\n');
+        // The ledger stores exactly what the model saw (notice included) so resume reproduces it; the timeline strips the notice with `steeredText()`.
+        const modelText = human ? steeredModelText(text) : text;
         await this.history.append({version: 1, sessionId: this.sessionId, ownerId, activityId, source, inputKind: kind,
-          role: 'user', text, message: {role: 'user', text}, deliveryIds: group.map(item => item.id)});
-        messages.push(inputMessage(text, {ownerId, source, inputKind: kind}));
+          role: 'user', text: modelText, message: {role: 'user', text: modelText}, deliveryIds: group.map(item => item.id)});
+        messages.push(inputMessage(modelText, {ownerId, source, inputKind: kind}));
       }
       const ids = new Set(selected.map(item => item.id));
       await this.save(this.records.map(item => ids.has(item.id) ? {...item, status: 'delivered', recipientActivityId: activityId} : item));

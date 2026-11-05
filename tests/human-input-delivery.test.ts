@@ -37,14 +37,14 @@ test('public Queue and Steer survive the managed-session wrapper and reach diffe
   try {
     await f.app.submit('original human goal'); await started.promise;
     const target = f.app.store.activities.list().find(activity => activity.ownerId === 'logox' && activity.status === 'running')!;
-    await f.app.submit('later independent goal');
+    await f.app.submit('later independent goal', 'logox', {mode: 'queue'});
     await steer(f.app, 'correct the current path', target.activityId);
     assert.equal(f.app.store.activities.list().length, 2, 'Steering must not create another task');
     release.resolve(); await idle(f.app);
-    assert.ok(requests[1]?.messages.some(message => message.text === 'correct the current path'));
+    assert.ok(requests[1]?.messages.some(message => message.text.includes('correct the current path')));
     assert.ok(!requests[1]?.messages.some(message => message.text === 'later independent goal'));
     assert.ok(requests[2]?.messages.some(message => message.text === 'later independent goal'));
-    const steering = (await f.app.journal.load('s', 'logox')).find(entry => entry.text === 'correct the current path');
+    const steering = (await f.app.journal.load('s', 'logox')).find(entry => entry.text.includes('correct the current path'));
     assert.equal(steering?.activityId, target.activityId); assert.equal(steering?.inputKind, 'human');
   } finally {release.resolve(); await f.close();}
 });
@@ -79,7 +79,7 @@ test('steering admitted while context preparation waits is included in the next 
     const target = f.app.store.activities.list()[0]!;
     await steer(f.app, 'correction during preparation', target.activityId);
     releasePrepare.resolve(); await idle(f.app);
-    assert.ok(requests[0]?.messages.some(message => message.text === 'correction during preparation'));
+    assert.ok(requests[0]?.messages.some(message => message.text.endsWith('correction during preparation')));
     assert.equal(requests.length, 1);
   } finally {releasePrepare.resolve(); await f.close();}
 });
@@ -98,7 +98,7 @@ test('queuing a continuation does not reset recovery budgets in the still-runnin
     const state = () => readFile(path, 'utf8').then(text => JSON.parse(text));
     assert.equal((await state()).execution[root].noDelivery.used, 1);
     // This is the existing natural-language continuation routing fixture.
-    await f.app.submit('继续');
+    await f.app.submit('继续', 'logox', {mode: 'queue'});
     assert.equal((await state()).execution[root].noDelivery.used, 1);
     releaseSecond.resolve(); await idle(f.app);
     assert.equal((await state()).execution[root].noDelivery.used, 0);
@@ -118,6 +118,92 @@ test('retry boundaries consume new steering instead of resampling a stale reques
     const target = f.app.store.activities.list()[0]!;
     await steer(f.app, 'correction before retry', target.activityId);
     await idle(f.app);
-    assert.ok(requests[1]?.messages.some(message => message.text === 'correction before retry'));
+    assert.ok(requests[1]?.messages.some(message => message.text.endsWith('correction before retry')));
   } finally {await f.close();}
+});
+
+test('a plain message during a running Logox round steers the same round at the next boundary', {timeout: 10000}, async () => {
+  const started = gate(), release = gate(); const requests: ModelRequest[] = [];
+  const f = await fixture(async request => {
+    requests.push(request);
+    if (requests.length === 1) {started.resolve(); await release.promise; return label();}
+    return done();
+  });
+  try {
+    await f.app.submit('original human goal'); await started.promise;
+    await f.app.submit('actually use the other path');
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 1, 'No second round is created');
+    assert.deepEqual(f.app.getInputQueue('logox').queued, [], 'The message is not a queued badge');
+    release.resolve(); await idle(f.app);
+    const seen = requests[1]?.messages.find(message => message.text.includes('actually use the other path'));
+    assert.ok(seen, 'The next request carries the steered message');
+    assert.ok(seen.text.startsWith('[The user sent this while you were working.'));
+    assert.equal(requests.length, 2, 'The round continued instead of starting another');
+    const entry = (await f.app.journal.load('s', 'logox')).find(item => item.text.includes('actually use the other path'));
+    assert.equal(entry?.source, 'steered'); assert.equal(entry?.inputKind, 'human'); assert.equal(entry?.role, 'user');
+    const row = f.app.store.getSnapshot().messages.find(message => message.text === 'actually use the other path');
+    assert.equal(row?.source, 'steered');
+  } finally {release.resolve(); await f.close();}
+});
+
+test('an idle target starts a round and Ctrl+Q queue waits for a later round', {timeout: 10000}, async () => {
+  const started = gate(), release = gate(); const requests: ModelRequest[] = [];
+  const f = await fixture(async request => {
+    requests.push(request);
+    if (requests.length === 1) {started.resolve(); await release.promise; return label();}
+    return done();
+  });
+  try {
+    await f.app.submit('first goal'); await started.promise;
+    await f.app.submit('wait your turn', 'logox', {mode: 'queue'});
+    assert.equal(f.app.getInputQueue('logox').queued.length, 1);
+    release.resolve(); await idle(f.app);
+    assert.ok(!requests[1]?.messages.some(message => message.text.includes('wait your turn')));
+    assert.ok(requests.at(-1)?.messages.some(message => message.text === 'wait your turn'));
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 2);
+    await f.app.submit('fresh idle goal'); await idle(f.app);
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'logox').length, 3, 'Idle target starts a new round');
+  } finally {release.resolve(); await f.close();}
+});
+
+test('a message to a running actor window steers that actor and is persisted with its delivery id', {timeout: 10000}, async () => {
+  const started = gate(), release = gate(); const requests: ModelRequest[] = [];
+  const f = await fixture(async request => {
+    requests.push(request);
+    if (requests.length === 1) {started.resolve(); await release.promise; return label();}
+    return done();
+  });
+  try {
+    await f.app.submit('@kalon design the panel'); await started.promise;
+    await f.app.submit('@kalon make it darker', 'logox');
+    assert.equal(f.app.store.activities.list().filter(item => item.ownerId === 'kalon').length, 1);
+    release.resolve(); await idle(f.app);
+    assert.ok(requests[1]?.messages.some(message => message.text.includes('make it darker') && message.text.includes('while you were working')));
+    const entry = (await f.app.journal.load('s', 'kalon')).find(item => item.text.includes('make it darker'));
+    assert.equal(entry?.source, 'steered'); assert.ok(entry?.deliveryIds?.length);
+  } finally {release.resolve(); await f.close();}
+});
+
+test('resume restores the steered message as a steered row with the human text, and the model ledger keeps the notice', {timeout: 15000}, async () => {
+  const started = gate(), release = gate(); let calls = 0;
+  const f = await fixture(async () => {
+    if (++calls === 1) {started.resolve(); await release.promise; return label();}
+    return done();
+  });
+  let closed = false;
+  try {
+    await f.app.submit('resume goal'); await started.promise;
+    await f.app.submit('resume correction');
+    release.resolve(); await idle(f.app);
+    await f.app.close(); closed = true;
+    const config = await loadConfig(f.cwd, {provider: {model: 'fixture', context_window: 131072}, permissions: {mode: 'creative'}}, {}, f.cwd, f.cwd);
+    const again = await createTestApplication({cwd: f.cwd, config, sessionId: 's', provider: {respond: async () => done()}, resourceOptions: {home: f.cwd, boundary: f.cwd}, env: {}, authPath: join(f.cwd, 'auth.json')});
+    try {
+      const row = again.store.getSnapshot().messages.find(message => message.role === 'user' && message.text.includes('resume correction'));
+      assert.equal(row?.text, 'resume correction');
+      assert.equal(row?.source, 'steered');
+      const ledger = (await again.journal.load('s', 'logox')).find(entry => entry.text.includes('resume correction'));
+      assert.ok(ledger?.message?.text.startsWith('[The user sent this while you were working.'));
+    } finally {await again.close();}
+  } finally {release.resolve(); if (!closed) await f.app.close(); await rm(f.cwd, {recursive: true, force: true});}
 });

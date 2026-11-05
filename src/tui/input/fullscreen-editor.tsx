@@ -27,9 +27,9 @@ export function fullscreenEditorLayout(width: number, height: number) {
 type ChangeDraft = (update: (draft: Draft) => Draft) => void;
 
 /** A view over the caller's draft, never a second editable copy or a task dispatcher. */
-export function FullscreenEditor({draft, width, height, title = 'Compose', notice = '', disabled = false, onEdit, onCollapse, onSubmit, onSteer, onCopy, onInterrupt, onClose, onCursor, scrollOffset, onScroll: setScrollOffset}: {
+export function FullscreenEditor({draft, width, height, title = 'Compose', notice = '', disabled = false, onEdit, onCollapse, onSubmit, onSteer, onQueue, onCopy, onInterrupt, onClose, onCursor, scrollOffset, onScroll: setScrollOffset}: {
   draft: Draft; width: number; height: number; title?: string; notice?: string; disabled?: boolean;
-  onEdit: ChangeDraft; onCollapse(): void; onSubmit(): void; onSteer(): void;
+  onEdit: ChangeDraft; onCollapse(): void; onSubmit(): void; onSteer(): void; onQueue(): void;
   onCopy(text: string): void; onInterrupt(): void; onClose(): void;
   onCursor(position: {x: number; y: number} | undefined): void;
   /** null follows the caret; host-owned scrolling commits with the sole native cursor owner. */
@@ -89,6 +89,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     if (key.ctrl && input === 'x') {if (copy()) replace(''); return;}
     if (key.ctrl && input === 'a') {setAnchor(0); setScrollOffset(null); onEdit(current => ({...move(current, Infinity), anchor: 0})); return;}
     if (key.ctrl && input === 't') {onSteer(); return;}
+    if (key.ctrl && input === 'q') {onQueue(); return;}
     if (key.return) {if (key.ctrl) {if (draft.text.trim()) onSubmit();} else replace('\n'); return;}
     if (key.ctrl && input === 'j') {replace('\n'); return;}
     if (key.tab) {replace('    '); return;}

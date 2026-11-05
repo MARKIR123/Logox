@@ -91,7 +91,7 @@ export interface TaskHandle {readonly activityId: string; readonly done: Promise
 interface Task<Id extends string> {ownerId: Id; prompt: string}
 interface QueuedTask<Id extends string> extends Task<Id> {
   activityId: string; source: string; origin: TaskOrigin; controller: AbortController;
-  ready: Promise<void>; resolve(): void; stopReason?: StopReason; stopDetail?: string;
+  ready: Promise<void>; done: Promise<void>; resolve(): void; stopReason?: StopReason; stopDetail?: string;
   progress?: TaskProgressSnapshot;
   /** Final status and full report once the task has ended; read by tasks that run `after` it. */
   outcome?: {status: RoundStatus; title: string; text: string};
@@ -131,6 +131,8 @@ export class EnsembleRuntime<Id extends string> {
     if (this.closed) throw new Error('Ensemble is closed');
     const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
     if (!/^[a-z][a-z0-9_-]{0,63}$/.test(ownerId) || !member || !prompt.trim() || !/^(?:direct|[a-z][a-z0-9_-]{0,63})$/.test(source)) throw new Error('Invalid actor or task');
+    const host = origin.inputKind === 'collaboration' && !origin.resumeTaskId ? this.queuedHost(ownerId) : undefined;
+    if (host) return this.foldIntoQueued(host, prompt, source);
     const activityId = randomUUID();
     origin = {...origin, rootActivityId: origin.rootActivityId ?? activityId, inputKind: inputKind({ownerId, source, ...origin})};
     const controller = new AbortController();
@@ -144,7 +146,7 @@ export class EnsembleRuntime<Id extends string> {
     if (!(ownerId === 'logox' && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
     let resolve!: () => void;
     const done = new Promise<void>(finish => {resolve = finish;});
-    const task: QueuedTask<Id> = {ownerId, prompt, activityId, source, origin, controller, resolve, ready: Promise.resolve()};
+    const task: QueuedTask<Id> = {ownerId, prompt, activityId, source, origin, controller, resolve, done, ready: Promise.resolve()};
     task.ready = this.trackWrite((async () => {
       const progress = origin.resumeTaskId
         ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId)
@@ -162,6 +164,18 @@ export class EnsembleRuntime<Id extends string> {
     if (nextIndex >= 0) this.queue.splice(nextIndex, 0, task); else this.queue.push(task);
     queueMicrotask(() => this.pump());
     return {activityId, done, cancel: () => {this.cancel(activityId);}};
+  }
+  /** A Director-dispatched task of `ownerId` that has not started yet (held by `after`, a paused batch or a busy actor). */
+  private queuedHost(ownerId: string): QueuedTask<Id> | undefined {
+    return this.queue.find(task => task.ownerId === ownerId && task.origin.inputKind === 'director' && !task.doomed && !task.controller.signal.aborted);
+  }
+  /** A peer message for an actor whose dispatched task has not started joins that task instead of opening a second card that would run first and hold the actor's slot. */
+  private foldIntoQueued(host: QueuedTask<Id>, text: string, source: string): TaskHandle {
+    host.prompt = host.prompt + '\n\n' + text;
+    this.store.message(this.sessionId, host.ownerId, 'user', text, {activityId: host.activityId, source, inputKind: 'collaboration'});
+    host.ready = this.trackWrite(host.ready.then(() => this.checkpoint(host, this.store.activities.get(this.sessionId, host.activityId)?.status === 'paused' ? 'paused' : 'queued')));
+    void host.ready.catch(() => {});
+    return {activityId: host.activityId, done: host.done, cancel: () => {}};
   }
   isBusy(): boolean {return [...this.controllers.keys()].some(id => this.store.activities.get(this.sessionId, id)?.status !== 'paused') || this.pendingWrites.size > 0;}
   queuedInputs(ownerId?: string) {
@@ -314,7 +328,7 @@ export class EnsembleRuntime<Id extends string> {
       if (task.origin.batchId && this.pausedBatches.has(task.origin.batchId)) continue;
       if (task.doomed) continue;
       if (this.releaseDependencies(task)) continue;
-      if (this.activeSlots.has(task.ownerId)) continue;
+      if (this.activeSlots.has(task.ownerId)) {this.markBusy(task); continue;}
       this.queue.splice(index, 1);
       index--;
       const execution = (async () => {
@@ -333,6 +347,14 @@ export class EnsembleRuntime<Id extends string> {
       this.activeSlots.set(task.ownerId, execution);
       if (!actorConcurrency) break;
     }
+  }
+  /** Shows why a task that is ready but not running yet waits: its actor is still on an earlier activity. */
+  private markBusy(task: QueuedTask<Id>): void {
+    if (task.origin.batchId && this.pausedBatches.has(task.origin.batchId)) return;
+    const member = this.options.member ? this.options.member(task.ownerId as Id) : Object.hasOwn(cast, task.ownerId) ? cast[task.ownerId as ActorId] : undefined;
+    const stage = `Waiting on ${member?.name ?? task.ownerId}'s current task`;
+    const current = this.store.activities.get(this.sessionId, task.activityId);
+    if (current?.status === 'queued' && current.stage !== stage) this.store.activities.update(this.sessionId, task.activityId, {stage});
   }
   /** Ids named in `after` that are still unfinished (queued, running or waiting). Unknown ids count as finished. */
   private blockers(after: readonly string[] | undefined): string[] {

@@ -1,6 +1,13 @@
 /** Marker text appended to a ledger after the user stopped a whole run (Esc / Ctrl+C). */
 export const USER_INTERRUPT_MARKER = '[Interrupted by user]\nThe user stopped your previous run before it finished. Tool calls that were still unfinished have no complete result; the round record lists the unfinished items. Read the user\'s next message first: if it gives new instructions, follow them. Otherwise re-check the current state and ask before resuming the interrupted work.';
 
+/** Prefix on a human message that reached the model between steps of a run it was already executing (the message follows). */
+export const USER_STEER_NOTICE = '[The user sent this while you were working. Take it into account now; it may change your direction.]';
+
+export const steeredModelText = (text: string): string => USER_STEER_NOTICE + '\n' + text;
+/** The human's own words from a steered ledger entry (the notice is model-facing only). */
+export const steeredText = (text: string): string => text.startsWith(USER_STEER_NOTICE + '\n') ? text.slice(USER_STEER_NOTICE.length + 1) : text;
+
 /** Tool result for a call that was cut off because the user interrupted the run. */
 export const USER_INTERRUPTED_TOOL_TEXT = 'The user interrupted this run before the tool finished; it has no complete result.';
 

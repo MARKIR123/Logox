@@ -3,6 +3,9 @@ import {taskOriginSchema} from './contracts.js';
 import {inputKindSchema} from './provenance.js';
 
 export const submitDeliverySchema = z.discriminatedUnion('mode', [
+  /** Enter: steer the target window's running task at its next step boundary, otherwise start a new round. */
+  z.strictObject({mode: z.literal('auto')}),
+  /** Ctrl+Q: always wait for a later round, never join the running one. */
   z.strictObject({mode: z.literal('queue')}),
   z.strictObject({mode: z.literal('steer'), activityId: z.string().min(1)}),
 ]);

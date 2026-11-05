@@ -60,7 +60,7 @@ export function pathDenial(tool: string, grant: JobGrant, path: GrantPath): stri
 }
 
 export interface AutomaJobArgs {
-  readonly title: string;
+  readonly title?: string | undefined;
   readonly brief: string;
   readonly read?: readonly string[] | undefined;
   readonly files?: readonly string[] | undefined;
@@ -76,7 +76,7 @@ export interface RetainedGrant {
 }
 
 export interface PlannedJob {
-  readonly job: AutomaJobArgs;
+  readonly job: AutomaJobArgs & {readonly title: string};
   readonly grant: JobGrant;
   readonly model?: string | undefined;
   readonly denial?: string | undefined;
@@ -86,10 +86,15 @@ export const AUTOMA_MAX_RETAINED = 2;
 
 const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+)$/;
 
+export function titleFrom(brief: string): string {
+  const line = brief.trim().split(/\r?\n/)[0]!.replace(/\s+/g, ' ');
+  return line.length <= 60 ? line : line.slice(0, 59).trimEnd() + '…';
+}
+
 function filesError(pattern: string, cwd: string): string | undefined {
   const text = pattern.trim().replaceAll('\\', '/');
   if (WORKSPACE_WIDE.test(text) || text === '/') return `\`files\` must name specific paths, not the whole workspace: ${pattern}`;
-  if (text.split('/').includes('..') || !inside(cwd, resolve(cwd, text.replace(/[*?].*$/, '')))) return `\`files\` must stay inside the workspace: ${pattern}`;
+  if (text.split('/').includes('..') || !inside(cwd, resolve(cwd, text.replace(/[*?].*$/, '')))) return `\`files\` must stay inside the workspace: ${pattern}. Workers cannot write to the scratchpad; have a command print to stdout, or write the file yourself.`;
   return undefined;
 }
 
@@ -103,16 +108,29 @@ export function planDispatch(input: {
   readonly retained: readonly RetainedGrant[];
   /** Who currently holds a write pattern, when it is not the principal. */
   readonly holder: (pattern: string) => string | undefined;
-}): {ok: true; jobs: readonly PlannedJob[]} | {ok: false; error: string} {
+}): {ok: true; jobs: readonly PlannedJob[]; note?: string} | {ok: false; error: string} {
   const {profile, cwd} = input;
   const refuse = (error: string) => ({ok: false as const, error});
-  const presetName = input.preset ?? profile.default_preset;
-  if (!Object.hasOwn(profile.presets, presetName)) return refuse(`Unknown preset "${presetName}". Available: ${Object.keys(profile.presets).join(', ')}.`);
+  const needsWrite = input.jobs.some(job => !job.instance && job.files?.length);
+  const wanted = input.jobs.flatMap(job => job.instance ? [] : job.commands ?? []);
+  const fits = (name: string) => {
+    const item = profile.presets[name]!;
+    return (!needsWrite || item.tools === 'write') && wanted.every(command => (item.commands ?? []).some(prefix => matchesCommand(prefix, command)));
+  };
+  let note: string | undefined;
+  let presetName = input.preset ?? '';
+  if (!Object.hasOwn(profile.presets, presetName)) {
+    // Presets are a means, not a decision: pick the first one that covers the files and commands the jobs ask for.
+    const chosen = [profile.default_preset, ...Object.keys(profile.presets)].find(fits) ?? profile.default_preset;
+    if (input.preset) note = `Preset "${input.preset}" does not exist (available: ${Object.keys(profile.presets).join(', ')}); used "${chosen}".`;
+    presetName = chosen;
+  }
   const preset = profile.presets[presetName]!;
   const planned: PlannedJob[] = [];
   const resumed = new Set<string>();
   let fresh = 0;
-  for (const job of input.jobs) {
+  for (const raw of input.jobs) {
+    const job = {...raw, title: raw.title ?? titleFrom(raw.brief)};
     if (job.instance) {
       const instance = input.retained.find(item => item.id === job.instance);
       if (!instance) return refuse(`Automa instance "${job.instance}" does not exist. Instances end with your task, on failure, on cancel and on release; dispatch a fresh job with a complete brief.`);
@@ -138,7 +156,10 @@ export function planDispatch(input: {
     }
     const allowed = preset.commands ?? [];
     const outside = (job.commands ?? []).filter(command => !allowed.some(prefix => matchesCommand(prefix, command)));
-    if (outside.length) return refuse(`Preset "${presetName}" does not allow: ${outside.join(', ')}. Allowed: ${allowed.join(', ') || 'none'}.`);
+    if (outside.length) {
+      const others = Object.entries(profile.presets).filter(([name, item]) => name !== presetName && (item.commands?.length)).map(([name, item]) => `${name} (${item.commands!.join(', ')})`);
+      return refuse(`Preset "${presetName}" does not allow the command prefix: ${outside.join(', ')}. Allowed: ${allowed.join(', ') || 'none'}.${others.length ? ' Other presets: ' + others.join('; ') + '.' : ''} Put the command in a Shell call of your own if no preset fits.`);
+    }
     const commands = job.commands ?? allowed;
     const exclusive = (preset.exclusive ?? []).filter(prefix => commands.some(command => matchesCommand(prefix, command)));
     const grant: JobGrant = {...(job.read?.length ? {read: job.read} : {}), files: job.files ?? [], commands, exclusive};
@@ -159,5 +180,5 @@ export function planDispatch(input: {
       }
     }
   }
-  return {ok: true, jobs: planned};
+  return {ok: true, jobs: planned, ...(note ? {note} : {})};
 }

@@ -496,12 +496,13 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         });
         continue;
       }
-      flushRound(message.time);
-      lastUserTime = message.time;
+      // A steered message arrived inside a running round: it stays a row of that round instead of closing it.
+      const steered = source === 'human' && message.source === 'steered';
+      if (!steered) {flushRound(message.time); lastUserTime = message.time;}
       builder.pushBlank();
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' ? message.source ?? message.ownerId : 'user',
-        queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source);
+        steered ? 'steered' : queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source);
       body(message);
     } else {
       if (systemLike) {

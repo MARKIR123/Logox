@@ -12,6 +12,7 @@ import {z} from 'zod';
 import {DynamicEnsemble} from './actors/ensemble.js';
 import {ActorCatalog} from './actors/catalog.js';
 import {ActorServices} from './actors/services.js';
+import {steeredText} from './prompts/runtime/interruption.js';
 import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
@@ -921,7 +922,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (entry.message?.role === 'assistant' && (entry.message.reasoning || entry.step)) {
       store.message(session, entry.ownerId, 'assistant', entry.message.reasoning ?? '', {...origin, kind: 'thinking', ...(entry.step ? {step: entry.step} : {})});
     }
-    if (entry.text) store.message(session, entry.ownerId, entry.role === 'tool' ? 'notice' : entry.role, entry.message?.role === 'tool' ? entry.message.name + '\n' + entry.text : entry.text,
+    if (entry.text) store.message(session, entry.ownerId, entry.role === 'tool' ? 'notice' : entry.role, entry.message?.role === 'tool' ? entry.message.name + '\n' + entry.text : entry.source === 'steered' && entry.role === 'user' ? steeredText(entry.text) : entry.text,
       {...origin, ...(entry.role === 'tool' ? {kind: 'tool' as const, ...(entry.step ? {step: entry.step} : {})} : {})});
   }
   for (const task of checkpoints) {
@@ -1024,7 +1025,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
       } finally {stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopSurfaceErrors(); stopLoginErrors();}
     },
-    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
+    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'auto'}): Promise<void> {
       const text = raw.trim();
       if (!text || closed) return;
       if (permissionTask) throw new Error('Permissions are saving, please wait...');
@@ -1048,7 +1049,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!target || !['running', 'waiting_input'].includes(target.status)) throw new Error('The steering target is no longer active. The draft was not queued.');
         if (target.ownerId !== source) throw new Error('The steering target does not match the selected Actor window.');
         await beginTask();
-        if (!await ensemble.injectTaskMessage(target.ownerId, text, 'direct', undefined, 'queue',
+        if (!await ensemble.injectTaskMessage(target.ownerId, text, 'steered', undefined, 'queue',
           {activityId: delivery.activityId, inputKind: 'human', kind: 'human_steer'})) {
           throw new Error('The steering target is no longer available. The draft was not queued.');
         }
@@ -1370,6 +1371,13 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /actors to view available members, then dispatch tasks with @<actor> <task>.');
       const owner = mention ? mention[1]! : source;
       await beginTask();
+      if (delivery.mode === 'auto') {
+        // Steering: a plain message to a window whose task is mid-run joins that run at its next step boundary; Ctrl+Q ('queue') opts out.
+        const active = ensemble.getActiveTask(owner);
+        if (active && store.activities.get(session, active.activityId)?.status === 'running' &&
+          await ensemble.injectTaskMessage(owner, mention ? mention[2]! : text, 'steered', undefined, 'queue',
+            {activityId: active.activityId, inputKind: 'human', kind: 'human_steer'})) return;
+      }
       await dispatchInput(owner, mention ? mention[2]! : text, owner === 'logox' ? source : 'direct');
     },
   };

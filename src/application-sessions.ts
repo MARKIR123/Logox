@@ -304,7 +304,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     getInputQueue: (ownerId?: string) => current.getInputQueue(ownerId),
     cancel: (activityId: string) => current.cancel(activityId),
     cancelTool: (callId: string) => current.cancelTool(callId),
-    async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
+    async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'auto'}): Promise<void> {
       // Serialize only the entry checks and call start; long tasks stay protected by each module's busy state.
       // The async pending read must not let a later /new overtake the previous setting save.
       const previous = entry;
@@ -325,7 +325,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       try {
         await operation;
       } catch (error) {await active.recordError(error, source); throw error;}
-      if (delivery.mode === 'queue' && text && !text.startsWith('/') && persistence.get(active)!.saved) {
+      if (delivery.mode !== 'steer' && text && !text.startsWith('/') && persistence.get(active)!.saved) {
         // Initial registration completed before dispatch; a title update failure must not turn an accepted task into a failed submission.
         try {await manager.touch(active.sessionId, text);}
         catch (error) {await active.recordError(error, source);}

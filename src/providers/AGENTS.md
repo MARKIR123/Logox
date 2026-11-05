@@ -46,6 +46,7 @@
 
 ## 4. Hard Boundaries
 - **ChatGPT OAuth always uses streaming Responses** (`/responses`, `store: false`, `stream: true`); API-key auto mode keeps Chat Completions and is not switched to Responses to gain discovery. Enforced by `tests/openai-tool-disclosure.test.ts` and `tests/providers.test.ts` (Responses stays streaming).
+- **Reasoning reaches the store as thinking**: Responses requests add `reasoning.summary: 'auto'` only on the official `https://api.openai.com/v1` endpoint (gateways may reject it); `response.reasoning_summary_text.delta`, reasoning items in `output_item.done` / non-streaming output, and Chat `reasoning_content` / `reasoning` / `thinking` / `reasoning_details` are all parsed. Enforced by `tests/openai-provider.test.ts`.
 - **Native discovery requires an exact official endpoint and model, or an explicit `tool_discovery`**; unknown compatible endpoints stay ordinary tools and no capability probe is sent. *Unenforced*.
 - **Native identity is never invented**: Responses client search keeps the original `call_id`; malformed, duplicate or incomplete search identities are protocol errors; truncated batches execute no tools. Enforced by `tests/openai-tool-disclosure.test.ts`, `tests/anthropic-tool-disclosure.test.ts`.
 - **Usage accounting differs per vendor**: Anthropic total input = uncached + cache-read + cache-created; OpenAI `input_tokens` already includes cached input. Enforced by `tests/anthropic-tool-disclosure.test.ts`, `tests/model-preferences-usage.test.ts`. Fixtures do not prove remote cache hits.
