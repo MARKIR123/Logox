@@ -83,7 +83,7 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
     group.push(message); staged.set(message.activityId, group);
   }
   // Asks and their replies are matched over the whole session: a reply in one actor's window needs the question from another's.
-  const pairs = pairSendMessages(snapshot.messages.filter(message => message.sessionId === sessionId));
+  const pairs = pairSendMessages(snapshot.messages.filter(message => message.sessionId === sessionId), snapshot.activities.filter(item => item.sessionId === sessionId));
   return {messages, candidates, staged, activities, grouped, thinking, pairs};
 }
 function messageProjection(snapshot: RuntimeSnapshot, sessionId: string, view: string) {

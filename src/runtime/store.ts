@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {Activities} from './activities.js';
 import {Interactions} from './interactions.js';
-import {immutable, type Message, type PendingInput, type RuntimeSnapshot} from './contracts.js';
+import {immutable, settleStep, type Message, type PendingInput, type RuntimeSnapshot} from './contracts.js';
 import type {SystemEvent} from './system-events.js';
 
 export class RuntimeStore {
@@ -11,7 +11,7 @@ export class RuntimeStore {
   private snapshot: RuntimeSnapshot = immutable({revision: 0, pending: [], activities: [], interactions: [], messages: []});
   private publishTimer: ReturnType<typeof setTimeout> | undefined;
 
-  readonly activities = new Activities(() => this.publish());
+  readonly activities = new Activities(() => this.publish(), (sessionId, activityId, status) => this.settleActivitySteps(sessionId, activityId, status));
   readonly interactions = new Interactions(() => this.publish());
   readonly getSnapshot = (): RuntimeSnapshot => this.snapshot;
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -88,6 +88,14 @@ export class RuntimeStore {
     this.activities.clearSession(sessionId);
     for (let index = this.messages.length - 1; index >= 0; index--) if (this.messages[index]?.sessionId === sessionId) this.messages.splice(index, 1);
     this.publish();
+  }
+  /** A finished activity owns no running step: a clock must not outlive the work it times. */
+  private settleActivitySteps(sessionId: string, activityId: string, status: 'completed' | 'failed' | 'cancelled'): void {
+    this.messages.forEach((message, index) => {
+      if (message.sessionId !== sessionId || message.activityId !== activityId || !message.step) return;
+      const step = settleStep(message.step, status);
+      if (step !== message.step) this.messages[index] = immutable({...message, step});
+    });
   }
   private publish(): void {
     this.flush();

@@ -164,6 +164,16 @@ export const stepSchema = z.strictObject({title: z.string(), callId: z.string().
   state: z.enum(['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled']),
   elapsedMs: z.number().nonnegative(), runningSince: z.number().optional(), waiting: z.string().optional()});
 export type Step = z.infer<typeof stepSchema>;
+export type StepEnd = 'completed' | 'failed' | 'cancelled';
+/**
+ * Closes a step that never got a terminal record: no live clock, no waiting reason. `at` bounds the time counted since it
+ * started (default: now), so a step restored from an old ledger does not claim the hours since.
+ */
+export function settleStep(step: Step, state: StepEnd, at = Date.now()): Step {
+  if (step.state === 'completed' || step.state === 'failed' || step.state === 'cancelled') return step;
+  const {runningSince, waiting: _, ...rest} = step;
+  return {...rest, state, elapsedMs: step.elapsedMs + (step.state === 'running' && runningSince !== undefined ? Math.max(0, at - runningSince) : 0)};
+}
 /** A human message held back because its target was mid-round; it is not part of the timeline until it is delivered or steered. */
 export interface PendingInput {
   readonly id: string; readonly sessionId: string;

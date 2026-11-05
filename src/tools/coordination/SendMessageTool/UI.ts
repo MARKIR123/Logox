@@ -13,10 +13,10 @@ function recipient(call: ToolCall) {
   return {label: role ? `${role.symbol} ${role.name}` : to || 'actor', color: role?.color ?? palette.accent};
 }
 
-/** `ask · awaiting reply`, `ask · answered`, `inform`, `reply`, or `ask` for a follow-up question; `interrupt` is appended when it cut in. */
+/** `ask · awaiting reply`, `ask · answered`, `ask · no reply`, `inform`, `reply`, or `ask` for a follow-up question; `interrupt` is appended when it cut in. */
 function summaryOf(args: Record<string, unknown>, pairing: SendPairing): string {
   const type = args.type === 'ask' || args.type === 'reply' ? args.type : 'inform';
-  const base = type === 'ask' && !pairing.question ? `ask · ${pairing.answered ? 'answered' : 'awaiting reply'}` : type;
+  const base = type === 'ask' && !pairing.question ? `ask · ${pairing.answered ? 'answered' : pairing.ended ? 'no reply' : 'awaiting reply'}` : type;
   return args.mode === 'interrupt' ? base + ' · interrupt' : base;
 }
 

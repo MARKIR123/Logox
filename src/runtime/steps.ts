@@ -7,6 +7,7 @@ import {legacyToolTitle} from '../tools/ui-format.js';
 export function stepElapsed(step: Step, now = Date.now()): number {
   return step.elapsedMs + (step.state === 'running' && step.runningSince !== undefined ? Math.max(0, now - step.runningSince) : 0);
 }
+export {settleStep} from './contracts.js';
 export {legacyToolTitle as toolTitle} from '../tools/ui-format.js';
 
 /** Runtime owns each request/call clock. Rendering samples it without publishing timer ticks. */

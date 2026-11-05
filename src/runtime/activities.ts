@@ -12,7 +12,9 @@ export function activityKey(sessionId: string, activityId: string): string {
 }
 export class Activities {
   private readonly records = new Map<string, Activity>();
-  constructor(private readonly onChange: () => void) {}
+  constructor(private readonly onChange: () => void,
+    /** Runs once, before the change is published, when an activity reaches a terminal status. */
+    private readonly onFinish: (sessionId: string, activityId: string, status: 'completed' | 'failed' | 'cancelled') => void = () => {}) {}
   list(): readonly Activity[] { return Object.freeze([...this.records.values()]); }
   clearSession(sessionId: string): void {
     const entries = [...this.records].filter(([, activity]) => activity.sessionId === sessionId);
@@ -41,6 +43,7 @@ export class Activities {
     }
     if (transitions[current.status].length === 0) throw new Error('A finished activity cannot be updated further');
     this.records.set(key, immutable(next));
+    if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') this.onFinish(sessionId, activityId, next.status);
     this.onChange();
     return next;
   }

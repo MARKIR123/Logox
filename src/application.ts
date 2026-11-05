@@ -38,6 +38,7 @@ import {
 import {ModelPool} from './providers/model-pool.js';
 import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
+import {settleStep} from './runtime/contracts.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
 import {submitDeliverySchema, type SubmitDelivery} from './runtime/delivery.js';
@@ -925,11 +926,14 @@ export async function createSessionApplication(options: SessionApplicationOption
           switched: savedModel.switched, phase: savedModel.phase}} : {})});
     }
     if (entry.message?.role === 'assistant' && entry.message.memoryOnly) continue;
-    if (entry.message?.role === 'assistant' && (entry.message.reasoning || entry.step)) {
-      store.message(session, entry.ownerId, 'assistant', entry.message.reasoning ?? '', {...origin, kind: 'thinking', ...(entry.step ? {step: entry.step} : {})});
+    // Nothing runs after a restart: a step the ledger left open is closed here, whatever tool it belonged to. A tool record that
+    // carries its result finished the way the result says; one without a result was interrupted.
+    const step = entry.step ? settleStep(entry.step, entry.message?.role === 'tool' ? entry.message.isError ? 'failed' : 'completed' : 'cancelled', entry.step.runningSince ?? 0) : undefined;
+    if (entry.message?.role === 'assistant' && (entry.message.reasoning || step)) {
+      store.message(session, entry.ownerId, 'assistant', entry.message.reasoning ?? '', {...origin, kind: 'thinking', ...(step ? {step} : {})});
     }
     if (entry.text) store.message(session, entry.ownerId, entry.role === 'tool' ? 'notice' : entry.role, entry.message?.role === 'tool' ? entry.message.name + '\n' + entry.text : entry.source === 'steered' && entry.role === 'user' ? steeredText(entry.text) : entry.text,
-      {...origin, ...(entry.role === 'tool' ? {kind: 'tool' as const, ...(entry.step ? {step: entry.step} : {})} : {})});
+      {...origin, ...(entry.role === 'tool' ? {kind: 'tool' as const, ...(step ? {step} : {})} : {})});
   }
   for (const task of checkpoints) {
     if (store.activities.get(session, task.activityId)) continue;

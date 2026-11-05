@@ -609,6 +609,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                     if (sent?.success && sent.data.type === 'ask') {
                       asks.open({sessionId: context.sessionId, from: context.ownerId, fromActivityId: context.activityId, to: sent.data.to,
                         label: (sent.data.summary || sent.data.message).replace(/\s+/g, ' ').slice(0, 120)});
+                      // The call is done once delivered; "awaiting reply" is a card summary derived from the conversation, not a running step.
+                      steps.finish(id, context.signal.aborted ? 'cancelled' : 'completed', call.name + '\n' + result.text);
                       return {...result, text: result.text + '\n\n' + (context.ownerId === 'logox' ? ASK_SENT_NOTE_DIRECTOR : ASK_SENT_NOTE)};
                     }
                     const note = pacing.observe(call, result, {

@@ -1,4 +1,4 @@
-import type {Message} from '../../../runtime/contracts.js';
+import type {Activity, Message} from '../../../runtime/contracts.js';
 import {messageToolCall} from '../../../tui/timeline/tool-ui.js';
 import {callArgs} from '../../ui-format.js';
 
@@ -9,6 +9,8 @@ export interface SendPairing {
   /** For an ask: the reply that closed it. */
   readonly answer?: string;
   readonly answered?: boolean;
+  /** For an unanswered ask: its sender's activity is over and the recipient has nothing running, so no reply is coming. */
+  readonly ended?: boolean;
 }
 
 export interface SendFacts {
@@ -43,7 +45,7 @@ export function hiddenFromView(message: Message, view: string): boolean {
  * Pairs asks with their replies the way the runtime does (`AskBoard.answer`): a reply from B to A closes every open ask
  * from A to B. Replies and follow-up asks carry the question they respond to, so an answer is never shown without it.
  */
-export function pairSendMessages(messages: readonly Message[]): ReadonlyMap<string, SendPairing> {
+export function pairSendMessages(messages: readonly Message[], activities: readonly Pick<Activity, 'sessionId' | 'activityId' | 'ownerId' | 'status'>[] = []): ReadonlyMap<string, SendPairing> {
   const pairs = new Map<string, SendPairing>();
   const open: {id: string; from: string; to: string; text: string}[] = [];
   for (const message of messages) {
@@ -65,6 +67,15 @@ export function pairSendMessages(messages: readonly Message[]): ReadonlyMap<stri
       open.push({id: message.id, from: facts.sender, to: facts.to, text: facts.text});
       pairs.set(message.id, {answered: false, ...(owed.length ? {question: owed.at(-1)!.text} : {})});
     }
+  }
+  // An ask nobody answered is "ended" once the asker's activity is over and the recipient has no live work left to answer it.
+  const done = (status: string) => status === 'completed' || status === 'failed' || status === 'cancelled';
+  const byId = new Map(messages.map(message => [message.id, message]));
+  for (const ask of open) {
+    const message = byId.get(ask.id), asker = activities.find(item => item.activityId === message?.activityId && item.sessionId === message?.sessionId);
+    if (!asker || !done(asker.status)) continue;
+    if (activities.some(item => item.sessionId === asker.sessionId && item.ownerId === ask.to && !done(item.status))) continue;
+    pairs.set(ask.id, {...pairs.get(ask.id), ended: true});
   }
   return pairs;
 }
