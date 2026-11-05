@@ -49,6 +49,41 @@ export function deliberateStopLabel(messages: readonly ModelMessage[]): string |
   return marker.data?.by === 'user' ? USER_INTERRUPT_LABEL : marker.data?.by === 'director' ? DIRECTOR_STOP_LABEL : undefined;
 }
 
+/** A persona micro-action such as "（核对色板与标尺）" or "(checks the palette)": a whole line wrapped in full-width or ASCII brackets. */
+const ACTION_LINE = /^\s*(?:（[^（）\n]{1,160}）|\([^()\n]{1,160}\)|【[^【】\n]{1,160}】)\s*$/;
+
+/** The first line that can name a task or round: blank lines and leading bracketed micro-action lines are skipped. */
+export function titleLine(text: string): string {
+  return text.split(/\r?\n/).map(line => line.trim()).find(line => line && !ACTION_LINE.test(line)) ?? '';
+}
+
+/** Drops leading blank and bracketed micro-action lines so a summary starts with substance. */
+export function stripLeadingActionLines(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length && (!lines[index]!.trim() || ACTION_LINE.test(lines[index]!))) index++;
+  return index === lines.length ? text : lines.slice(index).join('\n');
+}
+
+/** Shortens text to at most max characters on a word (or grapheme) boundary and appends an ellipsis. */
+export function clampText(text: string, max: number): string {
+  const value = text.trim();
+  if (value.length <= max) return value;
+  const room = max - 1;
+  let end = 0;
+  for (const {index, segment} of new Intl.Segmenter(undefined, {granularity: 'grapheme'}).segment(value)) {
+    if (index + segment.length > room) break;
+    end = index + segment.length;
+  }
+  let cut = value.slice(0, end);
+  // Mid-word cut: back up to the previous whitespace unless that would discard most of the text.
+  if (/\S/.test(value.charAt(end)) && /[^\s]$/.test(cut)) {
+    const space = cut.search(/\s\S*$/);
+    if (space > room * 0.5) cut = cut.slice(0, space);
+  }
+  return cut.trimEnd() + '…';
+}
+
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
   messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly);
   const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
@@ -65,7 +100,7 @@ export function summarizeRound(messages: readonly ModelMessage[], status: RoundS
   const tools = messages.filter(message => message.role === 'tool').slice(-4)
     .map(message => message.role === 'tool' ? message.name + ': ' + (message.isError ? 'failed/not executed; ' : '') + message.text.slice(0, 140) : '');
   const label = status === 'completed' ? 'Completed' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Interrupted; follow-up work needs checking' : 'Failed; needs further handling';
-  return {title: (status === 'completed' ? final.split('\n')[0]?.trim() || label : label).slice(0, 100),
+  return {title: (status === 'completed' ? titleLine(final) || label : label).slice(0, 100),
     report: ['Goal: ' + goal.slice(0, 350), 'Status: ' + label, final ? 'Reply: ' + final.slice(-850) : 'No complete assistant reply.',
       ...tools].join('\n').slice(0, 2000), source: 'local'};
 }

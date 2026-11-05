@@ -19,7 +19,7 @@
 | Session files, transcripts, task checkpoints | `src/store/journal.ts:Journal` | `Journal.checkpoint()`, `Journal.append()`, `Journal.appendSystem()` |
 | Session list, resume, leases, delete | `src/store/sessions.ts:SessionManager` | `src/store/session-trash.ts:SessionTrash` |
 | Cross-process lock or atomic write | `src/store/file-lock.ts:withFileLock()` | `src/store/replace-file.ts:replaceFile()` |
-| Scratchpad directory or 32 KB output offload | `src/kernel/scratchpad.ts:getScratchpadDir()` | `src/kernel/scratchpad.ts:maybePersistLargeOutput()` |
+| Scratchpad directory (session tree, per-actor subdirectory) or 32 KB output offload | `src/kernel/scratchpad.ts:getActorScratchpadDir()` | `src/kernel/scratchpad.ts:maybePersistLargeOutput()` |
 
 ## 3. Common Changes
 ### Add a system event kind or presentation

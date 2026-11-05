@@ -21,7 +21,7 @@ import {UsageLedger, usageLines} from './context/usage.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
 import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
-import {getScratchpadDir, ensureScratchpadDir} from './kernel/scratchpad.js';
+import {getScratchpadDir, ensureScratchpadDir, getActorScratchpadDir, ensureActorScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {LoginFlow} from './providers/login.js';
 import {runLoginWizard, type WizardProviderRow} from './providers/login-wizard.js';
@@ -368,6 +368,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     const role = actorServices.definition(context);
     const model = taskModels.selection(context), thinking = taskModels.thinking(context);
     const policy = actorServices.skills(context);
+    const actorScratchpad = getActorScratchpadDir(cwd, context.sessionId, context.ownerId);
+    void ensureActorScratchpadDir(cwd, context.sessionId, context.ownerId);
     const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
     const history = (await journal.load(context.sessionId, context.ownerId)).map(storedMessage);
     const language = sessionLanguage(store.getSnapshot().messages
@@ -376,14 +378,14 @@ export async function createSessionApplication(options: SessionApplicationOption
       effort: thinking.levels.length > 1 ? thinking.effort : 'unsupported', permission: permissions.mode + ' · ' +
         permissionModes[permissions.mode].description +
         '\nExplicit rules (still adjudicated per call): ' + permissionRules,
-      directory: cwd, scratchpad,
+      directory: cwd, scratchpad: actorScratchpad,
       rules: environmentVersion(resources.prompt(policy).context), services: extensions.mcp.status().map(service => service.name + ':' + service.state).sort(),
       ...(language ? {language} : {})}, history);
     const extensionRegistrations: ToolRegistration[] = extensions.mcp.definitions().map(definition => ({definition,
       metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
     const base = await agentRequestBase(cwd, context.ownerId, extensionRegistrations,
       resources, {prompt: role.prompt, execution: role.execution, collaboration: role.collaboration,
-        compression: role.compression, visibility: policy}, true, scratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history});
+        compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history});
     const contextUpdates: RuntimeContextMessage[] = [...effective.updates, ...base.contextUpdates ?? []];
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     if (restriction) base.tools = [finishRoundTool];
@@ -1319,7 +1321,7 @@ export async function createSessionApplication(options: SessionApplicationOption
             const role = actors.find(source);
             const identity = {sessionId: session, ownerId: source, activityId};
             const base = await agentRequestBase(cwd, source, actorServices.tools(source), resources,
-              role ? {prompt: role.prompt, compression: role.compression, visibility: {actorId: source, skills: role.skills}} : undefined, true, scratchpad);
+              role ? {prompt: role.prompt, compression: role.compression, visibility: {actorId: source, skills: role.skills}} : undefined, true, getActorScratchpadDir(cwd, session, source));
             await contexts.prepare(identity, contexts.requestBase(identity, base), controller.signal, true);
             controller.signal.throwIfAborted();
             store.activities.update(session, activityId, {status: 'completed', stage: 'Compacted'});

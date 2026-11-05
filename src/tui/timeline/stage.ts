@@ -53,6 +53,7 @@ function retryLabel(detail: string): string {
   return counter ? `Retrying (${counter[1]}${counter[2] ? '/' + counter[2] : ''})` : 'Retrying';
 }
 function activityStatus(activity: RuntimeSnapshot['activities'][number]): string {
+  if (activity.status === 'queued' && activity.stage.startsWith('Waiting on ')) return activity.stage;
   return activity.status === 'running' && ['Resuming', 'Adjusting'].includes(activity.stage)
     ? activity.stage : activity.stage === 'History' ? 'History' : statuses[activity.status] ?? activity.status;
 }

@@ -4,16 +4,24 @@ import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
 import {normalizeAliases} from '../aliases.js';
 import {recordWrite} from './record.js';
+import {WRITE_OVERWRITE_DESCRIPTION, WRITE_LARGE_FILE_NOTICE, WRITE_LARGE_FILE_BYTES, WRITE_LARGE_FILE_LINES} from './prompt.js';
 
 const writeArgs = z.strictObject({
   file_path: pathArg.describe('The absolute path to the file to write'),
   content: z.string().describe('The content to write to the file'),
+  overwrite: z.boolean().optional().describe(WRITE_OVERWRITE_DESCRIPTION),
 });
 
 /** Deprecated alias: `path` is accepted during the migration window. */
 export const writeSchema = z.preprocess(value => normalizeAliases(value, {path: 'file_path'}), writeArgs);
 
 export type WriteArgs = z.infer<typeof writeArgs>;
+
+function lineCount(bytes: Buffer): number {
+  let lines = 1;
+  for (const byte of bytes) if (byte === 10) lines++;
+  return lines;
+}
 
 export async function executeWrite(
   args: WriteArgs,
@@ -35,6 +43,10 @@ export async function executeWrite(
     const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId);
     if (peer) {
       throw new Error(`File was modified by ${peer} since your last read. Please Read the latest file content (or use Edit for targeted changes) before overwriting.`);
+    }
+
+    if (before && !args.overwrite && (before.length > WRITE_LARGE_FILE_BYTES || lineCount(before) > WRITE_LARGE_FILE_LINES)) {
+      throw new Error(WRITE_LARGE_FILE_NOTICE);
     }
 
     const after = Buffer.from(args.content);

@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm, mkdir, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
-import {Mcp} from '../src/extensions/mcp.js';
+import {Mcp, collapseRepeatedLines} from '../src/extensions/mcp.js';
 import {McpClient} from '../src/extensions/mcp-client.js';
 import {mcpServerSchema, hooksSchema} from '../src/extensions/config.js';
 import {Hooks} from '../src/extensions/hooks.js';
@@ -83,8 +83,29 @@ test('MCP accepts screenshot responses over one MiB without discarding the image
 test('MCP rejects malformed image blocks instead of reporting successful visual evidence', async () => {
   const f = await fixture('bad-image');
   const mcp = new Mcp(f.cwd, {fixture: f.config}, async () => true);
-  try {assert.equal((await mcp.execute(invoke({value: 1}), context())).isError, true);}
-  finally {await mcp.close(); await f.cleanup();}
+  try {
+    const result = await mcp.execute(invoke({value: 1}), context());
+    assert.equal(result.isError, true);
+    assert.match(result.text, /^Invalid MCP parameters or response content: /);
+    assert.match(result.text, /\bdata\b/, 'the cause names the offending field');
+  } finally {await mcp.close(); await f.cleanup();}
+});
+
+test('MCP collapses runs of identical lines and leaves short repeats alone', async () => {
+  const f = await fixture('repeat');
+  const mcp = new Mcp(f.cwd, {fixture: f.config}, async () => true);
+  try {
+    const result = await mcp.execute(invoke({value: 1}), context());
+    assert.equal(result.isError, false, result.text);
+    assert.equal(result.text, 'header\nError: failed to load resource (×188)\nmid\na\na\nfooter');
+  } finally {await mcp.close(); await f.cleanup();}
+});
+
+test('collapseRepeatedLines is conservative', () => {
+  assert.equal(collapseRepeatedLines('x\nx'), 'x\nx');
+  assert.equal(collapseRepeatedLines('x\nx\nx'), 'x (×3)');
+  assert.equal(collapseRepeatedLines('\n\n\n\nz'), '\n\n\n\nz');
+  assert.equal(collapseRepeatedLines('x\ny\nx\ny\nx\ny'), 'x\ny\nx\ny\nx\ny');
 });
 
 test('MCP images reach the next model request through the application', async () => {

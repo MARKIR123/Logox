@@ -24,7 +24,7 @@ test('Actor schema accepts files and rejects bad types', () => {
   assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: 'index.html'}]}).success);
   assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: [1]}]}).success);
   assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: ['']}]}).success);
-  assert.match(ACTOR_DESCRIPTION, /`files`/);
+  assert.match(ACTOR_DESCRIPTION, /`owns`/);
   assert.ok(schemas.Actor);
 });
 

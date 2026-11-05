@@ -35,6 +35,7 @@ import {composeBaseSystemPrompt, toolErrorRecoveryInstruction} from '../prompts/
 import {maybePersistLargeOutput} from './scratchpad.js';
 import {DIRECTOR_INTERRUPTED_TOOL_TEXT, TOOL_CANCELLED_TEXT, USER_INTERRUPTED_TOOL_TEXT} from '../prompts/runtime/interruption.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
+import {clampText} from '../context/contracts.js';
 import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {extractNarration, stripNarration} from '../runtime/narration.js';
@@ -431,17 +432,17 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 const obj = rawArgs as Record<string, unknown>;
                 let clamped = false;
                 if (typeof obj.title === 'string' && obj.title.trim().length > 120) {
-                  obj.title = obj.title.trim().slice(0, 120); clamped = true;
+                  obj.title = clampText(obj.title, 120); clamped = true;
                 }
                 if (typeof obj.outcome === 'string' && obj.outcome.trim().length > 600) {
-                  obj.outcome = obj.outcome.trim().slice(0, 600); clamped = true;
+                  obj.outcome = clampText(obj.outcome, 600); clamped = true;
                 }
                 if (typeof obj.verification === 'string' && obj.verification.trim().length > 240) {
-                  obj.verification = obj.verification.trim().slice(0, 240); clamped = true;
+                  obj.verification = clampText(obj.verification, 240); clamped = true;
                 }
                 if (Array.isArray(obj.carry_forward)) {
                   const nextCarry = obj.carry_forward.slice(0, 8).map(item =>
-                    typeof item === 'string' && item.trim().length > 240 ? (clamped = true, item.trim().slice(0, 240)) : item
+                    typeof item === 'string' && item.trim().length > 240 ? (clamped = true, clampText(item, 240)) : item
                   );
                   if (obj.carry_forward.length > 8) clamped = true;
                   if (clamped) obj.carry_forward = nextCarry;
@@ -629,7 +630,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                   // A deliberate stop says who stopped it; other cancellations keep the plain text.
                   const result: ToolResult = context.signal.aborted && settledResult.isError && settledResult.text === TOOL_CANCELLED_TEXT
                     ? {...settledResult, text: interruptedToolText(context.stopReason?.(), TOOL_CANCELLED_TEXT)} : settledResult;
-                  const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId);
+                  const persistedText = await maybePersistLargeOutput(result.text, options.cwd, call.id, context.sessionId, context.ownerId);
                   const step = steps.get(toolIds.get(call.id)!);
                   const toolMessage: ModelMessage = {
                     role: 'tool', callId: call.id, name: call.name,

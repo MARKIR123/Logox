@@ -41,6 +41,10 @@ for await (const line of createInterface({input: process.stdin})) {
     const args = message.params.arguments;
     if (args.mode === 'wait') continue;
     if (args.mode === 'bad') {process.stdout.write('bad-json\n'); continue;}
+    if (mode === 'repeat') {
+      respond({content: [{type: 'text', text: ['header', ...Array(188).fill('Error: failed to load resource'), 'mid', 'a', 'a', 'footer'].join('\n')}]});
+      continue;
+    }
     if (['image', 'large-image', 'bad-image'].includes(mode)) {
       const image = {type: 'image', mimeType: 'image/png',
         data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='};

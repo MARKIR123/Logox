@@ -26,6 +26,24 @@ const imageSchema = z.object({data: z.string().min(1), mimeType: z.enum(['image/
 const resultSchema = z.object({isError: z.boolean().optional(), content: z.array(z.object({
   type: z.string(), text: z.string().optional(), data: z.string().optional(), mimeType: z.string().optional(),
 })).max(256), structuredContent: z.record(z.string(), z.json()).optional()});
+const MCP_INVALID_TEXT = 'Invalid MCP parameters or response content';
+/** Underlying cause of a schema failure: up to three issues as path: message. */
+export function zodCause(error: z.ZodError): string {
+  const issues = error.issues.slice(0, 3).map(issue => (issue.path.length ? issue.path.join('.') : '(root)') + ': ' + issue.message);
+  return issues.join('; ') + (error.issues.length > 3 ? ' (+' + (error.issues.length - 3) + ' more)' : '');
+}
+/** Collapses runs of identical consecutive non-blank lines into one line plus " (×N)"; conservative: only runs of 3 or more. */
+export function collapseRepeatedLines(text: string): string {
+  const lines = text.split('\n'), out: string[] = [];
+  for (let i = 0; i < lines.length;) {
+    let j = i + 1;
+    while (j < lines.length && lines[j] === lines[i]) j++;
+    if (j - i >= 3 && lines[i]!.trim()) out.push(lines[i] + ' (×' + (j - i) + ')');
+    else out.push(...lines.slice(i, j));
+    i = j;
+  }
+  return out.join('\n');
+}
 export interface ExtensionApprovalRequest {
   readonly source: 'mcp'; readonly server: string; readonly tool: string; readonly callId: string;
   readonly action?: 'list' | 'call';
@@ -121,13 +139,13 @@ export class Mcp {
       context.startTool?.();
       const result = resultSchema.parse(await client.request('tools/call', {name: args.tool, arguments: args.arguments}, context.signal));
       const images = result.content.filter(block => block.type === 'image').map(block => imageSchema.parse(block));
-      const text = result.content.map(block => block.type === 'text' ? block.text ?? ''
-        : block.type === 'image' ? '[Image: ' + block.mimeType + ']' : '[' + block.type + ' content]').join('\n') +
+      const text = collapseRepeatedLines(result.content.map(block => block.type === 'text' ? block.text ?? ''
+        : block.type === 'image' ? '[Image: ' + block.mimeType + ']' : '[' + block.type + ' content]').join('\n')) +
         (result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '');
       return {text: text.length > 64_000 ? text.slice(0, 64_000) + '\n[MCP output truncated]' : text,
         isError: result.isError ?? false, ...(images.length ? {images} : {})};
     } catch (error) {
-      return {text: error instanceof z.ZodError ? 'Invalid MCP parameters or response content' : error instanceof Error ? error.message : 'MCP execution failed', isError: true};
+      return {text: error instanceof z.ZodError ? MCP_INVALID_TEXT + ': ' + zodCause(error) : error instanceof Error ? error.message : 'MCP execution failed', isError: true};
     }
   }
   async close(): Promise<void> {await Promise.all([...this.clients.values()].map(client => client.close())); this.catalogs.clear();}

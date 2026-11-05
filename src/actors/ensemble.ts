@@ -93,10 +93,18 @@ interface QueuedTask<Id extends string> extends Task<Id> {
   activityId: string; source: string; origin: TaskOrigin; controller: AbortController;
   ready: Promise<void>; resolve(): void; stopReason?: StopReason; stopDetail?: string;
   progress?: TaskProgressSnapshot;
+  /** Final status and full report once the task has ended; read by tasks that run `after` it. */
+  outcome?: {status: RoundStatus; title: string; text: string};
+  /** A dependency failed or was stopped: the task is being cancelled and never runs. */
+  doomed?: boolean;
+  dependenciesReleased?: boolean;
 }
+const DEPENDENCY_REPORT_LIMIT = 8000;
+const DEPENDENCY_REPORTS_HEADER = 'Reports from the work this task was waiting for:';
 export class EnsembleRuntime<Id extends string> {
   private readonly queue: QueuedTask<Id>[] = [];
   private readonly tasks = new Map<string, QueuedTask<Id>>();
+  private readonly finished = new Map<string, {ownerId: string; status: RoundStatus; title: string; text: string}>();
   private readonly activeSlots = new Map<Id, Promise<void>>();
   private readonly pausedBatches = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
@@ -130,7 +138,7 @@ export class EnsembleRuntime<Id extends string> {
     this.store.activities.create({
       sessionId: this.sessionId, activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
       title: origin.taskTitle ?? (member.name + ' · ' + member.title),
-      status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: 'Waiting to enter', detail: prompt,
+      status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: this.waitingStage(origin.after) ?? 'Waiting to enter', detail: prompt,
       ...this.identityOrigin(origin),
     });
     if (!(ownerId === 'logox' && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
@@ -242,7 +250,8 @@ export class EnsembleRuntime<Id extends string> {
     if (index >= 0) {
       this.queue.splice(index, 1);
       this.controllers.delete(activityId); this.tasks.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: 'Queued task cancelled'});
+      this.finished.set(activityId, {ownerId: task.ownerId, status: 'cancelled', title: 'Queued task cancelled', text: detail ?? 'The task had not started.'});
+      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: detail ?? 'Queued task cancelled'});
       void this.trackWrite(task.ready.catch(() => {}).then(async () => {
         await this.checkpoint(task, 'cancelled');
         await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId, source: task.source,
@@ -264,7 +273,7 @@ export class EnsembleRuntime<Id extends string> {
   resumeBatch(batchId: string): void {
     this.pausedBatches.delete(batchId);
     for (const task of this.queue.filter(task => task.origin.batchId === batchId)) {
-      this.store.activities.update(this.sessionId, task.activityId, {status: 'queued', stage: 'Waiting to enter'});
+      this.store.activities.update(this.sessionId, task.activityId, {status: 'queued', stage: this.waitingStage(task.origin.after) ?? 'Waiting to enter'});
       task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, 'queued')));
       void task.ready.catch(() => {});
     }
@@ -303,6 +312,8 @@ export class EnsembleRuntime<Id extends string> {
     for (let index = 0; index < this.queue.length; index++) {
       const task = this.queue[index]!;
       if (task.origin.batchId && this.pausedBatches.has(task.origin.batchId)) continue;
+      if (task.doomed) continue;
+      if (this.releaseDependencies(task)) continue;
       if (this.activeSlots.has(task.ownerId)) continue;
       this.queue.splice(index, 1);
       index--;
@@ -315,12 +326,52 @@ export class EnsembleRuntime<Id extends string> {
           await this.options.settled?.(task.activityId, 'failed');
         }
       })().catch(() => {}).finally(() => {
+        this.finished.set(task.activityId, {ownerId: task.ownerId, ...(task.outcome ?? this.fallbackOutcome(task))});
         this.tasks.delete(task.activityId); this.controllers.delete(task.activityId); this.activeSlots.delete(task.ownerId); this.inboxes.delete(task.activityId);
         task.resolve(); this.pump();
       });
       this.activeSlots.set(task.ownerId, execution);
       if (!actorConcurrency) break;
     }
+  }
+  /** Ids named in `after` that are still unfinished (queued, running or waiting). Unknown ids count as finished. */
+  private blockers(after: readonly string[] | undefined): string[] {
+    return (after ?? []).filter(id => this.tasks.has(id) && !this.finished.has(id));
+  }
+  private waitingStage(after: readonly string[] | undefined): string | undefined {
+    const names = this.blockers(after).map(id => {const owner = this.tasks.get(id)!.ownerId; const member = this.options.member ? this.options.member(owner as Id) : Object.hasOwn(cast, owner) ? cast[owner as ActorId] : undefined; return member?.name ?? owner;});
+    return names.length ? 'Waiting on ' + [...new Set(names)].join(', ') : undefined;
+  }
+  private fallbackOutcome(task: QueuedTask<Id>) {
+    const status = this.store.activities.get(this.sessionId, task.activityId)?.status;
+    return {status: (status === 'completed' || status === 'failed' ? status : 'cancelled') as RoundStatus, title: '', text: ''};
+  }
+  /** Holds a task with unfinished `after` dependencies; on release prepends their reports, or cancels the task when one did not complete. Returns true while the task must stay queued. */
+  private releaseDependencies(task: QueuedTask<Id>): boolean {
+    const after = task.origin.after;
+    if (!after?.length || task.dependenciesReleased) return false;
+    const waiting = this.waitingStage(after);
+    if (waiting) {
+      if (this.store.activities.get(this.sessionId, task.activityId)?.stage !== waiting && !(task.origin.batchId && this.pausedBatches.has(task.origin.batchId))) {
+        this.store.activities.update(this.sessionId, task.activityId, {stage: waiting});
+      }
+      return true;
+    }
+    task.dependenciesReleased = true;
+    const reports = after.flatMap(id => {const done = this.finished.get(id); return done ? [{id, ...done}] : [];});
+    const failed = reports.find(report => report.status !== 'completed');
+    if (failed) {
+      task.doomed = true;
+      queueMicrotask(() => {this.cancel(task.activityId, 'director_cancel', `Not started: the task it waited for (${failed.ownerId}, ${failed.id}) ${failed.status === 'failed' ? 'failed' : 'was stopped'}.`);});
+      return true;
+    }
+    if (reports.length) {
+      task.prompt = [DEPENDENCY_REPORTS_HEADER, reports.map(report => `[${report.ownerId} · ${report.title || report.id}]\n${report.text.slice(0, DEPENDENCY_REPORT_LIMIT)}`).join('\n\n'), task.prompt].join('\n\n');
+    }
+    this.store.activities.update(this.sessionId, task.activityId, {stage: 'Waiting to enter'});
+    task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, 'queued')));
+    void task.ready.catch(() => {});
+    return false;
   }
   private trackWrite(operation: Promise<void>): Promise<void> {
     this.pendingWrites.add(operation);
@@ -446,6 +497,7 @@ export class EnsembleRuntime<Id extends string> {
       if (output.length && !recorded) await this.history.append({version: 1, ...identity, role: 'assistant', text: output.join('\n')});
       signal.throwIfAborted();
       const summary = await finish('completed');
+      if (summary) task.outcome = {status: 'completed', title: summary.title, text: delivery?.text ?? summary.report};
       if (summary) {
         this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: 'Wrapping up', detail: summary.report});
         try {await this.options.taskEnd?.(context, summary, 'completed');}
@@ -480,6 +532,7 @@ export class EnsembleRuntime<Id extends string> {
       const stopMarker = status === 'cancelled' ? stopNotice(task.stopReason, task.stopDetail, activityId) : undefined;
       if (stopMarker) await this.history.append({version: 1, ...identity, role: 'context', text: stopMarker.text, message: stopMarker}).catch(() => {});
       const summary = await finish(status);
+      task.outcome = {status, title: summary?.title ?? '', text: (delivery?.text ?? summary?.report ?? detail).slice(0, 2000)};
       try {await checkpoint(status, signal.aborted || isUserCancel ? undefined : detail);}
       catch {this.store.message(this.sessionId, ownerId, 'notice', 'Failed to save final activity state; restart will mark it interrupted and will not run tools automatically', {activityId});}
       if (summary) {

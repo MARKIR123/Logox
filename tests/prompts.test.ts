@@ -71,3 +71,31 @@ test('runtime facts remain typed messages rather than rewriting the system promp
   assert.ok(!base.system.includes(recovery.text));
   assert.ok(!base.system.includes('does not support image input'));
 });
+
+const profile = (id: string, file: string) => readFileSync(new URL('../src/actors/profiles/' + id + '/' + file, import.meta.url), 'utf8');
+
+test('stage line is unambiguously the first line of work turns; personas never put the flourish on line one', () => {
+  assert.match(SHARED_EXECUTION_RULES, /always the very first line of your text[\s\S]*nothing precedes it/);
+  assert.equal(SHARED_EXECUTION_RULES.split('very first line').length - 1, 1);
+  for (const id of ['logox', 'techne', 'kalon', 'aletheia']) {
+    const persona = profile(id, 'persona.md');
+    const rule = persona.split('\n').find(line => line.includes('Micro-Actions'))!;
+    assert.match(rule, /never as the first line of a message, and never in work turns, task reports or tool payloads/, id);
+    assert.doesNotMatch(persona, /["“]（/, id + ': examples must not open with the flourish');
+  }
+});
+
+test('brief, scope and ownership rules live in the lowest layer that can enforce them', () => {
+  assert.match(SHARED_EXECUTION_RULES, /never state a figure \(frame rate, timing, size, count\) you did not measure/);
+  const companion = collaborationFor('techne');
+  assert.match(companion, /Do what the brief asks and nothing more/);
+  assert.match(companion, /outside your `You own` list only after telling their owner/);
+  assert.doesNotMatch(collaborationFor('logox'), /Do what the brief asks/);
+  const director = profile('logox', 'collaboration.md');
+  for (const needle of ['artifact ownership', '`after`', '`interfaces`', '`verified`', 'do not call `ReadActor`', 'Add no features the user did not ask for', 'states only what tools measured']) {
+    assert.ok(director.includes(needle), needle);
+  }
+  assert.match(profile('techne', 'execution.md'), /Edit, Never Rewrite/);
+  assert.match(profile('aletheia', 'execution.md'), /Behaviour first[\s\S]*Skip what the brief lists as already verified/);
+  assert.match(profile('kalon', 'execution.md'), /Own the Visual Artifacts[\s\S]*review the rendered result/);
+});

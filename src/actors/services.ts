@@ -34,6 +34,7 @@ import {
   executeCancelActor,
   canonicalToolName,
 } from '../tools/index.js';
+import {renderBrief} from '../tools/orchestration/ActorTool/brief.js';
 import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
@@ -44,6 +45,19 @@ import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READ
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {inputKind} from '../runtime/provenance.js';
 
+/** Orders per-owner groups so an owner dispatched `after` another owner of the same call comes later; rejects cycles. */
+function orderByDependency<T extends {after: ReadonlySet<string>}>(grouped: ReadonlyMap<string, T>): [string, T][] {
+  const ordered: [string, T][] = [], visiting = new Set<string>(), done = new Set<string>();
+  const visit = (owner: string) => {
+    if (done.has(owner)) return;
+    if (visiting.has(owner)) throw new Error('Circular `after` dependency involving ' + owner);
+    visiting.add(owner);
+    for (const ref of grouped.get(owner)!.after) if (grouped.has(ref)) visit(ref);
+    visiting.delete(owner); done.add(owner); ordered.push([owner, grouped.get(owner)!]);
+  };
+  for (const owner of grouped.keys()) visit(owner);
+  return ordered;
+}
 const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'SendMessage']);
 
 export interface ActorServicesOptions {
@@ -236,14 +250,16 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
-        const grouped = new Map<string, {prompts: string[]; files: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
+        const grouped = new Map<string, {prompts: string[]; files: Set<string>; after: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), after: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
-          group.prompts.push(task.prompt);
-          for (const file of task.files ?? []) group.files.add(file);
+          const brief = renderBrief(task);
+          group.prompts.push(brief ? task.prompt + '\n\n' + brief : task.prompt);
+          for (const file of [...task.owns ?? [], ...task.files ?? []]) group.files.add(file);
+          for (const ref of task.after ?? []) group.after.add(ref);
           grouped.set(task.ownerId, group);
         }
         if (resumeBatch) {
@@ -261,13 +277,16 @@ export class ActorServices {
           ...(recovery ? {recovery} : {})};
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
-        const handles = [...grouped].map(([owner, task]) => {
+        const dispatched = new Map<string, string>();
+        const handles = orderByDependency(grouped).map(([owner, task]) => {
+          const after = this.resolveAfter(owner, task.after, dispatched);
           const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
-            ...(task.files.size ? {ownedFiles: [...task.files]} : {})};
+            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(after.length ? {after} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
+          dispatched.set(owner, handle.activityId);
           return handle;
         });
         for (const activityId of resumed) this.continuedTasks.add(activityId);
@@ -330,6 +349,23 @@ export class ActorServices {
       const collab = await this.collaboration.execute(call, context);
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
     } catch (error) {return {text: error instanceof Error ? error.message : 'Actor operation failed', isError: true};}
+  }
+  /** Resolves `after` references (activity ids or actor ids) to unfinished activity ids; finished or unknown activity ids are dropped, unknown actors are rejected. */
+  private resolveAfter(owner: string, refs: ReadonlySet<string>, dispatched: ReadonlyMap<string, string>): string[] {
+    const activities = this.options.getSnapshot?.().activities.filter(activity => activity.sessionId === this.options.sessionId) ?? [];
+    const open = (status: string) => ['queued', 'running', 'waiting_input', 'paused'].includes(status);
+    const ids = new Set<string>();
+    for (const ref of refs) {
+      if (ref === owner) throw new Error('A task cannot run after itself: ' + ref);
+      const sameCall = dispatched.get(ref);
+      if (sameCall) {ids.add(sameCall); continue;}
+      const byId = activities.find(activity => activity.activityId === ref);
+      if (byId) {if (open(byId.status)) ids.add(byId.activityId); continue;}
+      if (!this.options.catalog.find(ref)) throw new Error('Unknown `after` reference (not an actor id or activity id): ' + ref);
+      const latest = activities.filter(activity => activity.ownerId === ref && open(activity.status)).at(-1);
+      if (latest) ids.add(latest.activityId);
+    }
+    return [...ids];
   }
   async grantExecution(context: ActorContext): Promise<void> {
     if (context.inputKind !== 'human' || !context.grantExecution) return;
