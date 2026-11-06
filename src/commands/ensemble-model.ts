@@ -68,7 +68,7 @@ const firstLine = (text: string) => (text.split(/\r?\n/).find(line => line.trim(
 export function toolsFor(actor: ActorDefinition, sources: EnsembleSources, names: ReadonlyMap<string, string>): EnsembleTool[] {
   const result: EnsembleTool[] = [];
   for (const tool of sources.tools(actor.id)) {
-    if (tool.definition.name.startsWith('_')) continue; // internal protocol tools (_FinishRound, _GitStatus) have no user-facing surface
+    // Every tool the actor receives is listed, protocol tools included: hiding a tool from the timeline is not hiding it from the catalog.
     const category = tool.metadata.category;
     result.push({name: tool.definition.name, folder: category === 'core' ? [] : category.split('/'),
       summary: firstLine(tool.metadata.description ?? tool.definition.description), description: tool.definition.description.trim(),

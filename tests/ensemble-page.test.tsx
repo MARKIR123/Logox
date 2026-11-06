@@ -109,7 +109,7 @@ test('model: roster order, merged persona with project overlay, per-actor tool a
     assert.ok(!names(kalon).includes('orchestration:Actor'), 'companions do not get the Director-only tool');
     assert.ok(names(kalon).includes('core:Read') && names(kalon).includes('coordination:SendMessage'));
     assert.ok(names(kalon).includes('mcp:playwright:browser_click'), 'MCP servers are folders');
-    assert.ok(!names(kalon).some(name => name.includes(':_')), 'internal protocol tools stay hidden');
+    assert.ok(names(kalon).includes('protocol:_FinishRound'), 'protocol tools are listed: timeline-hidden is not catalog-hidden');
     const read = kalon.tools.find(tool => tool.name === 'Read')!;
     assert.ok(read.params.some(param => param.name === 'file_path' && param.required));
     assert.deepEqual(kalon.skills.map(skill => skill.scope + '/' + skill.folder.join('/')), ['built-in/public', 'project/', 'user/kalon/design']);
