@@ -11,10 +11,10 @@ const layout: Record<string, string[]> = {
   input: ['editor.ts', 'fullscreen-editor.tsx', 'input-delivery.ts'],
   interactions: ['approval-view.ts', 'choice-style.ts', 'interaction-card.tsx', 'production-question.tsx', 'question-panel.tsx'],
   login: ['login.tsx', 'login-wizard.tsx'],
-  panels: ['command-result.tsx', 'permissions-editor.ts', 'picker.tsx', 'tabbed-page.tsx', 'toggle-list.tsx'],
+  panels: ['command-result.tsx', 'ensemble-layout.ts', 'ensemble-page.tsx', 'permissions-editor.ts', 'picker.tsx', 'settings-layout.ts', 'settings-page.tsx', 'tabbed-page.tsx', 'toggle-list.tsx'],
   previews: ['provider-wizard-preview.ts', 'question-preview.tsx', 'slash-preview.tsx'],
   status: ['actor-pills.tsx', 'notification-line.ts', 'statusbar-editor.tsx', 'statusbar.ts'],
-  terminal: ['clipboard.ts', 'metrics.ts', 'mouse.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
+  terminal: ['clipboard.ts', 'focus.ts', 'metrics.ts', 'mouse.ts', 'notify.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
   timeline: ['activity-card.tsx', 'actor-location.ts', 'group-row.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts', 'tool-card.ts', 'tool-code.ts',
     'scene.ts', 'selection.ts', 'stage.ts', 'thinking-groups.ts', 'tool-groups.ts', 'tool-ui.ts', 'viewport.ts'],
 };

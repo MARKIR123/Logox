@@ -39,7 +39,7 @@
 
 通常用交互命令即可：
 
-- `/settings`：主题、光标、动画和状态栏偏好（`/animations` 是旧别名）。
+- `/settings`：按分组列出外观、启动页和对话偏好，并可进入状态栏、权限、模型与价格、快捷键页面（`/animations` 是旧别名）。详见下文“设置页”。
 - `/config`：只读的生效配置，包括当前模型、思考档位、Base URL 和执行限制。
 - `/status`、`/usage`：运行状态与用量。
 
@@ -125,7 +125,7 @@ tool_discovery = "none" # 保守使用普通工具集
 
 在角色窗口里输入的普通内容交给当前角色。每个角色有独立的历史：**同一角色的任务串行，不同角色可以并发**。它们共享同一份项目文件，不是隔离的工作树。`/cast <task>` 把同一个任务同时交给三个内置角色。
 
-`/actors`（或 `/ensemble`）查看角色定义；`/model <actor>` 设置该角色的默认模型，未设置时继承会话模型。在角色窗口里输入 `/model` 也是设置该角色的默认值。角色定义与技能覆盖见[角色模块](modules/actors.md)，单任务的模型确认与转用见[任务模型](modules/task-models.md)。
+`/ensemble` 打开角色总览（见下节）；`/model <actor>` 设置该角色的默认模型，未设置时继承会话模型。在角色窗口里输入 `/model` 也是设置该角色的默认值。角色定义与技能覆盖见[角色模块](modules/actors.md)，单任务的模型确认与转用见[任务模型](modules/task-models.md)。
 
 ### 排队与插话
 
@@ -264,11 +264,51 @@ playwright = false
 
 修改 MCP 配置后需要重启 Logox，`/reload` 不会重启服务。
 
+## 设置页
+
+`/settings` 是一页数据驱动的列表：每一行来自 `src/config/settings-definitions.ts` 里的一条定义（标签、说明、分组、类型、可选值、默认值，以及保存和预览的方式）。右侧显示当前值：选项行是 `‹ 值 ›`，开关行是 `[✓]` / `[ ]`，文本行直接显示文字（空值显示 `(none)`）。选中行有一行说明，页面够高时说明可折成两行。
+
+| 分组 | 设置项 | 效果与保存位置 |
+|---|---|---|
+| Appearance | Theme | 主题；草稿阶段就实时预览，丢弃时还原。保存到 `~/.logox/ui-preferences.json` |
+| | Cursor | 光标形状（Block / Underline / Bar） |
+| | Animations | 动效开关，与 `statusbar.json` 里的 `motion` 是同一份 |
+| | Tool card tint | `none` / `subtle` / `standard`：展开卡片的底色强度，把三档嵌套深度的混色比例按 0 / 0.5 / 1 缩放 |
+| | Context bar、Context bar width | 上下文仪表开关与宽度（8 到 24 格，步长 4），与状态栏编辑器共用 `statusbar.json` |
+| Splash | Start page | 空会话是否显示带徽标的欢迎页；关闭后只显示普通欢迎文字 |
+| | Emblem size | `auto`（按空间取最大）/ `small 26`（不画 52 像素大徽标）/ `large 52`（尽量用大徽标，放不下时回退） |
+| | Tagline | `fixed`（A terminal coding ensemble）或 `rotate daily`（按本地日期从一份静态英文列表轮换，含 λόγος 一行） |
+| Conversation | Your name | 与 `/name` 同一份存储（`user-profile.json`），保存后时间线标签立即更新 |
+| | Thinking display | `folded`（一行，默认）/ `preview`（已完成的思考默认展开，只显示 3 行，其余在 `… N more lines` 后）/ `full`（默认完整展开）。进行中的思考始终折叠；点击单张卡片仍可单独折叠或展开 |
+| | Diff layout | `auto (by width)`（卡片宽度小于 72 列时用无行号的紧凑版）/ `unified`（带行号）/ `compact`（始终无行号） |
+| | Notify when done | `off` / `when unfocused` / `always`：一轮工作（从出现活动到没有活动）超过 30 秒后响铃，终端为 iTerm2、WezTerm、Ghostty 时发 OSC 9 通知。焦点来自终端的焦点上报（DECSET 1004）；终端不上报时一律视为失焦 |
+| | Enter key | `send`（默认：Enter 发送，Shift+Enter / Alt+Enter / Ctrl+J 换行）/ `newline`（Enter 换行，Ctrl+Enter 或 Ctrl+S 发送；Ctrl+Enter 只在能区分它的终端里可用，Ctrl+S 处处可用）。页脚提示随之变化 |
+| | Default thinking | 当前模型的思考档位，与 `/effort` 同一个保存路径，可选项随模型而定 |
+| | Default mode | 权限模式，与 `/permissions` 写同一个设置 |
+| Pages | Status bar、Permissions、Models & pricing、Shortcuts | 回车或单击打开子页面，Esc 返回，设置页上的草稿保持不变。Models & pricing 是只读表：每个已配置的供应商下列出模型的窗口、最大输出、每百万 token 价格，以及价格来源（`config` 是你自己写的 `prices`，否则是内置目录的匹配度 `exact` / `alias` / `normalized` / `inferred` 加目录名）；网关镜像其他厂商时用 `[catalogs.<provider>]` 声明，见[模型表](modules/model-table.md)。Shortcuts 是只读的按键分组表，暂不支持改键 |
+
+操作：↑↓（或 Tab）选择，←→ 改值，Space 翻转开关或前进一个选项，Enter 保存全部改动并关闭（通知行显示 `✓ Settings saved`；没有改动时 Enter 等同于关闭），`/` 搜索（按标签、说明和分组过滤，标题右侧显示 `匹配数/总数`，Enter 回到列表，Esc 清除过滤）。文本行按 Enter 进入编辑，再按 Enter 提交，Esc 放弃；页面行与文本行用 Ctrl+S 保存。标题 `Settings · N unsaved` 的 N 是与已保存值不同的行数（大于 0 时为警告色）。有未保存改动时按 Esc 会在页内询问 `Discard N unsaved changes?`，`y` 丢弃，`n` 或 Esc 继续编辑，两个选项都可以点击。
+
+保存失败（例如偏好文件损坏）时页面和草稿保留，错误写在页脚，同时以 `✗` 进入通知行；已经保存成功的行不会重复保存，修复原因后再按 Enter 即可重试。界面偏好用带锁的原子写入，不会覆盖损坏的文件。
+
 ## 状态栏
 
-`/statusbar` 打开状态栏编辑器，`/settings` 的 Statusbar 标签页是同一个入口。可以选择风格（Pipes：彩色字段加竖线和上下文仪表；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色和上下文仪表宽度，开关各模块并调整显示顺序。默认显示角色、模型、思考档位、权限、上下文仪表和缓存命中率，Git 与费用需要手动打开。
+### 角色总览 /ensemble
 
-页脚有两行：上面是状态行，下面是通知行。通知行平时显示弱化的按键提示；鼠标悬停在任一模块（含右侧的 Actor 胶囊）上时显示它的详情，例如上下文各类别的用量和压缩水位、模型窗口与价格；操作结果（保存、复制等）会以 ✓ / ▲ / ✗ 短暂占用这一行。点击模型、思考档位或权限模块分别打开 `/model`、`/effort`、`/permissions`。终端高度小于 8 行时只保留状态行。窄屏下按“角色 > 权限 > 上下文仪表 > 模型 > 缓存 > Git > 费用”的优先级整项取舍，不会出现被截断的半截文字。实时预览不写盘，Enter 保存，Esc 丢弃未保存的草稿。在 `/settings` 中应用当前标签页后页面保留，独立的 `/statusbar` 保存后会收起。
+每个角色（Logox、Kalon、Techne、Aletheia，不含 Automa）一个标签页，标签与页面边线使用该角色的颜色。`←` `→` / `Tab` 或点击标签切换角色。每页是一张可滚动的页面（`↑` `↓`、`PgUp` `PgDn`、滚轮）：
+
+- **参数**：模型（`<model> · <thinking>`，标明 `set for <Name>` 或 `follows session`；`m` 或点击打开 `/model <actor>`）、上下文（用真实窗口和水位写成一句话，例如 `keeps 0 rounds and 2 tool results · compacts at 84% (167k)`）、角色档案路径（项目层扩展用户层时标 `+ project` 并列出两处路径）。
+- **Tools · N / Skills · N**：以 `›` 结尾的两行，`Enter` 或点击进入子页，`Esc` 返回。
+- **This session**：仅当前会话的任务、工具调用、审批、Token 与费用。
+- **提示词**：Persona、Execution、Collaboration、Memory priorities 完整渲染为 Markdown，各带文件名；项目层角色档案存在时，Persona 显示合并后的生效内容并标 `+ project`。
+
+工具子页与 `src/tools` 目录同构：根层是该角色实际可用的核心工具（`名称  简述`），再是每个分类目录一行（`▸ coordination · 3`）和每个 MCP 服务一行（`▸ mcp:playwright · N`，工具清单在该服务首次被列出后才有）。`Enter` 进入目录（面包屑 `Tools › coordination`），再按 `Enter` 打开工具详情：模型实际看到的完整描述、参数表（名称、类型、必填、说明）以及角色、加载方式和可见性。技能子页按来源（Built-in / User / Project）和目录分组，详情页渲染技能文件并显示来源路径。
+
+`e` 用外部编辑器打开当前视野内的文件（提示词所在文件，或技能文件）：先 `$VISUAL`，再 `$EDITOR`，否则用系统默认打开方式（`start` / `open` / `xdg-open`）；编辑从不发生在界面内，终端内编辑器（如 vim）不适用。资源没有文件监听，保存后运行 `/reload` 才会生效。页脚提示 `←→ actor · ↑↓ scroll · Enter open · m model · e edit · Esc back` 可逐项点击，窄屏按重要性丢弃，子页里只显示适用的提示。
+
+`/statusbar` 打开状态栏编辑器，`/settings` 的 Pages 分组里的 Status bar 是同一个入口（Esc 回到设置页）。可以选择风格（Pipes：彩色字段加竖线和上下文仪表；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色和上下文仪表宽度，开关各模块并调整显示顺序。默认显示角色、模型、思考档位、权限、上下文仪表和缓存命中率，Git 与费用需要手动打开。
+
+页脚有两行：上面是状态行，下面是通知行。通知行平时显示弱化的按键提示；鼠标悬停在任一模块（含右侧的 Actor 胶囊）上时显示它的详情，例如上下文各类别的用量和压缩水位、模型窗口与价格；操作结果（保存、复制等）会以 ✓ / ▲ / ✗ 短暂占用这一行。点击模型、思考档位或权限模块分别打开 `/model`、`/effort`、`/permissions`。终端高度小于 8 行时只保留状态行。窄屏下按“角色 > 权限 > 上下文仪表 > 模型 > 缓存 > Git > 费用”的优先级整项取舍，不会出现被截断的半截文字。实时预览不写盘，Enter 保存，Esc 丢弃未保存的草稿。从 `/settings` 进入时，保存后停留在状态栏页，Esc 回到设置页；独立的 `/statusbar` 保存后会收起。
 
 先安装带 Nerd Font 字形的等宽字体并在终端中选用，推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)，也可以用任意 [Nerd Font](https://www.nerdfonts.com/font-downloads) 的 Mono 变体，例如 `JetBrainsMono NFM`。偏好保存在 `~/.logox/statusbar.json`，旧布局自动兼容。按键与布局细节见[终端操作](UI-SPEC.md)。
 
@@ -285,7 +325,7 @@ playwright = false
 | | `/setup` | 重新打开首次设置向导 |
 | | `/name [称呼 \| --reset]` | 查看、设置或清除 Logox 对你的称呼（最多 32 个显示单元，立即生效；时间线用户标题显示该称呼而不是 `You`，模型在环境信息中得知并用它称呼你） |
 | 配置 | `/config` | 只读查看生效配置 |
-| | `/settings`（旧别名 `/animations`） | 主题、光标、动画和状态栏 |
+| | `/settings`（旧别名 `/animations`） | 外观、启动页、对话偏好，以及状态栏、权限、模型与价格、快捷键页面 |
 | | `/statusbar` | 状态栏模块、顺序、风格和配色 |
 | 登录与模型 | `/login [provider]` | 登录、保存 API key、管理自定义接口 |
 | | `/model [provider/model]` | 选择模型；`/model <actor> [provider/model]` 设置角色默认模型 |
@@ -295,8 +335,7 @@ playwright = false
 | | `/providers <name> [model]` | 切换提供商 |
 | | `/providers check`、`/check-provider` | 发送真实请求检查当前提供商，可能计费 |
 | | `/providers logout <name>`（同 `unregister`） | 删除已保存的提供商 |
-| 角色 | `/actors`、`/ensemble` | 查看角色、职责、整理设置和默认模型 |
-| | `/actors model <actor>` | 设置角色默认模型 |
+| 角色 | `/ensemble` | 每个角色一个标签页：模型、上下文、工具、技能、本会话用量和提示词 |
 | | `/cast <task>` | 把同一任务交给三个内置角色 |
 | | `@actor <task>` | 交给指定角色 |
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |

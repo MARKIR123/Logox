@@ -50,7 +50,7 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 |---|---|
 | 发送：目标空闲时开始新一轮；目标运行中则排队，显示在输入框上方的待发送列表，本轮结束后作为下一轮送出 | Enter |
 | 输入框为空时立即发送最新一条待发送消息（Send now）；有草稿时补充给所选运行中任务（Steer），均不取消任务 | Ctrl+T |
-| 换行 | Shift+Enter、Alt+Enter 或 Ctrl+J |
+| 换行 | Shift+Enter、Alt+Enter 或 Ctrl+J（`/settings` 的 `Enter key` 设为 `newline` 后，Enter 也是换行，Ctrl+Enter 或 Ctrl+S 发送，页脚提示随之变化） |
 | 光标在输入内上下移动；到首行 / 末行后浏览更早 / 更近的输入（无命令候选时） | ↑ / ↓ |
 | 扩展选区 | Shift+方向键、Shift+Home/End；Ctrl+Shift+Home/End 选到草稿首尾 |
 | 全选、复制、剪切 | Ctrl+A、Ctrl+C、Ctrl+X |
@@ -172,11 +172,12 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 | 界面 | 单击 | 滚轮 | 悬停 |
 |---|---|---|---|
 | 选择器（`/model` `/resume` `/rewind`、登录列表） | 未聚焦的行先聚焦，再点同一行才确认；页签切换供应商；思考档位标记直接选择；页脚 `Tab Provider` / `Enter Confirm` / `Esc Back` / `Ctrl+X <删除>` 都是按钮；禁用行不响应 | 移动选中项（跳过禁用行） | 行、页签、档位标记 |
-| 标签页面（`/settings` `/config` `/usage` `/providers` …） | 页签栏（位置由布局推出，窄屏收成单标签时单击切到下一页）；开关行切换，枚举行前进，行尾 `‹` `›` 分别后退与前进；页脚按钮（`Enter Save` / `Apply tab`、`Esc Back` …） | 开关页移动选中行，普通页滚动三行 | 页签、行、`‹` `›`、页脚按钮 |
+| 标签页面（`/config` `/usage` `/providers` …） | 页签栏（位置由布局推出，窄屏收成单标签时单击切到下一页）；开关行切换，枚举行前进，行尾 `‹` `›` 分别后退与前进；页脚按钮（`Enter Save` / `Apply tab`、`Esc Back` …） | 开关页移动选中行，普通页滚动三行 | 页签、行、`‹` `›`、页脚按钮 |
 | `/permissions` | 点模式名选择（草稿），`unsaved` 标记保存；点规则行选中；选中规则尾部 `[Delete]` 后行内出现 `y / n`，可直接点 `y` 或 `n`；`+ Add rule` 打开表单，点字段聚焦，`‹` `›` 切换决策与范围，`[ Add ]` 提交，`[ Cancel ]` 取消 | 移动选中规则 | 每个可点单元（同一目标的单元一起高亮） |
 | `/providers` | 页脚 `[t] Test`、`[r] Refresh`、`[x] Logout`、`[←` 上一个、`→]` 下一个供应商；登出确认行与页脚的 `[y] Confirm` / `any other key Cancel` 可点 | 滚动 | 页脚按钮 |
 | `/statusbar` 编辑器 | 风格、配色、仪表宽度行的 `‹` `›` 与模块行（切换启用；行尾箭头调整顺序） | 移动选中行 | 行与 `‹` `›` |
 | 提问面板、审批卡 | 点选项即选择；审批卡点选项即作答（Deny 先打开说明） | 提问面板滚动正文 | 提问选项行 |
+| `/ensemble` | 标签行点角色；`Model` 行打开 `/model <actor>`；`Tools · N` / `Skills · N` 进入子页；子页的目录与条目行打开；面包屑各段返回对应层；页脚提示逐项可点 | 主页与详情每次三行，列表移动选中项 | 标签、行与页脚按钮（当前标签角色的颜色） |
 | 命令结果页 | 页脚 `Ctrl+C Copy all`、`Esc Back` | 每次三行 | 页脚按钮 |
 | 全屏编辑器 | 右上折叠、右下发送、正文定位与拖选 | 滚动草稿 | 折叠与发送按钮（窗口角色色） |
 
@@ -209,19 +210,44 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 
 模型和思考档位的切换直接反映在状态栏，不追加时间线回执；设置保存只在页脚短暂提示。局部错误留在当前表单，必要的全局错误保留摘要与可展开详情。
 
-`/settings` 包含 Settings 与 Statusbar 两个标签，用 Tab / Shift+Tab 或鼠标切换。Settings 标签的三项顺序固定：
+`/settings` 是数据驱动的分组列表（定义见 `src/config/settings-definitions.ts`，每项的行为见[用户手册](USAGE.md)“设置页”）。布局自上而下：
 
-| 项目 | 操作 |
-|---|---|
-| Theme preset | ←/→ 或 Space 切换，列出所有已加载主题 |
-| Cursor style | ←/→ 或 Space 切换（Block、Underline、Bar） |
-| UI animations and motion waves | ← 关闭，→ 开启，Space 翻转 |
+```text
+────────────────────────────────────────────────────────────────
+  Settings · 1 unsaved                                  / search
+  Appearance
+  ❯ Theme                                          ‹ logox-dark ›
+    Cursor                                            ‹ Block █ ›
+    Animations                                              [✓]
+    ……
+  Pages
+    Status bar                                                 ›
+  说明行（选中行的一句话，淡色斜体，页面够高时折成两行）
+  ↑↓ choose · ←→ change · Enter save · / search · Esc discard
+────────────────────────────────────────────────────────────────
+```
 
-↑↓ 移动焦点；Enter 只应用当前标签并留在页面，另一个标签的草稿不会丢；Esc 关闭并丢弃尚未应用的修改。保存中键盘与鼠标暂时锁定，失败时保留草稿与错误，可重试。`/animations` 是 `/settings` 的旧别名；`/statusbar` 直接打开同一个编辑器，Enter 保存后收起。
+- 分组标题 muted 加粗；选中行以窗口角色色的淡底（12% 混入背景）加 `❯` 标出，其余行没有底色。
+- 值靠右。选项和数值行是 `‹ 值 ›`，开关是 `[✓]` / `[ ]`，文本行是纯文字，页面行是 `›`。与已保存值不同的值用警告色。
+- 宽度分级：70 列及以上每个选项行都带 `‹ ›`，标题右侧显示 `/ search`；小于 70 列只有选中行带箭头，标题不再显示搜索入口；列表随选中行滚动，分组标题随首行回到视野。
+- 标题 `Settings · N unsaved`：N 是与已保存值不同的行数，大于 0 时为警告色。`/` 搜索时标题右侧变成 `/关键字▌  匹配数/总数`。
+- 页脚提示随选中行变化（选项行 `←→ change · Enter save`，页面行 `Enter open · Ctrl+S save`，文本行 `Enter edit · Ctrl+S save`，搜索时 `Enter done · Esc clear`），每一段都是按钮。
+- 有未保存改动时 Esc 在说明行位置询问 `Discard N unsaved changes?  y Discard · n Keep editing`，两个选项可点击；Enter 不会误丢弃。
+- 主题草稿实时预览，丢弃时还原；其余设置在保存时生效。保存失败时页面与草稿保留，错误显示在页脚并进入通知行；保存成功后页面关闭，通知行显示 `✓ Settings saved`。保存中键盘与鼠标暂时锁定。
+
+鼠标：单击行选中；单击 `‹` `›` 后退或前进；单击复选框翻转；单击文本值进入编辑；单击页面行打开子页面；滚轮移动选中行；页脚每个按钮、标题右侧的搜索入口、说明行的 `y` / `n` 都可点击；悬停以窗口角色色高亮行、箭头和按钮。点击区域与绘制来自同一份布局（`src/tui/panels/settings-layout.ts:settingsLayout`）。
+
+Pages 分组的四行分别打开状态栏编辑器、`/permissions` 页、只读的 Models & pricing 表和只读的 Shortcuts 表；Esc 回到设置页，设置页上的草稿保持不变。`/animations` 是 `/settings` 的旧别名；`/statusbar` 与 `/permissions` 仍可直接打开，保存后收起。
 
 `/config` 是只读的 Effective Configuration 页，显示当前生效的模型、思考档位、Base URL、Automa 和执行限制，不编辑配置。可编辑的偏好在 `/settings`，运行状态与用量在 `/status`。
 
 所有开关与单选、多选控件使用 `[ ]`（未选）和 `[■]`（已选）。聚焦行使用主题 `accent`，已选但未聚焦为白色，未选且未聚焦为灰色，禁用项为灰色。`❯` 只表示键盘焦点，移动焦点不会自动勾选多选项。
+
+## 角色总览（/ensemble）
+
+一个标签对应一个角色（Logox、Kalon、Techne、Aletheia，按名册顺序，其后是自定义角色），标签行显示字形加名称，窄屏时非当前标签只留字形。当前标签和页面上下两条边线都用该角色的颜色。每个标签页是一张连续滚动的页面：角色标题与描述，Parameters（Model、Context、Profile、以 `›` 结尾的 Tools · N 与 Skills · N），This session，然后是 Persona、Execution、Collaboration、Memory priorities 的完整 Markdown。主页上 `↑` `↓` 先在 Model / Tools / Skills 三行之间移动，到头后滚动页面。
+
+子页（Tools、Skills）第一行是面包屑，`Esc` 逐层返回：详情 → 目录 → 上级 → 主页 → 关闭。工具树与 `src/tools` 目录同构，MCP 服务各自成目录；技能树按 Built-in / User / Project 与文件夹分组。`e` 把当前视野内的文件交给外部编辑器，提示显示在通知行（全屏页面里占用页脚）；窄屏下页脚提示按重要性丢弃，不截断文字。实现见 `src/tui/panels/ensemble-layout.ts`，由同一份布局绘制并生成点击区域。
 
 ## 提问面板
 
@@ -287,7 +313,7 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 - 缓存：命中率为当前窗口 cached / (input + cached)，没有数据时该模块隐藏。
 - 权限模式变化会立刻刷新页脚。
 
-`/statusbar`（或 `/settings` 的 Statusbar 标签）编辑状态栏：
+`/statusbar`（或 `/settings` 的 Pages 分组里的 Status bar）编辑状态栏：
 
 | 项目 | 选项或操作 |
 |---|---|
@@ -310,10 +336,10 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 
 ## 主题与动效
 
-主题是数据文件。内置主题位于 `src/config/themes/*.json`，用户在 `~/.logox/themes/*.json` 新增文件或同名覆盖即可改色，具体步骤见[配色设置](COLORS.md)。在 `/settings` 的 `Theme preset` 选择主题，结果保存到 `~/.logox/ui-preferences.json`。
+主题是数据文件。内置主题位于 `src/config/themes/*.json`，用户在 `~/.logox/themes/*.json` 新增文件或同名覆盖即可改色，具体步骤见[配色设置](COLORS.md)。在 `/settings` 的 `Theme` 选择主题（草稿阶段就实时预览，丢弃时还原），结果保存到 `~/.logox/ui-preferences.json`。
 
 主题只管系统颜色（边线、高亮、描述、选区等），切换角色窗口不会变色，切换主题才会变。角色的身份色与卡片底色属于角色配置 `~/.logox/actors/<id>/config.yaml` 的 `color`、`card_closed`、`card_open`，不随主题切换；`config.toml` 的 `[theme]` 仍可做四色覆盖，见[配置示例](../config.example.toml)和[角色模块](modules/actors.md)。
 
-`/settings` 中的 `UI animations and motion waves` 控制动效；关闭后界面保持静态，任务状态不受影响。
+`/settings` 中的 `Animations` 控制动效；关闭后界面保持静态，任务状态不受影响。`Tool card tint` 控制展开卡片的底色强度（none 无底色，subtle 半强度，standard 默认），背景仍只表示“展开”。
 
 系统命令的结果与错误以独立的系统身份显示，不冒充助手回复。显示、保存和送入模型是三件不同的事，详见[系统历史](modules/system-history.md)。

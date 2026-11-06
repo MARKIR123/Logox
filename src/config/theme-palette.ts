@@ -66,6 +66,8 @@ export const defaultPalette: Readonly<ThemePalette> = Object.freeze(resolveTheme
 export const palette: ThemePalette = {...defaultPalette};
 let revision = 0;
 export function themeRevision(): number {return revision;}
+/** Marks every cached layout stale without changing a colour (presentation settings change how rows are built). */
+export function invalidateTheme(): void {revision++;}
 export function applyTheme(overrides?: ThemeOverrides): ThemePalette {
   // Resolve before mutating; invalid overlays cannot leave a half-applied palette.
   Object.assign(palette, resolveThemeColors(overrides));

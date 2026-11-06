@@ -18,6 +18,7 @@ import {inputKind} from '../../runtime/provenance.js';
 import {thinkingRequests} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
+import {uiSettings} from '../../config/ui-settings.js';
 import {userLabelRevision} from '../../config/user-profile.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
 import {groupToolMessages, type EditRun, type StageLine, type ToolGroup} from './tool-groups.js';
@@ -95,8 +96,18 @@ function messageProjection(snapshot: RuntimeSnapshot, sessionId: string, view: s
   if (!projection) {projection = projectMessages(snapshot, sessionId, view); views.set(key, projection);}
   return projection;
 }
+/** Rows of a finished thought shown by `Thinking display: preview` before the `… N more lines` expander. */
+const PREVIEW_THOUGHT_LINES = 3;
+const thinkingIds = new WeakMap<RuntimeSnapshot, ReadonlySet<string>>();
+/** True when `id` is a thought message; `Thinking display` preview and full open those cards by default. */
+function isThinkingId(snapshot: RuntimeSnapshot, id: string): boolean {
+  let ids = thinkingIds.get(snapshot);
+  if (!ids) {ids = new Set(snapshot.messages.filter(message => message.kind === 'thinking').map(message => message.id)); thinkingIds.set(snapshot, ids);}
+  return ids.has(id);
+}
 export function stageFoldOpen(snapshot: RuntimeSnapshot, id: string, folds: Readonly<Record<string, boolean>>): boolean {
-  return folds[id] ?? snapshot.interactions.some(request => request.status === 'pending' && (request.activityId === id || request.requestId === id));
+  return folds[id] ?? (snapshot.interactions.some(request => request.status === 'pending' && (request.activityId === id || request.requestId === id))
+    || uiSettings().thinkingDisplay !== 'folded' && isThinkingId(snapshot, id));
 }
 /** Uses the demo's row builder but reads only real messages and activities. */
 export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, view: string, width: number,
@@ -330,7 +341,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const live = requests.some(entry => entry.request.step.state === 'running');
     const totalMs = requests.reduce((sum, entry) => sum + stepElapsed(entry.request.step, now), 0);
     const tokens = requests.reduce((sum, entry) => sum + entry.request.tokens, 0);
-    const isOpen = open(id);
+    // A running thought stays folded unless the reader opened it; finished ones follow `Thinking display`.
+    const isOpen = live ? folds[id] ?? false : open(id);
+    const bodyCap = uiSettings().thinkingDisplay === 'preview' ? PREVIEW_THOUGHT_LINES : TOOL_BODY_LINES;
     const lead = isOpen ? '▾ ' : '▸ ';
     const duration = (ms: number) => { const total = Math.round(ms / 1000); return total < 60 ? total + 's' : Math.floor(total / 60) + 'm ' + String(total % 60).padStart(2, '0') + 's'; };
     const tokenText = tokens > 0 ? tokens.toLocaleString('en-US') + ' tokens' : '';
@@ -374,10 +387,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         }
         const expanded = open(expanderId(id));
         const total = rows.reduce((sum, row) => sum + row.weight, 0);
-        const collapsible = total > TOOL_BODY_LINES;
+        const collapsible = total > bodyCap;
         let used = 0, shown = 0;
         for (const row of rows) {
-          if (collapsible && !expanded && shown > 0 && used + row.weight > TOOL_BODY_LINES) break;
+          if (collapsible && !expanded && shown > 0 && used + row.weight > bodyCap) break;
           used += row.weight; shown++;
           if (row.blank) target.pushBlank(viewColor, inner);
           else if (row.prose !== undefined) target.pushProse(row.id, row.prose, viewColor, 'body', inner, undefined, palette.muted);

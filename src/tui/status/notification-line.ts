@@ -161,10 +161,11 @@ export function pillDetail(input: PillDetailInput): NoteSegment[] {
 }
 
 /** Context-aware key hints: the quiet default of row 2. */
-export function footerHints(input: {readonly own: boolean; readonly queued: number; readonly menu: boolean; readonly closing: boolean; readonly width: number}): string {
+export function footerHints(input: {readonly own: boolean; readonly queued: number; readonly menu: boolean; readonly closing: boolean; readonly width: number; readonly newlineEnter?: boolean}): string {
   if (input.closing) return 'Closing…';
   if (input.menu) return input.width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const back = input.own ? 'Esc back to Logox · ' : '';
+  if (input.newlineEnter) return back + (input.width < 40 ? 'Ctrl+S send' : 'Enter newline · Ctrl+S send · / commands');
   if (input.queued > 0) return back + 'Enter send · Ctrl+T send queued now · / commands';
   if (input.width < 40) return input.own ? 'Esc back · Enter send' : 'Enter send · / commands';
   return back + (input.own ? 'Enter send · / commands' : 'Enter send · Shift+Enter newline · @role dispatch · / commands');

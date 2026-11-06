@@ -15,6 +15,16 @@ export const EMBLEM_WORDMARK_PIXELS: readonly string[] = [".....................
 export const EMBLEM_WORDMARK = 'L   O   G   O   X';
 export const EMBLEM_TAGLINE = 'A terminal coding ensemble';
 export const EMBLEM_ETYMOLOGY = 'λόγος · reason, word, account';
+/** Taglines `Tagline: rotate daily` cycles through, one per calendar day; the first is the fixed default and the second is the etymology line. */
+export const TAGLINES: readonly string[] = [EMBLEM_TAGLINE, EMBLEM_ETYMOLOGY, 'Many hands, one conversation', 'Plan, build, review, repeat', 'Small steps, verified', 'Ask for the work, not the keystrokes'];
+/** The splash tagline: the fixed one, or the list entry for `date`'s local calendar day. */
+export function taglineFor(mode: 'fixed' | 'rotate', date: Date = new Date()): string {
+  if (mode === 'fixed') return EMBLEM_TAGLINE;
+  const day = Math.floor((Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())) / 86_400_000);
+  return TAGLINES[day % TAGLINES.length]!;
+}
+/** `Emblem size` in /settings: auto picks the largest layout that fits, small never draws the 52-pixel master, large prefers it. */
+export type EmblemSize = 'auto' | 'small' | 'large';
 
 export interface SplashSegment {readonly text: string; readonly color?: string; readonly bg?: string; readonly bold?: boolean; readonly italic?: boolean}
 export type SplashLine = readonly SplashSegment[];
@@ -111,11 +121,14 @@ const clip = (line: SplashLine, room: number): SplashLine => {
  * the draft beside plain text; the draft stacked above plain text; undefined when nothing fits, so the caller shows the plain welcome text.
  * Every line stays within `width`.
  */
-export function splashLines(input: {width: number; height: number; colors: SplashColors; title?: string | undefined; info: readonly string[]; version?: string | undefined}): SplashLine[] | undefined {
+export function splashLines(input: {width: number; height: number; colors: SplashColors; title?: string | undefined; info: readonly string[]; version?: string | undefined;
+  emblem?: EmblemSize | undefined; tagline?: string | undefined}): SplashLine[] | undefined {
   const {width, height, colors} = input;
   const tagColor = isHex(colors.blue) && isHex(colors.bone) ? mixHex(colors.bone, colors.blue, 0.55) : colors.bone;
-  const tagline: SplashLine = [{text: EMBLEM_TAGLINE, color: tagColor, bold: true}];
-  const etymology: SplashLine = [{text: EMBLEM_ETYMOLOGY, color: colors.muted, italic: true}];
+  const tagText = input.tagline ?? EMBLEM_TAGLINE;
+  const tagline: SplashLine = [{text: tagText, color: tagColor, bold: true}];
+  // The etymology line is the second line unless the tagline already is it.
+  const etymology: SplashLine = tagText === EMBLEM_ETYMOLOGY ? [{text: EMBLEM_TAGLINE, color: colors.muted, italic: true}] : [{text: EMBLEM_ETYMOLOGY, color: colors.muted, italic: true}];
   const pad = (cells: number): SplashSegment => ({text: ' '.repeat(Math.max(0, cells))});
   const centred = (line: SplashLine, span: number): SplashLine => [pad(MARGIN + Math.floor((span - stringWidth(lineText(line))) / 2)), ...line];
 
@@ -138,7 +151,11 @@ export function splashLines(input: {width: number; height: number; colors: Splas
     const full = [header, ...wordmarkLines(colors), [], ...infoBlock];
     return (full.length <= rows ? full : [header, ...wordmarkLines(colors), ...infoBlock]).slice(0, rows);
   };
-  if (width >= MARGIN + MASTER_WIDTH + BIG_GAP + WORD_WIDTH + 2 && height >= MASTER_ROWS + 4) return sideBySide(masterLines(colors), MASTER_WIDTH, bigRight(MASTER_ROWS));
+  if (input.emblem !== 'small' && width >= MARGIN + MASTER_WIDTH + BIG_GAP + WORD_WIDTH + 2 && height >= MASTER_ROWS + 4) return sideBySide(masterLines(colors), MASTER_WIDTH, bigRight(MASTER_ROWS));
+  // `large` takes the master beside the plain header and info when the wordmark would not fit next to it.
+  if (input.emblem === 'large' && width >= MARGIN + MASTER_WIDTH + BIG_GAP + 24 && height >= MASTER_ROWS + 4) {
+    return sideBySide(masterLines(colors), MASTER_WIDTH, [header, [], ...infoBlock]);
+  }
   if (width >= MARGIN + EMBLEM_WIDTH + BIG_GAP + WORD_WIDTH + 2 && height >= EMBLEM_ROWS + 4) return sideBySide(emblemLines(colors), EMBLEM_WIDTH, bigRight(EMBLEM_ROWS));
 
   const text: SplashLine[] = [

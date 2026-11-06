@@ -78,3 +78,10 @@ export function stageStatus(options: StageStatusOptions, ownerId: string): Stage
     ...(cost ? {cost: cost.amount, costCurrency: cost.currency, ...(cost.partial ? {costPartial: true} : {})} : {}),
     ...(git ? {git} : {}), session: sessionId, project: cwd};
 }
+/** Tokens and cost of one actor's window in this session (the /ensemble "This session" block). */
+export function actorUsage(options: StageStatusOptions, ownerId: string): {input: number; output: number; cost?: string} {
+  const records = options.contexts.meter({sessionId: options.sessionId, ownerId}).usageRecords();
+  const sum = totals(records), subscriptions = options.subscriptions?.() ?? new Set<string>();
+  const cost = costOf(records, options.config, provider => subscriptions.has(provider));
+  return {input: sum.input, output: sum.output, ...(cost ? {cost: (cost.partial ? '~' : '') + cost.currency + ' ' + cost.amount.toFixed(4)} : {})};
+}

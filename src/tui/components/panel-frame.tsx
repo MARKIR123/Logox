@@ -35,18 +35,22 @@ export function hitFooter(parts: readonly FooterPart[], pointer: Pointer | null)
   return parts.find(part => part.region !== undefined && inRegion(pointer, part.region));
 }
 /** Shared whitespace and fixed viewport; content components own their keyboard behavior. */
-export function PanelFrame({title, width, height, footer, children, docked = false, parts, hovered, hoverColor}: {
+export function PanelFrame({title, width, height, footer, children, docked = false, parts, hovered, hoverColor, header, bleed = false}: {
   title: string; width: number; height: number; footer: string; children: ReactNode; docked?: boolean;
   /** Footer split into clickable parts (already clipped); `hovered` takes `hoverColor`. */
   parts?: readonly FooterPart[]; hovered?: FooterPart | undefined; hoverColor?: string;
+  /** Replaces the title text with styled content (already clipped to the columns). */
+  header?: ReactNode;
+  /** The body draws its own side padding, so rows can carry a full-width background. */
+  bleed?: boolean;
 }) {
   const padding = panePadding(width), columns = Math.max(1, width - padding * 2);
   const bottomRule = !docked && height >= 4;
   const rule = <Box height={1} flexShrink={0}><Text color={palette.accent} wrap="truncate">{'─'.repeat(width)}</Text></Box>;
   return <Box width={width} height={height} flexShrink={0} overflow="hidden" flexDirection="column">
     {rule}
-    <Box height={1} flexShrink={0} paddingX={padding}><Text bold color={palette.accent} wrap="truncate">{clipLine(safeText(title), columns)}</Text></Box>
-    <Box height={Math.max(0, height - (bottomRule ? 4 : 3))} flexShrink={0} overflow="hidden" flexDirection="column" paddingX={padding}>{children}</Box>
+    <Box height={1} flexShrink={0} paddingX={padding}>{header ?? <Text bold color={palette.accent} wrap="truncate">{clipLine(safeText(title), columns)}</Text>}</Box>
+    <Box height={Math.max(0, height - (bottomRule ? 4 : 3))} flexShrink={0} overflow="hidden" flexDirection="column" paddingX={bleed ? 0 : padding}>{children}</Box>
     <Box height={1} flexShrink={0} paddingX={padding}><Text color={palette.muted} wrap="truncate">{parts
       ? parts.map((part, index) => <Text key={index} {...(part === hovered && hoverColor ? {color: hoverColor, bold: true} : {})}>{part.text}</Text>)
       : clipLine(footer, columns)}</Text></Box>

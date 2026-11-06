@@ -61,9 +61,8 @@ test('slash commands can be viewed, opened, and executed while tasks are activel
     // 3. Both editable settings and read-only config should open while busy
     await app.submit('/settings');
     surface = app.surfaces.getSnapshot();
-    assert.equal(surface?.kind, 'page');
+    assert.equal(surface?.kind, 'settings');
     assert.equal(surface.title, 'Settings');
-    assert.equal(surface.initialTab, 'settings');
     await app.submit('/config');
     surface = app.surfaces.getSnapshot();
     assert.equal(surface?.kind, 'page');

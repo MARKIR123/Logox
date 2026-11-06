@@ -1,4 +1,5 @@
 import {palette} from './theme.js';
+import {toolTintScale, uiSettings} from '../../config/ui-settings.js';
 
 function parseHex(hex: string): [number, number, number] {
   const value = Number.parseInt(hex.replace('#', ''), 16);
@@ -18,4 +19,6 @@ export const faintColor = (): string => mixHex(palette.muted, palette.bg, 0.6);
 /** Mix share of the owner color per nesting depth: depth 1 is a block on the surface, deeper blocks step up so a child stays distinguishable from its parent. */
 export const TINT_STEPS: readonly number[] = [0.06, 0.11, 0.16];
 /** Expanded-card tint: the owning actor color mixed into the background by nesting depth (1 = outermost open card); background color only ever means "expanded". */
-export const expandedTint = (ownerColor: string, depth = 1): string => mixHex(ownerColor, palette.bg, TINT_STEPS[Math.min(Math.max(1, depth), TINT_STEPS.length) - 1]!);
+/** `Tool card tint` in /settings scales the steps: none keeps the surface colour, subtle halves them, standard is the stock tint. */
+export const expandedTint = (ownerColor: string, depth = 1): string =>
+  mixHex(ownerColor, palette.bg, TINT_STEPS[Math.min(Math.max(1, depth), TINT_STEPS.length) - 1]! * toolTintScale[uiSettings().toolTint]);

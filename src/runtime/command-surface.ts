@@ -1,6 +1,7 @@
 import type {SystemPresentation} from './system-events.js';
 import type {StatusbarAppearance} from '../config/statusbar-preferences.js';
 import type {StageStatus} from './stage-status.js';
+import type {EnsembleData} from './ensemble-view.js';
 
 /** The command surface carries public data only; credentials and business callbacks never enter the snapshot. */
 export interface PickerItem {readonly id: string; readonly label: string; readonly description?: string | undefined; readonly disabled?: boolean | undefined; readonly deletable?: boolean | undefined; readonly color?: string | undefined; readonly effort?: string | undefined; readonly effortLevels?: readonly string[] | undefined; readonly group?: string | undefined}
@@ -38,10 +39,29 @@ export type CommandSurface = Partial<CommandOrigin> & (
       readonly items: readonly PickerItem[]; readonly current: string; readonly status: 'loading' | 'ready' | 'saving'; readonly error: string; readonly deleteLabel?: string; readonly emptyText?: string;
       readonly effort?: string; readonly effortLevels?: readonly string[]}
   | {readonly id: string; readonly kind: 'result'; readonly title: string; readonly text: string; readonly lines?: readonly ResultLine[]}
+  | {readonly id: string; readonly kind: 'settings'; readonly title: string; readonly items: readonly SettingsItem[]; readonly pages: readonly SettingsPageLink[];
+      readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage}
+  | {readonly id: string; readonly kind: 'ensemble'; readonly title: string; readonly data: EnsembleData}
   | {readonly id: string; readonly kind: 'page'; readonly title: string; readonly tabs: readonly CommandTab[]; readonly initialTab: string;
       readonly saving?: boolean; readonly error?: string;
       /** An action waiting for an inline yes/no on this page (for example entering creative mode). */
       readonly confirm?: {readonly tabId: string; readonly action: string; readonly prompt: string}});
+/** One row of the /settings page as the renderer sees it (public data only; hooks stay in the application). */
+export interface SettingsItem {
+  readonly key: string; readonly label: string; readonly description: string; readonly group: string;
+  readonly kind: 'boolean' | 'select' | 'number' | 'text';
+  readonly options: readonly string[]; readonly labels?: Readonly<Record<string, string>> | undefined;
+  readonly min?: number | undefined; readonly max?: number | undefined; readonly step?: number | undefined;
+  /** The saved value; the page keeps unsaved drafts itself. */
+  readonly value: string | number | boolean;
+}
+/** A row that opens a sub-page (Status bar, Permissions, Models & pricing, Shortcuts). */
+export interface SettingsPageLink {readonly id: string; readonly label: string; readonly description: string}
+/** A page opened from /settings; it draws over the settings page and Esc returns to it. */
+export interface SettingsSubPage {
+  readonly id: string; readonly title: string; readonly tabs: readonly CommandTab[]; readonly initialTab: string;
+  readonly saving?: boolean; readonly error?: string; readonly confirm?: {readonly tabId: string; readonly action: string; readonly prompt: string} | undefined;
+}
 export interface CommandResult {
   readonly message?: string;
   readonly presentation?: SystemPresentation;

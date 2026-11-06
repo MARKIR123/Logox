@@ -9,6 +9,8 @@ import {applyCommandSuggestion, commandSuggestions, completionQuery, type Comman
 import type {CommandSurfaces} from '../commands/surfaces.js';
 import {Picker} from './panels/picker.js';
 import {TabbedPage} from './panels/tabbed-page.js';
+import {SettingsPage} from './panels/settings-page.js';
+import {EnsemblePage} from './panels/ensemble-page.js';
 import {CommandResultPanel} from './panels/command-result.js';
 import {COMPOSER_EXPAND_LABEL, COMPOSER_EXPAND_PADDING, FullscreenEditor} from './input/fullscreen-editor.js';
 import type {LoginFlow} from '../providers/login.js';
@@ -46,7 +48,8 @@ import {ActivityCard} from './timeline/activity-card.js';
 import {InteractionCard} from './interactions/interaction-card.js';
 import {approvalModel, optionIndex, type ApprovalDecision} from './interactions/approval-view.js';
 import {ownerColor, ownerHeader, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
-import {splashLines} from './appearance/emblem.js';
+import {splashLines, taglineFor} from './appearance/emblem.js';
+import {uiSettings, uiSettingsRevision} from '../config/ui-settings.js';
 
 /** The package version for the splash; dist/src/tui/app.js sits three levels below package.json. */
 const APP_VERSION = (() => { try { return (createRequire(import.meta.url)('../../../package.json') as {version?: string}).version; } catch { return undefined; } })();
@@ -66,6 +69,7 @@ import {clipLine} from './terminal/text.js';
 import {extractSelection, timelineRows, viewport, normalizeSelection, type Anchor, type Row} from './timeline/viewport.js';
 import {osc52Clipboard} from './terminal/clipboard.js';
 import {parseSgrMouse, type SgrMouseEvent} from './terminal/mouse.js';
+import {consumeFocusReports, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON} from './terminal/focus.js';
 
 import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
 import {decorateRow, presentedSegments, railCell} from './timeline/row-presentation.js';
@@ -120,7 +124,7 @@ const noLoginSnapshot = () => null;
 export function App({store, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, getQueuedCount, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
-  const themeVersion = themeRevision() * 1000 + userLabelRevision();
+  const themeVersion = themeRevision() * 1000 + userLabelRevision() + uiSettingsRevision() * 1e9;
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
     if (!definitions) return cast;
@@ -492,7 +496,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const noteNotice: Notice | undefined = notice && !noticeInline ? {text: notice, tone: noticeTone} : undefined;
   const hoverDetail = hoveredPill ? pillHoverDetail() : hoveredWidget && footerStatus ? widgetDetail(hoveredWidget, footerStatus, windowColor, width) : undefined;
   const footerNote = footerHeight > 1 ? notificationSegments({notice: noteNotice, detail: hoverDetail,
-    hints: footerHints({own, queued: queuedHere, menu: Boolean(menuHeight), closing, width})}, width) : [];
+    hints: footerHints({own, queued: queuedHere, menu: Boolean(menuHeight), closing, width, newlineEnter: uiSettings().enterKey === 'newline'})}, width) : [];
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -527,9 +531,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       ? Math.max(0, Math.floor((screenRows - fixedHeight - activityHeight) * 0.6)) : 0;
   const timelineHeight = Math.max(0, screenRows - fixedHeight - activityHeight - questionHeight);
   const splash = useMemo(() => {
-    if (!welcome) return undefined;
+    // `Start page` off keeps the plain welcome text.
+    if (!welcome || !uiSettings().startPage) return undefined;
     const lines = safeText(welcome.text).replace(/\t/g, '  ').split('\n');
     return splashLines({width, height: timelineHeight, title: welcome.systemTitle, info: lines, version: APP_VERSION,
+      emblem: uiSettings().emblem, tagline: taglineFor(uiSettings().tagline),
       colors: {blue: roles.logox?.color ?? palette.accent, bone: palette.fg, title: palette.accent, muted: palette.muted}});
   }, [welcome, width, timelineHeight, roles, themeVersion]);
   const view = viewport(messageRows, timelineHeight, anchor);
@@ -607,7 +613,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   }, [snapshot.activities, snapshot.messages, stopping]);
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
-    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
+    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
     if (plane) plane.present({
       ...current,
       width,
@@ -621,7 +627,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
-    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'result' || welcome) plane.hide();
+    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'result' || welcome) plane.hide();
     else plane.present({
       ...view,
       width,
@@ -1042,7 +1048,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   useEffect(() => {
     if (!stdin) return;
-    stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2 q');
+    stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2 q' + FOCUS_REPORTING_ON);
     const originalRead = stdin.read.bind(stdin);
     let carry = '';
     stdin.read = ((size?: number) => {
@@ -1058,13 +1064,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         }
         const tail = /\x1b\[<[\d;]*$/.exec(text);
         carry = tail ? tail[0] : '';
+        // Focus reports (`ESC [ I` / `ESC [ O`) update the terminal focus state and never reach the key parser.
+        if (text.includes('\x1b[I') || text.includes('\x1b[O')) {
+          const cleaned = consumeFocusReports(typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+          return (cleaned === '' ? null : typeof chunk === 'string' ? cleaned : Buffer.from(cleaned)) as typeof chunk;
+        }
       }
       return chunk;
     }) as typeof stdin.read;
     return () => {
       if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
       stdin.read = originalRead;
-      stdout?.write('\x1b[0 q\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l');
+      stdout?.write('\x1b[0 q\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l' + FOCUS_REPORTING_OFF);
     };
   }, [stdin, stdout]);
 
@@ -1383,10 +1394,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       changeResponse(current => reduceResponse(questionPanel, current, {kind: 'select', index: current.selected}));
       return;
     }
+    // `Enter key: newline` (settings): Enter inserts a newline in the composer; Ctrl+Enter (terminals that report it) or Ctrl+S sends.
+    const newlineMode = uiSettings().enterKey === 'newline' && stage && !demoScene && focus === 'input' && !editingCustom;
+    if (newlineMode && key.ctrl && input === 's') {if (draft.text.trim()) sendSceneInput(); return;}
     if (key.ctrl && input === 'j') { edit(current => insert(current, '\n')); return; }
     if (key.return) {
       if (focus === 'stop') {stopActor(focusedStop); setFocus('input'); return;}
       if (key.shift || key.meta) { edit(current => insert(current, '\n')); return; }
+      if (newlineMode) {
+        if (!key.ctrl) edit(current => insert(current, '\n'));
+        else if (draft.text.trim()) sendSceneInput();
+        return;
+      }
       if (demoScene && key.ctrl) {
         const match = /^main-(aletheia|techne|kalon)$/.exec(foldableDemoIds[cardCursor]!);
         if (match) switchView(match[1] as ActorId);
@@ -1449,6 +1468,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} width={width} height={screenRows}
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
   </MouseHost>;
+  if (surface?.kind === 'settings' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><SettingsPage key={surface.id} items={surface.items} pages={surface.pages}
+    width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} sub={surface.sub}
+    onSave={changes => {void surfaces.saveSettings(surface.id, changes);}} onPreview={(key, value) => surfaces.previewSetting(surface.id, key, value)}
+    onDiscard={() => surfaces.cancel()} onOpenPage={id => surfaces.openSettingsPage(surface.id, id)} onCloseSub={() => surfaces.closeSettingsPage(surface.id)}
+    onSubSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
+    onSubAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseHost>;
+  if (surface?.kind === 'ensemble' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><EnsemblePage key={surface.id} data={surface.data} width={width} height={screenRows} notice={notice}
+    onClose={() => surfaces.cancel()} onModel={actorId => {void surfaces.ensembleModel(surface.id, actorId).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));}}
+    onNotice={text => flash(text, 3500, 'info')}
+    onEdit={path => {void surfaces.ensembleEdit(surface.id, path).then(result => flash(result.message, 5000, result.ok ? 'success' : 'error'));}}/></MouseHost>;
   if (surface?.kind === 'page' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
     saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}

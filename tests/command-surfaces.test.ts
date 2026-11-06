@@ -76,10 +76,11 @@ test('页签命令和提供商选择不触发模型、不进账本；确认才�
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: {respond: async () => {calls++; throw new Error('不该调用模型');}}});
   try {
     const before = app.store.getSnapshot().messages.filter(isTimelineMessage).length;
-    for (const [command, tab] of [['/status', 'status'], ['/config', 'config'], ['/settings', 'settings']]) {
+    for (const [command, tab] of [['/status', 'status'], ['/config', 'config']]) {
       await app.submit(command!); const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page'); assert.equal(page.initialTab, tab);
       app.surfaces.cancel();
     }
+    await app.submit('/settings'); assert.equal(app.surfaces.getSnapshot()?.kind, 'settings'); app.surfaces.cancel();
     await app.submit('/help');
     const help = app.surfaces.getSnapshot(); assert.ok(help?.kind === 'result');
     assert.match(help.text, /\/model/);

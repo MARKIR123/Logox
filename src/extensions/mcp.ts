@@ -67,6 +67,13 @@ export class Mcp {
     return this.clients.size ? [{name: 'mcp', description: 'Call MCP tools. First list a server, then call a listed tool with arguments matching its full schema. Calls require permission. Browser interactions and screenshots use the local playwright server; returned images are delivered directly to your visual input. Servers: ' +
       Object.keys(this.servers).filter(name => this.clients.has(name)).join(', '), parameters: z.toJSONSchema(mcpParametersSchema)}] : [];
   }
+  /** Enabled servers with the tool catalogs fetched so far (a server is listed on first use); read-only, for /ensemble. */
+  folders() {
+    return Object.keys(this.servers).filter(name => this.clients.has(name)).map(server => {
+      const tools = this.catalogs.get(server);
+      return {server, listed: tools !== undefined, tools: (tools ?? []).map(tool => ({name: tool.name, description: tool.description ?? '', inputSchema: tool.inputSchema as Record<string, unknown>}))};
+    });
+  }
   status() {
     return Object.keys(this.servers).filter(name => this.clients.has(name)).map(name => ({name, state: this.clients.get(name)!.status()}));
   }

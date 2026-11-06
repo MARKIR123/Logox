@@ -26,12 +26,12 @@ test('fresh projects without a main model can open all tabs and retain user acto
         for (const command of ['/ensemble', '/status', '/providers', '/config', '/usage', '/permissions', '/commands']) {
           await app.submit(command);
           const page = app.surfaces.getSnapshot();
-          assert.equal(page?.kind, command === '/commands' ? 'result' : 'page', command);
+          assert.equal(page?.kind, command === '/commands' ? 'result' : command === '/ensemble' ? 'ensemble' : 'page', command);
           app.surfaces.cancel();
         }
         await app.submit('/ensemble');
-        const ensemblePage = app.surfaces.getSnapshot(); assert.ok(ensemblePage?.kind === 'page');
-        assert.ok(ensemblePage.tabs.find(tab => tab.id === 'actors')?.lines.join('\n').includes('dedicated-builder'));
+        const ensemblePage = app.surfaces.getSnapshot(); assert.ok(ensemblePage?.kind === 'ensemble');
+        assert.ok(ensemblePage.data.actors.some(actor => actor.model.text.includes('dedicated-builder')));
         app.surfaces.cancel();
         for (const [id, selected] of Object.entries(bindings)) assert.deepEqual(app.actors.find(id)?.defaultModel, selected);
       } finally {await app.close();}

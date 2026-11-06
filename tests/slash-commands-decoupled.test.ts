@@ -11,10 +11,6 @@ function mockContext(): ApplicationCommandContext {
   return {
     session: 'session-1',
     pageOwner: 'logox',
-    currentTheme: 'mist-dark',
-    themeOptions: ['mist-dark', 'logox-dark'],
-    currentCursor: 'Block █',
-    motion: true,
     permissions: {
       mode: 'default',
       description: 'Standard approval',
@@ -30,30 +26,16 @@ function mockContext(): ApplicationCommandContext {
     statusLines: ['Status line 1'],
     usageLines: ['Usage line 1'],
     providersLines: ['Provider line 1'],
-    actorsLines: ['Actor line 1'],
     commandsLines: ['Command line 1'],
   };
 }
 
-test('createCommandTabsFor exposes appearance and the shared statusbar editor from /settings', () => {
-  const result = createCommandTabsFor('/settings', mockContext())!;
-  assert.equal(result.title, 'Settings');
-  assert.equal(result.initialTab, 'settings');
-  assert.deepEqual(result.tabs.map(tab => tab.id), ['settings', 'statusbar']);
-  assert.deepEqual(result.tabs[1], createCommandTabsFor('/statusbar', mockContext())!.tabs[0]);
-  assert.deepEqual(createCommandTabsFor('/animations', mockContext()), result, 'Animations remains a settings alias');
-  assert.equal(result.tabs[0]!.id, 'settings');
-  assert.deepEqual(result.tabs[0]!.lines, [], 'Visual settings never include effective configuration output');
-  const toggles = result.tabs[0]!.toggles!;
-  assert.equal(toggles.length, 3);
-  assert.equal(toggles[0]!.id, 'theme');
-  assert.equal(toggles[0]!.value, 'mist-dark');
-  assert.ok(toggles[0]!.options?.includes('logox-dark'));
-  assert.equal(toggles[1]!.id, 'cursor');
-  assert.equal(toggles[1]!.value, 'Block █');
-  assert.ok(toggles[1]!.options?.includes('Underline _'));
-  assert.equal(toggles[2]!.id, 'motion');
-  assert.equal(toggles[2]!.enabled, true);
+test('/settings is its own surface: tab pages no longer build it, /statusbar keeps the shared editor', () => {
+  assert.equal(createCommandTabsFor('/settings', mockContext()), null, 'settings opens CommandSurfaces.openSettings, not a tabbed page');
+  assert.equal(createCommandTabsFor('/animations', mockContext()), null);
+  const statusbar = createCommandTabsFor('/statusbar', mockContext())!;
+  assert.equal(statusbar.initialTab, 'statusbar');
+  assert.deepEqual(statusbar.tabs.map(tab => tab.id), ['statusbar']);
 });
 
 test('createCommandTabsFor exposes only read-only effective configuration from /config', () => {

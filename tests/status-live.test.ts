@@ -143,11 +143,11 @@ test('a failed theme/cursor save is reported instead of swallowed', async () => 
     // A directory where the preference file belongs makes the write fail.
     await mkdir(join(root, 'home', '.logox', 'ui-preferences.json'), {recursive: true});
     await app.submit('/settings');
-    const open = page(app);
-    const settings = open.tabs.find(tab => tab.id === 'settings')!;
-    await app.surfaces.saveToggles(open.id, 'settings', settings.toggles!);
+    const open = app.surfaces.getSnapshot();
+    assert.ok(open?.kind === 'settings');
+    await app.surfaces.saveSettings(open.id, {cursor: 'Underline _'});
     const receipt = app.store.getSnapshot().messages.filter(message => message.role === 'system').at(-1)!;
-    assert.match(receipt.text, /could not be saved/);
+    assert.match(receipt.text, /Cursor was not saved/);
     assert.equal(receipt.systemEventKind, 'command_error');
   } finally {app.surfaces.cancel(); await app.close(); await rm(root, {recursive: true, force: true});}
 });

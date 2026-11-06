@@ -1,16 +1,11 @@
-import type {CommandTab, CommandToggle, CommandResult, TabLine, PermissionsPageData} from './runtime/command-surface.js';
+import type {CommandTab, CommandToggle, TabLine, PermissionsPageData} from './runtime/command-surface.js';
 import {row, tabContent} from './commands/tab-rows.js';
-import {applyThemePreset, applyCursorStyle, type CursorStyleName} from './config/theme-presets.js';
 import type {StatusbarAppearance} from './config/statusbar-preferences.js';
 import type {StageStatus} from './runtime/stage-status.js';
 
 export interface ApplicationCommandContext {
   readonly session: string;
   readonly pageOwner: string;
-  readonly currentTheme: string;
-  readonly themeOptions: readonly string[];
-  readonly currentCursor: CursorStyleName;
-  readonly motion: boolean;
   readonly permissions: {
     readonly mode: string;
     readonly description: string;
@@ -28,10 +23,10 @@ export interface ApplicationCommandContext {
   readonly configLines?: readonly TabLine[] | undefined;
   readonly usageLines: readonly TabLine[];
   readonly providersLines: readonly TabLine[];
-  readonly actorsLines: readonly TabLine[];
   readonly commandsLines: readonly TabLine[];
 }
 
+/** Tabbed command pages. `/settings` is its own surface (`CommandSurfaces.openSettings`) and opens the statusbar and permissions pages from here. */
 export function createCommandTabsFor(
   command: string,
   context: ApplicationCommandContext
@@ -48,41 +43,6 @@ export function createCommandTabsFor(
       title: 'Effective Configuration',
       tabs: [{id: 'config', title: 'Config', ...tabContent(context.configLines ?? [])}],
       initialTab: 'config',
-    };
-  }
-
-  if (normalized === '/settings' || normalized === '/animations') {
-    const toggles: CommandToggle[] = [
-      {
-        id: 'theme',
-        label: 'Theme preset',
-        value: context.currentTheme,
-        options: [...context.themeOptions],
-        enabled: true,
-      },
-      {
-        id: 'cursor',
-        label: 'Cursor style',
-        value: context.currentCursor,
-        options: ['Block █', 'Underline _', 'Bar |'],
-        enabled: true,
-      },
-      {
-        id: 'motion',
-        label: 'UI animations and motion waves',
-        enabled: context.motion,
-      },
-    ];
-
-    return {
-      title: 'Settings',
-      tabs: [{
-        id: 'settings',
-        title: 'Settings',
-        lines: [],
-        toggles,
-      }, statusbarTab],
-      initialTab: 'settings',
     };
   }
 
@@ -157,46 +117,5 @@ export function createCommandTabsFor(
     };
   }
 
-  if (normalized === '/actors' || normalized === '/ensemble') {
-    return {
-      title: 'Actor Ensemble',
-      tabs: [{
-        id: 'actors',
-        title: 'Actors',
-        ...tabContent(context.actorsLines),
-      }],
-      initialTab: 'actors',
-    };
-  }
-
   return null;
-}
-
-export async function saveConfigToggles(
-  items: readonly CommandToggle[],
-  options: {
-    saveMotion(enabled: boolean): Promise<void>;
-    stdout?: {write(data: string): void};
-    onThemeChange?(themeName: string): Promise<void> | void;
-    onCursorChange?(cursorName: string): Promise<void> | void;
-  }
-): Promise<CommandResult> {
-  const themeItem = items.find(it => it.id === 'theme');
-  if (themeItem?.value) {
-    applyThemePreset(themeItem.value);
-    options.onThemeChange?.(themeItem.value);
-  }
-
-  const cursorItem = items.find(it => it.id === 'cursor');
-  if (cursorItem?.value) {
-    applyCursorStyle(cursorItem.value as CursorStyleName, options.stdout as any);
-    options.onCursorChange?.(cursorItem.value);
-  }
-
-  const motionItem = items.find(it => it.id === 'motion');
-  if (motionItem) {
-    await options.saveMotion(motionItem.enabled);
-  }
-
-  return {message: 'Settings saved.', presentation: 'status'};
 }

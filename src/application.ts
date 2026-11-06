@@ -4,8 +4,8 @@ import type {ExtensionApproval} from './extensions/mcp.js';
 import {ProjectExtensions, observeTasks, observeExtra} from './extensions/runtime.js';
 import {createHash, randomUUID} from 'node:crypto';
 import {homedir} from 'node:os';
-import {CommandSurfaces} from './commands/surfaces.js';
-import type {CommandTab, PickerItem} from './runtime/command-surface.js';
+import {CommandSurfaces, type PageActions} from './commands/surfaces.js';
+import type {CommandTab, PickerItem, SettingsItem} from './runtime/command-surface.js';
 import {commandHelp, type CommandContext} from './commands.js';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -17,9 +17,15 @@ import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
+import {UiPreferences, uiSettings} from './config/ui-settings.js';
+import {RoundNotifier} from './tui/terminal/notify.js';
+import {terminalFocus} from './tui/terminal/focus.js';
+import {settingDefinition, settingDefinitions, settingOptions, settingsPages, saveSettings, type SettingsEnv} from './config/settings-definitions.js';
+import {modelsRows} from './commands/models-page.js';
+import {shortcutRows} from './commands/shortcuts.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from './config/model-grouping.js';
 import {UsageLedger, usageRows} from './context/usage.js';
-import {row, rowText} from './commands/tab-rows.js';
+import {row, rowText, tabContent} from './commands/tab-rows.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
 import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
@@ -56,7 +62,9 @@ import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
 import {StatusbarPreferences} from './config/statusbar-preferences.js';
-import {stageStatus} from './application-status.js';
+import {actorUsage, stageStatus} from './application-status.js';
+import {buildEnsemble} from './commands/ensemble-model.js';
+import {openInEditor} from './commands/editor.js';
 import {sessionLanguage} from './context/language.js';
 import {EnvironmentState, environmentVersion, formatEnvironment} from './context/environment.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from './runtime/context-updates.js';
@@ -68,7 +76,7 @@ import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/
 import {applyTheme, palette} from './tui/appearance/theme.js';
 import type {ResultLine, TabLine} from './runtime/command-surface.js';
 import {GitStatusSource} from './extensions/git-status.js';
-import {createCommandTabsFor, saveConfigToggles, type ApplicationCommandContext} from './application-commands.js';
+import {createCommandTabsFor, type ApplicationCommandContext} from './application-commands.js';
 import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, listThemes, loadThemePresets, resolveTheme, type CursorStyleName} from './config/theme-presets.js';
 
 export interface ApplicationOptions {
@@ -528,16 +536,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       });
   };
   let pageOwner = 'logox';
-  let currentThemeName = DEFAULT_THEME;
-  let currentCursorName: CursorStyleName = 'Block █';
   let activeCommandPage = '';
   // Themes are data: shipped JSON plus any `~/.logox/themes/*.json` overlay.
   loadThemePresets(homeDir);
-  const uiPref = new StateFile(join(homeDir, '.logox', 'ui-preferences.json'), z.object({
-    version: z.number().default(1),
-    theme: z.string().default(DEFAULT_THEME),
-    cursor: z.string().default('Block █'),
-  }));
+  const ui = new UiPreferences(homeDir);
   // A `[theme]` table that differs from stock wins over the default theme file;
   // an untouched table lets the shipped default take over.
   const stockTheme = themeSchema.parse({});
@@ -545,18 +547,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     ? config.theme.user !== stockTheme.user || config.theme.accent !== stockTheme.accent
       || config.theme.dream_collapsed !== stockTheme.dream_collapsed || config.theme.dream_expanded !== stockTheme.dream_expanded
     : false;
-  void uiPref.read().then((saved: {theme?: string; cursor?: string} | undefined) => {
-    if (saved?.theme) {
-      // Older preferences stored display names; persist back the file ID.
-      currentThemeName = resolveTheme(saved.theme)?.name ?? DEFAULT_THEME;
-      applyThemePreset(currentThemeName);
-    } else if (!themeCustomizedInToml) {
-      applyThemePreset(currentThemeName);
-    }
-    if (saved?.cursor) {
-      currentCursorName = saved.cursor as CursorStyleName;
-      applyCursorStyle(currentCursorName, process.stdout);
-    }
+  void ui.load().then(saved => {
+    if (ui.saved) {
+      // Older preferences stored display names; resolve to the file ID.
+      applyThemePreset(resolveTheme(saved.theme)?.name ?? DEFAULT_THEME);
+      applyCursorStyle(saved.cursor as CursorStyleName, process.stdout);
+    } else if (!themeCustomizedInToml) applyThemePreset(DEFAULT_THEME);
   }).catch(() => {});
   const contextRows = (): TabLine[] => {
     const identity = {sessionId: session, ownerId: pageOwner};
@@ -629,10 +625,6 @@ export async function createSessionApplication(options: SessionApplicationOption
   const buildAppCommandContext = (): ApplicationCommandContext => ({
     session,
     pageOwner,
-    currentTheme: currentThemeName,
-    themeOptions: listThemes().map(theme => theme.name),
-    currentCursor: currentCursorName,
-    motion: statusbar.getSnapshot().motion,
     permissions: {
       mode: permissions.mode,
       description: permissionModes[permissions.mode].description,
@@ -708,21 +700,192 @@ export async function createSessionApplication(options: SessionApplicationOption
       ...usageRows(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
     ],
     providersLines: providersTabRows(),
-    actorsLines: actorServices.management.tab().rows ?? actorServices.management.tab().lines,
     commandsLines: [...commandHelp().split('\n').map(line => row.text(line)), ...resources.snapshot().commands.map(item => row.text('/' + item.name + ': ' + item.description))],
   });
 
+  /** Save and action handlers of the tabbed pages; /settings reuses them for the sub-pages it opens. */
+  const pageActions = (closeOnSave: boolean): PageActions => ({
+    closeOnSave,
+    onSaveToggles: async (tabId, items, appearance) => {
+      if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
+      await statusbar.save(items.map(({id, enabled}) => ({id, enabled})), appearance);
+      refreshCurrentPage();
+      return {message: 'Statusbar layout saved.', presentation: 'status'};
+    },
+    onTabAction: async (tabId, action) => {
+      if (action === 'cancel_confirm') return {message: 'Cancelled.', presentation: 'status'};
+      if (tabId === 'permissions' && action.startsWith('set_mode:')) {
+        // The page edits a draft; only Enter reaches here, and this is the single place the mode is saved.
+        const nextMode = permissionModeSchema.parse(action.slice('set_mode:'.length));
+        await permissions.setMode(nextMode);
+        return {message: 'Permission mode set to ' + nextMode, presentation: 'status', close: true};
+      }
+      if (tabId === 'permissions' && action.startsWith('delete_rule:')) {
+        await permissions.revoke(action.slice('delete_rule:'.length));
+        return {message: 'Permission rule deleted', presentation: 'status'};
+      }
+      if (tabId === 'permissions' && action.startsWith('add_rule:')) {
+        const input = z.strictObject({scope: permissionScopeSchema, decision: permissionDecisionSchema, tool: z.string(), pattern: z.string()}).parse(JSON.parse(action.slice('add_rule:'.length)));
+        const checked = validateRuleInput(input, permissions.userScopeAvailable);
+        if (!checked.ok) throw new Error(checked.error);
+        await permissions.add(checked.rule);
+        return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
+      }
+      if (tabId === 'providers') {
+        const names = registry.names();
+        if (action === 'next_provider' && names.length > 0) {
+          viewingProviderIndex = (viewingProviderIndex + 1) % names.length;
+          refreshCurrentPage();
+          return {};
+        }
+        if (action === 'prev_provider' && names.length > 0) {
+          viewingProviderIndex = (viewingProviderIndex - 1 + names.length) % names.length;
+          refreshCurrentPage();
+          return {};
+        }
+        const current = names[viewingProviderIndex];
+        if (!current) return {};
+        if (action === 'test') {
+          providerStatuses.set(current, 'Testing connection...');
+          refreshCurrentPage();
+          const start = Date.now();
+          try {
+            const candidate = registry.candidate(current);
+            await candidate.check(commands.signal);
+            const elapsed = Date.now() - start;
+            providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
+            refreshCurrentPage();
+            return {message: "Provider '" + current + "' connected (" + elapsed + "ms)", presentation: 'status'};
+          } catch (error) {
+            providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
+            refreshCurrentPage();
+            return {message: "Provider '" + current + "' connection failed", kind: 'command_error', presentation: 'status'};
+          }
+        }
+        if (action === 'refresh') {
+          providerStatuses.set(current, 'Refreshing models...');
+          refreshCurrentPage();
+          try {
+            const pool = await modelPool.syncProvider(current, commands.signal);
+            const count = pool.filter(m => m.provider === current).length;
+            providerStatuses.set(current, '● Connected (' + count + ' models synced)');
+            refreshCurrentPage();
+            return {message: "Refreshed " + count + " models from '" + current + "'", presentation: 'status'};
+          } catch (error) {
+            providerStatuses.set(current, '○ Sync failed');
+            refreshCurrentPage();
+            return {message: "Failed to refresh models from '" + current + "'", kind: 'command_error', presentation: 'status'};
+          }
+        }
+        if (action === 'logout') {
+          if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
+          return {confirm: {action: 'confirm_logout', prompt: "Log out of provider '" + current + "' and remove its credentials?"}};
+        }
+        if (action === 'confirm_logout') {
+          if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
+          await registry.unregister(current);
+          if (viewingProviderIndex >= registry.names().length) {
+            viewingProviderIndex = Math.max(0, registry.names().length - 1);
+          }
+          refreshCurrentPage();
+          return {message: "Logged out provider '" + current + "'", presentation: 'status'};
+        }
+      }
+      return {};
+    },
+  });
+
+  /** Everything /settings reads and writes, wired to the real stores. */
+  const settingsEnv: SettingsEnv = {
+    ui, statusbar,
+    themes: () => listThemes().map(theme => theme.name),
+    applyTheme: name => {applyThemePreset(name);},
+    applyCursor: name => applyCursorStyle(name as CursorStyleName, process.stdout),
+    userName: () => userName,
+    saveUserName: async name => {
+      await profileReady;
+      try {userName = await saveUserName(homeDir, name);}
+      catch {throw new Error('Could not save the preferred name; it is unchanged.');}
+      setUserLabel(userName);
+      return userName;
+    },
+    thinking: () => registry.thinking(),
+    saveEffort: effort => saveEffort(effortSchema.parse(effort)),
+    permissionMode: () => permissions.mode,
+    permissionModes: () => Object.keys(permissionModes),
+    savePermissionMode: mode => permissions.setMode(permissionModeSchema.parse(mode)),
+  };
+  const settingsItems = (): SettingsItem[] => settingDefinitions.map(definition => ({
+    key: definition.key, label: definition.label, description: definition.description, group: definition.group, kind: definition.kind,
+    options: settingOptions(definition, settingsEnv), value: definition.read(settingsEnv),
+    ...(definition.labels ? {labels: definition.labels} : {}),
+    ...(definition.min !== undefined ? {min: definition.min} : {}), ...(definition.max !== undefined ? {max: definition.max} : {}), ...(definition.step !== undefined ? {step: definition.step} : {}),
+  }));
+  /** The page behind a `Pages` row of /settings; Esc returns to the settings with their drafts. */
+  const settingsSubPage = (id: string) => {
+    const context = buildAppCommandContext();
+    if (id === 'statusbar') {
+      const spec = createCommandTabsFor('/statusbar', context);
+      activeCommandPage = '/statusbar';
+      return spec ? {title: 'Status bar', tabs: spec.tabs, initialTab: spec.initialTab, actions: pageActions(false)} : null;
+    }
+    if (id === 'permissions') {
+      const spec = createCommandTabsFor('/permissions', context);
+      activeCommandPage = '/permissions';
+      return spec ? {title: 'Permissions', tabs: spec.tabs, initialTab: spec.initialTab, actions: pageActions(true)} : null;
+    }
+    activeCommandPage = '';
+    if (id === 'models') {
+      return {title: 'Models & pricing', initialTab: 'models', actions: {onSaveToggles: () => ({})} as PageActions,
+        tabs: [{id: 'models', title: 'Models', ...tabContent(modelsRows(config, registry.names(), modelPool.snapshot()))}]};
+    }
+    if (id === 'shortcuts') {
+      return {title: 'Shortcuts', initialTab: 'shortcuts', actions: {onSaveToggles: () => ({})} as PageActions,
+        tabs: [{id: 'shortcuts', title: 'Shortcuts', ...tabContent(shortcutRows())}]};
+    }
+    return null;
+  };
+  const openSettings = () => {
+    let previewed = false;
+    surfaces.openSettings(settingsItems(), settingsPages.map(({id, label, description}) => ({id, label, description})), {
+      save: changes => saveSettings(settingsEnv, changes),
+      preview: (key, value) => {const definition = settingDefinition(key); if (definition?.preview) {previewed = true; definition.preview(settingsEnv, value);}},
+      revert: () => {if (previewed) for (const definition of settingDefinitions) definition.revert?.(settingsEnv);},
+      openPage: settingsSubPage,
+    });
+  };
+
+  /** /ensemble: a read-only snapshot per actor; `m` leaves for the model picker and `e` hands a file to the external editor. */
+  const openEnsemble = (initial?: string) => {
+    const statusOptions = {sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config, subscriptions: () => subscriptionProviders, git: () => gitStatus.get()};
+    const mcpRegistrations = (): ToolRegistration[] => extensions.mcp.definitions().map(definition => ({definition,
+      metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
+    const data = buildEnsemble({actors: () => actors.list(), cwd, home: homeDir, status, policy: id => actorServices.policy(id),
+      tools: id => toolRegistry.resolveForActor(id, mcpRegistrations()), mcp: () => extensions.mcp.folders(),
+      skills: actor => resources.skillsFor({actorId: actor.id, skills: actor.skills}), snapshot: () => store.getSnapshot(),
+      usage: id => actorUsage(statusOptions, id)}, initial);
+    surfaces.openEnsemble(data, {
+      model: async id => {const actor = actors.find(id); if (!actor) return; if (actor.id === 'logox') openModels(actor.name); else await actorServices.management.openDefaultModel(actor.id, surfaces);},
+      edit: path => openInEditor(path),
+    });
+  };
+
+  const pageIsOpen = () => {const open = surfaces.getSnapshot(); return open?.kind === 'page' || open?.kind === 'settings' && open.sub !== undefined;};
   const refreshCurrentPage = () => {
-    if (surfaces.getSnapshot()?.kind !== 'page' || !activeCommandPage) return;
+    if (!pageIsOpen() || !activeCommandPage) return;
     const spec = createCommandTabsFor(activeCommandPage, buildAppCommandContext());
     if (spec) surfaces.updatePage(spec.tabs);
   };
 
-  const stopPageUpdates = store.subscribe(() => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();});
+  const stopPageUpdates = store.subscribe(() => {if (pageIsOpen()) refreshCurrentPage();});
+  // `Notify when done`: a bell or OSC 9 notification when a stretch of work longer than 30 s ends (see `tui/terminal/notify.ts`).
+  const roundNotifier = new RoundNotifier({sessionId: session, mode: () => uiSettings().notify, focused: terminalFocus,
+    write: data => {if (process.stdout.isTTY) process.stdout.write(data);}});
+  const stopNotifier = store.subscribe(() => {roundNotifier.observe(store.getSnapshot());});
   const stopPermissions = tools.configurePermissions(session, {
     reviewer: () => {const selected = registry.selection(); return {provider: options.provider ?? registry.provider(), model: JSON.stringify([selected.provider, selected.model])};},
     charge: async (context, amount, model) => {await configureMeter(context.ownerId); contexts.meter(context).chargeUsage(amount, model, 'approval');},
-    changed: () => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();},
+    changed: () => {if (pageIsOpen()) refreshCurrentPage();},
   });
   const stopPermissionPolicy = permissions.subscribe(() => {
     bumpStatus();
@@ -730,7 +893,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       (request.kind === 'permission' || request.kind === 'question' && request.title === 'Approval failed; action paused')) {
       store.interactions.cancel(request.requestId, 'Permissions changed; pending actions will be re-evaluated');
     }
-    if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();
+    if (pageIsOpen()) refreshCurrentPage();
   });
   surfaces.subscribe(() => {
     if (!surfaces.getSnapshot()) activeCommandPage = '';
@@ -1112,7 +1275,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       ensemble.cancel(activityId, 'user');
     }},
     async close() {
-      closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); store.interactions.close(); compactTask?.controller.abort();
+      closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone, permissions.flushStats()]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
@@ -1181,9 +1344,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         })();
         try {await permissionTask;} finally {permissionTask = undefined;}
         return;
-      }
-      if (text.startsWith('/actors model ')) {
-        await actorServices.management.openDefaultModel(text.slice(14).trim(), surfaces); return;
       }
       if (text.startsWith('/model ') || text === '/model') {
         const rawArg = text === '/model' ? '' : text.slice(7).trim();
@@ -1260,116 +1420,13 @@ export async function createSessionApplication(options: SessionApplicationOption
         receipt(buildAppCommandContext().commandsLines.map(rowText).join('\n'), 'panel', 'Help & Commands'); return;
       }
       pageOwner = source;
+      if (text === '/settings' || text === '/animations') {openSettings(); return;}
+      if (text === '/ensemble') {openEnsemble(source); return;}
       const pageSpec = createCommandTabsFor(text, buildAppCommandContext());
       if (pageSpec) {
         activeCommandPage = text;
 
-        surfaces.openPage(pageSpec.title, pageSpec.tabs, pageSpec.initialTab, {
-          closeOnSave: pageSpec.tabs.filter(tab => tab.toggles).length <= 1,
-          onSaveToggles: async (tabId, items, appearance) => {
-            if (tabId === 'settings') {
-              const res = await saveConfigToggles(items, {
-                saveMotion: async enabled => statusbar.saveMotion(enabled),
-                stdout: process.stdout,
-                onThemeChange: theme => { currentThemeName = theme; },
-                onCursorChange: cursor => { currentCursorName = cursor as CursorStyleName; },
-              });
-              try {
-                await uiPref.save({version: 1, theme: currentThemeName, cursor: currentCursorName});
-              } catch (error) {
-                // The choice is already applied to this session; say plainly that it will not survive a restart.
-                return {message: 'Settings applied for this session but could not be saved: ' + (error instanceof Error ? error.message : String(error)),
-                  kind: 'command_error', presentation: 'status'};
-              }
-              return res;
-            }
-            if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
-            await statusbar.save(items.map(({id, enabled}) => ({id, enabled})), appearance);
-            refreshCurrentPage();
-            return {message: 'Statusbar layout saved.', presentation: 'status'};
-          },
-          onTabAction: async (tabId, action) => {
-            if (action === 'cancel_confirm') return {message: 'Cancelled.', presentation: 'status'};
-            if (tabId === 'permissions' && action.startsWith('set_mode:')) {
-              // The page edits a draft; only Enter reaches here, and this is the single place the mode is saved.
-              const nextMode = permissionModeSchema.parse(action.slice('set_mode:'.length));
-              await permissions.setMode(nextMode);
-              return {message: 'Permission mode set to ' + nextMode, presentation: 'status', close: true};
-            }
-            if (tabId === 'permissions' && action.startsWith('delete_rule:')) {
-              await permissions.revoke(action.slice('delete_rule:'.length));
-              return {message: 'Permission rule deleted', presentation: 'status'};
-            }
-            if (tabId === 'permissions' && action.startsWith('add_rule:')) {
-              const input = z.strictObject({scope: permissionScopeSchema, decision: permissionDecisionSchema, tool: z.string(), pattern: z.string()}).parse(JSON.parse(action.slice('add_rule:'.length)));
-              const checked = validateRuleInput(input, permissions.userScopeAvailable);
-              if (!checked.ok) throw new Error(checked.error);
-              await permissions.add(checked.rule);
-              return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
-            }
-            if (tabId === 'providers') {
-              const names = registry.names();
-              if (action === 'next_provider' && names.length > 0) {
-                viewingProviderIndex = (viewingProviderIndex + 1) % names.length;
-                refreshCurrentPage();
-                return {};
-              }
-              if (action === 'prev_provider' && names.length > 0) {
-                viewingProviderIndex = (viewingProviderIndex - 1 + names.length) % names.length;
-                refreshCurrentPage();
-                return {};
-              }
-              const current = names[viewingProviderIndex];
-              if (!current) return {};
-              if (action === 'test') {
-                providerStatuses.set(current, 'Testing connection...');
-                refreshCurrentPage();
-                const start = Date.now();
-                try {
-                  const candidate = registry.candidate(current);
-                  await candidate.check(commands.signal);
-                  const elapsed = Date.now() - start;
-                  providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
-                  refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)", presentation: 'status'};
-                } catch (error) {
-                  providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
-                  refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connection failed", kind: 'command_error', presentation: 'status'};
-                }
-              }
-              if (action === 'refresh') {
-                providerStatuses.set(current, 'Refreshing models...');
-                refreshCurrentPage();
-                try {
-                  const pool = await modelPool.syncProvider(current, commands.signal);
-                  const count = pool.filter(m => m.provider === current).length;
-                  providerStatuses.set(current, '● Connected (' + count + ' models synced)');
-                  refreshCurrentPage();
-                  return {message: "Refreshed " + count + " models from '" + current + "'", presentation: 'status'};
-                } catch (error) {
-                  providerStatuses.set(current, '○ Sync failed');
-                  refreshCurrentPage();
-                  return {message: "Failed to refresh models from '" + current + "'", kind: 'command_error', presentation: 'status'};
-                }
-              }
-              if (action === 'logout') {
-                if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
-                return {confirm: {action: 'confirm_logout', prompt: "Log out of provider '" + current + "' and remove its credentials?"}};
-              }
-              if (action === 'confirm_logout') {
-                if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
-                await registry.unregister(current);
-                if (viewingProviderIndex >= registry.names().length) {
-                  viewingProviderIndex = Math.max(0, registry.names().length - 1);
-                }
-                refreshCurrentPage();
-                return {message: "Logged out provider '" + current + "'", presentation: 'status'};
-              }
-            }
-            return {};
-          },
-        }); return;
+        surfaces.openPage(pageSpec.title, pageSpec.tabs, pageSpec.initialTab, pageActions(pageSpec.tabs.filter(tab => tab.toggles).length <= 1)); return;
       }
       if (text === '/skills') {
         receipt(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + ': ' + item.description + '\n' + item.path).join('\n\n') || 'No skills found', 'panel', 'Skills'); return;
@@ -1495,7 +1552,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await dispatchInput(source, expanded, source === 'logox' ? source : 'direct'); return;
       }
       const mention = /^@([a-z][a-z0-9_-]*)\s+([\s\S]+)$/.exec(text);
-      if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /actors to view available members, then dispatch tasks with @<actor> <task>.');
+      if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /ensemble to view available members, then dispatch tasks with @<actor> <task>.');
       const owner = mention ? mention[1]! : source;
       await beginTask();
       if (ownerIsBusy(owner)) {

@@ -1,7 +1,7 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider `presets`, saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
+- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider `presets`, saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, UI presentation preferences (`ui-settings.ts`) and the `/settings` row definitions (`settings-definitions.ts`), and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
 - **Does not own**: HTTP transport, model discovery and wire formats ([`src/providers/AGENTS.md`](../providers/AGENTS.md)); the lock and atomic-replace primitives (`src/store/file-lock.ts`, `src/store/replace-file.ts`, see [`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); picker and settings panels (`src/tui/`); actor colors and models ([`src/actors/AGENTS.md`](../actors/AGENTS.md)).
 - **Design rationale**: [docs/USAGE.md](../../docs/USAGE.md) (load order, keys); [docs/COLORS.md](../../docs/COLORS.md) (theme files and tokens); [docs/modules/task-models.md](../../docs/modules/task-models.md) (model selection).
 
@@ -17,6 +17,8 @@
 | Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |
 | Statusbar modules, styles, palettes | `statusbar-preferences.ts:StatusbarPreferences` | `statusbar-palettes.json`, `~/.logox/statusbar.json` |
 | Theme files, `base` chains, user overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/logox-dark.json` |
+| Add or change a `/settings` row (label, description, group, kind, options, default, persistence) | `settings-definitions.ts:settingDefinitions` | `ui-settings.ts:UiPreferences`, `tests/settings-definitions.test.ts` |
+| Presentation preferences read by renderers (tool tint, thinking display, diff layout, splash, enter key, notify) | `ui-settings.ts:uiSettings()` | `ui-settings.ts:applyUiSettings`, `~/.logox/ui-preferences.json` |
 | Preferred user name (`/name`, onboarding step, live timeline label) | `user-profile.ts:sanitizeUserName()` | `user-profile.ts:saveUserName()`, `src/context/environment.ts:formatEnvironment()` |
 | First-run onboarding flag | `onboarding-preferences.ts:shouldOfferOnboarding()` | `~/.logox/` onboarding file |
 
@@ -38,6 +40,12 @@
 1. Create `themes/<name>.json` with `colors` and optionally `base` (`logox-dark` is the root).
 2. Update the shipped-theme count assertions and list in `tests/theme-presets.test.ts` (it expects exactly the shipped set). Build copies `themes/*.json` to `dist`.
 - Tests: `tests/theme-presets.test.ts`.
+
+### Add a `/settings` row
+1. Add the value to `ui-settings.ts:uiPreferencesSchema` (with `.default()`, and to `UiSettings` / `defaultUiSettings` when a renderer reads it live), or pick the store that already owns it (statusbar, user profile, model preference, permissions).
+2. Add a `SettingDefinition` to `settings-definitions.ts:settingDefinitions`: `key`, `label`, one-sentence `description`, `group`, `kind`, `options` (and `labels`), `default`, and `read`/`write` hooks; a value that should preview live also sets `preview`/`revert`.
+3. Read it where it takes effect (`uiSettings()` in a renderer, or the owning store); document it in `docs/USAGE.md`.
+- Tests: `tests/settings-definitions.test.ts` iterates every definition (group, description, default, options, a write that reads back and survives a reload), `tests/settings-behaviours.test.ts` for the behaviour.
 
 ### Add a persisted preference file
 1. Define a strict Zod schema with a `version` literal and wrap the path in `StateFile` (see `model-preferences.ts:preferenceSchema`). Use `update()` for read-modify-write.

@@ -37,17 +37,17 @@ function editPatch(path: string, oldText: string, newText: string): {hunks: Retu
   return {hunks: patch.hunks, offset};
 }
 
-function editDiff(args: Record<string, unknown>): {lines: ToolLine[]; stats: DiffStats} {
+function editDiff(args: Record<string, unknown>, width?: number): {lines: ToolLine[]; stats: DiffStats} {
   const path = String(args.file_path ?? args.path ?? '');
   const oldText = typeof args.old_string === 'string' ? args.old_string : typeof args.old_text === 'string' ? args.old_text : '';
   const newText = typeof args.new_string === 'string' ? args.new_string : typeof args.new_text === 'string' ? args.new_text : '';
   const {hunks, offset} = editPatch(path, oldText, newText);
-  return diffLines(hunks, offset);
+  return diffLines(hunks, offset, width);
 }
 
 /** Edit card view: numbered diff hunks separated by `⋯`, `added 3 · removed 1`. */
-export function editView(args: Record<string, unknown>): ToolView {
-  const {lines, stats} = editDiff(args);
+export function editView(args: Record<string, unknown>, width?: number): ToolView {
+  const {lines, stats} = editDiff(args, width);
   return {
     summary: diffSummary(stats),
     body: {lines, empty: 'No changes'},
@@ -91,7 +91,7 @@ export function renderEditRun(context: Omit<ToolRenderContext, 'call'>, run: rea
     const stats = {added: 0, removed: 0};
     run.forEach((item, index) => {
       if (item.step?.state === 'failed' || item.step?.state === 'cancelled' || item.step?.disposition) return;
-      const part = calls[index]!.name.toLowerCase() === 'write' ? writeDiff(args[index]!) : editDiff(args[index]!);
+      const part = calls[index]!.name.toLowerCase() === 'write' ? writeDiff(args[index]!, context.builder.width) : editDiff(args[index]!, context.builder.width);
       if (!part || !part.lines.length) return;
       if (lines.length) lines.push({separator: true, segments: [{text: '    ⋯', color: faintColor()}]});
       lines.push(...part.lines); stats.added += part.stats.added; stats.removed += part.stats.removed;
@@ -110,6 +110,6 @@ export const UI: ToolUI = {
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;
-    renderToolCard(context, {title: cardTitle(context, call), view: () => editView(callArgs(call))});
+    renderToolCard(context, {title: cardTitle(context, call), view: () => editView(callArgs(call), context.builder.width)});
   },
 };

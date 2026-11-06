@@ -66,10 +66,12 @@ test('dynamic actors compact closed rounds while preserving ledgers, anchors and
   const requests: ModelRequest[] = [];
   const f = await fixture(async request => {requests.push(request); return complete('找到边界', '证据位于 sample.ts:2');});
   try {
-    await f.app.submit('/actors');
+    await f.app.submit('/ensemble');
     const page = f.app.surfaces.getSnapshot();
-    assert.ok(page?.kind === 'page' && page.tabs.some(tab => tab.id === 'actors' && tab.lines.join('\n').includes('自定义侦察者')));
-    assert.ok(page.tabs.some(tab => tab.id === 'actors' && tab.lines.join('\n').includes('20000')), 'Display the effective inherited context budget');
+    assert.ok(page?.kind === 'ensemble');
+    const scout = page.data.actors.find(actor => actor.id === 'scout');
+    assert.ok(scout?.name.includes('自定义侦察者'), 'Custom actors get a tab after the roster');
+    assert.match(scout?.context ?? '', /compacts at [0-9]+%/, 'Context policy reads as a sentence');
     f.app.surfaces.cancel();
     await direct(f.app, '第一次调查');
     const first = f.app.store.getSnapshot().activities.at(-1)!;

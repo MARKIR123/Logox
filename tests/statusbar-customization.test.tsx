@@ -36,7 +36,7 @@ async function fixture() {
     if (text === '\r') {
       for (let round = 0; round < 200; round++) {
         const surface = app.surfaces.getSnapshot();
-        if (surface?.kind !== 'page' || !surface.saving) break;
+        if ((surface?.kind !== 'page' && surface?.kind !== 'settings') || !surface.saving) break;
         if (round === 199) throw new Error('Configuration save did not settle');
         await delay(10);
       }
@@ -72,7 +72,7 @@ test('settings and read-only config are separately discoverable in catalog, help
     assert.equal(suggestion.replacement, '/' + name);
     assert.equal(suggestion.execute, true);
   }
-  assert.match(commandHelp(), /\/settings: .*theme.*cursor.*animations.*statusbar/);
+  assert.match(commandHelp(), /\/settings: .*Appearance.*status bar/);
   assert.match(commandHelp(), /\/config: .*effective.*configuration.*read-only/);
 });
 
@@ -107,39 +107,24 @@ test('style, palette and modules preview locally; rapid edits accumulate and Esc
   } finally {await f.close();}
 });
 
-test('settings persists appearance and motion while retaining the page and other tab drafts across saves', async () => {
+test('settings saves appearance and motion through the data-driven page and keeps the statusbar sub-page separate', async () => {
   const f = await fixture();
   try {
     await f.open('/settings');
-    const page = f.app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page');
-    assert.deepEqual(page.tabs.map(tab => tab.id), ['settings', 'statusbar']);
+    const page = f.app.surfaces.getSnapshot(); assert.ok(page?.kind === 'settings');
+    assert.match(f.text(), /Settings/); assert.match(f.text(), /Appearance/); assert.match(f.text(), /Animations/);
     await f.key('\x1b[C');
-    const themeDraft = f.text().match(/Theme preset: (\S+)/)?.[1]; assert.ok(themeDraft);
+    const themeDraft = f.text().match(/‹ (\S+) ›/)?.[1]; assert.ok(themeDraft);
     await f.key('\x1b[B'); await f.key('\x1b[C');
     await f.key('\x1b[B'); await f.key('\x1b[D');
-    assert.match(f.text(), /\[ \] UI animations/);
-    await f.key('\t'); await f.key('\x1b[B'); await f.key('\x1b[C');
-    assert.match(f.text(), /Style: Starship/);
-    await act(async () => {f.app.store.message(f.app.sessionId, 'logox', 'assistant', 'Background refresh');}); await f.flush();
-    assert.match(f.text(), /Style: Starship/, 'Background refresh does not overwrite the local draft');
+    assert.match(f.text(), /1? ?unsaved/); assert.match(f.text(), /\[ \]/);
     await f.key('\r');
-    assert.equal(f.app.surfaces.getSnapshot()?.id, page.id, 'Applying statusbar retains the same settings page');
-    assert.equal(f.app.statusbar.getSnapshot().style, 'starship');
-    await f.key('\x1b[B'); await f.key('\x1b[C');
-    assert.match(f.text(), /Palette: gruvbox/);
-    await f.key('\t'); assert.equal(f.text().match(/Theme preset: (\S+)/)?.[1], themeDraft);
-    assert.match(f.text(), /Cursor style: Underline/); assert.match(f.text(), /\[ \] UI animations/);
-    await f.key('\r'); assert.equal(f.app.surfaces.getSnapshot()?.id, page.id, 'Applying settings retains the same page');
-    assert.deepEqual(JSON.parse(await readFile(f.uiPath, 'utf8')), {version: 1, theme: themeDraft, cursor: 'Underline _'});
+    assert.equal(f.app.surfaces.getSnapshot(), null, 'Enter saves and closes with a receipt');
+    assert.ok(f.app.store.getSnapshot().messages.some(message => message.text === 'Settings saved'));
+    const ui = JSON.parse(await readFile(f.uiPath, 'utf8'));
+    assert.equal(ui.theme, themeDraft); assert.equal(ui.cursor, 'Underline _');
     const saved = JSON.parse(await readFile(f.path, 'utf8'));
-    assert.equal(saved.motion, false); assert.equal(saved.style, 'starship'); assert.equal(saved.colorScheme, 'theme');
-    assert.equal(f.app.statusbar.getSnapshot().motion, false);
-    await f.key('\t'); assert.match(f.text(), /Palette: gruvbox/, 'Settings save preserves the unsaved statusbar draft');
-    await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null);
-    await f.open('/settings');
-    assert.equal(f.text().match(/Theme preset: (\S+)/)?.[1], themeDraft);
-    assert.match(f.text(), /Cursor style: Underline/); assert.match(f.text(), /\[ \] UI animations/);
-    await f.key('\t'); assert.match(f.text(), /Style: Starship/); assert.match(f.text(), /Palette: theme/, 'Escape discarded only the unsaved palette');
+    assert.equal(saved.motion, false); assert.equal(f.app.statusbar.getSnapshot().motion, false);
     assert.equal(f.calls, 0); assert.equal(f.networkCalls, 0);
   } finally {await f.close();}
 });
@@ -213,19 +198,19 @@ test('mouse controls match keyboard and narrow layouts retain an editable module
   } finally {await f.close();}
 });
 
-test('statusbar editor and tab bar take the mouse: tabs click through, wheel selects rows', async () => {
+test('statusbar sub-page of /settings takes the mouse: the row opens it, wheel selects rows, Esc returns', async () => {
   const f = await fixture();
   try {
     await f.open('/settings');
-    const bar = f.text().split('\n')[2]!;
-    assert.match(bar, /Statusbar/);
     const click = async (x: number, y: number) => {await f.key(`\x1b[<0;${x + 1};${y + 1}M`); await f.key(`\x1b[<0;${x + 1};${y + 1}m`);};
-    await click(bar.indexOf('Statusbar') + 1, 2);
-    assert.match(f.text(), /Style:/, 'clicking the Statusbar tab opens it');
+    await f.key('\x1b[F'); await f.key('\x1b[A'.repeat(3));
+    const row = f.text().split('\n').findIndex(line => line.includes('Status bar')); assert.ok(row >= 0, 'Pages row is scrolled into view');
+    await click(5, row);
+    assert.match(f.text(), /Style:/, 'clicking the Status bar row opens the editor');
     const style = f.text().split('\n').findIndex(line => line.includes('Style:'));
     await f.key(`\x1b[<65;11;${style + 1}M`); assert.match(f.text(), /❯ Palette:/, 'wheel down selects the next row');
     await f.key(`\x1b[<64;11;${style + 1}M`); assert.match(f.text(), /❯ Style:/, 'wheel up selects the previous row');
-    await click(f.text().split('\n')[2]!.indexOf('Settings') + 1, 2);
-    assert.match(f.text(), /Theme preset:/, 'and back to Settings');
+    await f.key('\x1b'); assert.match(f.text(), /❯ Status bar/, 'Esc returns to Settings with the row still selected');
+    assert.equal(f.app.surfaces.getSnapshot()?.kind, 'settings');
   } finally {await f.close();}
 });

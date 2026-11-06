@@ -4,6 +4,7 @@ import {linkSegments, textLines, type ToolLine} from './tool-card.js';
 import {palette} from '../appearance/theme.js';
 import {faintColor} from '../appearance/colors.js';
 import {layoutMarkdown} from './markdown.js';
+import {uiSettings} from '../../config/ui-settings.js';
 
 /** Dependency-free, line-oriented highlighter: comments faint, strings, keywords, numbers. Good enough to read, never to parse. */
 type Family = 'c' | 'hash' | 'json' | 'css' | 'plain';
@@ -90,29 +91,37 @@ export function markdownLines(source: string, width: number): ToolLine[] {
 }
 
 export interface DiffStats {readonly added: number; readonly removed: number}
+/** Below this card width `Diff layout: auto` drops the line-number gutter. */
+export const COMPACT_DIFF_WIDTH = 72;
+/** `Diff layout` from /settings: compact drops the gutter; auto does so when the card is narrower than `COMPACT_DIFF_WIDTH` (unknown width stays unified). */
+export function diffIsCompact(width?: number): boolean {
+  const layout = uiSettings().diffLayout;
+  return layout === 'compact' || layout === 'auto' && width !== undefined && width < COMPACT_DIFF_WIDTH;
+}
 /** Diff rows with a right-aligned line-number gutter and a faint `⋯` row between hunks. `offset` shifts a patch computed on an excerpt to real file lines. */
-export function diffLines(hunks: ReturnType<typeof structuredPatch>['hunks'], offset = 0): {lines: ToolLine[]; stats: DiffStats} {
+export function diffLines(hunks: ReturnType<typeof structuredPatch>['hunks'], offset = 0, cardWidth?: number): {lines: ToolLine[]; stats: DiffStats} {
   const lines: ToolLine[] = [];
+  const compact = diffIsCompact(cardWidth);
   let added = 0, removed = 0;
   const last = hunks.at(-1);
   const biggest = last ? Math.max(last.oldStart + last.oldLines, last.newStart + last.newLines) + offset : 1;
   const width = Math.max(3, String(biggest).length);
   const faint = faintColor();
   for (const [index, hunk] of hunks.entries()) {
-    if (index > 0) lines.push({separator: true, segments: [{text: ' '.repeat(width + 1) + '⋯', color: faint}]});
+    if (index > 0) lines.push({separator: true, segments: [{text: ' '.repeat(compact ? 0 : width + 1) + '⋯', color: faint}]});
     let oldLine = hunk.oldStart + offset, newLine = hunk.newStart + offset;
     for (const raw of hunk.lines) {
       if (raw.startsWith('\\')) continue;
       const sigil = raw[0]!, content = raw.slice(1).replaceAll('\t', '  ');
       if (sigil === '-') {
         removed++;
-        lines.push({bg: palette.diffRemovedBg, segments: [{text: String(oldLine++).padStart(width) + ' ', color: faint}, {text: '− ', color: palette.diffRemovedGutter, bold: true}, {text: content, color: palette.diffRemoved}]});
+        lines.push({bg: palette.diffRemovedBg, segments: [...compact ? [] : [{text: String(oldLine++).padStart(width) + ' ', color: faint}], {text: '− ', color: palette.diffRemovedGutter, bold: true}, {text: content, color: palette.diffRemoved}]});
       } else if (sigil === '+') {
         added++;
-        lines.push({bg: palette.diffAddedBg, segments: [{text: String(newLine++).padStart(width) + ' ', color: faint}, {text: '+ ', color: palette.diffAddedGutter, bold: true}, {text: content, color: palette.diffAdded}]});
+        lines.push({bg: palette.diffAddedBg, segments: [...compact ? [] : [{text: String(newLine++).padStart(width) + ' ', color: faint}], {text: '+ ', color: palette.diffAddedGutter, bold: true}, {text: content, color: palette.diffAdded}]});
       } else {
         oldLine++;
-        lines.push({segments: [{text: String(newLine++).padStart(width) + '   ', color: faint}, {text: content, color: palette.muted}]});
+        lines.push({segments: [{text: compact ? '  ' : String(newLine++).padStart(width) + '   ', color: faint}, {text: content, color: palette.muted}]});
       }
     }
   }
