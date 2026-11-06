@@ -6,14 +6,14 @@ import {palette} from '../appearance/theme.js';
 import {safeText} from '../terminal/text.js';
 import wrapAnsi from 'wrap-ansi';
 import {clipLine} from '../terminal/text.js';
-import {PanelFrame as CommandPane, panePadding} from '../components/panel-frame.js';
-import {ToggleList, moveToggle, cycleToggleOption} from './toggle-list.js';
-import {useMouse} from '../terminal/mouse.js';
+import {PanelFrame as CommandPane, footerParts, hitFooter, panePadding, panelRows, type FooterAction} from '../components/panel-frame.js';
+import {ToggleList, moveToggle, cycleToggleOption, toggleZone} from './toggle-list.js';
+import {inRegion, useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 import type {StatusbarAppearance} from '../../config/statusbar-preferences.js';
 import {StatusbarEditor} from '../status/statusbar-editor.js';
-import {initialPermissionsUi, permissionsView, reducePermissions, type PermissionsUi} from './permissions-editor.js';
+import {initialPermissionsUi, permissionsView, reduceClick, reducePermissions, selectedRule, type EditorClick, type PermissionsUi} from './permissions-editor.js';
 
-interface Cell {readonly text: string; readonly color: string; readonly bold?: boolean; readonly bg?: string}
+interface Cell {readonly text: string; readonly color: string; readonly bold?: boolean; readonly bg?: string; readonly hit?: EditorClick}
 type DisplayRow = readonly Cell[];
 const blankRow: DisplayRow = [];
 /** Word wrap by display cells (long words break hard); continuation rows are the caller's to indent. */
@@ -57,14 +57,27 @@ export function tabDisplay(tab: CommandTab | undefined, columns: number): Displa
     return textRows(line, columns, index === 0 ? palette.accent : palette.fg, 0, index === 0);
   });
 }
-function DisplayLine({row}: {row: DisplayRow}) {
+/** The click target of the cell under column `x` (relative to the row), if any; the same cells are drawn. */
+function hitAt(row: DisplayRow, x: number): EditorClick | undefined {
+  let column = 0;
+  for (const cell of row) {
+    const end = column + stringWidth(cell.text);
+    if (x >= column && x < end) return cell.hit;
+    column = end;
+  }
+  return undefined;
+}
+function DisplayLine({row, hovered, hoverColor}: {row: DisplayRow; hovered?: EditorClick | undefined; hoverColor?: string}) {
   return <Box height={1} flexShrink={0} overflow="hidden">
-    {row.length ? <Text wrap="truncate">{row.map((cell, at) => <Text key={at} color={cell.color} bold={cell.bold === true} {...(cell.bg ? {backgroundColor: cell.bg} : {})}>{cell.text}</Text>)}</Text> : <Text> </Text>}
+    {row.length ? <Text wrap="truncate">{row.map((cell, at) => {
+      const over = hovered !== undefined && cell.hit === hovered && hoverColor !== undefined;
+      return <Text key={at} color={over ? hoverColor : cell.color} bold={cell.bold === true || over} {...(cell.bg ? {backgroundColor: cell.bg} : {})}>{cell.text}</Text>;
+    })}</Text> : <Text> </Text>}
   </Box>;
 }
 
-export function TabbedPage({title, tabs, initialTab, width, height, onClose, onSave, onAction, confirm, saving = false, error = '', notice = ''}: {
-  title: string; tabs: readonly CommandTab[]; initialTab: string; width: number; height: number; onClose(): void;
+export function TabbedPage({title, tabs, initialTab, width, height, y = 0, onClose, onSave, onAction, confirm, saving = false, error = '', notice = ''}: {
+  title: string; tabs: readonly CommandTab[]; initialTab: string; width: number; height: number; /** Screen row of the page's top rule. */ y?: number; onClose(): void;
   /** A pending yes/no from the host; while set, y or Enter confirms and any other key (Esc included) cancels it. */
   confirm?: {readonly tabId: string; readonly action: string; readonly prompt: string} | undefined;
   onSave?(tabId: string, items: readonly CommandToggle[], appearance?: StatusbarAppearance): void | Promise<void>;
@@ -91,12 +104,15 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   const modeTab = tab?.mode, draftMode = modeTab && modeDraft && modeDraft !== modeTab.current ? modeDraft : undefined;
   const shownMode = draftMode ?? modeTab?.current;
   const modeDescription = modeTab?.options.find(option => option.id === shownMode)?.description ?? '';
+  // A click on the mode name steps to the next mode, exactly like Space.
+  const modeIds = modeTab?.options.map(option => option.id) ?? [];
+  const modeCycle: EditorClick = {kind: 'mode', id: modeIds[(Math.max(0, modeIds.indexOf(shownMode ?? '')) + 1) % Math.max(1, modeIds.length)] ?? ''};
   const permissionsView_ = tab?.permissions ? permissionsView(tab.permissions, permissionsUi, columns) : undefined;
   const lines: DisplayRow[] = permissionsView_ ? [...permissionsView_.rows] : [
     ...(confirm && confirm.tabId === tab?.id ? [[{text: '▲ ' + confirm.prompt, color: palette.warning, bold: true}] as DisplayRow,
-      [{text: '  [y] / Enter Confirm · any other key Cancel', color: palette.muted}] as DisplayRow, blankRow] : []),
-    ...(modeTab && shownMode ? [[{text: 'Mode:', color: palette.panelLabel}, {text: ' ' + shownMode, color: palette.fg, bold: true},
-      ...(draftMode ? [{text: ' · unsaved (Enter applies, Esc discards)', color: palette.warning, bold: true}] : []),
+      [{text: '  [y] / Enter Confirm', color: palette.muted, hit: {kind: 'confirm', yes: true}}, {text: ' · ', color: palette.muted}, {text: 'any other key Cancel', color: palette.muted, hit: {kind: 'confirm', yes: false}}] as DisplayRow, blankRow] : []),
+    ...(modeTab && shownMode ? [[{text: 'Mode:', color: palette.panelLabel, hit: modeCycle}, {text: ' ' + shownMode, color: palette.fg, bold: true, hit: modeCycle},
+      ...(draftMode ? [{text: ' · unsaved (Enter applies, Esc discards)', color: palette.warning, bold: true, hit: {kind: 'save-mode'} as const}] : []),
       {text: ' · ' + modeDescription, color: palette.muted}] as DisplayRow, blankRow] : []),
     ...tabDisplay(tab, columns)];
   const max = Math.max(0, lines.length - contentHeight);
@@ -267,38 +283,6 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     if (next !== undefined) setOffsets(previous => ({...previous, [tab.id]: Math.max(0, Math.min(max, next))}));
   });
 
-  useMouse(event => {
-    if (event.action !== 'press' || event.button !== 0 || saving || pendingSave.current) return;
-    const padding = panePadding(width), contentTop = hasTabBar ? 4 : 2;
-    if (hasTabBar && event.y === 2) {
-      let column = padding;
-      for (const candidate of tabs) {
-        const end = column + stringWidth('  ' + candidate.title + '  ');
-        if (event.x >= column && event.x < end) {setActive(candidate.id); setFocusArea('tabs'); return;}
-        column = end;
-      }
-    }
-    if (tab?.statusbar) {
-      if (event.y >= contentTop && event.y < contentTop + contentHeight) setFocusArea('content');
-      return;
-    }
-    if (tab && items && event.y >= contentTop && event.y < contentTop + visibleToggleCount) {
-      const at = start + event.y - contentTop, x = event.x - padding;
-      const item = items[at];
-      if (!item || x < 0 || x >= columns) return;
-      setFocusArea('content');
-      setFocused(previous => ({...previous, [tab.id]: at}));
-      const hasControls = Boolean(item.options?.length) || columns >= 18;
-      if (hasControls && x >= columns - 4) {
-        adjustItem(at, x < columns - 2 ? -1 : 1);
-      } else if (item.options?.length) {
-        changeValue(at, 1);
-      } else {
-        toggle(at);
-      }
-    }
-  });
-
   const itemHelp = reorderable ? '←→ Reorder · Space Toggle'
     : items?.[selected]?.options?.length ? '←→ Previous/next · Space Next'
     : '← Off · → On · Space Toggle';
@@ -310,34 +294,118 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     : items ? `${hasTabBar ? focusArea === 'tabs' ? '←→ / Tab Switch · ↓ Edit · ' : 'Tab Switch · ' : ''}↑↓ Select · Enter ${hasTabBar ? 'Apply tab' : 'Save'} · Esc ${hasTabBar ? 'Close / discard unsaved' : 'Discard'}`
     : `${hasTabBar ? '←→ / Tab Switch · ' : ''}↑↓ / PgUp PgDn Scroll · Esc Back`;
 
+  // Screen geometry shared by drawing and hit-testing: frame rows, then the tab bar (two rows) and the content.
+  const padding = panePadding(width), frame = panelRows(height);
+  const tabBarY = y + frame.bodyY, contentTop = tabBarY + (hasTabBar ? 2 : 0);
+  const tabsFit = stringWidth(tabs.map(item => '  ' + item.title + '  ').join('')) <= columns;
+  let tabX = padding;
+  const tabCells = !hasTabBar ? [] : tabsFit ? tabs.map(item => {
+    const text = (item.id === tab?.id ? '❯ ' : '  ') + item.title + '  ', x0 = tabX;
+    tabX += stringWidth(text);
+    return {id: item.id, text, region: {y: tabBarY, x0, x1: tabX}};
+  }) : [{id: '', text: clipLine('❯ ' + (tab?.title ?? '') + ' · ' + (index + 1) + '/' + tabs.length, columns), region: {y: tabBarY, x0: padding, x1: padding + columns}}];
+  const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
+  const activate = (click: EditorClick) => {
+    if (confirm && click.kind === 'confirm') {onAction?.(confirm.tabId, click.yes ? confirm.action : 'cancel_confirm'); return;}
+    if (tab?.permissions) {
+      const step = reduceClick(tab.permissions, permissionsUi, click);
+      setPermissionsUi(step.ui);
+      if (step.action) onAction?.(tab.id, step.action);
+    } else if (modeTab && click.kind === 'mode') setModeDraft(click.id);
+    else if (modeTab && click.kind === 'save-mode' && draftMode && tab) onAction?.(tab.id, 'set_mode:' + draftMode);
+  };
+  const moveFocus = (delta: number) => {
+    if (!tab || !items) return;
+    setFocusArea('content');
+    setFocused(previous => ({...previous, [tab.id]: Math.max(0, Math.min(items.length - 1, (previous[tab.id] ?? 0) + delta))}));
+  };
+  const ui = permissionsUi, permDirty = Boolean(tab?.permissions && ui.draftMode !== undefined && ui.draftMode !== tab.permissions.mode.current);
+  const rule = tab?.permissions ? selectedRule(tab.permissions, ui) : undefined, ruleIndex = rule && tab?.permissions ? tab.permissions.rules.indexOf(rule) : -1;
+  const saveMode = () => {if (tab && draftMode) onAction?.(tab.id, 'set_mode:' + draftMode);};
+  const footerActions: readonly FooterAction[] = confirm ? [
+    {label: 'y Confirm', run: () => activate({kind: 'confirm', yes: true})}, {label: 'any other key Cancel', run: () => activate({kind: 'confirm', yes: false})}]
+    : permissionsView_ ? (ui.form ? [{label: 'Enter Add', run: () => activate({kind: 'submit'})}, {label: 'Esc Cancel', run: () => activate({kind: 'cancel'})}]
+      : ui.confirmDelete ? [{label: 'y Delete', run: () => activate({kind: 'confirm', yes: true})}, {label: 'any other key Cancel', run: () => activate({kind: 'confirm', yes: false})}]
+      : permDirty ? [{label: 'Enter Save mode', run: () => activate({kind: 'save-mode'})}, {label: 'Esc Discard', run: onClose}]
+      : [{label: 'a Add', run: () => activate({kind: 'add'})}, ...(ruleIndex >= 0 ? [{label: 'd / Del Delete', run: () => activate({kind: 'delete', index: ruleIndex})}] : []), {label: 'Esc Back', run: onClose}])
+    : modeTab ? (draftMode ? [{label: 'Enter Apply and save', run: saveMode}, {label: 'Esc Discard', run: onClose}] : [{label: 'Esc Back', run: onClose}])
+    : tab?.id === 'providers' ? [{label: '[t] Test', run: () => onAction?.('providers', 'test')}, {label: '[r] Refresh', run: () => onAction?.('providers', 'refresh')},
+      {label: '[x] Logout', run: () => onAction?.('providers', 'logout')}, {label: '[←', run: () => onAction?.('providers', 'prev_provider')},
+      {label: '→]', run: () => onAction?.('providers', 'next_provider')}, {label: '[Esc] Back', run: onClose}]
+    : items ? [{label: 'Enter ' + (hasTabBar ? 'Apply tab' : 'Save'), run: saveCurrent}, {label: 'Esc ' + (hasTabBar ? 'Close / discard unsaved' : 'Discard'), run: onClose}]
+    : [{label: 'Esc Back', run: onClose}];
+  const footerText = error || notice || footer;
+  const footerView = footerParts(footerText, error || notice || saving ? [] : footerActions, width, y, height);
+  const hoveredFooter = hitFooter(footerView, pointer);
+
+  useMouse(event => {
+    if (saving || pendingSave.current || event.x < 0 || event.x >= width || event.y < y || event.y >= y + height) return;
+    const wheel = event.action === 'wheel_up' ? -1 : event.action === 'wheel_down' ? 1 : 0;
+    if (wheel) {
+      if (tab?.statusbar) {setFocusArea('content'); return;}
+      if (items) moveFocus(wheel);
+      else if (tab?.permissions && !permissionsUi.form && !permissionsUi.confirmDelete) {
+        setPermissionsUi(reducePermissions(tab.permissions, permissionsUi, '', wheel < 0 ? {upArrow: true} : {downArrow: true}).ui);
+      } else if (tab) setOffsets(previous => ({...previous, [tab.id]: Math.max(0, Math.min(max, offset + wheel * 3))}));
+      return;
+    }
+    if (event.action !== 'press' || event.button !== 0) return;
+    const clickedFooter = hitFooter(footerView, event);
+    if (clickedFooter?.run) {clickedFooter.run(); return;}
+    const clickedTab = tabCells.find(cell => inRegion(event, cell.region));
+    if (clickedTab) {
+      const target = clickedTab.id === '' ? tabs[(index + 1) % tabs.length] : tabs.find(item => item.id === clickedTab.id);
+      if (target) {setActive(target.id); setFocusArea('tabs');}
+      return;
+    }
+    if (tab?.statusbar) {
+      if (event.y >= contentTop && event.y < contentTop + contentHeight) setFocusArea('content');
+      return;
+    }
+    if (tab && items && event.y >= contentTop && event.y < contentTop + visibleToggleCount) {
+      const at = start + event.y - contentTop, x = event.x - padding;
+      const item = items[at];
+      if (!item || x < 0 || x >= columns) return;
+      setFocusArea('content');
+      setFocused(previous => ({...previous, [tab.id]: at}));
+      const zone = toggleZone(item, columns, x);
+      if (zone !== 'row') adjustItem(at, zone === 'dec' ? -1 : 1);
+      else if (item.options?.length) changeValue(at, 1);
+      else toggle(at);
+      return;
+    }
+    if (tab && !items && event.y >= contentTop && event.y < contentTop + contentHeight) {
+      const line = lines[offset + event.y - contentTop], hit = line ? hitAt(line, event.x - padding) : undefined;
+      if (hit) activate(hit);
+    }
+  });
+  const overItem = items && pointer && pointer.y >= contentTop && pointer.y < contentTop + visibleToggleCount && items[start + pointer.y - contentTop]
+    && pointer.x >= padding && pointer.x < padding + columns
+    ? {index: start + pointer.y - contentTop, zone: toggleZone(items[start + pointer.y - contentTop]!, columns, pointer.x - padding)} : undefined;
+  const lineHover = (row: DisplayRow, at: number): EditorClick | undefined =>
+    pointer && pointer.y === contentTop + at && pointer.x >= padding && pointer.x < padding + columns ? hitAt(row, pointer.x - padding) : undefined;
+
   return (
-    <CommandPane title={title} width={width} height={height} footer={error || notice || footer}>
+    <CommandPane title={title} width={width} height={height} footer={footerText} parts={footerView} hovered={hoveredFooter} hoverColor={hoverColor}>
       {hasTabBar && (
         <>
           <Box height={1} flexShrink={0} overflow="hidden">
-            {stringWidth(tabs.map(item => '  ' + item.title + '  ').join('')) > columns ? (
-              <Text color={palette.accent} bold wrap="truncate">
-                {clipLine('❯ ' + (tab?.title ?? '') + ' · ' + (index + 1) + '/' + tabs.length, columns)}
-              </Text>
-            ) : (
-              tabs.map(item => (
-                <Text key={item.id} bold={item.id === tab?.id} color={item.id === tab?.id ? palette.accent : palette.muted}>
-                  {(item.id === tab?.id ? '❯ ' : '  ') + item.title + '  '}
-                </Text>
-              ))
-            )}
+            {tabCells.map(cell => {
+              const current = cell.id === '' || cell.id === tab?.id, hovered = !current && inRegion(pointer, cell.region);
+              return <Text key={cell.id} bold={current || hovered} color={current ? palette.accent : hovered ? hoverColor : palette.muted} wrap="truncate">{cell.text}</Text>;
+            })}
           </Box>
           <Box height={1} flexShrink={0}/>
         </>
       )}
       <Box height={contentHeight} flexShrink={0} overflow="hidden" flexDirection="column">
         {tab?.statusbar && items ? <StatusbarEditor key={tab.id} items={items} appearance={appearances[tab.id] ?? tab.statusbar.appearance}
-          status={tab.statusbar.status} width={columns} height={contentHeight} x={panePadding(width)} y={hasTabBar ? 4 : 2}
+          status={tab.statusbar.status} width={columns} height={contentHeight} x={padding} y={contentTop}
           active={focusArea === 'content'} disabled={saving} isLocked={() => saving || pendingSave.current} error={error}
           onItems={changeItems} onAppearance={changeAppearance}
           onFocusTabs={() => {if (hasTabBar) setFocusArea('tabs');}}/> : items ? (
           <>
-            <ToggleList items={items} selected={selected} start={start} count={visibleToggleCount} width={columns} disabled={saving}/>
+            <ToggleList items={items} selected={selected} start={start} count={visibleToggleCount} width={columns} disabled={saving} hover={overItem} hoverColor={hoverColor}/>
             <Text color={error ? palette.error : palette.muted} wrap="truncate">
               {clipLine(error || (reorderable ? itemHelp + ' · Order sets narrow-screen priority' : itemHelp), columns)}
             </Text>
@@ -348,7 +416,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
             )}
           </>
         ) : (
-          lines.slice(offset, offset + contentHeight).map((line, i) => <DisplayLine key={i} row={line}/>)
+          lines.slice(offset, offset + contentHeight).map((line, i) => <DisplayLine key={i} row={line} hovered={lineHover(line, i)} hoverColor={hoverColor}/>)
         )}
       </Box>
     </CommandPane>

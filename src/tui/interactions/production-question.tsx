@@ -1,6 +1,7 @@
 import {Box, Text} from 'ink';
 import {buildQuestionRows, AnswerCaret, type PanelQuestion} from './question-panel.js';
-import {useMouse} from '../terminal/mouse.js';
+import {useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
+import {palette} from '../appearance/theme.js';
 import {safeText} from '../terminal/text.js';
 
 export interface ProductionQuestionDraft {
@@ -37,6 +38,7 @@ export function ProductionQuestionPanel({question, position, total, width, heigh
     text: safeText(draft.text), cursor, error: draft.error, hint, foldAction: false});
   // This panel is docked directly above the composer, whose own top hairline closes it: drop the planner's bottom rule so one line shows.
   const shown = view.rows.length > 1 ? view.rows.slice(0, -1) : view.rows;
+  const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
   useMouse(event => {
     if (event.x < 0 || event.x >= width || event.y < y || event.y >= y + Math.min(height, shown.length)) return;
     if (event.action === 'wheel_up' || event.action === 'wheel_down') {onMove(event.action === 'wheel_down' ? 1 : -1); return;}
@@ -47,9 +49,12 @@ export function ProductionQuestionPanel({question, position, total, width, heigh
   });
   return <Box width={width} height={Math.min(height, shown.length)} flexDirection="column" flexShrink={0} overflow="hidden">
     {focused && view.caret && <AnswerCaret position={view.caret}/>}
-    {shown.slice(0, height).map((row, index) => <Box key={index} width={width} height={1} flexShrink={0}>
-      <Text wrap="truncate">{row.segments.map((segment, at) =>
-        <Text key={at} color={segment.color} bold={Boolean(segment.bold)}>{segment.text}</Text>)}</Text>
-    </Box>)}
+    {shown.slice(0, height).map((row, index) => {
+      const hovered = row.action !== undefined && pointer !== null && pointer.y === y + index && pointer.x >= 0 && pointer.x < width;
+      return <Box key={index} width={width} height={1} flexShrink={0}>
+        <Text wrap="truncate">{row.segments.map((segment, at) =>
+          <Text key={at} color={hovered ? hoverColor : segment.color} bold={Boolean(segment.bold) || hovered}>{segment.text}</Text>)}</Text>
+      </Box>;
+    })}
   </Box>;
 }

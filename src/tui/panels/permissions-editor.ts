@@ -5,7 +5,18 @@ import {palette} from '../appearance/theme.js';
 import {safeText, clipLine} from '../terminal/text.js';
 
 /** One styled cell of a page row; the page draws rows and never interprets them. */
-export interface EditorCell {readonly text: string; readonly color: string; readonly bold?: boolean; readonly bg?: string}
+export interface EditorCell {readonly text: string; readonly color: string; readonly bold?: boolean; readonly bg?: string; /** What a click does; cells sharing one object hover together. */ readonly hit?: EditorClick}
+/** Pointer intents of the page. Hit regions are derived from the rendered cells, never from separate geometry. */
+export type EditorClick =
+  | {readonly kind: 'mode'; readonly id: string}
+  | {readonly kind: 'save-mode'}
+  | {readonly kind: 'rule'; readonly index: number}
+  | {readonly kind: 'delete'; readonly index: number}
+  | {readonly kind: 'confirm'; readonly yes: boolean}
+  | {readonly kind: 'add'}
+  | {readonly kind: 'field'; readonly field: number; readonly delta?: number}
+  | {readonly kind: 'submit'}
+  | {readonly kind: 'cancel'};
 export type EditorRow = readonly EditorCell[];
 const DECISIONS = ['allow', 'ask', 'deny'] as const;
 const SCOPES = ['project', 'user', 'session'] as const;
@@ -82,7 +93,35 @@ export function reducePermissions(data: PermissionsPageData, ui: PermissionsUi, 
   return {ui, handled: false};
 }
 
-const decisionColor = (decision: PermissionRuleItem['decision']) => decision === 'allow' ? palette.success : decision === 'ask' ? palette.warning : palette.error;
+/** Mouse model of the page: each click maps onto the same transitions the keyboard takes. */
+export function reduceClick(data: PermissionsPageData, ui: PermissionsUi, click: EditorClick): EditorStep {
+  const none: EditorStep = {ui, handled: true};
+  if (click.kind === 'submit') return reducePermissions(data, ui, '', {return: true});
+  if (click.kind === 'cancel') return reducePermissions(data, ui, '', {escape: true});
+  if (click.kind === 'confirm') return ui.confirmDelete ? reducePermissions(data, ui, click.yes ? 'y' : 'n', {}) : none;
+  if (ui.form) {
+    if (click.kind !== 'field') return none;
+    const form = {...ui.form, field: click.field, error: ''};
+    if (!click.delta) return {ui: {...ui, form}, handled: true};
+    const scopes = scopesFor(data);
+    return {ui: {...ui, form: click.field === 0 ? {...form, decision: cycle(form.decision, DECISIONS.length, click.delta)}
+      : click.field === 3 ? {...form, scope: cycle(form.scope, scopes.length, click.delta)} : form}, handled: true};
+  }
+  const base: PermissionsUi = {...ui, confirmDelete: undefined};
+  switch (click.kind) {
+    case 'mode': return {ui: {...base, draftMode: click.id === data.mode.current ? undefined : click.id, error: ''}, handled: true};
+    case 'save-mode': return reducePermissions(data, base, '', {return: true});
+    case 'rule': return {ui: {...base, selected: Math.max(0, Math.min(data.rules.length - 1, click.index))}, handled: true};
+    case 'delete': {
+      const rule = data.rules[click.index];
+      return rule ? {ui: {...base, selected: click.index, confirmDelete: rule.id, error: ''}, handled: true} : none;
+    }
+    case 'add': return {ui: {...base, form: newForm(), error: ''}, handled: true};
+    default: return none;
+  }
+}
+
+const decisionColor =(decision: PermissionRuleItem['decision']) => decision === 'allow' ? palette.success : decision === 'ask' ? palette.warning : palette.error;
 function compactTokens(tokens: number): string {return tokens >= 1000 ? (tokens / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(tokens);}
 const faint = () => palette.muted;
 export interface EditorView {readonly rows: readonly EditorRow[]; /** Row index that must stay visible. */ readonly focusRow: number; readonly footer: string}
@@ -93,13 +132,14 @@ export function permissionsView(data: PermissionsPageData, ui: PermissionsUi, co
   const shown = ui.draftMode ?? data.mode.current, dirty = ui.draftMode !== undefined && ui.draftMode !== data.mode.current;
   rows.push([{text: 'Mode  ', color: palette.panelLabel}, ...data.mode.options.flatMap((option, index): EditorCell[] => [
     ...(index ? [{text: '   ', color: palette.fg}] : []),
-    option.id === shown ? {text: ' ' + option.id + ' ', color: palette.selectionFg, bold: true, bg: palette.selectionBg} : {text: ' ' + option.id + ' ', color: palette.muted},
-  ]), ...(dirty ? [{text: '  unsaved', color: palette.warning, bold: true}] : [])]);
+    option.id === shown ? {text: ' ' + option.id + ' ', color: palette.selectionFg, bold: true, bg: palette.selectionBg, hit: {kind: 'mode', id: option.id}} : {text: ' ' + option.id + ' ', color: palette.muted, hit: {kind: 'mode', id: option.id}},
+  ]), ...(dirty ? [{text: '  unsaved', color: palette.warning, bold: true, hit: {kind: 'save-mode'} as const}] : [])]);
   const consequence = data.mode.options.find(option => option.id === shown)?.description ?? '';
   rows.push([{text: '      ' + clipLine(consequence, Math.max(1, columns - 6)), color: palette.muted}]);
   rows.push([]);
   rows.push([{text: 'Rules', color: palette.fg, bold: true}, {text: '  ·  ' + data.rules.length, color: palette.muted}]);
   let focusRow = 0;
+  rows.push([{text: '  + Add rule', color: palette.accent, hit: {kind: 'add'}}, {text: '  (a)', color: faint()}]);
   if (!data.rules.length) rows.push([{text: '  No rules yet. Press a to add one, or choose "Always allow" on an approval card.', color: palette.muted}]);
   const selectedIndex = Math.min(ui.selected, data.rules.length - 1);
   for (const scope of SCOPES) {
@@ -111,13 +151,16 @@ export function permissionsView(data: PermissionsPageData, ui: PermissionsUi, co
       const confirming = ui.confirmDelete === rule.id;
       const pattern = safeText(rule.pattern), room = Math.max(8, columns - 4 - 6 - stringWidth(rule.tool) - 2 - stringWidth(stats) - 2);
       if (active) focusRow = rows.length;
+      const hit: EditorClick = {kind: 'rule', index: at};
       rows.push([
-        {text: active ? '  ❯ ' : '    ', color: active ? palette.accent : palette.muted},
-        {text: rule.decision.padEnd(5), color: decisionColor(rule.decision), bold: true},
-        {text: rule.tool + '  ', color: active ? palette.fg : palette.fg, bold: active},
-        {text: clipLine(pattern, room), color: active ? palette.fg : palette.muted},
-        {text: '  ' + stats, color: faint()},
-        ...(confirming ? [{text: '  Delete this rule? y / n', color: palette.warning, bold: true}] : []),
+        {text: active ? '  ❯ ' : '    ', color: active ? palette.accent : palette.muted, hit},
+        {text: rule.decision.padEnd(5), color: decisionColor(rule.decision), bold: true, hit},
+        {text: rule.tool + '  ', color: palette.fg, bold: active, hit},
+        {text: clipLine(pattern, room), color: active ? palette.fg : palette.muted, hit},
+        {text: '  ' + stats, color: faint(), hit},
+        ...(confirming ? [{text: '  Delete this rule? ', color: palette.warning, bold: true}, {text: 'y', color: palette.warning, bold: true, hit: {kind: 'confirm', yes: true} as const},
+          {text: ' / ', color: palette.warning, bold: true}, {text: 'n', color: palette.warning, bold: true, hit: {kind: 'confirm', yes: false} as const}]
+          : active ? [{text: '  [Delete]', color: palette.muted, hit: {kind: 'delete', index: at} as const}] : []),
       ]);
     }
   }
@@ -127,18 +170,23 @@ export function permissionsView(data: PermissionsPageData, ui: PermissionsUi, co
     const scopes = scopesFor(data);
     rows.push([]);
     rows.push([{text: 'New rule', color: palette.fg, bold: true}]);
-    const field = (at: number, label: string, value: string, choice: boolean): EditorRow => [
-      {text: form.field === at ? '  ❯ ' : '    ', color: form.field === at ? palette.accent : palette.muted},
-      {text: label.padEnd(9), color: palette.panelLabel},
-      choice ? {text: '‹ ' + value + ' ›', color: at === 0 ? decisionColor(DECISIONS[form.decision]!) : palette.fg, bold: true}
-        : {text: value + (form.field === at ? '▌' : ''), color: palette.fg, bold: true},
-    ];
+    const field = (at: number, label: string, value: string, choice: boolean): EditorRow => {
+      const focus: EditorClick = {kind: 'field', field: at}, color = at === 0 ? decisionColor(DECISIONS[form.decision]!) : palette.fg;
+      return [
+        {text: form.field === at ? '  ❯ ' : '    ', color: form.field === at ? palette.accent : palette.muted, hit: focus},
+        {text: label.padEnd(9), color: palette.panelLabel, hit: focus},
+        ...(choice ? [{text: '‹ ', color, bold: true, hit: {kind: 'field', field: at, delta: -1} as const}, {text: value, color, bold: true, hit: {kind: 'field', field: at, delta: 1} as const},
+          {text: ' ›', color, bold: true, hit: {kind: 'field', field: at, delta: 1} as const}]
+          : [{text: value + (form.field === at ? '▌' : ''), color: palette.fg, bold: true, hit: focus}]),
+      ];
+    };
     rows.push(field(0, 'Decision', DECISIONS[form.decision]!, true));
     rows.push(field(1, 'Tool', form.tool, false));
     rows.push(field(2, 'Pattern', form.pattern, false));
     rows.push(field(3, 'Scope', scopes[form.scope] ?? 'project', true));
     focusRow = rows.length - 4 + form.field;
     if (form.error) {rows.push([{text: '    ✗ ' + form.error, color: palette.error}]); focusRow = rows.length - 1;}
+    rows.push([{text: '    ', color: palette.fg}, {text: '[ Add ]', color: palette.accent, bold: true, hit: {kind: 'submit'}}, {text: '  ', color: palette.fg}, {text: '[ Cancel ]', color: palette.muted, hit: {kind: 'cancel'}}]);
   }
   rows.push([]);
   const s = data.stats;

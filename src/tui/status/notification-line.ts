@@ -1,5 +1,5 @@
 import stringWidth from 'string-width';
-import {contextCategories} from '../../context/breakdown.js';
+import {contextCategories, type ContextCategory} from '../../context/breakdown.js';
 import type {StatusbarId} from '../../config/statusbar-preferences.js';
 import type {StageStatus} from '../../runtime/stage-status.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
@@ -38,20 +38,40 @@ function join(groups: readonly (readonly NoteSegment[])[]): NoteSegment[] {
   return out;
 }
 
-function contextDetail(status: StageStatus, actor: string): NoteSegment[] {
+const categoryAbbreviation: Readonly<Record<ContextCategory, string>> = {system: 'sys', prompt: 'pr', assistant: 'ast', thinking: 'th', tools: 'tl'};
+const share = (amount: number, window: number): string => {
+  const percent = window > 0 ? amount / window * 100 : 0;
+  return (amount > 0 && percent < 1 ? '<1' : String(Math.round(percent))) + '%';
+};
+const flatWidth = (segments: readonly NoteSegment[]): number => segments.reduce((sum, segment) => sum + stringWidth(segment.text), 0);
+/** Context gauge detail in percentages of the window; variants from longest to shortest, the first that fits `width` wins (never clipped with an ellipsis). */
+function contextDetail(status: StageStatus, actor: string, width?: number): NoteSegment[] {
   const context = status.context;
   if (!context) return [dim('ctx '), value('not measured yet')];
-  const out: NoteSegment[] = [dim('ctx '), value((context.estimated ? '~' : '') + formatTokens(context.tokens)), dim('/' + formatTokens(context.window))];
-  const ramp = contextRamp(actor);
-  if (context.categories) for (const category of contextCategories) {
-    const amount = context.categories[category];
-    if (amount <= 0) continue;
-    out.push({text: ' '}, {text: '▌', color: ramp[category]}, dim(' ' + category + ' '), value(formatTokens(amount, true)));
+  const ramp = contextRamp(actor), window = context.window, tilde = context.estimated ? '~' : '';
+  const percent = share(context.tokens, window);
+  const ratio = context.high ? Math.round(context.high / window * 100) + '%' : '';
+  const tone = palette[contextOver(status) ? 'error' : contextTone(status) === 'muted' ? 'fg' : contextTone(status)];
+  const compacts = (full: boolean): NoteSegment[] => context.high ? [dim(full ? 'compacts at ' : 'compacts '), value(ratio, tone)] : [];
+  const categories = (full: boolean): NoteSegment[][] => {
+    const out: NoteSegment[][] = [];
+    if (context.categories) for (const category of contextCategories) {
+      const amount = context.categories[category];
+      if (amount > 0) out.push([{text: '▌', color: ramp[category]}, dim((full ? category : categoryAbbreviation[category]) + ' '), value(share(amount, window))]);
+    }
+    return out;
+  };
+  const free: NoteSegment[] = [{text: '▌', color: mixHex(palette.muted, palette.bg, 0.22)}, dim('free '), value(share(Math.max(0, window - context.tokens), window))];
+  const head = [dim('ctx '), value(tilde + formatTokens(context.tokens)), dim('/' + formatTokens(window) + ' '), value(percent)];
+  const variants: NoteSegment[][] = [];
+  if (categories(true).length) {
+    variants.push(join([head, ...categories(true), free, compacts(true)]));
+    variants.push(join([head, ...categories(false), free, compacts(false)]));
+    variants.push(join([head, ...categories(false), compacts(false)]));
   }
-  out.push({text: ' '}, {text: '▌', color: mixHex(palette.muted, palette.bg, 0.22)}, dim(' free '), value(formatTokens(Math.max(0, context.window - context.tokens))));
-  if (context.high) out.push(dot(), dim('compacts at '), value(Math.round(context.high / context.window * 100) + '%', palette[contextOver(status) ? 'error' : contextTone(status) === 'muted' ? 'fg' : contextTone(status)]),
-    dim(' (' + formatTokens(context.high) + ')'));
-  return out;
+  variants.push(join([head, compacts(false)]));
+  variants.push(join([[dim('ctx '), value(tilde + percent)], compacts(false)]));
+  return (width === undefined ? variants[0] : variants.find(variant => flatWidth(variant) <= width) ?? variants[variants.length - 1])!;
 }
 function modelDetail(status: StageStatus): NoteSegment[] {
   if (!status.model) return [dim('No model selected'), dot(), click('click to change')];
@@ -93,9 +113,9 @@ function gitDetail(status: StageStatus): NoteSegment[] {
 }
 
 /** Row-2 detail of the hovered status widget. Click actions are named here and executed by `widgetCommand`. */
-export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = status.color ?? palette.accent): NoteSegment[] {
+export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = status.color ?? palette.accent, width?: number): NoteSegment[] {
   switch (id) {
-    case 'context': return contextDetail(status, actor);
+    case 'context': return contextDetail(status, actor, width);
     case 'model': return modelDetail(status);
     case 'permission': {
       const mode = status.permission, known = mode && Object.hasOwn(permissionModes, mode) ? permissionModes[mode as keyof typeof permissionModes] : undefined;

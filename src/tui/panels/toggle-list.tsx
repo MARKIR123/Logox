@@ -12,6 +12,13 @@ export function toggleLabel(item: CommandToggle): string {
   return item.label ?? (Object.hasOwn(statusbarLabels, item.id) ? statusbarLabels[item.id as StatusbarId] : item.id);
 }
 
+/** Rows with `‹ ›` controls: option rows always, boolean rows once the width allows. */
+export function toggleHasControls(item: CommandToggle, width: number): boolean {return Boolean(item.options?.length) || width >= 18;}
+export type ToggleZone = 'row' | 'dec' | 'inc';
+/** Which part of a row a column (relative to the row) falls on; shared by drawing, hover and clicks. */
+export function toggleZone(item: CommandToggle, width: number, x: number): ToggleZone {
+  return toggleHasControls(item, width) && x >= width - 4 ? (x < width - 2 ? 'dec' : 'inc') : 'row';
+}
 export function moveToggle(items: readonly CommandToggle[], index: number, direction: number): {items: readonly CommandToggle[]; index: number} {
   const next = Math.max(0, Math.min(items.length - 1, index + direction)), reordered = [...items];
   if (next !== index) [reordered[index], reordered[next]] = [reordered[next]!, reordered[index]!];
@@ -27,8 +34,10 @@ export function cycleToggleOption(item: CommandToggle, direction: number): Comma
 }
 
 /** Choice focus and selection are independent: ❯ marks focus, the square marks the saved choice. */
-export function ToggleList({items, selected, start, count, width, disabled = false}: {
+export function ToggleList({items, selected, start, count, width, disabled = false, hover, hoverColor = palette.accent}: {
   items: readonly CommandToggle[]; selected: number; start: number; count: number; width: number; disabled?: boolean;
+  /** Hovered row (index into `items`) and the part of it under the pointer. */
+  hover?: {readonly index: number; readonly zone: ToggleZone} | undefined; hoverColor?: string;
 }): ReactElement {
   return (
     <Box flexDirection="column" height={count} overflow="hidden">
@@ -36,6 +45,9 @@ export function ToggleList({items, selected, start, count, width, disabled = fal
         const focused = selected === start + offset;
         const hasOptions = Boolean(item.options && item.options.length > 0);
         const controls = (hasOptions || width >= 18) ? ' ‹ ›' : '';
+        const over = !disabled && hover?.index === start + offset ? hover.zone : undefined;
+        const rowHover = over !== undefined && !focused;
+        const controlColor = (part: 'dec' | 'inc') => over === part ? hoverColor : focused && !disabled ? palette.accent : palette.muted;
         const controlsWidth = stringWidth(controls);
         const label = safeText(toggleLabel(item));
 
@@ -49,11 +61,11 @@ export function ToggleList({items, selected, start, count, width, disabled = fal
             <Box key={item.id} height={1} flexShrink={0}>
               <Text wrap="truncate">
                 {focused ? <Text color={disabled ? palette.muted : palette.accent}>❯ </Text> : <Text>  </Text>}
-                <Text color={disabled ? palette.muted : focused ? palette.accent : palette.muted} bold={focused}>
+                <Text color={disabled ? palette.muted : focused ? palette.accent : rowHover ? hoverColor : palette.muted} bold={focused || rowHover}>
                   {displayText}
                 </Text>
                 <Text>{spacer}</Text>
-                <Text color={focused && !disabled ? palette.accent : palette.muted}>{controls}</Text>
+                {controls ? <><Text color={palette.muted}> </Text><Text color={controlColor('dec')} bold={over === 'dec'}>‹</Text><Text> </Text><Text color={controlColor('inc')} bold={over === 'inc'}>›</Text></> : null}
               </Text>
             </Box>
           );
@@ -62,7 +74,7 @@ export function ToggleList({items, selected, start, count, width, disabled = fal
         // Boolean toggle line
         const displayLabel = clipLine(label, Math.max(1, width - 8 - controlsWidth));
         const checkMark = toggleMarker(item.enabled) + ' ';
-        const stateColor = toggleColor(item.enabled, focused, disabled);
+        const stateColor = rowHover ? hoverColor : toggleColor(item.enabled, focused, disabled);
         const totalContentWidth = stringWidth((focused ? '❯ ' : '  ') + checkMark + displayLabel);
         const spacer = ' '.repeat(Math.max(0, width - totalContentWidth - controlsWidth));
 
@@ -77,7 +89,7 @@ export function ToggleList({items, selected, start, count, width, disabled = fal
                 {displayLabel}
               </Text>
               <Text>{spacer}</Text>
-              <Text color={focused && !disabled ? palette.accent : palette.muted}>{controls}</Text>
+              {controls ? <><Text color={palette.muted}> </Text><Text color={controlColor('dec')} bold={over === 'dec'}>‹</Text><Text> </Text><Text color={controlColor('inc')} bold={over === 'inc'}>›</Text></> : null}
             </Text>
           </Box>
         );

@@ -4,7 +4,7 @@ import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
 import {palette} from '../appearance/theme.js';
 import {safeText, clipLine} from '../terminal/text.js';
-import {useMouse} from '../terminal/mouse.js';
+import {useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 import {toggleColor, toggleMarker} from '../components/toggle-marker.js';
 import {graphemes, insert, erase, move, moveToLineEdge, type Draft} from '../input/editor.js';
 
@@ -258,6 +258,7 @@ export function QuestionPanel({question, position, total, width, height, y = 0, 
   const layout = buildQuestionRows({question, position, total, width, height, y, focus: state.focus, checked: state.checked,
     text: state.draft.text, cursor: state.draft.cursor, attached: !question.multiSelect && state.focus < options.length && state.draft.text ? options[state.focus]?.label ?? null : null,
     error: state.error, bodyOffset: state.bodyOffset, canNavigate: !!onBack || !!onForward});
+  const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
   useMouse(event => {
     if (event.x < 0 || event.x >= width || event.y < y || event.y >= y + (collapsed ? 1 : layout.rows.length)) return;
     if (event.action === 'wheel_up' || event.action === 'wheel_down') {
@@ -273,11 +274,13 @@ export function QuestionPanel({question, position, total, width, height, y = 0, 
   });
   if (collapsed) return <Text color={palette.muted} wrap="truncate">{clipLine('Waiting for your answer · Ctrl+K Expand', Math.max(1, width))}</Text>;
   return <Box flexDirection="column" width={Math.max(1, width)}>
-    {layout.rows.map((line, index) => <Box key={index} height={1} flexShrink={0} width={Math.max(1, width)}>
+    {layout.rows.map((line, index) => {
+      const hovered = line.action !== undefined && pointer !== null && pointer.y === y + index && pointer.x >= 0 && pointer.x < width;
+      return <Box key={index} height={1} flexShrink={0} width={Math.max(1, width)}>
       <Text wrap="truncate">{line.segments.some(segment => segment.text.length > 0)
-        ? line.segments.map((segment, at) => <Text key={at} color={segment.color} bold={!!segment.bold}>{segment.text}</Text>)
+        ? line.segments.map((segment, at) => <Text key={at} color={hovered ? hoverColor : segment.color} bold={!!segment.bold || hovered}>{segment.text}</Text>)
         : ' '}</Text>
-    </Box>)}
+    </Box>;})}
     {layout.caret && <AnswerCaret position={layout.caret}/>}
   </Box>;
 }

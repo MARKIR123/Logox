@@ -6,8 +6,9 @@ import {palette} from '../appearance/theme.js';
 import {safeText} from '../terminal/text.js';
 import {clipLine} from '../terminal/text.js';
 import {emptyDraft, erase, graphemes, insert, type Draft} from '../input/editor.js';
-import {PanelFrame as CommandPane, panePadding} from '../components/panel-frame.js';
+import {PanelFrame as CommandPane, footerParts, hitFooter, panePadding} from '../components/panel-frame.js';
 import {toggleMarker} from '../components/toggle-marker.js';
+import {inRegion, useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 
 export interface EffortStyle {
   readonly color: string;
@@ -77,7 +78,17 @@ export function Picker({title, description = '', items, current = '', status = '
   const descriptionRoom = Math.max(0, columns - 2 - 2 - Math.min(widestLabel, Math.floor(columns * 0.65)));
   const rule = <Box height={1} flexShrink={0}><Text color={palette.accent} wrap="truncate">{'─'.repeat(columns)}</Text></Box>;
   const {setCursorPosition} = useCursor();
-  const searchY = y + 2 + (showTabs ? 1 : 0) + (showSectionRules ? 1 : 0) + (showDescription ? 1 : 0);
+  // One geometry for drawing and hit-testing: the body starts two rows under the panel top.
+  const searchY = y + 2 + (showTabs || showDescription ? 1 : 0) + (showSectionRules ? 1 : 0);
+  const listY = searchY + (showSearch ? 1 : 0) + (showSearchGap ? 1 : 0), effortY = listY + count + 1;
+  let tabX = padding;
+  const tabCells = showTabs ? tabs.map((name, at) => {
+    const lead = at > 0 ? 2 : 0, text = name === activeTab ? '[ ' + name + ' ]' : '  ' + name + '  ';
+    const cell = {name, text: ' '.repeat(lead) + text, region: {y: y + 2, x0: tabX + lead, x1: tabX + lead + stringWidth(text)}};
+    tabX += lead + stringWidth(text);
+    return cell;
+  }) : [];
+  const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
   setCursorPosition(status === 'ready' && showSearch ? {x: Math.min(width - padding - 1, padding + 8 + stringWidth(tail)), y: searchY} : undefined);
   const edit = (next: Draft) => {if (next.text.length <= 512) {setSearch(next); setFocused('');};};
   usePaste(text => {if (status === 'ready' && showSearch) edit(insert(search, text.replace(/[\r\n]/g, ' ')));});
@@ -118,14 +129,56 @@ export function Picker({title, description = '', items, current = '', status = '
   const effortHint = '  (← → to adjust)';
   const showEffortHint = showEffortMarkers && columns >= stringWidth(effortPrefix + effortName + ' ' + effortHint)
     + markerCells * (itemEffortLevels?.length ?? 0);
-  const effortNotice = hasEffortBar ? ' · ←→ Thinking' : '';
-  const tabNotice = tabbed ? ' · Tab Provider' : '';
-  const footer = status === 'saving' ? 'Processing...' : nothing ? 'Esc Back' : '↑↓ Select' + tabNotice + effortNotice + ' · Enter Confirm · Esc Back' + (selected?.deletable && deleteLabel ? ' · Ctrl+X ' + deleteLabel : '');
-  return <CommandPane docked title={title} width={width} height={height} footer={notice || footer}>
+  const effortBar = (() => {
+    if (!hasEffortBar || !showEffortMarkers) return null;
+    const levels = itemEffortLevels ?? [];
+    const activeIdx = Math.max(0, levels.indexOf(currentEffort ?? levels[0]!));
+    const markerWidth = stringWidth(toggleMarker(false));
+    const available = Math.max(markerWidth, columns - stringWidth(effortPrefix + effortName + ' ') - (showEffortHint ? stringWidth(effortHint) : 0));
+    const visible = Math.max(1, Math.min(levels.length, Math.floor(available / markerWidth)));
+    const first = Math.max(0, Math.min(activeIdx - Math.floor(visible / 2), levels.length - visible));
+    const dashLimit = Math.max(2, Math.min(6, Math.floor(12 / Math.max(1, levels.length - 1))));
+    const dashCount = Math.max(0, Math.min(dashLimit, Math.floor((available - visible * markerWidth) / Math.max(1, visible - 1))));
+    return {levels, activeIdx, markerWidth, first, visible, dashCount,
+      cells: levels.slice(first, first + visible).map((tier, offset) => ({tier, idx: first + offset,
+        region: {y: effortY, x0: padding + stringWidth(effortPrefix) + offset * (markerWidth + dashCount), x1: padding + stringWidth(effortPrefix) + offset * (markerWidth + dashCount) + markerWidth}}))};
+  })();
+  const footer = status === 'saving' ? 'Processing...' : nothing ? 'Esc Back' : '↑↓ Select' + (tabbed ? ' · Tab Provider' : '') + (hasEffortBar ? ' · ←→ Thinking' : '') + ' · Enter Confirm · Esc Back' + (selected?.deletable && deleteLabel ? ' · Ctrl+X ' + deleteLabel : '');
+  const footerText = notice || footer;
+  const nextTab = () => {if (tabbed) {setPickedTab(tabs[(Math.max(0, tabs.indexOf(activeTab)) + 1) % tabs.length]!); setFocused('');}};
+  const footerView = footerParts(footerText, notice || status === 'saving' ? [] : [
+    ...(tabbed ? [{label: 'Tab Provider', run: nextTab}] : []),
+    ...(nothing ? [] : [{label: 'Enter Confirm', run: () => {if (selected) onSelect(selected.id, currentEffort);}}]),
+    {label: 'Esc Back', run: onCancel},
+    ...(selected?.deletable && deleteLabel && onDelete ? [{label: 'Ctrl+X ' + deleteLabel, run: () => onDelete(selected.id)}] : [])], width, y, height, true);
+  const move = (delta: number) => {
+    const at = enabled.findIndex(item => item.id === selected?.id);
+    setFocused(enabled[Math.max(0, Math.min(enabled.length - 1, at + delta))]?.id ?? '');
+  };
+  useMouse(event => {
+    if (event.x < 0 || event.x >= width || event.y < y || event.y >= y + height) return;
+    if (event.action === 'press' && event.button === 0 && status !== 'saving') {
+      const part = hitFooter(footerView, event);
+      if (part?.run) {part.run(); return;}
+    }
+    if (status !== 'ready') return;
+    if (event.action === 'wheel_up' || event.action === 'wheel_down') {move(event.action === 'wheel_up' ? -1 : 1); return;}
+    if (event.action !== 'press' || event.button !== 0) return;
+    const tab = tabCells.find(cell => inRegion(event, cell.region));
+    if (tab) {setPickedTab(tab.name); setFocused(''); return;}
+    const level = effortBar?.cells.find(cell => inRegion(event, cell.region));
+    if (level && selected) {setItemEfforts(prev => ({...prev, [selected.id]: level.tier})); return;}
+    const row = event.y - listY;
+    if (row < 0 || row >= count) return;
+    const item = matches[start + row];
+    if (!item || item.disabled) return;
+    if (item.id === selected?.id) onSelect(item.id, currentEffort); else setFocused(item.id);
+  });
+  return <CommandPane docked title={title} width={width} height={height} footer={footerText} parts={footerView} hovered={hitFooter(footerView, pointer)} hoverColor={hoverColor}>
     {showTabs ? <>
       <Box height={1} flexShrink={0}><Text wrap="truncate">
-        {tabs.map((name, at) => <Text key={name} color={name === activeTab ? palette.accent : palette.muted} bold={name === activeTab}>
-          {(at > 0 ? '  ' : '') + (name === activeTab ? '[ ' + name + ' ]' : '  ' + name + '  ')}
+        {tabCells.map(cell => <Text key={cell.name} color={cell.name === activeTab ? palette.accent : inRegion(pointer, cell.region) ? hoverColor : palette.muted} bold={cell.name === activeTab}>
+          {cell.text}
         </Text>)}
       </Text></Box>
     </> : showDescription ? <Box height={1} flexShrink={0}><Text color={error ? palette.error : palette.muted} wrap="truncate">{clipLine(safeText(error || description), columns)}</Text></Box> : null}
@@ -141,11 +194,12 @@ export function Picker({title, description = '', items, current = '', status = '
         const labelColumns = Math.max(1, columns - 2 - (detail ? stringWidth(detail) + 2 : 0));
         const label = clipLine(safeText(item.label + (item.id === current ? ' · current' : '') + effortBadge), labelColumns);
         const highlight = active && !item.disabled;
+        const hovered = !item.disabled && !active && pointer !== null && pointer.y === listY + matches.indexOf(item) - start && pointer.x >= 0 && pointer.x < width;
         return <Box key={item.id} height={1} flexShrink={0}><Text wrap="truncate">
-          <Text bold={highlight} color={highlight ? palette.accent : item.disabled ? palette.muted : palette.fg}>
+          <Text bold={highlight || hovered} color={highlight ? palette.accent : hovered ? hoverColor : item.disabled ? palette.muted : palette.fg}>
             {(active ? '❯ ' : '  ') + label}
           </Text>
-          {detail ? <Text color={highlight ? palette.accent : palette.muted}>
+          {detail ? <Text color={highlight ? palette.accent : hovered ? hoverColor : palette.muted}>
             {' '.repeat(Math.max(2, labelColumns - stringWidth(label) + 2)) + detail}
           </Text> : null}
         </Text></Box>;
@@ -156,23 +210,14 @@ export function Picker({title, description = '', items, current = '', status = '
       <Box height={1} flexShrink={0}>
         <Text wrap="truncate">
           <Text color={palette.accent}>{effortPrefix}</Text>
-          {(() => {
-            if (!showEffortMarkers) return null;
-            const levels = itemEffortLevels ?? [];
-            const activeIdx = Math.max(0, levels.indexOf(currentEffort ?? levels[0]!));
-            const markerWidth = stringWidth(toggleMarker(false));
-            const available = Math.max(markerWidth, columns - stringWidth(effortPrefix + effortName + ' ') - (showEffortHint ? stringWidth(effortHint) : 0));
-            const visible = Math.max(1, Math.min(levels.length, Math.floor(available / markerWidth)));
-            const start = Math.max(0, Math.min(activeIdx - Math.floor(visible / 2), levels.length - visible));
-            const dashLimit = Math.max(2, Math.min(6, Math.floor(12 / Math.max(1, levels.length - 1))));
-            const dashCount = Math.max(0, Math.min(dashLimit, Math.floor((available - visible * markerWidth) / Math.max(1, visible - 1))));
+          {effortBar && (() => {
             const currentStyle = effortStyles[currentEffort ?? ''] ?? {color: palette.accent};
-            return levels.slice(start, start + visible).map((tier, offset) => {
-              const idx = start + offset, isSelected = idx === activeIdx;
-              const railColor = idx < activeIdx ? currentStyle.color : palette.borderMuted;
-              return <Text key={tier}>
-                {offset > 0 && <Text color={railColor}>{'─'.repeat(dashCount)}</Text>}
-                <Text color={isSelected ? palette.accent : palette.muted} bold={isSelected}>
+            return effortBar.cells.map((cell, offset) => {
+              const isSelected = cell.idx === effortBar.activeIdx;
+              const railColor = cell.idx < effortBar.activeIdx ? currentStyle.color : palette.borderMuted;
+              return <Text key={cell.tier}>
+                {offset > 0 && <Text color={railColor}>{'─'.repeat(effortBar.dashCount)}</Text>}
+                <Text color={isSelected ? palette.accent : inRegion(pointer, cell.region) ? hoverColor : palette.muted} bold={isSelected}>
                   {toggleMarker(isSelected)}
                 </Text>
               </Text>;

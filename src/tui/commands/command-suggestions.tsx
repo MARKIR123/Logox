@@ -4,6 +4,7 @@ import {ListFrame, listContentWidth} from '../components/list-frame.js';
 import {palette} from '../appearance/theme.js';
 import {safeText, clipLine} from '../terminal/text.js';
 import {splitQueryMatch} from './query-match.js';
+import {useHoverColor, usePointer} from '../terminal/mouse.js';
 
 export interface SuggestionCommand {readonly name: string; readonly description: string; readonly tag?: string}
 export interface CommandSuggestionsProps {
@@ -28,6 +29,7 @@ export function suggestionWindow(length: number, selectedIndex: number, maxVisib
 
 export function CommandSuggestions({commands, selectedIndex, columns, query = '', title = 'Commands',
   maxVisible = 5, showCounts = true, y = 0, onPick, onWheelStep}: CommandSuggestionsProps) {
+  const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
   const window = suggestionWindow(commands.length, selectedIndex, maxVisible);
   const start = window.start;
   if (!commands.length) return null;
@@ -45,15 +47,16 @@ export function CommandSuggestions({commands, selectedIndex, columns, query = ''
       match: clipped.slice(originalHit.before.length, originalHit.before.length + originalHit.match.length),
       after: clipped.slice(originalHit.before.length + originalHit.match.length),
     } : null;
-    const nameColor = active ? palette.accent : palette.muted;
+    const hovered = !active && pointer !== null && pointer.y === y + 1 + row && pointer.x >= 0 && pointer.x < columns;
+    const nameColor = active ? palette.accent : hovered ? hoverColor : palette.muted;
     const gap = Math.max(0, nameBudget - stringWidth(clipped)) + 2;
     const rest = Math.max(0, available - nameBudget - 2);
     // A bracketed argument hint takes the remaining budget before optional description text.
     const tag = command.tag && rest >= 2 ? `[${clipLine(safeText(command.tag), rest - 2)}]` : '';
     const description = clipLine(safeText(command.description), Math.max(0, rest - (tag ? stringWidth(tag) + 1 : 0)));
     return <Text key={start + row}><Text color={nameColor}>{active ? ' ❯ ' : '   '}</Text>
-      {hit ? <><Text color={nameColor}>{hit.before}</Text><Text color={active ? palette.accent : palette.fg}>{hit.match}</Text><Text color={nameColor}>{hit.after}</Text></> : <Text color={nameColor}>{clipped}</Text>}
-      {rest > 0 && <Text color={active ? palette.accent : palette.muted}>{' '.repeat(gap)}{tag}{tag && description ? ' ' : ''}{description}</Text>}
+      {hit ? <><Text color={nameColor}>{hit.before}</Text><Text color={active ? palette.accent : hovered ? hoverColor : palette.fg}>{hit.match}</Text><Text color={nameColor}>{hit.after}</Text></> : <Text color={nameColor}>{clipped}</Text>}
+      {rest > 0 && <Text color={active ? palette.accent : hovered ? hoverColor : palette.muted}>{' '.repeat(gap)}{tag}{tag && description ? ' ' : ''}{description}</Text>}
     </Text>;
   });
   const hiddenAbove = start, hiddenBelow = commands.length - start - window.count;

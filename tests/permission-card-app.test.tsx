@@ -11,19 +11,19 @@ import {App} from '../src/tui/app.js';
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
 
-async function run(script: (key: (text: string) => Promise<void>, screen: () => string) => Promise<void>, extra: Record<string, unknown> = {}) {
+async function run(script: (key: (text: string) => Promise<void>, screen: () => string, output: TerminalScreen) => Promise<void>, extra: Record<string, unknown> = {}, stage = false) {
   const input = new Input(), output = new TerminalScreen(), store = new RuntimeStore();
   output.columns = 100; output.rows = 30;
   const ticket = store.interactions.open({kind: 'permission', sessionId: 's', activityId: 'a', ownerId: 'techne', title: 'Allow shell?', tool: 'shell',
     arguments: {command: 'npm ci --ignore-scripts'}, reason: 'installs packages', mode: 'auto', suggestion: {tool: 'shell', pattern: 'npm ci', label: 'npm ci *'}, ...extra});
   let instance!: ReturnType<typeof render>;
   await act(async () => {
-    instance = render(<App store={store} sessionId="s" onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/>, {
+    instance = render(<App {...(stage ? {stage: true} : {})} store={store} sessionId="s" onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/>, {
       stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});
   });
   const key = async (text: string) => {await act(async () => {input.write(text); await delay(40);}); await act(async () => {await instance.waitUntilRenderFlush();});};
   const screen = () => output.text.split('\x1b[1;1H\x1b[J').at(-1)!.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  try {await key('\t'); await script(key, screen); return await Promise.race([ticket.result, delay(500).then(() => undefined)]);}
+  try {await key('\t'); await script(key, screen, output); return await Promise.race([ticket.result, delay(500).then(() => undefined)]);}
   finally {store.interactions.close(); await act(async () => {instance.unmount();}); await instance.waitUntilExit(); input.destroy(); output.destroy();}
 }
 
@@ -54,4 +54,19 @@ test('拒绝说明：n 打开单行说明，Esc 返回，Enter 发送并带上�
   assert.ok(outcome?.status === 'answered' && outcome.response.kind === 'permission' && outcome.response.decision === 'deny' && outcome.response.note === '先跑测试');
   const bare = await run(async key => {await key('n'); await key('\r');});
   assert.ok(bare?.status === 'answered' && bare.response.kind === 'permission' && bare.response.decision === 'deny' && bare.response.note === undefined);
+});
+
+test('鼠标：点击审批选项即作答（会话授权），点击 Deny 先打开说明', {timeout: 8000}, async () => {
+  const click = async (key: (text: string) => Promise<void>, output: TerminalScreen, label: string) => {
+    const row = output.lines.findIndex(line => line.includes(label));
+    assert.ok(row >= 0, label);
+    const x = output.lines[row]!.indexOf(label) + 1;
+    await key(`\x1b[<0;${x + 1};${row + 1}M`); await key(`\x1b[<0;${x + 1};${row + 1}m`);
+  };
+  const session = await run(async (key, _screen, output) => {await click(key, output, 'for this session');}, {}, true);
+  assert.ok(session?.status === 'answered' && session.response.kind === 'permission' && session.response.decision === 'allow_session', 'click answers');
+  let opened = '';
+  const denied = await run(async (key, screen, output) => {await click(key, output, 'Deny and tell'); opened = screen(); await key('\r');}, {}, true);
+  assert.match(opened, /Tell Techne why/, 'Deny opens the note first');
+  assert.ok(denied?.status === 'answered' && denied.response.kind === 'permission' && denied.response.decision === 'deny');
 });

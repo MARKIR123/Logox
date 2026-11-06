@@ -212,3 +212,20 @@ test('mouse controls match keyboard and narrow layouts retain an editable module
     assert.match(f.text(), /\[■\] Role/, 'When chevrons are hidden, the right side of a module row toggles rather than reordering');
   } finally {await f.close();}
 });
+
+test('statusbar editor and tab bar take the mouse: tabs click through, wheel selects rows', async () => {
+  const f = await fixture();
+  try {
+    await f.open('/settings');
+    const bar = f.text().split('\n')[2]!;
+    assert.match(bar, /Statusbar/);
+    const click = async (x: number, y: number) => {await f.key(`\x1b[<0;${x + 1};${y + 1}M`); await f.key(`\x1b[<0;${x + 1};${y + 1}m`);};
+    await click(bar.indexOf('Statusbar') + 1, 2);
+    assert.match(f.text(), /Style:/, 'clicking the Statusbar tab opens it');
+    const style = f.text().split('\n').findIndex(line => line.includes('Style:'));
+    await f.key(`\x1b[<65;11;${style + 1}M`); assert.match(f.text(), /❯ Palette:/, 'wheel down selects the next row');
+    await f.key(`\x1b[<64;11;${style + 1}M`); assert.match(f.text(), /❯ Style:/, 'wheel up selects the previous row');
+    await click(f.text().split('\n')[2]!.indexOf('Settings') + 1, 2);
+    assert.match(f.text(), /Theme preset:/, 'and back to Settings');
+  } finally {await f.close();}
+});

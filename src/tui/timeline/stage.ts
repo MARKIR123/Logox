@@ -150,6 +150,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const isSystem = message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system'));
     const actorColor = railFor(message.ownerId);
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
+    // Text accents follow who wrote the text, not the surface: an actor's report keeps its colour in the Director window; briefs keep their author's.
+    const author = message.role === 'assistant' ? message.ownerId : inputKind(message) === 'collaboration' && message.source ? message.source.toLowerCase() : 'logox';
+    const accent = isUser || isSystem ? rail : ownerColor(author, roles);
     const systemError = isTimelineError(message);
     const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
     // A running, stoppable tool draws its `■ Stop` state (stopping, focused, hovered) into the row.
@@ -157,7 +160,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
     const run = runArg ?? editRuns.get(message.id)?.messages;
     const runKey = run ? run.map(item => item.id + ':' + (item.step?.state ?? '') + ':' + (item.step?.elapsedMs ?? 0) + ':' + item.text.length).join('|') : null;
-    const key = JSON.stringify([themeRevision(), userLabelRevision(), width, frameKey, rail, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
+    const key = JSON.stringify([themeRevision(), userLabelRevision(), width, frameKey, rail, accent, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -182,7 +185,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),
         open: open(message.id), railColor: rail, ...(frame ? {parentFrame: frame} : {})});
-      else if (message.role === 'assistant' || (message.role === 'user' && (inputKind(message) === 'director' || inputKind(message) === 'collaboration'))) chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame);
+      else if (message.role === 'assistant' || (message.role === 'user' && (inputKind(message) === 'director' || inputKind(message) === 'collaboration'))) chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame, accent);
       else chunk.pushProse(message.id, stripNarration(message.text), rail, 'body', frame, undefined, isSystem ? palette.system : undefined);
       rows = chunk.rows;
       if (layouts.size >= 4) layouts.delete(layouts.keys().next().value!);
@@ -493,7 +496,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
           open: open(message.id),
           railColor: viewColor,
           renderBody(inner) {
-            if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner);
+            if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner, senderColor);
           },
         });
         continue;

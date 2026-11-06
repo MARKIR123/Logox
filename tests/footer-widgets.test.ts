@@ -183,11 +183,18 @@ test('modules: cache is a registered widget, gauge on by default, git and cost o
 test('hover details name each widget in full', () => {
   const flat = (id: Parameters<typeof widgetDetail>[0], s: StageStatus = status) => widgetDetail(id, s).map(segment => segment.text).join('');
   const ctx = flat('context');
-  assert.match(ctx, /^ctx 121k\/200k/);
-  for (const [name, amount] of [['system', '9.2k'], ['prompt', '6.4k'], ['assistant', '26.0k'], ['thinking', '7.7k'], ['tools', '72.0k']]) assert.ok(ctx.includes(name + ' ' + amount), name);
-  assert.match(ctx, /free 78\.7k/);
-  assert.match(ctx, /compacts at 84% \(168k\)/);
+  const abbreviated = 'ctx 121k/200k 61% · ▌sys 5% · ▌pr 3% · ▌ast 13% · ▌th 4% · ▌tl 36% · ▌free 39% · compacts 84%';
+  assert.equal(ctx, 'ctx 121k/200k 61% · ▌system 5% · ▌prompt 3% · ▌assistant 13% · ▌thinking 4% · ▌tools 36% · ▌free 39% · compacts at 84%', 'roomy: full names');
+  const at = (width: number, s: StageStatus = status) => widgetDetail('context', s, undefined, width).map(segment => segment.text).join('');
+  assert.equal(at(200), ctx);
+  assert.equal(at(stringWidth(ctx) - 1), abbreviated, 'tier 2: abbreviations before dropping anything');
+  assert.ok(stringWidth(abbreviated) < 100, 'compact enough for a narrow terminal');
+  assert.equal(at(stringWidth(abbreviated) - 1), 'ctx 121k/200k 61% · ▌sys 5% · ▌pr 3% · ▌ast 13% · ▌th 4% · ▌tl 36% · compacts 84%', 'tier 3: free goes first');
+  assert.equal(at(60), 'ctx 121k/200k 61% · compacts 84%', 'then the per-category list');
+  assert.equal(at(20), 'ctx 61% · compacts 84%', 'finally the bare gauge');
+  for (const width of [20, 33, 60, 90, 120, 160, 200]) assert.ok(!at(width).includes('…'), 'never clipped at ' + width);
   assert.match(flat('context', {...status, context: {...status.context!, estimated: true}}), /^ctx ~121k/);
+  assert.match(at(20, {...status, context: {...status.context!, estimated: true}}), /^ctx ~61%/);
   const model = flat('model');
   assert.match(model, /claude-opus-5-5.*anthropic.*window 200k.*max out 64k.*\$5 \/ \$25 per M.*cache read \$0\.5.*click to change/);
   assert.doesNotMatch(flat('model', {...status, modelInfo: {window: 8000}}), /per M|max out/, 'unknown facts are omitted');

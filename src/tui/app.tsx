@@ -21,7 +21,7 @@ import {footerHints, notificationSegments, pillDetail, widgetCommand, widgetDeta
 import {extractNarration} from '../runtime/narration.js';
 import {findLatestActorRowIndex} from './timeline/actor-location.js';
 import {extractStatusBarSlice} from './status/statusbar.js';
-import {MouseContext, type MouseSubscriber} from './terminal/mouse.js';
+import {MouseHost, type MouseSubscriber} from './terminal/mouse.js';
 import {LoginDialog} from './login/login.js';
 import {useContentHeight} from './terminal/metrics.js';
 import {PENDING_VISIBLE_MAX, pendingRowLayout} from './input/input-delivery.js';
@@ -490,7 +490,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       title: activity?.taskTitle ?? activity?.title, stage, ...(first !== undefined ? {elapsedMs: Date.now() - first} : {}), ...(percent !== undefined ? {contextPercent: percent} : {})});
   };
   const noteNotice: Notice | undefined = notice && !noticeInline ? {text: notice, tone: noticeTone} : undefined;
-  const hoverDetail = hoveredPill ? pillHoverDetail() : hoveredWidget && footerStatus ? widgetDetail(hoveredWidget, footerStatus, windowColor) : undefined;
+  const hoverDetail = hoveredPill ? pillHoverDetail() : hoveredWidget && footerStatus ? widgetDetail(hoveredWidget, footerStatus, windowColor, width) : undefined;
   const footerNote = footerHeight > 1 ? notificationSegments({notice: noteNotice, detail: hoverDetail,
     hints: footerHints({own, queued: queuedHere, menu: Boolean(menuHeight), closing, width})}, width) : [];
 
@@ -1435,7 +1435,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (!key.ctrl && !key.meta && input) edit(current => insert(current, input));
   });
 
-  if (composerExpanded) return <MouseContext.Provider value={subscribeMouse}>
+  if (composerExpanded) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
       onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
       onCollapse={() => {setComposerMode(null); exitDeadline.current = 0;}}
@@ -1444,16 +1444,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       onInterrupt={interrupt} onClose={close} onCursor={setCursorPosition}
       scrollOffset={composerMode?.scrollOffset ?? null}
       onScroll={scrollOffset => setComposerMode(previous => previous && previous.scrollOffset !== scrollOffset ? {...previous, scrollOffset} : previous)}/>
-  </MouseContext.Provider>;
-  if (surface?.kind === 'result' && surfaces) return <MouseContext.Provider value={subscribeMouse}>
+  </MouseHost>;
+  if (surface?.kind === 'result' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} width={width} height={screenRows}
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
-  </MouseContext.Provider>;
-  if (surface?.kind === 'page' && surfaces) return <MouseContext.Provider value={subscribeMouse}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
+  </MouseHost>;
+  if (surface?.kind === 'page' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
     saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
     {...(surface.confirm ? {confirm: surface.confirm} : {})}
-    onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseContext.Provider>;
+    onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseHost>;
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
     <Box height={timelineHeight} flexShrink={0} flexDirection="column" overflow="hidden">
@@ -1473,19 +1473,19 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         </Box>;
       })}
     </Box>
-    {loginState?.phase === 'wizard' && authentication && <MouseContext.Provider value={subscribeMouse}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseContext.Provider>}
-    {surface?.kind === 'picker' && surfaces ? <Picker key={surface.id} title={surface.title} description={surface.description}
+    {loginState?.phase === 'wizard' && authentication && <MouseHost subscribe={subscribeMouse} color={windowColor}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseHost>}
+    {surface?.kind === 'picker' && surfaces ? <MouseHost subscribe={subscribeMouse} color={windowColor}><Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
       {...(surface.emptyText !== undefined ? {emptyText: surface.emptyText} : {})}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
       effort={surface.effort} effortLevels={surface.effortLevels}
-      notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/>
-      : loginState && authentication && !loginFolded ? loginState.phase === 'wizard' ? null : <MouseContext.Provider value={subscribeMouse}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseContext.Provider> : <>
+      notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/></MouseHost>
+      : loginState && authentication && !loginFolded ? loginState.phase === 'wizard' ? null : <MouseHost subscribe={subscribeMouse} color={windowColor}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseHost> : <>
     {!demoScene && !stage && activity && activityHeight > 0 && <Box height={activityHeight} flexShrink={0} overflow="hidden" flexDirection="column">
       <Box ref={activityRef} flexDirection="column" flexShrink={0}><ActivityCard activity={activity} expanded={expanded} hovered={hoveredFoldId === activity.activityId}/></Box>
     </Box>}
     {questionPanel && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
-      <MouseContext.Provider value={subscribeMouse}>
+      <MouseHost subscribe={subscribeMouse} color={windowColor}>
         <ProductionQuestionPanel question={(() => {
           const item = questionPanel.questions[response.questionIndex]!;
           return {header: questionPanel.title
@@ -1506,19 +1506,19 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           onMove={delta => {setFocus('question'); changeResponse(current => reduceResponse(questionPanel, current, {kind: 'move', delta}));}}
           onFocusInput={() => {setFocus('question'); changeResponse(current =>
             reduceResponse(questionPanel, current, {kind: 'select', index: questionPanel.questions[current.questionIndex]?.options?.length ?? 0}));}}/>
-      </MouseContext.Provider>
+      </MouseHost>
     </Box>}
     {!questionPanel && !stage && (!demoScene || !inlineRequest) && request && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
       <Box ref={detailRef} flexDirection="column" flexShrink={0}>
         <InteractionCard request={request} draft={response} focused={focus === 'question'} height={questionHeight}/>
       </Box>
     </Box>}
-    {menuHeight > 0 && <MouseContext.Provider value={subscribeMouse}>
+    {menuHeight > 0 && <MouseHost subscribe={subscribeMouse} color={windowColor}>
       <CommandMenu items={suggestions} selected={suggestionIndex} width={width} query={draft.text} maxVisible={menuCount} showCounts={menuShowCounts}
         y={timelineHeight + activityHeight + questionHeight}
         onPick={selected => setCompletion({query, selected, dismissed: false})}
         onWheelStep={moveSuggestion}/>
-    </MouseContext.Provider>}
+    </MouseHost>}
     {pendingHeight > 0 && <Box height={pendingHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {pendingShown.map(item => {
         const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId);

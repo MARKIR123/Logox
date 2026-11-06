@@ -87,7 +87,7 @@ export function renderActivity(context: ActorActivityContext): void {
           railColor: color,
           parentFrame: actorTreeFrame,
           renderBody(inner) {
-            builder.pushMarkdown(goalId + '-body', context.originalPrompt, color, inner);
+            builder.pushMarkdown(goalId + '-body', context.originalPrompt, color, inner, senderColor);
           },
         });
       }
@@ -97,7 +97,7 @@ export function renderActivity(context: ActorActivityContext): void {
          lastAssistantMessage.text.includes(activity.summary.report.trim().slice(0, 80)));
 
       if (activity.summary && !isReportDeliveredInTranscript) {
-        builder.pushMarkdown(activity.activityId + '-summary', activity.summary.report, color, actorTreeFrame);
+        builder.pushMarkdown(activity.activityId + '-summary', activity.summary.report, color, actorTreeFrame, roleColor);
       }
 
       const renderableItems = groupToolMessages(messages.filter(message => {
@@ -161,7 +161,7 @@ export function renderActivity(context: ActorActivityContext): void {
             railColor: color,
             parentFrame: actorTreeFrame,
             renderBody(inner) {
-              if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner);
+              if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner, senderColor);
             },
           });
         } else if (message.role === 'assistant' && !message.kind && message.text.trim()) {
@@ -181,7 +181,7 @@ export function renderActivity(context: ActorActivityContext): void {
             if (lines.length > 1) {
               const remaining = lines.slice(1).join('\n').trim();
               if (remaining) {
-                builder.pushMarkdown(message.id + '-body', remaining, color, currentPhaseFrame);
+                builder.pushMarkdown(message.id + '-body', remaining, color, currentPhaseFrame, roleColor);
               }
             }
           } else {

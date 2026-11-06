@@ -3,7 +3,7 @@ import {Box, Text, useInput, usePaste} from 'ink';
 import stringWidth from 'string-width';
 import {palette} from '../appearance/theme.js';
 import {panePadding} from '../components/panel-frame.js';
-import {useMouse} from '../terminal/mouse.js';
+import {useHoverColor, useMouse} from '../terminal/mouse.js';
 import {clipLine, safeText} from '../terminal/text.js';
 import {cursorAt, erase, graphemes, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, moveWord, type Draft} from './editor.js';
 
@@ -123,6 +123,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
   });
   const drag = useRef(false);
   const [hover, setHover] = useState<'collapse' | 'send' | null>(null);
+  const hoverColor = useHoverColor(palette.strong);
   useMouse(event => {
     if (disabled) return;
     if (event.action === 'release') {drag.current = false; return;}
@@ -153,7 +154,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     {Boolean(geometry.top) && rule}
     {Boolean(geometry.header) && <Box height={1} flexShrink={0}>
       <Box width={geometry.collapseX} overflow="hidden"><Text bold color={palette.accent} wrap="truncate">{clipLine(safeText(title), Math.max(0, geometry.collapseX - 1))}</Text></Box>
-      <Text color={hover === 'collapse' ? palette.strong : palette.muted}>{clipLine(geometry.collapse, geometry.width)}</Text>
+      <Text color={hover === 'collapse' ? hoverColor : palette.muted} bold={hover === 'collapse'}>{clipLine(geometry.collapse, geometry.width)}</Text>
     </Box>}
     <Box height={geometry.bodyHeight} flexShrink={0} flexDirection="column" overflow="hidden" paddingX={geometry.padding}>
       {layout.lines.slice(start, start + geometry.bodyHeight).map((line, index) => <Box key={start + index} height={1} flexShrink={0} overflow="hidden">
@@ -166,7 +167,7 @@ export function FullscreenEditor({draft, width, height, title = 'Compose', notic
     </Box>
     {Boolean(geometry.footer) && <Box height={1} flexShrink={0}>
       <Box width={geometry.sendX} overflow="hidden"><Text color={notice ? palette.accent : palette.muted} wrap="truncate">{clipLine(footer, Math.max(0, geometry.sendX - 1))}</Text></Box>
-      <Text color={draft.text.trim() ? hover === 'send' ? palette.strong : palette.fg : palette.muted}>{clipLine(geometry.send, geometry.width)}</Text>
+      <Text color={draft.text.trim() ? hover === 'send' ? hoverColor : palette.fg : palette.muted} bold={hover === 'send' && Boolean(draft.text.trim())}>{clipLine(geometry.send, geometry.width)}</Text>
     </Box>}
     {Boolean(geometry.bottom) && rule}
   </Box>;

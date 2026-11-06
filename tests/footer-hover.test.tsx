@@ -58,7 +58,7 @@ test('hovering the gauge shows its detail on row 2 and leaving restores the hint
   try {
     const gauge = columnOf(f.lines()[22]!, '█');
     await f.mouse(gauge + 2, 23);
-    assert.match(f.lines()[23]!, /ctx 121k\/200k.*system 9\.2k.*tools 72\.0k.*compacts at 84% \(168k\)/);
+    assert.match(f.lines()[23]!, /ctx 121k\/200k 61%.*system 5%.*tools 36%.*free 39%.*compacts at 84%/);
     await f.mouse(2, 5);
     assert.match(f.lines()[23]!, /Enter send/);
   } finally {await f.close();}

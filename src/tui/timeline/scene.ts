@@ -128,7 +128,8 @@ export interface RowBuilder {
   pushBlank(railColor?: string, frame?: FrameWrap, action?: SceneAction): void;
   pushTurnHeader(id: string, who: string, origin?: string, clock?: string, activity?: TurnActivity): void;
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
-  pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap): void;
+  /** `accent` colours inline code and other emphasis; it follows the OWNER of the text (default: the rail colour). */
+  pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap, accent?: string): void;
   pushFramedLine(
     id: string,
     railColor: string,
@@ -335,7 +336,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
   };
 
-  const pushMarkdown: RowBuilder['pushMarkdown'] = (id, text, railColor, frame) => {
+  const pushMarkdown: RowBuilder['pushMarkdown'] = (id, text, railColor, frame, accent = railColor) => {
     const f = frame ?? topFrame();
     text = trimTrailingBlankLines(text.replace(/^(?:[ \t]*\r?\n)+/, '')); // leading and trailing blank lines are never content
     if (!text.trim()) return;
@@ -349,7 +350,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         ...(f.bg || f.rightCols ? {suffixSegments: [{text: ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text))), ...(f.bg ? {bg: f.bg} : {})}, ...f.rightSegments]} : {}),
         segments: [...f.leftSegments, ...value.pieces.map(piece => ({text: piece.text,
           ...(piece.bold ? {bold: true} : {}), ...(piece.italic ? {italic: true} : {}),
-          color: piece.muted ? palette.muted : piece.code ? railColor : palette.fg})),
+          color: piece.muted ? palette.muted : piece.code ? accent : palette.fg})),
           ...(f.bg || f.rightCols ? [{text: ' '.repeat(Math.max(0, f.innerWidth - stringWidth(value.text)))}, ...f.rightSegments] : [])],
       });
     }
