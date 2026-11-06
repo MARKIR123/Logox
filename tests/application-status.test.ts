@@ -38,7 +38,7 @@ test('Actor 状态显示当前实际任务模型；后续排队不遮住运行�
     assert.equal(app.status('scout').state, 'Running');
     assert.equal(app.status('scout').model?.model, 'main');
     assert.equal(app.status('scout').effort, 'high');
-    assert.equal(app.status('logox').state, 'Ready');
+    assert.equal(app.status('logox').state, 'Waiting on 1 actor');
     for (const activity of app.store.getSnapshot().activities) app.cancel(activity.activityId);
     await waitForSnapshot(app.store, snapshot => snapshot.activities.every(activity => activity.status === 'cancelled'));
     assert.equal(app.status('scout').model?.model, 'special');

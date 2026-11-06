@@ -12,12 +12,13 @@ test('production question host renders planned columns exactly once, without a s
   for (const width of [20, 40, 80]) {
     const height = 24;
     const expected = buildQuestionRows({question: {...question, inputLabel: 'My view'}, position: 1, total: 1,
-      width, height, y: 0, focus: draft.selected, checked: draft.checked, text: draft.text, cursor: 80,
+      width, height, y: 0, focus: draft.selected, checked: [], text: draft.text, cursor: 80,
       error: '', hint: '↑↓ Select · Enter Submit · Tab Input · Esc Back', foldAction: false});
     const output = plain(renderToString(<ProductionQuestionPanel question={question} position={1} total={1}
       width={width} height={height} y={0} draft={draft} cursor={80} focused={false}
       onSelect={() => {}} onMove={() => {}} onFocusInput={() => {}}/>, {columns: width}));
     assert.deepEqual(output.split('\n').map(line => line.trimEnd()),
-      expected.rows.map(row => row.segments.map(segment => segment.text).join('').trimEnd()), 'All planned content reaches the screen at width ' + width);
+      // The panel is docked on the composer, whose hairline closes it, so the planner's own bottom rule is not drawn.
+      expected.rows.slice(0, -1).map(row => row.segments.map(segment => segment.text).join('').trimEnd()), 'All planned content reaches the screen at width ' + width);
   }
 });

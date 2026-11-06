@@ -2,7 +2,8 @@ import {readFile} from 'node:fs/promises';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {CommandSurfaces} from '../commands/surfaces.js';
-import type {CommandTab} from '../runtime/command-surface.js';
+import type {CommandTab, TabRow} from '../runtime/command-surface.js';
+import {row, rowText} from '../commands/tab-rows.js';
 import {immutable} from '../runtime/contracts.js';
 import {ActorCatalog, assertActorPath} from './catalog.js';
 import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './definitions.js';
@@ -21,7 +22,7 @@ export class ActorManagement {
     private readonly modelPool?: ModelPool,
   ) {}
   tab(): CommandTab {
-    return immutable({id: 'actors', title: 'Ensemble', lines: this.catalog.list().flatMap(actor => {
+    const rows = this.catalog.list().flatMap((actor): TabRow[] => {
       const policy = this.policy?.(actor.id) ?? actor.context;
       const resolved = this.modelResolver?.(actor.id);
       const effort = resolved?.effort;
@@ -37,16 +38,17 @@ export class ActorManagement {
         : 'Inherits session model (' + modelWithEffort + ') (switch via /model ' + actor.id + ')';
 
       return [
-        '── ' + actor.symbol + ' ' + actor.name + ' (' + actor.title + ') ' + '─'.repeat(30),
-        'Description: ' + actor.description,
-        'Designated model: ' + modelLine,
-        'Context retention: ' + policy.keep_recent_rounds + ' rounds / ' + policy.keep_recent_tools + ' tools',
-        'Context policy: ' + JSON.stringify(policy),
-        'Skills: ' + (actor.skills.join(', ') || 'Declared on-demand'),
-        'Persona prompt: ' + actor.prompt.slice(0, 150).replace(/\n/g, ' ') + '...',
-        '',
+        row.rule(actor.symbol + ' ' + actor.name + ' (' + actor.title + ')'),
+        row.field('Description', actor.description),
+        row.field('Designated model', modelLine),
+        row.field('Context retention', policy.keep_recent_rounds + ' rounds / ' + policy.keep_recent_tools + ' tools'),
+        row.field('Context policy', JSON.stringify(policy)),
+        row.field('Skills', actor.skills.join(', ') || 'Declared on-demand'),
+        row.field('Persona prompt', actor.prompt.slice(0, 150).replace(/\n/g, ' ') + '...'),
+        row.blank(),
       ];
-    })});
+    });
+    return immutable({id: 'actors', title: 'Ensemble', lines: rows.map(rowText), rows});
   }
   private async previous(id: string): Promise<string | undefined> {
     const path = this.catalog.projectPath(id); await assertActorPath(path);
@@ -165,7 +167,7 @@ export class ActorManagement {
       }
       if (choice !== 'inherit' && !selectedModel) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, selectedModel, new AbortController().signal);
-      return {message: actor.name + ' default model saved', presentation: 'silent'};
+      return {message: actor.name + ' default model saved', presentation: 'status'};
     });
   }
   async craftActor(content: string, approve: (review: ActorWriteReview) => Promise<boolean>, signal: AbortSignal): Promise<CraftResult> {

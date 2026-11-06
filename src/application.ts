@@ -18,7 +18,8 @@ import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from './config/model-grouping.js';
-import {UsageLedger, usageLines} from './context/usage.js';
+import {UsageLedger, usageRows} from './context/usage.js';
+import {row, rowText} from './commands/tab-rows.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
 import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
@@ -64,6 +65,8 @@ import type {ToolRegistration} from './tools/catalog.js';
 import {storedMessage} from './store/journal.js';
 import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
 import {applyTheme, palette} from './tui/appearance/theme.js';
+import type {ResultLine, TabLine} from './runtime/command-surface.js';
+import {GitStatusSource} from './extensions/git-status.js';
 import {createCommandTabsFor, saveConfigToggles, type ApplicationCommandContext} from './application-commands.js';
 import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, listThemes, loadThemePresets, resolveTheme, type CursorStyleName} from './config/theme-presets.js';
 
@@ -119,14 +122,15 @@ export async function createSessionApplication(options: SessionApplicationOption
     notice(text, 'command_result', owner, undefined, {presentation, ...(title ? {title} : {})});
     if (presentation === 'panel') surfaces.openResult(title ?? 'Command result', text, {sessionId: session, ownerId: owner});
   };
-  const queryResult = async (owner: string, title: string, query: () => Promise<string | undefined>) => {
+  const queryResult = async (owner: string, title: string, query: () => Promise<string | {text: string; lines: readonly ResultLine[]} | undefined>) => {
     const id = surfaces.openResult(title, 'Loading...', {sessionId: session, ownerId: owner});
     try {
-      const text = await query();
+      const result = await query();
       if (closed) return;
-      if (text === undefined) {if (surfaces.getSnapshot()?.id === id) surfaces.cancel(); return;}
+      if (result === undefined) {if (surfaces.getSnapshot()?.id === id) surfaces.cancel(); return;}
+      const text = typeof result === 'string' ? result : result.text;
       notice(text, 'command_result', owner, undefined, {presentation: 'panel', title});
-      surfaces.updateResult(id, text);
+      surfaces.updateResult(id, text, typeof result === 'string' ? undefined : result.lines);
     } catch (error) {
       if (surfaces.getSnapshot()?.id === id) surfaces.cancel();
       throw error;
@@ -231,7 +235,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const surfaces = new CommandSurfaces((result, completion) => {
     if (result.message && !closed) notice(result.message, result.kind ?? 'command_result', completion.ownerId ?? commandOwner, undefined,
-      {presentation: result.kind === 'command_error' && !completion.active ? 'timeline' : result.presentation ?? 'status',
+      // A dismissed surface cannot show feedback: its late failure surfaces in the timeline, its late success stays silent.
+      {presentation: !completion.active ? result.kind === 'command_error' ? 'timeline' : 'silent' : result.presentation ?? 'status',
         ...(result.title ? {title: result.title} : {})});
   }, () => ({sessionId: session, ownerId: commandOwner}));
   let surfaceError = '';
@@ -339,6 +344,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   let loginError = '';
   const stopLoginErrors = authentication.subscribe(() => {
+    refreshSubscriptions();
     const current = authentication.getSnapshot();
     const key = current?.error ? current.provider + ':' + current.error : '';
     const changed = Boolean(current?.error && key !== loginError);
@@ -346,14 +352,41 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (current?.error && changed) notice(current.error, 'command_error', loginOwner, undefined, {presentation: 'silent'});
   });
   const extraTools = [...actorServices.definitionsForValidation(), ...extensions.mcp.definitions()];
-  const meteredOwners = new Set<string>();
-  async function configureMeter(ownerId: string) {
-    if (meteredOwners.has(ownerId)) return;
-    const meter = contexts.meter({sessionId: session, ownerId});
-    meter.configureUsage(() => taskModels.summarizer({sessionId: session, ownerId}).model.identity,
-      record => usage.record(session, ownerId, record), await usage.read(session, ownerId));
-    meteredOwners.add(ownerId);
+  // Status revision: anything that changes the footer without touching the store or statusbar preferences bumps it.
+  let statusTick = 0;
+  const statusListeners = new Set<() => void>();
+  const bumpStatus = () => {statusTick++; for (const listener of [...statusListeners]) listener();};
+  const gitStatus = new GitStatusSource(cwd, bumpStatus);
+  gitStatus.start();
+  const subscriptionProviders = new Set<string>();
+  let subscriptionsDone: Promise<void> = Promise.resolve();
+  const refreshSubscriptions = () => {subscriptionsDone = (async () => {
+    const found = new Set<string>();
+    for (const name of await registry.auth.providers()) if ((await registry.auth.credential(name))?.type === 'oauth') found.add(name);
+    subscriptionProviders.clear(); for (const name of found) subscriptionProviders.add(name);
+    bumpStatus();
+  })().catch(() => {});};
+  refreshSubscriptions();
+  const meterReady = new Map<string, Promise<void>>();
+  /** Restores one owner's persisted usage into its meter exactly once, however many callers race. */
+  function configureMeter(ownerId: string): Promise<void> {
+    let ready = meterReady.get(ownerId);
+    if (!ready) {
+      ready = (async () => {
+        const meter = contexts.meter({sessionId: session, ownerId});
+        meter.configureUsage(() => taskModels.summarizer({sessionId: session, ownerId}).model.identity,
+          record => {usage.record(session, ownerId, record); bumpStatus();}, await usage.read(session, ownerId));
+        bumpStatus();
+      })();
+      meterReady.set(ownerId, ready);
+    }
+    return ready;
   }
+  // A resumed session shows its totals and context readings before any actor runs.
+  const meterRestore = Promise.all(['logox', ...actors.list().map(item => item.id)].map(async ownerId => {
+    await configureMeter(ownerId);
+    await contexts.restoreReading({sessionId: session, ownerId});
+  })).then(bumpStatus).catch(() => {});
   const automaJournal = (sessionId: string) => join(state, 'sessions', sessionId, 'subagents', 'automa.jsonl');
   void markInterruptedJobs(automaJournal(session));
   tools.setAutomaEnvironment({
@@ -485,7 +518,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     const thinking = registry.thinking();
     void surfaces.openPicker({title: 'Thinking Effort', description: 'Available effort tiers for current model; auto uses provider default', current: thinking.effort},
       async () => ({items: thinking.levels.map(id => ({id, label: id}))}), async id => {
-        await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)', presentation: 'silent'};
+        await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)', presentation: 'status'};
       });
   };
   let pageOwner = 'logox';
@@ -519,29 +552,30 @@ export async function createSessionApplication(options: SessionApplicationOption
       applyCursorStyle(currentCursorName, process.stdout);
     }
   }).catch(() => {});
-  const contextLines = (): string[] => {
+  const contextRows = (): TabLine[] => {
     const identity = {sessionId: session, ownerId: pageOwner};
-    const usage = contexts.status(identity), spent = contexts.meter(identity).spent;
+    const reading = contexts.status(identity), shown = status(pageOwner), usage = shown.usage;
     let window = 'Unknown, configure model context_window';
     try {window = String(taskModels.model(identity).window) + ' tokens';} catch {}
-    return ['Model context window: ' + window, ...(usage ? ['Latest request input: ~' + usage.input + ' tokens',
-      'Compaction threshold: ' + usage.high + ' tokens; target: ' + usage.low + ' tokens', 'Output limit: ' + usage.output + ' tokens'] : ['Current input: No tasks started']),
-      'Recorded task, summary & approval tokens (in/out): ' + spent.input + ' / ' + spent.output + ' tokens'];
+    const totals = (value: {input: number; output: number; cached: number} | undefined) =>
+      value ? value.input + ' in / ' + value.output + ' out / ' + value.cached + ' cached' : 'none recorded';
+    return [row.field('Model context window', window),
+      ...(reading ? [row.field('Context in use', (reading.estimated ? '~' : '') + reading.input + ' tokens' + (reading.estimated ? ' (estimate)' : ' (provider-reported)') + (reading.input > reading.window ? ' · over the window' : '')),
+        row.field('Compaction threshold', reading.high + ' tokens; target ' + reading.low + ' tokens'), row.field('Output limit', reading.output + ' tokens')]
+        : [row.field('Context in use', 'No history yet')]),
+      row.field('Tokens (this window)', totals(usage?.window)), row.field('Tokens (session, all windows)', totals(usage?.session)),
+      row.muted('Input excludes cache reads; cached counts cache reads. Includes task, summary, approval and Automa usage.')];
   };
-  const status = (ownerId: string) => stageStatus({sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config}, ownerId);
-  const sessionUsageRecords = () => [...meteredOwners].flatMap(ownerId => contexts.meter({sessionId: session, ownerId}).usageRecords());
+  const status = (ownerId: string) => stageStatus({sessionId: session, cwd, store, actors, registry, taskModels, contexts, permissions, config,
+    subscriptions: () => subscriptionProviders, git: () => gitStatus.get()}, ownerId);
+  const sessionUsageRecords = () => [...contexts.sessionMeters(session).values()].flatMap(meter => meter.usageRecords());
   let viewingProviderIndex = -1;
   const providerStatuses = new Map<string, string>();
-  const providersTabLines = (): string[] => {
+  const providersTabRows = (): TabLine[] => {
     const names = registry.names();
     if (names.length === 0) {
-      return [
-        'Connected Providers',
-        '─────────────────────────────────────────────────────────────',
-        'No providers currently configured.',
-        '',
-        'Run /login to add an official provider or custom reverse proxy.',
-      ];
+      return [row.heading('Connected Providers'), row.rule(), row.text('No providers currently configured.'), row.blank(),
+        row.text('Run /login to add an official provider or custom reverse proxy.')];
     }
     if (viewingProviderIndex < 0 || viewingProviderIndex >= names.length) {
       const activeIdx = names.indexOf(settings.provider);
@@ -560,19 +594,19 @@ export async function createSessionApplication(options: SessionApplicationOption
     const candSettings = registry.candidate(current).selection();
     const statusText = providerStatuses.get(current) ?? '● Ready (press [t] to test)';
 
-    const lines: string[] = [
-      navItems,
-      '─────────────────────────────────────────────────────────────',
-      'Provider: ' + current,
-      'Base URL: ' + candSettings.baseUrl,
-      'Status: ' + statusText,
-      'Models count: ' + currentModels.length,
-      '',
-      '── Models (' + currentModels.length + ') ───────────────────────────────────────────────',
+    const rows: TabLine[] = [
+      row.text(navItems),
+      row.rule(),
+      row.field('Provider', current),
+      row.field('Base URL', candSettings.baseUrl),
+      row.field('Status', statusText),
+      row.field('Models count', currentModels.length),
+      row.blank(),
+      row.rule('Models (' + currentModels.length + ')'),
     ];
 
     if (currentModels.length === 0) {
-      lines.push('  No models cached. Press [r] to fetch models from provider.');
+      rows.push(row.text('  No models cached. Press [r] to fetch models from provider.'));
     } else {
       for (const m of currentModels) {
         const win = m.window ? (Math.round(m.window / 1000) + 'k') : '128k';
@@ -580,10 +614,10 @@ export async function createSessionApplication(options: SessionApplicationOption
           ? '✦ ' + m.thinkingLevels.filter((l: string) => l !== 'auto').join(' / ')
           : '-';
         const offlineTag = m.isOffline ? ' [offline]' : '';
-        lines.push('  • ' + m.id + offlineTag + ' · ' + win + ' · Thinking: ' + eff);
+        rows.push(row.bullet(m.id + offlineTag + ' · ' + win + ' · Thinking: ' + eff));
       }
     }
-    return lines;
+    return rows;
   };
 
   const buildAppCommandContext = (): ApplicationCommandContext => ({
@@ -596,18 +630,19 @@ export async function createSessionApplication(options: SessionApplicationOption
     permissions: {
       mode: permissions.mode,
       description: permissionModes[permissions.mode].description,
+      modes: Object.entries(permissionModes).map(([id, mode]) => ({id, description: mode.description})),
       color: palette[permissionModes[permissions.mode].colorToken],
       lines: [
-        ...tools.permissionGuard({sessionId: session}).lines(),
-        'Readonly concurrency: ' + config.permissions.readonly_concurrency,
-        'Cumulative approval tokens: ' + sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens',
-        '',
-        '── Active Rules ─────────────────────────────────────────────',
-        ...permissions.snapshot().map(rule => '  • ' + rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern),
-        '',
-        '── Guidance ─────────────────────────────────────────────────',
-        'Press Space or m in this tab to cycle through default / auto / creative modes.',
-        'Paths support *, **, ?; shell matches static token prefixes.',
+        ...tools.permissionGuard({sessionId: session}).rows(),
+        row.field('Readonly concurrency', config.permissions.readonly_concurrency),
+        row.field('Cumulative approval tokens', sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens'),
+        row.blank(),
+        row.rule('Active Rules'),
+        ...permissions.snapshot().map(rule => row.bullet(rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern)),
+        row.blank(),
+        row.rule('Guidance'),
+        row.text('Space, m or ←→ change the mode as an unsaved draft; Enter applies and saves it, Esc leaves without applying.'),
+        row.text('Paths support *, **, ?; shell matches static token prefixes.'),
       ],
       readonly_concurrency: config.permissions.readonly_concurrency,
       approvalTokens: sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0),
@@ -615,59 +650,60 @@ export async function createSessionApplication(options: SessionApplicationOption
     statusbarModules: statusbar.getSnapshot().modules,
     statusbarAppearance: {style: statusbar.getSnapshot().style, colorScheme: statusbar.getSnapshot().colorScheme},
     statusbarStatus: status(pageOwner),
-    statusLines: [
-      'Session: ' + session + ' · Role: ' + pageOwner,
-      '─────────────────────────────────────────────────────────────',
-      'Provider: ' + (status(pageOwner).model?.provider ?? 'None'),
-      'Model: ' + (status(pageOwner).model?.model || 'None selected'),
-      'Thinking effort: ' + status(pageOwner).effort,
-      'Permission mode: ' + permissions.mode,
-      'Execution state: ' + status(pageOwner).state,
-      'Active tasks: ' + store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length,
-      '',
-      '── Context & Tokens ──────────────────────────────────────────',
-      ...contextLines(),
-      '',
-      '── Resources & Environment ───────────────────────────────────',
-      'Resource origins:',
-      ...resources.snapshot().guidelines.map(item => '  • ' + item.path),
-      'Skills: ' + resources.snapshot().skills.length + ' · Template commands: ' + resources.snapshot().commands.length,
-      ...resources.snapshot().issues.map(item => '  • ' + item.kind + ': ' + item.path + ' · ' + item.reason),
-      ...extensions.mcp.status().map(item => '  • MCP ' + item.name + ': ' + item.state),
-    ],
-    configLines: [
-      'Effective Configuration',
-      '─────────────────────────────────────────────────────────────',
-      'Provider: ' + settings.provider,
-      'Model: ' + (settings.model || 'None selected'),
-      'Thinking effort: ' + registry.thinking().effort,
-      'Base URL: ' + settings.baseUrl,
-      'Automa worker: ' + (() => {
-        const automaModel = tools.modelStorage.get('automa');
-        return automaModel ? `${automaModel.provider}/${automaModel.model} (dedicated)` : `Inherits session model (${settings.provider}/${settings.model || 'none'})`;
-      })(),
-      '',
-      '── Execution Limits ──────────────────────────────────────────',
-      'Temperature: ' + config.provider.temperature,
-      'Max tokens: ' + config.provider.max_tokens,
-      'Request timeout: ' + config.provider.timeout + 's',
-      'Max loop iterations: ' + (config.kernel.max_iterations > 0 ? config.kernel.max_iterations : 'Unlimited (Claude Code mode)'),
-      'Max connection retries: ' + config.kernel.max_retries,
-      '',
-      '── Instructions ─────────────────────────────────────────────',
-      'Switch via /model or /providers; use /settings to customize themes and preferences.',
-    ],
+    statusLines: (() => {
+      const shown = status(pageOwner), snapshot = resources.snapshot(), automaModel = tools.modelStorage.get('automa');
+      return [
+        row.field('Session', session + ' · Role: ' + pageOwner),
+        row.rule(),
+        row.field('Provider', shown.model?.provider ?? 'None'),
+        row.field('Model', shown.model?.model || 'None selected'),
+        row.field('Thinking effort', shown.effort + (shown.effortError ? ' (' + shown.effortError + ')' : '')),
+        row.field('Permission mode', permissions.mode),
+        row.field('Execution state', shown.state),
+        row.field('Active tasks', store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length),
+        ...(shown.git ? [row.field('Git', shown.git.branch + (shown.git.dirty ? ' · ' + shown.git.dirty + ' changed' : '') + (shown.git.ahead ? ' · ahead ' + shown.git.ahead : '') + (shown.git.behind ? ' · behind ' + shown.git.behind : ''))] : []),
+        ...(automaModel ? [row.field('Automa worker', automaModel.provider + '/' + automaModel.model)] : []),
+        row.blank(),
+        row.rule('Context & Tokens'),
+        ...contextRows(),
+        row.blank(),
+        row.rule('Resources & Environment'),
+        ...(snapshot.guidelines.length ? [row.text('Project rules loaded from:'), ...snapshot.guidelines.map(item => row.bullet(item.path))] : [row.field('Project rules', 'none loaded')]),
+        row.field('Skills', snapshot.skills.length + ' · Template commands: ' + snapshot.commands.length),
+        ...snapshot.issues.map(item => row.bullet(item.kind + ': ' + item.path + ' · ' + item.reason)),
+        ...extensions.mcp.status().map(item => row.bullet('MCP ' + item.name + ': ' + item.state)),
+      ];
+    })(),
+    configLines: (() => {
+      const shown = status(pageOwner), automaModel = tools.modelStorage.get('automa');
+      return [
+        row.field('Provider', shown.model?.provider ?? settings.provider),
+        row.field('Model', shown.model?.model || 'None selected'),
+        row.field('Thinking effort', shown.effort + (shown.effortError ? ' (' + shown.effortError + ')' : '')),
+        row.field('Base URL', settings.baseUrl),
+        row.field('Automa worker', automaModel ? automaModel.provider + '/' + automaModel.model + ' (dedicated)' : 'Inherits session model (' + settings.provider + '/' + (settings.model || 'none') + ')'),
+        row.blank(),
+        row.rule('Execution Limits'),
+        row.field('Temperature', config.provider.temperature),
+        row.field('Max tokens', config.provider.max_tokens),
+        row.field('Request timeout', config.provider.timeout + 's'),
+        ...(config.kernel.max_iterations > 0 ? [row.field('Max loop iterations', config.kernel.max_iterations)] : []),
+        row.field('Max connection retries', config.kernel.max_retries),
+        row.blank(),
+        row.rule('Instructions'),
+        row.text('Switch via /model or /providers; use /settings to customize themes and preferences.'),
+      ];
+    })(),
     usageLines: [
-      'Session: ' + session + ' · Role: ' + pageOwner,
-      '─────────────────────────────────────────────────────────────',
-      'Total across session roles: ' + sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)',
-      '',
-      '── Breakdown ────────────────────────────────────────────────',
-      ...usageLines(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
+      row.field('Session', session + ' · Role: ' + pageOwner),
+      row.field('Total across session roles', sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)'),
+      row.blank(),
+      row.rule('Breakdown'),
+      ...usageRows(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
     ],
-    providersLines: providersTabLines(),
-    actorsLines: actorServices.management.tab().lines,
-    commandsLines: [...commandHelp().split('\n'), ...resources.snapshot().commands.map(item => '/' + item.name + ': ' + item.description)],
+    providersLines: providersTabRows(),
+    actorsLines: actorServices.management.tab().rows ?? actorServices.management.tab().lines,
+    commandsLines: [...commandHelp().split('\n').map(line => row.text(line)), ...resources.snapshot().commands.map(item => row.text('/' + item.name + ': ' + item.description))],
   });
 
   const refreshCurrentPage = () => {
@@ -683,6 +719,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     changed: () => {if (surfaces.getSnapshot()?.kind === 'page') refreshCurrentPage();},
   });
   const stopPermissionPolicy = permissions.subscribe(() => {
+    bumpStatus();
     for (const request of store.interactions.list()) if (request.status === 'pending' &&
       (request.kind === 'permission' || request.kind === 'question' && request.title === 'Approval failed; action paused')) {
       store.interactions.cancel(request.requestId, 'Permissions changed; pending actions will be re-evaluated');
@@ -738,6 +775,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     void surfaces.openPicker({
       title: 'Select Model for ' + forActor,
       description: 'Model families grouped by provider · Tab switches provider',
+      emptyText: 'No models available. Run /login to connect a provider, then /providers and press r to refresh its model list.',
       current: JSON.stringify([settings.provider, currentBase]),
       items,
     },
@@ -811,7 +849,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           }
         }
         await saveSelection(candidate);
-        return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'silent'};
+        return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'status'};
       });
   };
   const openAutomaModel = async () => {
@@ -881,7 +919,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (!choices.has(choice)) throw new Error('Invalid model selection');
       await tools.modelStorage.save('automa', choices.get(choice), commands.signal);
       const chosen = choices.get(choice);
-      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'silent'};
+      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'status'};
     });
   };
   // Restore the actual model messages; legacy TS demo ledgers remain readable, and tools are not re-executed.
@@ -1012,8 +1050,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     systemNotice: notice,
     getInputQueue: (ownerId?: string) => ({queued: ensemble.queuedInputs(ownerId), steering: deliveries.snapshot().filter(item =>
       item.kind === 'human_steer' && item.status === 'pending' && (!ownerId || item.ownerId === ownerId))}),
-    getStatusSnapshot: () => store.getSnapshot().revision + ':' + statusbar.getSnapshot().revision,
-    subscribeStatus(listener: () => void) {const stopStore = store.subscribe(listener), stopPreferences = statusbar.subscribe(listener); return () => {stopStore(); stopPreferences();};},
+    getStatusSnapshot: () => store.getSnapshot().revision + ':' + statusbar.getSnapshot().revision + ':' + statusTick,
+    subscribeStatus(listener: () => void) {
+      const stopStore = store.subscribe(() => {gitStatus.touch(); listener();}), stopPreferences = statusbar.subscribe(listener);
+      statusListeners.add(listener);
+      return () => {stopStore(); stopPreferences(); statusListeners.delete(listener);};
+    },
     async recordError(error: unknown, owner = 'logox') {
       notice(error instanceof Error ? error.message : String(error), 'command_error', owner);
       await systems.flush();
@@ -1066,9 +1108,9 @@ export async function createSessionApplication(options: SessionApplicationOption
     async close() {
       closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); store.interactions.close(); compactTask?.controller.abort();
       try {
-        await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask]);
+        await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
-      } finally {stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
+      } finally {await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();
@@ -1156,12 +1198,12 @@ export async function createSessionApplication(options: SessionApplicationOption
           if (specificModel) {
             if (specificModel.toLowerCase() === 'inherit') {
               await tools.modelStorage.save('automa', undefined, commands.signal);
-              receipt('Automa model set to inherit session model', 'silent', undefined, source);
+              receipt('Automa model set to inherit session model', 'status', undefined, source);
               return;
             }
             const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
             await tools.modelStorage.save('automa', {provider: resolved.provider, model: resolved.model}, commands.signal);
-            receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
+            receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
             return;
           }
           await openAutomaModel();
@@ -1173,7 +1215,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           if (specificModel) {
             const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
             await actorServices.management.saveDefaultModel(targetActor.id, {provider: resolved.provider, model: resolved.model}, commands.signal);
-            receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
+            receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
             return;
           }
           if (targetActor.id === 'logox') {
@@ -1189,7 +1231,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!model) throw new Error('Please specify a model name');
         const resolved = modelPool.resolveShorthand(model, settings.provider);
         await saveSelection(registry.candidate(resolved.provider, resolved.model));
-        receipt('Current model: ' + resolved.provider + '/' + resolved.model, 'silent', undefined, source);
+        receipt('Current model: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
         return;
       }
       if (text === '/name' || text.startsWith('/name ')) {
@@ -1209,7 +1251,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         return;
       }
       if (text === '/help' || text === '/commands') {
-        receipt(buildAppCommandContext().commandsLines.join('\n'), 'panel', 'Help & Commands'); return;
+        receipt(buildAppCommandContext().commandsLines.map(rowText).join('\n'), 'panel', 'Help & Commands'); return;
       }
       pageOwner = source;
       const pageSpec = createCommandTabsFor(text, buildAppCommandContext());
@@ -1226,11 +1268,13 @@ export async function createSessionApplication(options: SessionApplicationOption
                 onThemeChange: theme => { currentThemeName = theme; },
                 onCursorChange: cursor => { currentCursorName = cursor as CursorStyleName; },
               });
-              await uiPref.save({
-                version: 1,
-                theme: currentThemeName,
-                cursor: currentCursorName,
-              }).catch(() => {});
+              try {
+                await uiPref.save({version: 1, theme: currentThemeName, cursor: currentCursorName});
+              } catch (error) {
+                // The choice is already applied to this session; say plainly that it will not survive a restart.
+                return {message: 'Settings applied for this session but could not be saved: ' + (error instanceof Error ? error.message : String(error)),
+                  kind: 'command_error', presentation: 'status'};
+              }
               return res;
             }
             if (tabId !== 'statusbar') throw new Error('This page does not support configuration');
@@ -1239,12 +1283,12 @@ export async function createSessionApplication(options: SessionApplicationOption
             return {message: 'Statusbar layout saved.', presentation: 'status'};
           },
           onTabAction: async (tabId, action) => {
-            if (tabId === 'permissions' && action === 'toggle_mode') {
-              const modes = ['default', 'auto', 'creative'] as const;
-              const nextMode = modes[(modes.indexOf(permissions.mode) + 1) % modes.length]!;
+            if (action === 'cancel_confirm') return {message: 'Cancelled.', presentation: 'status'};
+            if (tabId === 'permissions' && action.startsWith('set_mode:')) {
+              // The page edits a draft; only Enter reaches here, and this is the single place the mode is saved.
+              const nextMode = permissionModeSchema.parse(action.slice('set_mode:'.length));
               await permissions.setMode(nextMode);
-              refreshCurrentPage();
-              return {message: 'Permission mode switched to: ' + nextMode, presentation: 'silent'};
+              return {message: 'Permission mode set to ' + nextMode, presentation: 'status', close: true};
             }
             if (tabId === 'providers') {
               const names = registry.names();
@@ -1270,11 +1314,11 @@ export async function createSessionApplication(options: SessionApplicationOption
                   const elapsed = Date.now() - start;
                   providerStatuses.set(current, '● Connected (' + elapsed + 'ms)');
                   refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)", presentation: 'silent'};
+                  return {message: "Provider '" + current + "' connected (" + elapsed + "ms)", presentation: 'status'};
                 } catch (error) {
                   providerStatuses.set(current, '○ Offline (' + (error instanceof Error ? error.message : 'failed') + ')');
                   refreshCurrentPage();
-                  return {message: "Provider '" + current + "' connection failed", kind: 'command_error', presentation: 'silent'};
+                  return {message: "Provider '" + current + "' connection failed", kind: 'command_error', presentation: 'status'};
                 }
               }
               if (action === 'refresh') {
@@ -1285,20 +1329,25 @@ export async function createSessionApplication(options: SessionApplicationOption
                   const count = pool.filter(m => m.provider === current).length;
                   providerStatuses.set(current, '● Connected (' + count + ' models synced)');
                   refreshCurrentPage();
-                  return {message: "Refreshed " + count + " models from '" + current + "'", presentation: 'silent'};
+                  return {message: "Refreshed " + count + " models from '" + current + "'", presentation: 'status'};
                 } catch (error) {
                   providerStatuses.set(current, '○ Sync failed');
                   refreshCurrentPage();
-                  return {message: "Failed to refresh models from '" + current + "'", kind: 'command_error', presentation: 'silent'};
+                  return {message: "Failed to refresh models from '" + current + "'", kind: 'command_error', presentation: 'status'};
                 }
               }
               if (action === 'logout') {
+                if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
+                return {confirm: {action: 'confirm_logout', prompt: "Log out of provider '" + current + "' and remove its credentials?"}};
+              }
+              if (action === 'confirm_logout') {
+                if (ensemble.isBusy()) return {message: 'Tasks are running. Wait or cancel before unregistering provider.', kind: 'command_error', presentation: 'status'};
                 await registry.unregister(current);
                 if (viewingProviderIndex >= registry.names().length) {
                   viewingProviderIndex = Math.max(0, registry.names().length - 1);
                 }
                 refreshCurrentPage();
-                return {message: "Logged out provider '" + current + "'", presentation: 'silent'};
+                return {message: "Logged out provider '" + current + "'", presentation: 'status'};
               }
             }
             return {};
@@ -1327,7 +1376,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (!effortCommand[1]) {openThinking(); return;}
         const effort = effortSchema.safeParse(effortCommand[1]);
         if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
-        await saveEffort(effort.data); receipt('Thinking effort: ' + effort.data + ' (saved)', 'silent', undefined, source); return;
+        await saveEffort(effort.data); receipt('Thinking effort: ' + effort.data + ' (saved)', 'status', undefined, source); return;
       }
       if (text === '/model') {
         if (source !== 'logox' && actors.find(source)) {
@@ -1363,7 +1412,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
         if (!parts[0] || parts.length > 2) throw new Error('Usage: /providers <name> [model]');
         await saveSelection(registry.candidate(parts[0], parts[1]));
-        receipt('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model'), 'silent', undefined, source); return;
+        receipt('Current provider: ' + settings.provider + '\nModel: ' + (settings.model || 'Select with /model'), 'status', undefined, source); return;
       }
       if (text === '/check-provider') {
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
@@ -1403,15 +1452,15 @@ export async function createSessionApplication(options: SessionApplicationOption
           const activities = new Set((await journal.activeTasks(session)).map(task => task.activityId));
           for (const owner of owners) for (const entry of await journal.load(session, owner)) if (entry.activityId) activities.add(entry.activityId);
           const paths = await tools.snapshots.undo([...activities]);
-          if (!paths.length) {receipt('No file changes to undo', 'silent', undefined, source); return undefined;}
+          if (!paths.length) {receipt('No file changes to undo', 'status', undefined, source); return undefined;}
           return 'Undone:\n' + paths.join('\n');
         }); return;
       }
       if (text === '/doctor') {
-        const {runDoctorChecks, formatDoctorReport} = await import('./doctor.js');
+        const {runDoctorChecks, doctorLines} = await import('./doctor.js');
         await queryResult(source, 'Logox Doctor', async () => {
-          const report = runDoctorChecks(cwd);
-          return formatDoctorReport(report);
+          const lines = doctorLines(runDoctorChecks(cwd));
+          return {text: lines.map(line => line.text).join('\n'), lines};
         });
         return;
       }

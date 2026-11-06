@@ -71,7 +71,8 @@
     "demo:pipeline": "npm run build && node scripts/demo-pipeline-tree.mjs",
     "doctor": "npm run build && node dist/src/cli.js --doctor",
     "sync:profiles": "node scripts/sync-actor-profiles.mjs",
-    "check:docs": "node scripts/check-docs.mjs"
+    "check:docs": "node scripts/check-docs.mjs",
+    "sync:models": "node scripts/sync-model-table.mjs"
   },
   "engines": {
     "node": ">=22"

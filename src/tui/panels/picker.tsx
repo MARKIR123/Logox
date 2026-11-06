@@ -60,7 +60,9 @@ export function Picker({title, description = '', items, current = '', status = '
   const showTabs = tabbed && bodyRows - effortRows >= 2;
   const showSectionRules = (tabs.length > 0 || hasEffortBar) && bodyRows - effortRows >= (showTabs ? 5 : 4);
   const contentRows = bodyRows - effortRows - (showSectionRules ? 2 : 0);
-  const showSearch = contentRows - (showTabs ? 1 : 0) >= 2;
+  // A list that loaded empty has nothing to search: show the next step instead of a dead search box.
+  const nothing = status === 'ready' && items.length === 0;
+  const showSearch = !nothing && contentRows - (showTabs ? 1 : 0) >= 2;
   const showSearchGap = showTabs && showSectionRules && contentRows >= 4;
   const showDescription = !tabbed && contentRows >= 3;
   const count = Math.max(0, contentRows - (showTabs ? 1 : 0) - (showSearch ? 1 : 0)
@@ -70,6 +72,9 @@ export function Picker({title, description = '', items, current = '', status = '
   const searchWidth = Math.max(1, columns - 9);
   let tail = search.text;
   while (stringWidth(tail) > searchWidth) tail = graphemes(tail).slice(1).join('');
+  // The description column takes whatever the widest visible label leaves, instead of a fixed cap.
+  const widestLabel = Math.max(0, ...matches.map(item => stringWidth(safeText(item.label + (item.id === current ? ' · current' : ''))) + (item.effortLevels && item.effortLevels.length > 1 ? 10 : 0)));
+  const descriptionRoom = Math.max(0, columns - 2 - 2 - Math.min(widestLabel, Math.floor(columns * 0.65)));
   const rule = <Box height={1} flexShrink={0}><Text color={palette.accent} wrap="truncate">{'─'.repeat(columns)}</Text></Box>;
   const {setCursorPosition} = useCursor();
   const searchY = y + 2 + (showTabs ? 1 : 0) + (showSectionRules ? 1 : 0) + (showDescription ? 1 : 0);
@@ -115,7 +120,7 @@ export function Picker({title, description = '', items, current = '', status = '
     + markerCells * (itemEffortLevels?.length ?? 0);
   const effortNotice = hasEffortBar ? ' · ←→ Thinking' : '';
   const tabNotice = tabbed ? ' · Tab Provider' : '';
-  const footer = status === 'saving' ? 'Processing...' : '↑↓ Select' + tabNotice + effortNotice + ' · Enter Confirm · Esc Back' + (selected?.deletable && deleteLabel ? ' · Ctrl+X ' + deleteLabel : '');
+  const footer = status === 'saving' ? 'Processing...' : nothing ? 'Esc Back' : '↑↓ Select' + tabNotice + effortNotice + ' · Enter Confirm · Esc Back' + (selected?.deletable && deleteLabel ? ' · Ctrl+X ' + deleteLabel : '');
   return <CommandPane docked title={title} width={width} height={height} footer={notice || footer}>
     {showTabs ? <>
       <Box height={1} flexShrink={0}><Text wrap="truncate">
@@ -132,7 +137,7 @@ export function Picker({title, description = '', items, current = '', status = '
         const active = item.id === selected?.id;
         const itemEffort = active ? currentEffort : (itemEfforts[item.id] ?? item.effort);
         const effortBadge = itemEffort && item.effortLevels && item.effortLevels.length > 1 ? ' · ✦ ' + itemEffort : '';
-        const detail = clipLine(safeText(item.description ?? ''), Math.max(0, Math.min(30, Math.floor(columns / 2))));
+        const detail = clipLine(safeText(item.description ?? ''), descriptionRoom);
         const labelColumns = Math.max(1, columns - 2 - (detail ? stringWidth(detail) + 2 : 0));
         const label = clipLine(safeText(item.label + (item.id === current ? ' · current' : '') + effortBadge), labelColumns);
         const highlight = active && !item.disabled;
@@ -144,7 +149,7 @@ export function Picker({title, description = '', items, current = '', status = '
             {' '.repeat(Math.max(2, labelColumns - stringWidth(label) + 2)) + detail}
           </Text> : null}
         </Text></Box>;
-      }) : <Text color={palette.muted} wrap="truncate">{error || emptyText}</Text>}
+      }) : <Text color={palette.muted} wrap="wrap">{error || emptyText}</Text>}
     </Box>
     {hasEffortBar && <>
       <Box height={1} flexShrink={0}/>

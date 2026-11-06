@@ -12,7 +12,8 @@
 | Classify an HTTP or transport failure | `http.ts:providerFailure()` | `http.ts:isProviderInterruption()`, `http.ts:ProviderError` |
 | Limit concurrent requests or slow down on HTTP 429/529 | `request-gate.ts:RequestGate` | `registry.ts:ProviderRegistry.gateFor()`, `http.ts:isRateLimitFailure()`, `http.ts:parseRetryAfter()` |
 | Fix connection drops, proxy or TLS | `transport.ts:createHttpTransport()` | `error-format.ts:formatNetworkError()` |
-| Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-capacities.ts:modelCapacities` |
+| Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-table.ts:ModelTable.resolve()`, `model-capacities.ts:modelCapacities` |
+| Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
 | Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()`, `auth.ts:AuthStorage` |
 | Model list cache and shorthand | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
 | ChatGPT OAuth login or refresh | `oauth.ts:startOpenAiOAuth()` | `oauth.ts:refreshOpenAIToken()`, `login.ts:LoginFlow` |
@@ -55,6 +56,9 @@
 - **Every model `respond` goes through one `RequestGate` per normalized base URL** (shared with `candidate()` registries; max 16 in flight, halved on 429/529/`rate_limit_error`/`overloaded_error`, never retries, keyed without credentials). `check()` and `/models` listing bypass it. Rate-limit errors carry `diagnostic.status` and optional `diagnostic.retryAfterMs`. Enforced by `tests/provider-request-gate.test.ts`.
 - **Local proxy auto-probe**: when the configured proxy port refuses, `transport.ts` probes `7898, 7890, 7897, 10808, 10809` on `127.0.0.1`. *Unenforced*.
 - **The transport never modifies global fetch, dispatcher or environment**: *Unenforced*.
+
+- **The generated table is data only**: the sync script reads the upstream package's JSON and never imports or executes its code; output is sorted and deterministic. Enforced by `tests/model-table.test.ts`.
+- **Low-confidence (`inferred`) table matches never feed thinking levels or output clamps**: they only fill a window or output the name heuristics leave empty. Enforced by `tests/model-table.test.ts`.
 
 ## 5. Dependencies
 - **Depends on**: `src/config/` (`modelSettings()`, `presets`, thinking effort types), `src/runtime/` (`Provider`, `ModelMessage`, runtime context codecs), `src/context/` (`ModelCapacity`), `src/tools/protocol/LoadToolsTool/prompt.ts` (disclosure wording), `undici`.

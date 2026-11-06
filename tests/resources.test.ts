@@ -101,7 +101,8 @@ test('正式任务、compact 共用资源；reload 更新提示与命令但保�
       assert.match(report.text, /Configuration: validation failed/);
       app.surfaces.cancel();
       assert.deepEqual(await app.journal.load(app.sessionId, 'logox'), before);
-      assert.equal(app.contexts.status({sessionId: app.sessionId, ownerId: 'logox'}), undefined);
+      // A rejected reload sends no request; the earlier reading survives but is no longer anchored on provider usage.
+      assert.equal(app.contexts.status({sessionId: app.sessionId, ownerId: 'logox'})?.estimated, true);
       assert.ok(app.store.getSnapshot().messages.some(item => item.text.includes('Configuration: validation failed')));
       const base = await agentRequestBase(f.cwd, 'logox', [], app.resources);
       assert.ok(base.system.includes('规则第二版')); assert.ok(!base.system.includes('规则第一版'));

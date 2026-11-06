@@ -31,19 +31,23 @@ export function ProductionQuestionPanel({question, position, total, width, heigh
   const hint = multi ? '↑↓ Move · Space Toggle · Enter Submit · Tab Input · Esc Back'
     : options.length ? '↑↓ Select · Enter Submit · Tab Input · Esc Back' : 'Enter Submit · Esc Back';
   const view = buildQuestionRows({question: {...question, inputLabel: question.secret ? 'Input' : 'My view'},
-    position, total, width, height, y, focus: draft.selected, checked: draft.checked ?? [],
+    position, total, width, height, y, focus: draft.selected,
+    // A single choice has no check list: its marker follows the selection, so it always agrees with the "Selected:" hint.
+    checked: multi ? draft.checked ?? [] : draft.selected < options.length ? [draft.selected] : [],
     text: safeText(draft.text), cursor, error: draft.error, hint, foldAction: false});
+  // This panel is docked directly above the composer, whose own top hairline closes it: drop the planner's bottom rule so one line shows.
+  const shown = view.rows.length > 1 ? view.rows.slice(0, -1) : view.rows;
   useMouse(event => {
-    if (event.x < 0 || event.x >= width || event.y < y || event.y >= y + Math.min(height, view.rows.length)) return;
+    if (event.x < 0 || event.x >= width || event.y < y || event.y >= y + Math.min(height, shown.length)) return;
     if (event.action === 'wheel_up' || event.action === 'wheel_down') {onMove(event.action === 'wheel_down' ? 1 : -1); return;}
     if (event.action !== 'press' || event.button !== 0) return;
-    const action = view.rows[event.y - y]?.action;
+    const action = shown[event.y - y]?.action;
     if (action === 'input') onFocusInput();
     else if (typeof action === 'number') onSelect(action);
   });
-  return <Box width={width} height={Math.min(height, view.rows.length)} flexDirection="column" flexShrink={0} overflow="hidden">
+  return <Box width={width} height={Math.min(height, shown.length)} flexDirection="column" flexShrink={0} overflow="hidden">
     {focused && view.caret && <AnswerCaret position={view.caret}/>}
-    {view.rows.slice(0, height).map((row, index) => <Box key={index} width={width} height={1} flexShrink={0}>
+    {shown.slice(0, height).map((row, index) => <Box key={index} width={width} height={1} flexShrink={0}>
       <Text wrap="truncate">{row.segments.map((segment, at) =>
         <Text key={at} color={segment.color} bold={Boolean(segment.bold)}>{segment.text}</Text>)}</Text>
     </Box>)}

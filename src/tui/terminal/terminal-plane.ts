@@ -77,8 +77,10 @@ export class TerminalPlane {
   present(frame: PlaneFrame): void {
     if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height)) this.erase();
     const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId;
+    // The first content after an empty history (a new approval, the first message) must not wait for frame pacing.
+    const firstContent = this.displayedRows.length === 0 && frame.rows.length > 0;
     this.frame = frame;
-    if (hoverChanged && this.active && !this.closed && !this.outputHeld) {
+    if ((hoverChanged || firstContent) && this.active && !this.closed && !this.outputHeld) {
       this.flush();
       return;
     }

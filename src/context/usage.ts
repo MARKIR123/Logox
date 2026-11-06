@@ -4,6 +4,9 @@ import {join} from 'node:path';
 import {StateFile} from '../config/model-preferences.js';
 import type {Config} from '../config/config.js';
 import {usageRecordSchema, type UsageRecord} from './budget.js';
+import {costOf, modelKey} from './cost.js';
+import type {TabRow} from '../runtime/command-surface.js';
+import {row, rowText} from '../commands/tab-rows.js';
 
 const ledgerSchema = z.array(usageRecordSchema);
 export class UsageLedger {
@@ -24,14 +27,11 @@ export class UsageLedger {
   }
   async flush(): Promise<void> {await this.pending;}
 }
-function modelKey(identity: string): string {
-  try {const parts: unknown = JSON.parse(identity); if (Array.isArray(parts) && typeof parts[0] === 'string' && typeof parts[1] === 'string') return parts[0] + '/' + parts[1];} catch {}
-  return identity;
-}
-export function usageLines(records: readonly UsageRecord[], config: Config): string[] {
+/** Structured usage page. Missing cache rates bill at the input rate and mark the figure partial; a model with no price shows none. */
+export function usageRows(records: readonly UsageRecord[], config: Config): TabRow[] {
   const totalInput = records.reduce((sum, record) => sum + record.input, 0), totalOutput = records.reduce((sum, record) => sum + record.output, 0);
-  const lines = ['Actual response usage; input includes cache, and cost is computed from static configuration.',
-    'Total input / output: ' + totalInput + ' / ' + totalOutput + ' token'];
+  const rows: TabRow[] = [row.muted('Actual response usage; input includes cache. Cost uses configured or built-in list prices.'),
+    row.field('Total input / output', totalInput + ' / ' + totalOutput + ' token')];
   const groups = new Map<string, {input: number; output: number; cacheRead: number; cacheWrite: number}>();
   for (const record of records) {
     const key = JSON.stringify([modelKey(record.model), record.category]);
@@ -39,18 +39,15 @@ export function usageLines(records: readonly UsageRecord[], config: Config): str
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) total[field] += record[field];
     groups.set(key, total);
   }
-  if (!groups.size) return [...lines, 'No response usage recorded yet.'];
+  if (!groups.size) return [...rows, row.text('No response usage recorded yet.')];
   for (const [key, total] of groups) {
     const [model, category] = z.tuple([z.string(), z.string()]).parse(JSON.parse(key));
-    const price = config.models[model]?.prices;
-    const buckets = [[total.input - total.cacheRead - total.cacheWrite, price?.input], [total.output, price?.output],
-      [total.cacheRead, price?.cache_read], [total.cacheWrite, price?.cache_write]] as const;
-    const known = !!price && buckets.every(([tokens, rate]) => tokens === 0 || rate !== undefined);
-    const cost = known ? buckets.reduce((sum, [tokens, rate]) => sum + tokens * (rate ?? 0) / 1e6, 0) : undefined;
-    lines.push('', model + ' · ' + (['task', 'approval', 'automa'].includes(category) ? category : 'summary'),
-      'Input / output: ' + total.input + ' / ' + total.output + ' token',
-      'Cache read / write: ' + total.cacheRead + ' / ' + total.cacheWrite + ' token',
-      'Estimated cost: ' + (cost === undefined ? 'unknown (no price)' : cost.toFixed(6) + ' ' + price!.currency));
+    const cost = costOf([{id: 'group', model, category: 'task', ...total}], config);
+    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa'].includes(category) ? category : 'summary')),
+      row.field('Input / output', total.input + ' / ' + total.output + ' token'),
+      row.field('Cache read / write', total.cacheRead + ' / ' + total.cacheWrite + ' token'),
+      row.field('Estimated cost', cost === undefined ? 'unknown (no price)' : (cost.partial ? '~' : '') + cost.amount.toFixed(6) + ' ' + cost.currency + (cost.partial ? ' (partial: cache rate billed as input)' : '')));
   }
-  return lines;
+  return rows;
 }
+export function usageLines(records: readonly UsageRecord[], config: Config): string[] {return usageRows(records, config).map(rowText);}

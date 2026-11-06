@@ -194,10 +194,10 @@ test('a screenshot does not trigger premature compaction with a calibrated usage
   } finally {await f.cleanup();}
 });
 
-test('gpt-6.1-sol retains a 350k working context within its 1M built-in window', async () => {
+test('gpt-6.1-sol retains a 350k working context within a declared 1M window', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-sol-capacity-'));
   try {
-    const config = await loadConfig(directory, {provider: {name: 'openai', model: 'gpt-6.1-sol'}}, {}, directory, directory);
+    const config = await loadConfig(directory, {provider: {name: 'openai', model: 'gpt-6.1-sol'}, models: {'openai/gpt-6.1-sol': {context_window: 1_000_000}}}, {}, directory, directory);
     const model = new ProviderRegistry(config, {}, undefined, new AuthStorage(join(directory, 'auth.json'))).capacity();
     const f = await fixture({}, model);
     try {

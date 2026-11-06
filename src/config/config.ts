@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
 import {hooksSchema, mcpServerSchema} from '../extensions/config.js';
 import {defaultPalette, hexColorSchema} from './theme-palette.js';
+import {modelTable, thinkingHint} from '../providers/model-table.js';
 
 export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
   input: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative().optional(),
@@ -18,6 +19,12 @@ const capacitySchema = z.object({
   context_window: z.number().int().min(256).optional(),
   max_output_tokens: z.number().int().positive().optional(),
 });
+/** Declares which built-in model catalog (see `src/providers/model-table.ts`) a custom gateway mirrors, plus id aliases for names the catalog does not list. */
+export const catalogSchema = z.object({
+  mirror: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  aliases: z.record(z.string().min(1), z.string().min(1)).default({}),
+  subscription: z.boolean().optional(),
+}).strict();
 export const contextPolicySchema = z.object({
   keep_recent_rounds: z.number().int().nonnegative().default(2),
   keep_recent_tools: z.number().int().nonnegative().default(2),
@@ -52,6 +59,7 @@ const schema = z.object({
   hooks: hooksSchema.default({enabled: false, timeout_s: 5, entries: []}),
   context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, keep_index_lines: 20, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5}),
   models: z.record(z.string(), capacitySchema).default({}),
+  catalogs: z.record(z.string().min(1), catalogSchema).default({}),
   provider: z.object({
     context_window: capacitySchema.shape.context_window, max_output_tokens: capacitySchema.shape.max_output_tokens,
     thinking_effort: effortSchema.default('auto'),
@@ -214,7 +222,9 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
           ? ['auto', 'off', 'low', 'high', 'max']
           : protocol === 'anthropic-adaptive' && model.startsWith('claude-opus-')
             ? ['auto', 'off', 'low', 'medium', 'high', 'max']
-            : ['auto', 'off', 'low', 'medium', 'high']
+            : protocol === 'reasoning-effort' && (official || config.catalogs[provider.name]?.mirror !== undefined)
+              ? ['auto', ...(thinkingHint(modelTable.resolve(provider.name, model, {catalogs: config.catalogs, baseUrl})) ?? ['off', 'low', 'medium', 'high'])]
+              : ['auto', 'off', 'low', 'medium', 'high']
       ),
     } : {}),
     key: keyEnv ? env[keyEnv] ?? '' : '',

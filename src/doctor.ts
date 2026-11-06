@@ -3,6 +3,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {resolveRgPath} from './tools/GrepTool/rg-path.js';
+import type {ResultLine} from './runtime/command-surface.js';
 
 export interface DoctorCheckItem {
   readonly name: string;
@@ -263,4 +264,20 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push('');
 
   return lines.join('\n');
+}
+
+/** Panel form of the report: semantic tones instead of raw ANSI, so the TUI styles it through the palette. */
+export function doctorLines(report: DoctorReport, width = 58): ResultLine[] {
+  const rule = '─'.repeat(Math.max(8, Math.min(width, 58)));
+  const lines: ResultLine[] = [{text: '◈ Logox Doctor · Environment & Readiness Diagnosis', tone: 'title'}, {text: rule, tone: 'muted'}];
+  for (const check of report.checks) {
+    const tone = check.status === 'pass' ? 'pass' : check.status === 'warn' ? 'warn' : 'fail';
+    lines.push({text: `${check.status === 'pass' ? '✔' : check.status === 'warn' ? '▲' : '✖'} ${check.name.padEnd(24)} ${check.message}`, tone});
+    if (check.detail) lines.push({text: `  └─ ${check.detail}`, tone: 'muted'});
+  }
+  lines.push({text: rule, tone: 'muted'}, {text: 'Font & Powerline Alignment Check:', tone: 'strong'},
+    {text: '   ◈ Logox  ⊞ Techne  ✧ Kalon  ◎ Aletheia '},
+    {text: '  └─ If the glyphs above render smoothly without [?], your terminal has Nerd Font enabled.', tone: 'muted'},
+    {text: '     Recommended font: Maple Mono NF CN (or any Nerd Font Mono, e.g. JetBrainsMono NFM).', tone: 'muted'});
+  return lines;
 }

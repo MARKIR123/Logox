@@ -5,15 +5,21 @@ import {palette} from '../appearance/theme.js';
 import {layoutInput} from '../input/editor.js';
 import {clipLine, safeText} from '../terminal/text.js';
 import {useMouse} from '../terminal/mouse.js';
+import type {ResultLine, ResultTone} from '../../runtime/command-surface.js';
+
+const toneColor = (tone: ResultTone | undefined): string => tone === 'title' ? palette.accent : tone === 'strong' ? palette.strong : tone === 'pass' ? palette.success
+  : tone === 'warn' ? palette.warning : tone === 'fail' ? palette.error : tone === 'muted' ? palette.muted : palette.fg;
 
 /** Read-only command output. Copy retains the original text, not its display wraps. */
-export function CommandResultPanel({title, text, width, height, onClose, onCopy}: {
-  title: string; text: string; width: number; height: number;
+export function CommandResultPanel({title, text, styled, width, height, onClose, onCopy}: {
+  title: string; text: string; styled?: readonly ResultLine[] | undefined; width: number; height: number;
   onClose(): void; onCopy(text: string): void;
 }) {
   const columns = Math.max(1, width - 2 * panePadding(width));
   const contentHeight = Math.max(0, height - (height >= 4 ? 4 : 3));
-  const lines = useMemo(() => layoutInput({text: safeText(text).replace(/\t/g, '  '), cursor: 0}, columns).lines, [text, columns]);
+  const lines = useMemo((): readonly {text: string; tone?: ResultTone | undefined}[] => styled
+    ? styled.flatMap(line => layoutInput({text: safeText(line.text).replace(/\t/g, '  '), cursor: 0}, columns).lines.map(wrapped => ({text: wrapped.text, tone: line.tone})))
+    : layoutInput({text: safeText(text).replace(/\t/g, '  '), cursor: 0}, columns).lines, [text, styled, columns]);
   const [position, setPosition] = useState(0);
   const max = Math.max(0, lines.length - contentHeight), offset = Math.min(max, position);
   const [copied, setCopied] = useState(false);
@@ -48,7 +54,7 @@ export function CommandResultPanel({title, text, width, height, onClose, onCopy}
   </Box>;
   return <PanelFrame title={title} width={width} height={height} footer={footer}>
     {lines.slice(offset, offset + contentHeight).map((line, index) => <Box key={offset + index} height={1} flexShrink={0} overflow="hidden">
-      <Text color={palette.fg} wrap="truncate">{clipLine(line.text, columns) || ' '}</Text>
+      <Text color={toneColor('tone' in line ? line.tone : undefined)} bold={'tone' in line && (line.tone === 'title' || line.tone === 'strong')} wrap="truncate">{clipLine(line.text, columns) || ' '}</Text>
     </Box>)}
   </PanelFrame>;
 }

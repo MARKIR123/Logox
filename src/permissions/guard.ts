@@ -4,6 +4,8 @@ import type {ActorContext} from '../actors/ensemble.js';
 import type {ModelMessage, ModelTurn, Provider} from '../runtime/messages.js';
 import {PermissionEngine, type PermissionTarget} from './engine.js';
 import {inputKind} from '../runtime/provenance.js';
+import type {TabRow} from '../runtime/command-surface.js';
+import {row, rowText} from '../commands/tab-rows.js';
 
 const verdictSchema = z.strictObject({decision: z.enum(['allow', 'danger']), reason: z.string().trim().min(1).max(1000)});
 type Arguments = Record<string, z.infer<ReturnType<typeof z.json>>>;
@@ -40,11 +42,12 @@ export class PermissionGuard {
   constructor(readonly engine: PermissionEngine, private readonly options: GuardOptions = {}) {}
   policy(): string {return digest([this.engine.mode, this.engine.snapshot()]);}
   snapshot(): readonly PermissionRecord[] {return this.records.map(record => ({...record}));}
-  lines(): string[] {
-    return ['Model approval requests this run: ' + this.calls, 'Approval input / output this run: ' + this.input + ' / ' + this.output + ' token' +
-      (this.missingUsage ? '; ' + this.missingUsage + ' without usage reported' : ''), '', ...this.records.slice(-30).reverse().flatMap(record =>
-      [record.owner + ' · ' + record.action + ' · ' + record.decision + ' · ' + record.source, record.reason])];
+  rows(): TabRow[] {
+    return [row.field('Model approval requests this run', this.calls), row.field('Approval input / output this run', this.input + ' / ' + this.output + ' token' +
+      (this.missingUsage ? '; ' + this.missingUsage + ' without usage reported' : '')), row.blank(), ...this.records.slice(-30).reverse().flatMap(record =>
+      [row.text(record.owner + ' · ' + record.action + ' · ' + record.decision + ' · ' + record.source), row.muted('  ' + record.reason)])];
   }
+  lines(): string[] {return this.rows().map(rowText);}
   private record(context: ActorContext, target: PermissionTarget, decision: PermissionRecord['decision'], source: PermissionRecord['source'], reason: string): void {
     const action = (context.via ? context.via.label + ' · ' : '') + target.tool + (target.command ? ' · ' + target.command.trim().split(/\s+/)[0] + ' · #' + digest(target.command).slice(0, 8)
       : target.paths.length ? ' · ' + target.paths[0]!.slice(0, 180) : '');

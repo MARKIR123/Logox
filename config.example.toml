@@ -70,6 +70,13 @@ readonly_concurrency = 4
 # cache_read = 0.5
 # cache_write = 3
 
+# Custom gateway that serves models from a built-in catalog: declare the catalog it mirrors (and ids the catalog lacks)
+# so context windows and prices resolve. See docs/modules/model-table.md.
+# [catalogs.antigravity]
+# mirror = "google"
+# [catalogs.antigravity.aliases]
+# "gemini-4-argon-high" = "gemini-4-argon"
+
 # The bundled Playwright MCP server starts locally on first browser use.
 # Prepare Chromium while online with: npm run browser:install
 # [mcp]

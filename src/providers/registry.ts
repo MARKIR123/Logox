@@ -9,6 +9,7 @@ import {modelSettings, presets, type Config, type ModelSettings} from '../config
 import {resolveProviderCapabilities} from './capabilities.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
+import {modelTable, type Resolution} from './model-table.js';
 import {type ThinkingEffort, isOpenAiReasoningModel} from '../config/model-preferences.js';
 import {AuthStorage} from './auth.js';
 import {CustomProviderStorage, type CustomProviderRecord} from './custom-storage.js';
@@ -73,6 +74,8 @@ export class ProviderRegistry {
   private readonly capabilities = new Map<string, {window?: number; maxOutput?: number}>();
   readonly customProviders = new Map<string, CustomProviderRecord>();
   /** One gate per normalized endpoint, shared with candidates so every model request to an endpoint queues together. */
+  /** Providers whose stored credential was seen to be an OAuth (subscription) login; set by settingsFor() and used by sync table lookups. */
+  private readonly oauthProviders = new Set<string>();
   private gates = new Map<string, RequestGate>();
   /** Gate tuning; tests shorten cooldowns. Applies to gates created afterwards. */
   gateOptions: RequestGateOptions = {};
@@ -172,6 +175,7 @@ export class ProviderRegistry {
     const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
     settings.maxTokens = Math.min(settings.maxTokens, config.provider.max_output_tokens ?? config.models[name + '/' + settings.model]?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? Infinity);
     const cred = await this.auth.credential(name);
+    if (cred?.type === 'oauth') this.oauthProviders.add(name);
     if (cred?.type === 'oauth' && (name === 'openai' || name.toLowerCase().includes('openai'))) {
       const expires = cred.expires_at ?? cred.expires ?? 0;
       if (expires && Date.now() >= expires - 180_000) {
@@ -195,12 +199,19 @@ export class ProviderRegistry {
     if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('Provider ' + name + ' is not logged in; use /login, set ' + (keyEnv ?? 'api_key_env') + ', or check auth_file', false, 'authentication');
     return settings;
   }
+  /** Built-in table lookup for a provider/model honouring `[catalogs.<provider>]` gateway mapping; `oauth` prefers the subscription catalog. */
+  tableHit(name: string, model: string, baseUrl?: string, oauth = this.oauthProviders.has(name)): Resolution | undefined {
+    return modelTable.resolve(name, model, {catalogs: this.config.catalogs, baseUrl: baseUrl ?? this.configFor(name).providers[name]?.base_url ?? presets[name]?.base_url, oauth});
+  }
   capacity(name = this.config.provider.name, model?: string): ModelCapacity {
     const config = this.configFor(name, model), settings = modelSettings(config, this.env);
     if (!settings.model) throw new ProviderError('No model configured; use /model to select one');
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
     const override = config.models[name + '/' + settings.model];
-    const builtin = modelCapacities[name + '/' + settings.model]
+    const hit = this.tableHit(name, settings.model, settings.baseUrl);
+    const table = hit && hit.confidence !== 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
+    const guessed = hit?.confidence === 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
+    const base = modelCapacities[name + '/' + settings.model]
       ?? modelCapacities['openai/' + settings.model]
       ?? modelCapacities['openai-compatible/' + settings.model];
     const isAntigravity = name === 'antigravity' || settings.baseUrl.includes('8045');
@@ -217,8 +228,8 @@ export class ProviderRegistry {
       : isReasoning ? 128_000
       : cleanModel.includes('gpt-4') ? 16_384
       : undefined;
-    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? builtin?.window ?? defaultWindow;
-    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? defaultOutput;
+    const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? table?.window ?? base?.window ?? defaultWindow ?? guessed?.window;
+    const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? table?.maxOutput ?? base?.maxOutput ?? defaultOutput ?? guessed?.maxOutput;
     if (!window) throw new ProviderError('Context window for model ' + name + '/' + settings.model + ' is unknown; set context_window under [models."' + name + '/' + settings.model + '"] and restart (for local models, use the actual num_ctx).', false, 'capacity');
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
       window, ...(maxOutput ? {maxOutput} : {})};
@@ -274,7 +285,7 @@ export class ProviderRegistry {
       await response.body?.cancel();
       const stored = readStoredModelsForProvider(name);
       if (stored.length > 0) return [...new Set(stored)].sort();
-      const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
+      const known = this.knownModels(name);
       if (known.length > 0) return [...new Set(known)].sort();
       throw new ProviderError('Model list query failed (HTTP ' + response.status + ')');
     }
@@ -282,7 +293,7 @@ export class ProviderRegistry {
     if (!payload.success) {
       const stored = readStoredModelsForProvider(name);
       if (stored.length > 0) return [...new Set(stored)].sort();
-      const known = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
+      const known = this.knownModels(name);
       if (known.length > 0) return [...new Set(known)].sort();
       throw new ProviderError('Model list format is invalid');
     }
@@ -291,6 +302,13 @@ export class ProviderRegistry {
       this.capabilities.set(JSON.stringify([name, model.id]), {...(window ? {window} : {}), ...(model.max_output_tokens ? {maxOutput: model.max_output_tokens} : {})});
     }
     return [...new Set(payload.data.data.map(model => model.id))].sort();
+  }
+  /** Offline model list: base capacities plus the built-in table for the catalogs this provider maps to. */
+  private knownModels(name: string): string[] {
+    const fromBase = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
+    const settings = modelSettings(this.configFor(name), this.env);
+    const catalog = modelTable.catalogsFor(name, {catalogs: this.config.catalogs, baseUrl: settings.baseUrl})[0];
+    return [...fromBase, ...(catalog && (name === catalog || this.config.catalogs[name]?.mirror !== undefined) ? modelTable.modelIds(catalog) : [])];
   }
   /** Queries authenticated cloud and configured local endpoints; does not change the current session selection. */
   async modelCatalog(signal: AbortSignal): Promise<{models: {provider: string; id: string}[]; issues: string[]}> {

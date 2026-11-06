@@ -55,7 +55,7 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
     assert.equal(statusbarText(status, 5), '\uf007 Lo…');
     assert.equal(statusbarText(status, 25), '\uf007 Logox │ \uf4b8 demo/flash');
     assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*Context \[.*\] 20% USED.*running/);
-    assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Cost|费用) CNY 1.2500/);
+    assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Session cost|Cost|费用) CNY 1.2500/);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 

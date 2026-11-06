@@ -73,9 +73,11 @@ function toolPairs(entries: readonly HistoryEntry[]): Pair[] {
   });
   return pairs;
 }
+/** `estimated` is false only when `input` is anchored on provider-reported usage of the latest response. */
+export interface ContextReading {input: number; high: number; low: number; window: number; output: number; estimated: boolean}
 export class ContextManager {
   private readonly meters = new Map<string, TokenMeter>();
-  private readonly statistics = new Map<string, {input: number; high: number; low: number; window: number; output: number}>();
+  private readonly statistics = new Map<string, ContextReading>();
   constructor(private readonly options: ContextOptions) {}
   private key(identity: Identity): string {return JSON.stringify([identity.sessionId, identity.ownerId]);}
   meter(identity: Identity): TokenMeter {
@@ -85,9 +87,44 @@ export class ContextManager {
     return meter;
   }
   status(identity: Identity) {return this.statistics.get(this.key(identity));}
-  invalidatePrefix(): void {for (const meter of this.meters.values()) meter.invalidate(); this.statistics.clear();}
+  /** Every meter of one session, keyed by owner (Automa usage is charged to its dispatcher's meter). */
+  sessionMeters(sessionId: string): ReadonlyMap<string, TokenMeter> {
+    const result = new Map<string, TokenMeter>();
+    for (const [key, meter] of this.meters) {
+      const [session, owner] = JSON.parse(key) as [string, string];
+      if (session === sessionId) result.set(owner, meter);
+    }
+    return result;
+  }
+  /** Drops provider anchors; existing readings stay visible but are marked as estimates until the next response. */
+  invalidatePrefix(): void {
+    for (const meter of this.meters.values()) meter.invalidate();
+    for (const [key, reading] of this.statistics) this.statistics.set(key, {...reading, estimated: true});
+  }
   observe(identity: Identity, request: ModelRequest, turn: ModelTurn, model: ModelCapacity): void {
     this.meter(identity).observe(request, turn, model);
+    // Record the context the provider actually reported for this response, not only the pre-request estimate.
+    const usage = turn.usage;
+    if (!usage || !['complete', 'tools'].includes(turn.stop) || !Number.isFinite(usage.input + usage.output) || usage.input <= 0) return;
+    const key = this.key(identity), previous = this.statistics.get(key);
+    const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
+    const marks = watermarks(model, policy);
+    this.statistics.set(key, {high: marks.high, low: marks.low, window: model.window, output: previous?.output ?? 0, input: usage.input + usage.output, estimated: false});
+  }
+  /** Rebuilds a reading for an owner that has stored history but has not run in this process (session resume); always an estimate. */
+  async restoreReading(identity: Identity): Promise<void> {
+    const key = this.key(identity);
+    if (this.statistics.has(key)) return;
+    try {
+      const entries = await this.options.journal.load(identity.sessionId, identity.ownerId);
+      if (!entries.length) return;
+      const model = this.options.model(identity);
+      const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
+      const marks = watermarks(model, policy);
+      const input = estimateRequest({system: '', tools: [], messages: normalizeMessages(entries.map(message))});
+      if (!this.statistics.has(key)) this.statistics.set(key, {input, high: marks.high, low: marks.low, window: model.window, estimated: true,
+        output: Math.max(0, Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety)))});
+    } catch {}
   }
   summaryContract(identity: Identity): string {return this.options.contract?.(identity)?.trim() ?? "";}
   requestBase(_identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>): Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'> {
@@ -275,7 +312,7 @@ export class ContextManager {
     }
     const input = meter.estimate(request, model);
     const output = Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety));
-    this.statistics.set(this.key(identity), {input, high: marks.high, low: marks.low, window: model.window, output: Math.max(0, output)});
+    this.statistics.set(this.key(identity), {input, high: marks.high, low: marks.low, window: model.window, output: Math.max(0, output), estimated: !meter.anchored(request, model)});
     if (input >= marks.high || output < 1) throw new ContextBudgetError('[Context] Input still exceeds the safe budget; no request sent. Retry /compact, configure the actual model window, or reduce input. Raw history and completed effects are retained.');
     return {request: {...request, maxTokens: output}, model, compacted};
   }

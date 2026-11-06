@@ -11,6 +11,7 @@
 | Follow the cascade or a TOML error | `config.ts:loadConfig()` | `config.ts:merge()`, `config.example.toml` |
 | Add or change a config key | `config.ts:schema` | `config.example.toml`, `docs/USAGE.md` |
 | Resolve a thinking protocol or effort levels | `config.ts:modelSettings()` | `model-preferences.ts:isOpenAiReasoningModel()`, `model-grouping.ts:detectEffortLevels()` |
+| Declare which built-in model catalog a gateway mirrors | `config.ts:catalogSchema` (`[catalogs.<provider>]`) | `src/providers/model-table.ts:ModelTable.resolve()`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
 | Provider presets and defaults | `config.ts:presets` | `src/providers/registry.ts:ProviderRegistry.names()` |
 | Saved model/effort selection | `model-preferences.ts:preferenceSchema` | `model-preferences.ts:StateFile`, `src/store/file-lock.ts:withFileLock()` |
 | Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |

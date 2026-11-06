@@ -51,24 +51,40 @@ function shorten(value: string, width: number): string {
 
 const stateLabels: Readonly<Record<string, string>> = {
   'Ready': 'ready', 'Running': 'running', 'Queued': 'queued',
-  'Awaiting answer': 'waiting', 'Awaiting permission': 'waiting', 'Paused': 'paused', 'Completed': 'completed',
+  'Awaiting answer': 'waiting', 'Awaiting permission': 'approval', 'Paused': 'paused', 'Completed': 'completed',
   'Failed': 'failed', 'Stopped': 'cancelled', 'Interrupted': 'cancelled',
 };
 const effortTokens: Readonly<Record<string, ThemeColorKey>> = {
   off: 'effortOff', low: 'effortLow', medium: 'effortMedium', high: 'effortHigh', max: 'effortMax', auto: 'effortAuto',
 };
+/** Whole percent of the window; never rounds up to 100 (99.6 reads 99) and is capped there (see `contextOver`). */
 function usedPercent(status: StageStatus): number | undefined {
   const context = status.context;
   if (!context || !Number.isFinite(context.tokens) || !Number.isFinite(context.window) || context.window <= 0) return;
-  return Math.round(Math.max(0, Math.min(100, context.tokens / context.window * 100)));
+  const raw = Math.max(0, context.tokens / context.window * 100);
+  return raw >= 100 ? 100 : Math.min(99, Math.round(raw));
+}
+function contextOver(status: StageStatus): boolean {
+  const context = status.context;
+  return !!context && (context.over === true || context.window > 0 && context.tokens > context.window);
 }
 function contextVariants(status: StageStatus): string[] {
   const used = usedPercent(status);
   if (used === undefined) return ['Context N/A', 'Ctx N/A'];
   const filled = Math.round(used / 20), gauge = '■'.repeat(filled) + '□'.repeat(5 - filled);
   const compactFilled = Math.round(used / 100 * 3), compactGauge = '■'.repeat(compactFilled) + '□'.repeat(3 - compactFilled);
-  return [`Context [${gauge}] ${used}% USED`, `[${gauge}] ${used}% USED`, `${compactGauge} ${used}% USED`];
+  // `~` marks an estimate not anchored on provider-reported usage; `>` marks a window overrun.
+  const shown = (contextOver(status) ? '>' : status.context?.estimated ? '~' : '') + used + '%';
+  return [`Context [${gauge}] ${shown} USED`, `[${gauge}] ${shown} USED`, `${compactGauge} ${shown} USED`];
 }
+function gitVariants(status: StageStatus, width: number): string[] {
+  const git = status.git;
+  if (!git) return [];
+  const branch = clean(git.branch);
+  const marks = (git.dirty ? ' ●' + git.dirty : '') + (git.ahead ? ' ↑' + git.ahead : '') + (git.behind ? ' ↓' + git.behind : '');
+  return [branch + marks, branch + (git.dirty ? ' ●' : ''), branch, shorten(branch, width)].filter(Boolean);
+}
+function compactCount(value: number): string {return new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1}).format(value);}
 function namedVariants(value: string, width: number, prefix = ''): string[] {
   const name = clean(value);
   return [prefix + name, name, shorten(name, width)].filter(Boolean);
@@ -91,25 +107,27 @@ const registry: Readonly<Record<StatusbarId, Descriptor>> = {
   }},
   effort: {icon: '\uf0eb', token: status => effortTokens[status.effort ?? ''] ?? 'muted',
     variants: status => {
-      const effort = status.effort === 'Unsupported' ? 'unsupported' : status.effort ?? 'unsupported';
+      const effort = status.effort === 'Unsupported' ? 'unsupported' : status.effort === 'Unavailable' ? 'unavailable' : status.effort ?? 'unsupported';
       return ['Thinking ' + effort, effort];
     }},
   permission: {icon: '\uf023', token: status => {
     const mode = status.permission;
     return mode && Object.hasOwn(permissionModes, mode) ? permissionModes[mode as keyof typeof permissionModes].colorToken : 'muted';
   }, variants: status => ['Permission ' + (status.permission ?? 'none'), status.permission ?? 'none']},
-  context: {icon: '\uf1c0', token: status => (usedPercent(status) ?? 0) >= 90 ? 'error' : (usedPercent(status) ?? 0) >= 70 ? 'warning' : 'success', variants: contextVariants},
+  context: {icon: '\uf1c0', token: status => contextOver(status) || (usedPercent(status) ?? 0) >= 90 ? 'error' : (usedPercent(status) ?? 0) >= 70 ? 'warning' : 'success', variants: contextVariants},
   state: {icon: '\uf04b', token: status => /fail|error/i.test(status.state) ? 'error' : /wait|paus|queue/i.test(status.state) ? 'warning' : 'success',
     variants: status => [stateLabels[status.state] ?? status.state]},
   tokens: {icon: '\uf0ec', token: 'effortMedium', variants: status => {
     const tokens = status.tokens;
-    if (tokens === undefined || !Number.isFinite(tokens)) return ['Tokens N/A', 'N/A'];
-    return ['Tokens ' + tokens.toLocaleString('en-US'), tokens.toLocaleString('en-US'), new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1}).format(tokens)];
+    // Session total across every window: fresh input plus output, cache reads excluded.
+    if (tokens === undefined || !Number.isFinite(tokens)) return ['Session tokens N/A', 'N/A'];
+    return ['Session tokens ' + tokens.toLocaleString('en-US'), 'Tokens ' + tokens.toLocaleString('en-US'), tokens.toLocaleString('en-US'), compactCount(tokens)];
   }},
+  // Hidden when nothing could be priced; `~` marks a partial figure (unpriced usage or a cache rate billed as input).
   cost: {icon: '\uf155', token: 'warning', variants: status => {
-    if (status.cost === undefined || !Number.isFinite(status.cost)) return ['Cost N/A', 'N/A'];
-    const cost = (status.costCurrency ? status.costCurrency + ' ' : '') + status.cost.toFixed(4);
-    return ['Cost ' + cost, cost];
+    if (status.cost === undefined || !Number.isFinite(status.cost)) return [];
+    const cost = (status.costPartial ? '~' : '') + (status.costCurrency ? status.costCurrency + ' ' : '') + status.cost.toFixed(4);
+    return ['Session cost ' + cost, 'Cost ' + cost, cost];
   }},
   session: {icon: '\uf0e6', token: 'strong', variants: (status, width) => namedVariants(status.session ?? 'unsaved', width, 'Session ')},
   project: {icon: '\uf07b', token: 'success', variants: (status, width) => {
@@ -117,6 +135,7 @@ const registry: Readonly<Record<StatusbarId, Descriptor>> = {
     const path = clean(status.project), leaf = path.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) ?? path;
     return [path, leaf, shorten(leaf, width)].filter(Boolean);
   }},
+  git: {icon: '\ue725', token: 'success', variants: gitVariants},
 };
 
 export function statusbarText(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}): string {

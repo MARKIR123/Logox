@@ -33,7 +33,7 @@
 - `/check-provider` 会发送一次真实请求，可能计费。
 - `--check-config` 只显示配置和认证是否存在，不证明远端可用。
 
-遇到环境问题（Node 版本、终端能力、Playwright 浏览器、角色档案、凭据）时，运行 `npm run doctor` 或 `--doctor`，在会话内也可输入 `/doctor`。注意 `/doctor` 没有登记在命令列表里，`/help` 和候选菜单中看不到它。
+遇到环境问题（Node 版本、终端能力、Playwright 浏览器、角色档案、凭据）时，运行 `npm run doctor` 或 `--doctor`，在会话内也可输入 `/doctor`。`/doctor` 已登记在命令列表中，`/help` 和候选菜单里都能看到；面板内的结果按主题颜色着色，不再输出原始 ANSI。
 
 ## 配置
 
@@ -92,7 +92,7 @@ name = "local"
 - `kernel.max_iterations = 0`（默认）不限制模型往返次数；设为正数时，达到额度会询问是否继续。取消随时可用。
 - 模型窗口来自配置、目录或能力推断，未知能力需显式配置。以服务实际窗口为准。
 - `/effort`（别名 `/thinking`、`/think`）选择当前模型支持的思考档位；不支持的档位不会因此可用。
-- `/usage` 的费用按配置中每百万 token 的静态价格估算，不是提供商账单；服务未返回的 usage 不会被补造。
+- `/usage` 的费用按每百万 token 的静态价格估算（先看 `[models."p/m".prices]`，再查[内置模型表](modules/model-table.md)；自建网关用 `[catalogs.<name>]` 指定对应目录），不是提供商账单；服务未返回的 usage 不会被补造。
 
 ### 网络
 
@@ -193,7 +193,7 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 
 ## 权限
 
-`/permissions` 打开权限页，查看规则并切换模式；也可以用 `/permissions mode [default|auto|creative]` 直接选择，或用 `/permissions add <session|project> <allow|deny> <工具> <模式>`、`/permissions revoke <id>` 管理规则。
+`/permissions` 打开权限页，查看规则并切换模式：Space / `m` / ←→ 只改页内草稿（标记为 unsaved），Enter 才应用并保存并提示 “Permission mode set to …”，Esc 离开且不应用；也可以用 `/permissions mode [default|auto|creative]` 直接选择，或用 `/permissions add <session|project> <allow|deny> <工具> <模式>`、`/permissions revoke <id>` 管理规则。
 
 | 模式 | 默认行为 |
 |---|---|
@@ -254,7 +254,7 @@ playwright = false
 | 帮助与状态 | `/help`、`/commands` | 查看命令和快捷键 |
 | | `/status` | 查看模型、用量、权限和会话状态 |
 | | `/usage` | 直接打开用量页 |
-| | `/doctor` | 检查环境、终端、浏览器、角色档案和凭据（隐藏命令，`/help` 中不显示，与 `--doctor` 等价） |
+| | `/doctor` | 检查环境、终端、浏览器、角色档案和凭据（与 `--doctor` 等价，结果面板按主题着色） |
 | | `/setup` | 重新打开首次设置向导 |
 | | `/name [称呼 \| --reset]` | 查看、设置或清除 Logox 对你的称呼（最多 32 个显示单元，立即生效；时间线用户标题显示该称呼而不是 `You`，模型在环境信息中得知并用它称呼你） |
 | 配置 | `/config` | 只读查看生效配置 |

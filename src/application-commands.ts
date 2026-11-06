@@ -1,4 +1,5 @@
-import type {CommandTab, CommandToggle, CommandResult} from './runtime/command-surface.js';
+import type {CommandTab, CommandToggle, CommandResult, TabLine} from './runtime/command-surface.js';
+import {row, tabContent} from './commands/tab-rows.js';
 import {applyThemePreset, applyCursorStyle, type CursorStyleName} from './config/theme-presets.js';
 import type {StatusbarAppearance} from './config/statusbar-preferences.js';
 import type {StageStatus} from './runtime/stage-status.js';
@@ -14,19 +15,20 @@ export interface ApplicationCommandContext {
     readonly mode: string;
     readonly description: string;
     readonly color?: string;
-    readonly lines: readonly string[];
+    readonly lines: readonly TabLine[];
+    readonly modes?: readonly {readonly id: string; readonly description: string}[];
     readonly readonly_concurrency: number;
     readonly approvalTokens: number;
   };
   readonly statusbarModules: readonly CommandToggle[];
   readonly statusbarAppearance?: StatusbarAppearance;
   readonly statusbarStatus?: StageStatus;
-  readonly statusLines: readonly string[];
-  readonly configLines?: readonly string[] | undefined;
-  readonly usageLines: readonly string[];
-  readonly providersLines: readonly string[];
-  readonly actorsLines: readonly string[];
-  readonly commandsLines: readonly string[];
+  readonly statusLines: readonly TabLine[];
+  readonly configLines?: readonly TabLine[] | undefined;
+  readonly usageLines: readonly TabLine[];
+  readonly providersLines: readonly TabLine[];
+  readonly actorsLines: readonly TabLine[];
+  readonly commandsLines: readonly TabLine[];
 }
 
 export function createCommandTabsFor(
@@ -43,7 +45,7 @@ export function createCommandTabsFor(
   if (normalized === '/config') {
     return {
       title: 'Effective Configuration',
-      tabs: [{id: 'config', title: 'Config', lines: context.configLines ?? []}],
+      tabs: [{id: 'config', title: 'Config', ...tabContent(context.configLines ?? [])}],
       initialTab: 'config',
     };
   }
@@ -90,11 +92,8 @@ export function createCommandTabsFor(
         id: 'permissions',
         title: 'Permissions',
         ...(context.permissions.color ? {color: context.permissions.color} : {}),
-        lines: [
-          `Current mode: ${context.permissions.mode} · ${context.permissions.description} (press Space or m to toggle mode)`,
-          '─────────────────────────────────────────────────────────────',
-          ...context.permissions.lines,
-        ],
+        ...(context.permissions.modes ? {mode: {current: context.permissions.mode, options: context.permissions.modes}} : {}),
+        ...tabContent(context.permissions.lines),
       }],
       initialTab: 'permissions',
     };
@@ -115,17 +114,17 @@ export function createCommandTabsFor(
         {
           id: 'status',
           title: 'Status',
-          lines: context.statusLines,
+          ...tabContent(context.statusLines),
         },
         ...(context.configLines ? [{
           id: 'config',
           title: 'Config',
-          lines: context.configLines,
+          ...tabContent(context.configLines),
         }] : []),
         {
           id: 'usage',
           title: 'Usage',
-          lines: context.usageLines,
+          ...tabContent(context.usageLines),
         },
       ],
       initialTab: normalized === '/usage' ? 'usage' : 'status',
@@ -138,7 +137,7 @@ export function createCommandTabsFor(
       tabs: [{
         id: 'providers',
         title: 'Providers',
-        lines: context.providersLines,
+        ...tabContent(context.providersLines),
       }],
       initialTab: 'providers',
     };
@@ -150,7 +149,7 @@ export function createCommandTabsFor(
       tabs: [{
         id: 'commands',
         title: 'Commands',
-        lines: context.commandsLines,
+        ...tabContent(context.commandsLines),
       }],
       initialTab: 'commands',
     };
@@ -162,7 +161,7 @@ export function createCommandTabsFor(
       tabs: [{
         id: 'actors',
         title: 'Actors',
-        lines: context.actorsLines,
+        ...tabContent(context.actorsLines),
       }],
       initialTab: 'actors',
     };

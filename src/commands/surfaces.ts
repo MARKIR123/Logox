@@ -1,7 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {immutable} from '../runtime/contracts.js';
-import type {CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem} from '../runtime/command-surface.js';
+import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
+  /** Shown instead of the search box when the list loads empty; say what to do next. */
+  readonly emptyText?: string;
   readonly items?: readonly PickerItem[];
   readonly effort?: string;
   readonly effortLevels?: readonly string[];
@@ -40,14 +42,14 @@ export class CommandSurfaces {
     this.publish({id: randomUUID(), kind: 'page', title, tabs, initialTab, ...this.origin?.()});
   }
   /** Read-only output has no save callback or model execution semantics. */
-  openResult(title: string, text: string, origin = this.origin?.()): string {
+  openResult(title: string, text: string, origin = this.origin?.(), lines?: readonly ResultLine[]): string {
     this.assertIdle();
     const id = randomUUID();
-    this.publish({id, kind: 'result', title, text, ...origin});
+    this.publish({id, kind: 'result', title, text, ...(lines ? {lines} : {}), ...origin});
     return id;
   }
-  updateResult(surfaceId: string, text: string): void {
-    if (this.state?.kind === 'result' && this.state.id === surfaceId) this.publish({...this.state, text});
+  updateResult(surfaceId: string, text: string, lines?: readonly ResultLine[]): void {
+    if (this.state?.kind === 'result' && this.state.id === surfaceId) this.publish({...this.state, text, ...(lines ? {lines} : {})});
   }
   async saveToggles(surfaceId: string, tabId: string, items: readonly CommandToggle[], appearance?: import('../config/statusbar-preferences.js').StatusbarAppearance): Promise<void> {
     const state = this.state, actions = this.pageActions;
@@ -75,7 +77,15 @@ export class CommandSurfaces {
     if (state?.kind !== 'page' || state.id !== surfaceId || state.saving || !actions?.onTabAction) return;
     try {
       const result = await actions.onTabAction(tabId, action);
-      if (result?.message) this.onDone(result, this.completion(state, this.state?.id === surfaceId));
+      const current = this.state;
+      if (current?.kind === 'page' && current.id === surfaceId) {
+        const {confirm: _previous, ...rest} = current;
+        if (result?.confirm) this.publish({...rest, confirm: {tabId, ...result.confirm}});
+        else if (current.confirm) this.publish(rest);
+      }
+      const stillOpen = this.state?.id === surfaceId;
+      if (result?.close && stillOpen) this.dismiss();
+      if (result?.message) this.onDone(result, this.completion(state, stillOpen));
     } catch (error) {
       if (this.state?.id === surfaceId) this.publish({...state, error: error instanceof Error ? error.message : 'Operation failed'});
       else this.onDone({message: error instanceof Error ? error.message : 'Operation failed', kind: 'command_error', presentation: 'timeline'}, this.completion(state, false));

@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {immutable} from '../runtime/contracts.js';
 import {StateFile} from './model-preferences.js';
 
-export const statusbarIds = ['role', 'model', 'effort', 'permission', 'context', 'state', 'tokens', 'cost', 'session', 'project'] as const;
+export const statusbarIds = ['role', 'model', 'effort', 'permission', 'context', 'state', 'tokens', 'cost', 'session', 'project', 'git'] as const;
 export type StatusbarId = typeof statusbarIds[number];
 export type StatusbarStyle = 'pipes' | 'starship';
 export type StatusbarColorScheme = 'theme' | 'gruvbox' | 'dracula';
@@ -12,7 +12,7 @@ export interface StatusbarAppearance {readonly style: StatusbarStyle; readonly c
 export interface StatusbarModule {readonly id: StatusbarId; readonly enabled: boolean}
 export const statusbarLabels: Readonly<Record<StatusbarId, string>> = {
   role: 'Role', model: 'Model', effort: 'Thinking effort', permission: 'Permission mode', context: 'Context usage', state: 'Run state',
-  tokens: 'Total tokens', cost: 'Cost', session: 'Session', project: 'Project directory',
+  tokens: 'Session tokens', cost: 'Session cost', session: 'Session', project: 'Project directory', git: 'Git branch',
 };
 export const defaultStatusbar: readonly StatusbarModule[] = immutable(statusbarIds.map((id, index) => ({id, enabled: index < 6})));
 const modulesSchema = z.array(z.strictObject({id: z.enum(statusbarIds), enabled: z.boolean()})).max(statusbarIds.length)

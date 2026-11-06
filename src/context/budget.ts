@@ -58,6 +58,12 @@ export class TokenMeter {
     this.spent.input += usage.input; this.spent.output += usage.output;
     this.spent.cacheRead += usage.cacheRead; this.spent.cacheWrite += usage.cacheWrite;
   }
+  /** True when the request extends the provider-anchored prefix, so its token count rests on reported usage. */
+  anchored(request: ModelRequest, model: ModelCapacity): boolean {
+    const anchor = this.anchor;
+    return !!anchor && anchor.identity === model.identity && request.messages.length >= anchor.prefix.messages.length &&
+      digest({system: request.system, tools: request.tools, ...(request.toolDiscovery ? {toolDiscovery: request.toolDiscovery} : {}), messages: request.messages.slice(0, anchor.prefix.messages.length)}) === digest(anchor.prefix);
+  }
   estimate(request: ModelRequest, model: ModelCapacity): number {
     const anchor = this.anchor;
     if (anchor?.identity === model.identity && request.messages.length >= anchor.prefix.messages.length &&

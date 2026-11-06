@@ -21,7 +21,7 @@ test('legacy layouts retain order, enabled flags and motion while missing module
     await prefs.load();
     const snapshot = prefs.getSnapshot();
     assert.deepEqual(snapshot.modules.slice(0, 2), [{id: 'context', enabled: true}, {id: 'role', enabled: false}]);
-    assert.equal(snapshot.modules.length, 10);
+    assert.equal(snapshot.modules.length, statusbarIds.length);
     assert.ok(snapshot.modules.slice(2).every(module => !module.enabled));
     assert.deepEqual(new Set(snapshot.modules.map(module => module.id)), new Set(statusbarIds));
     assert.equal(snapshot.motion, false);

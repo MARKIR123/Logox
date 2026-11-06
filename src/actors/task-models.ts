@@ -58,12 +58,8 @@ export class TaskModels {
   constructor(private readonly options: TaskModelsOptions) {}
   private key(identity: Identity): string {return JSON.stringify([identity.sessionId, identity.ownerId]);}
   async begin(context: ActorContext): Promise<TaskModelScope> {
-    let configured = context.ownerId === 'logox' ? undefined : this.options.defaultModel(context.ownerId);
-    if (configured && !this.options.registry.names().includes(configured.provider)) {
-      const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
-      if (fallback) configured = fallback;
-    }
-    const initial = selectionSchema.parse(configured ?? this.options.registry.selection());
+    const initial = this.idleSelection(context.ownerId);
+    const configured = context.ownerId === 'logox' ? undefined : this.configured(context.ownerId);
     const state: TaskModelCheckpoint = {version: 1, sessionId: context.sessionId, ownerId: context.ownerId, activityId: context.activityId,
       initial, actual: initial, inherited: !configured, switched: false, phase: 'started'};
     const scope = new TaskModelScope(this.options, context, state);
@@ -74,12 +70,19 @@ export class TaskModels {
   selection(identity: Identity): TaskModelSelection {
     const scope = this.current.get(this.key(identity));
     if (scope && (identity.ownerId !== 'logox' || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) return scope.selection();
-    let configured = identity.ownerId === 'logox' ? undefined : this.options.defaultModel(identity.ownerId);
+    return this.idleSelection(identity.ownerId);
+  }
+  /** The model the owner's next task starts with: its configured default (after the unregistered-provider fallback), else the session model. */
+  idleSelection(ownerId: string): TaskModelSelection {
+    return selectionSchema.parse(this.configured(ownerId) ?? this.options.registry.selection());
+  }
+  private configured(ownerId: string): TaskModelSelection | undefined {
+    let configured = ownerId === 'logox' ? undefined : this.options.defaultModel(ownerId);
     if (configured && !this.options.registry.names().includes(configured.provider)) {
       const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
       if (fallback) configured = fallback;
     }
-    return selectionSchema.parse(configured ?? this.options.registry.selection());
+    return configured;
   }
   model(identity: Identity): ModelCapacity {
     const selection = this.selection(identity);

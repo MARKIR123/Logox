@@ -1,10 +1,10 @@
 import React, {useRef, useState, type ReactElement} from 'react';
 import stringWidth from 'string-width';
 import {Box, Text, useInput} from 'ink';
-import type {CommandTab, CommandToggle} from '../../runtime/command-surface.js';
+import type {CommandTab, CommandToggle, TabRow} from '../../runtime/command-surface.js';
 import {palette} from '../appearance/theme.js';
 import {safeText} from '../terminal/text.js';
-import {layoutInput} from '../input/editor.js';
+import wrapAnsi from 'wrap-ansi';
 import {clipLine} from '../terminal/text.js';
 import {PanelFrame as CommandPane, panePadding} from '../components/panel-frame.js';
 import {ToggleList, moveToggle, cycleToggleOption} from './toggle-list.js';
@@ -12,13 +12,67 @@ import {useMouse} from '../terminal/mouse.js';
 import type {StatusbarAppearance} from '../../config/statusbar-preferences.js';
 import {StatusbarEditor} from '../status/statusbar-editor.js';
 
-export function TabbedPage({title, tabs, initialTab, width, height, onClose, onSave, onAction, saving = false, error = '', notice = ''}: {
+interface Cell {readonly text: string; readonly color: string; readonly bold?: boolean}
+type DisplayRow = readonly Cell[];
+const blankRow: DisplayRow = [];
+/** Word wrap by display cells (long words break hard); continuation rows are the caller's to indent. */
+function wrapBody(text: string, room: number): string[] {
+  return wrapAnsi(safeText(text), Math.max(1, room), {hard: true, trim: false}).split(String.fromCharCode(10));
+}
+function ruleRow(columns: number, title?: string): DisplayRow {
+  if (!title) return [{text: '─'.repeat(columns), color: palette.panelSeparator}];
+  const head = '── ' + title + ' ';
+  return [{text: head, color: palette.panelSeparator}, {text: '─'.repeat(Math.max(0, columns - stringWidth(head))), color: palette.panelSeparator}];
+}
+/** Hanging indent: the leading spaces and bullet stay on the first row, every continuation row aligns under the text after them. */
+function textRows(text: string, columns: number, color: string, indent = 0, bold = false): DisplayRow[] {
+  const lead = ' '.repeat(indent) + /^ *(• )?/u.exec(text)![0], body = text.replace(/^ *(• )?/u, '');
+  const hang = Math.min(stringWidth(lead), Math.max(0, columns - 8));
+  return wrapBody(body, columns - hang).map((line, index) => [{text: (index === 0 ? lead.slice(0, hang) : ' '.repeat(hang)) + line, color, ...(bold ? {bold} : {})}]);
+}
+/** Rows come from the producer when it supplied them; plain `lines` render as text, with full-width rules for dash-only lines. */
+export function tabDisplay(tab: CommandTab | undefined, columns: number): DisplayRow[] {
+  if (!tab) return [];
+  const fromRows = (rows: readonly TabRow[]): DisplayRow[] => rows.flatMap((item): DisplayRow[] => {
+    if (item.kind === 'blank') return [blankRow];
+    if (item.kind === 'rule') return [ruleRow(columns, item.title)];
+    if (item.kind === 'heading') return textRows(item.text, columns, palette.accent, 0, true);
+    if (item.kind === 'text') return textRows(item.text, columns, item.tone === 'muted' ? palette.muted : palette.fg, item.indent ?? 0);
+    const label = item.label + ':', labelWidth = stringWidth(label) + 1;
+    // A long label puts the value on its own indented rows; otherwise continuation rows align under the value.
+    if (labelWidth > Math.floor(columns / 2)) {
+      return [[{text: label, color: palette.panelLabel}], ...wrapBody(item.value, columns - 2).map((line): DisplayRow => [{text: '  ' + line, color: palette.fg, bold: true}])];
+    }
+    return wrapBody(item.value, columns - labelWidth).map((line, index): DisplayRow => index === 0
+      ? [{text: label, color: palette.panelLabel}, {text: ' ' + line, color: palette.fg, bold: true}]
+      : [{text: ' '.repeat(labelWidth) + line, color: palette.fg, bold: true}]);
+  });
+  if (tab.rows) return fromRows(tab.rows);
+  return tab.lines.flatMap((line, index): DisplayRow[] => {
+    if (!line.trim()) return [blankRow];
+    if (/^[─-]{2,}$/u.test(line.trim())) return [ruleRow(columns)];
+    const titled = /^── (.+?) ─+$/u.exec(line);
+    if (titled) return [ruleRow(columns, titled[1])];
+    return textRows(line, columns, index === 0 ? palette.accent : palette.fg, 0, index === 0);
+  });
+}
+function DisplayLine({row}: {row: DisplayRow}) {
+  return <Box height={1} flexShrink={0} overflow="hidden">
+    {row.length ? <Text wrap="truncate">{row.map((cell, at) => <Text key={at} color={cell.color} bold={cell.bold === true}>{cell.text}</Text>)}</Text> : <Text> </Text>}
+  </Box>;
+}
+
+export function TabbedPage({title, tabs, initialTab, width, height, onClose, onSave, onAction, confirm, saving = false, error = '', notice = ''}: {
   title: string; tabs: readonly CommandTab[]; initialTab: string; width: number; height: number; onClose(): void;
+  /** A pending yes/no from the host; while set, y or Enter confirms and any other key (Esc included) cancels it. */
+  confirm?: {readonly tabId: string; readonly action: string; readonly prompt: string} | undefined;
   onSave?(tabId: string, items: readonly CommandToggle[], appearance?: StatusbarAppearance): void | Promise<void>;
   onAction?(tabId: string, action: string): void;
   saving?: boolean; error?: string; notice?: string;
 }): ReactElement {
   const [active, setActive] = useState(initialTab);
+  // Permission mode is edited as a draft; nothing is saved until Enter.
+  const [modeDraft, setModeDraft] = useState<string | undefined>(undefined);
   const hasTabBar = tabs.length > 1;
   const [focusArea, setFocusArea] = useState<'tabs' | 'content'>(hasTabBar && !tabs.find(tab => tab.id === initialTab)?.toggles ? 'tabs' : 'content');
   const [appearances, setAppearances] = useState<Record<string, StatusbarAppearance>>({});
@@ -32,7 +86,16 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   const columns = Math.max(1, width - 2 * panePadding(width));
   const frameRows = height >= 4 ? 1 : 0;
   const contentHeight = Math.max(1, height - frameRows - (hasTabBar ? 5 : 3));
-  const lines = tab?.lines.flatMap(text => layoutInput({text: safeText(text), cursor: 0}, columns).lines.map(line => line.text)) ?? [];
+  const modeTab = tab?.mode, draftMode = modeTab && modeDraft && modeDraft !== modeTab.current ? modeDraft : undefined;
+  const shownMode = draftMode ?? modeTab?.current;
+  const modeDescription = modeTab?.options.find(option => option.id === shownMode)?.description ?? '';
+  const lines: DisplayRow[] = [
+    ...(confirm && confirm.tabId === tab?.id ? [[{text: '▲ ' + confirm.prompt, color: palette.warning, bold: true}] as DisplayRow,
+      [{text: '  [y] / Enter Confirm · any other key Cancel', color: palette.muted}] as DisplayRow, blankRow] : []),
+    ...(modeTab && shownMode ? [[{text: 'Mode:', color: palette.panelLabel}, {text: ' ' + shownMode, color: palette.fg, bold: true},
+      ...(draftMode ? [{text: ' · unsaved (Enter applies, Esc discards)', color: palette.warning, bold: true}] : []),
+      {text: ' · ' + modeDescription, color: palette.muted}] as DisplayRow, blankRow] : []),
+    ...tabDisplay(tab, columns)];
   const max = Math.max(0, lines.length - contentHeight), offset = Math.min(max, offsets[tab?.id ?? ''] ?? 0);
   const items = tab?.toggles ? choices[tab.id] ?? tab.toggles : undefined;
   const selected = Math.min(Math.max(0, (items?.length ?? 1) - 1), focused[tab?.id ?? ''] ?? 0);
@@ -86,6 +149,10 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
 
   useInput((input, key) => {
     if (key.eventType === 'release') return;
+    if (confirm) {
+      onAction?.(confirm.tabId, input === 'y' || input === 'Y' || key.return ? confirm.action : 'cancel_confirm');
+      return;
+    }
     if (key.escape) {
       if (!saving && !pendingSave.current) onClose();
       return;
@@ -165,9 +232,14 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       return;
     }
 
-    if (tab.id === 'permissions' && (input === ' ' || input === 'm' || input === 'M')) {
-      onAction?.('permissions', 'toggle_mode');
-      return;
+    if (modeTab) {
+      const ids = modeTab.options.map(option => option.id), at = Math.max(0, ids.indexOf(shownMode ?? modeTab.current));
+      const step = key.leftArrow ? -1 : (input === ' ' || input === 'm' || input === 'M' || key.rightArrow) ? 1 : 0;
+      if (step && ids.length) {setModeDraft(ids[(at + step + ids.length) % ids.length]); return;}
+      if (key.return) {
+        if (draftMode) onAction?.(tab.id, 'set_mode:' + draftMode);
+        return;
+      }
     }
 
     let next: number | undefined;
@@ -213,6 +285,8 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     : items?.[selected]?.options?.length ? '←→ Previous/next · Space Next'
     : '← Off · → On · Space Toggle';
   const footer = saving ? 'Saving...'
+    : confirm ? 'y Confirm · any other key Cancel'
+    : modeTab ? (draftMode ? 'Enter Apply and save · Space / ←→ Change · Esc Discard' : 'Space / m / ←→ Change mode · ↑↓ Scroll · Esc Back')
     : tab?.id === 'providers' ? '[t] Test   [r] Refresh   [x] Logout   [←→] Provider   [↑↓] Scroll   [Esc] Back'
     : items ? `${hasTabBar ? focusArea === 'tabs' ? '←→ / Tab Switch · ↓ Edit · ' : 'Tab Switch · ' : ''}↑↓ Select · Enter ${hasTabBar ? 'Apply tab' : 'Save'} · Esc ${hasTabBar ? 'Close / discard unsaved' : 'Discard'}`
     : `${hasTabBar ? '←→ / Tab Switch · ' : ''}↑↓ / PgUp PgDn Scroll · Esc Back`;
@@ -250,74 +324,12 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
             </Text>
             {hasLinesWithItems && (
               <Box flexDirection="column" marginTop={1} overflow="hidden">
-                {lines.slice(0, Math.max(0, contentHeight - visibleToggleCount - 2)).map((line, i) => {
-                  if (!line || !line.trim()) {
-                    return <Box key={i} height={1} flexShrink={0}><Text> </Text></Box>;
-                  }
-                  if (line.startsWith('──') || line.startsWith('---')) {
-                    return (
-                      <Box key={i} height={1} flexShrink={0}>
-                        <Text color={palette.panelSeparator} wrap="truncate">{clipLine(line, columns)}</Text>
-                      </Box>
-                    );
-                  }
-                  const colonIndex = line.indexOf(': ');
-                  if (colonIndex > 0 && colonIndex < 35 && !line.startsWith('http') && !line.startsWith('  • ')) {
-                    const label = line.slice(0, colonIndex + 1);
-                    const value = line.slice(colonIndex + 1).trimStart();
-                    return (
-                      <Box key={i} height={1} flexShrink={0}>
-                        <Text color={palette.panelLabel}>{label} </Text>
-                        <Text color={palette.fg} bold wrap="truncate">{clipLine(value, Math.max(1, columns - stringWidth(label) - 1))}</Text>
-                      </Box>
-                    );
-                  }
-                  return (
-                    <Box key={i} height={1} flexShrink={0}>
-                      <Text color={palette.fg} wrap="truncate">{clipLine(line, columns)}</Text>
-                    </Box>
-                  );
-                })}
+                {lines.slice(0, Math.max(0, contentHeight - visibleToggleCount - 2)).map((line, i) => <DisplayLine key={i} row={line}/>)}
               </Box>
             )}
           </>
         ) : (
-          lines.slice(offset, offset + contentHeight).map((line, i) => {
-            const isFirst = offset + i === 0;
-            if (!line || !line.trim()) {
-              return <Box key={i} height={1} flexShrink={0}><Text> </Text></Box>;
-            }
-            if (line.startsWith('──') || line.startsWith('---')) {
-              return (
-                <Box key={i} height={1} flexShrink={0}>
-                  <Text color={palette.panelSeparator} wrap="truncate">{clipLine(line, columns)}</Text>
-                </Box>
-              );
-            }
-            if (isFirst) {
-              return (
-                <Box key={i} height={1} flexShrink={0}>
-                  <Text color={palette.accent} bold wrap="truncate">{clipLine(line, columns)}</Text>
-                </Box>
-              );
-            }
-            const colonIndex = line.indexOf(': ');
-            if (colonIndex > 0 && colonIndex < 35 && !line.startsWith('http') && !line.startsWith('  • ')) {
-              const label = line.slice(0, colonIndex + 1);
-              const value = line.slice(colonIndex + 1).trimStart();
-              return (
-                <Box key={i} height={1} flexShrink={0}>
-                  <Text color={palette.panelLabel}>{label} </Text>
-                  <Text color={palette.fg} bold wrap="truncate">{clipLine(value, Math.max(1, columns - stringWidth(label) - 1))}</Text>
-                </Box>
-              );
-            }
-            return (
-              <Box key={i} height={1} flexShrink={0}>
-                <Text color={palette.fg} wrap="truncate">{clipLine(line, columns)}</Text>
-              </Box>
-            );
-          })
+          lines.slice(offset, offset + contentHeight).map((line, i) => <DisplayLine key={i} row={line}/>)
         )}
       </Box>
     </CommandPane>

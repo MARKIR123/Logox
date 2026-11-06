@@ -111,7 +111,7 @@ test('toggling permission mode updates dedicated single-tab surface without flas
       }
     });
 
-    await app.surfaces.triggerTabAction(page.id, 'permissions', 'toggle_mode');
+    await app.surfaces.triggerTabAction(page.id, 'permissions', 'set_mode:creative');
 
     // Every update to the page during toggle must preserve the single-tab (length 1), NEVER emitting 9 tabs
     assert.ok(updateCalls.length > 0);

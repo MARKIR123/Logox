@@ -95,7 +95,7 @@ async function answerWizard(f: Fixture, question: string, selected: readonly str
   f.app.authentication.answerWizard({selected, ...(custom !== undefined ? {custom} : {})});
 }
 
-test('direct and picker model/effort changes update real status and actor/tool bindings with silent durable receipts', async () => withFixture(async f => {
+test('direct and picker model/effort changes update real status and actor/tool bindings with footer-flash receipts', async () => withFixture(async f => {
   assert.equal(f.app.status('logox').model?.model, 'first');
   await f.app.submit('/model receipt/second');
   assert.deepEqual(f.app.status('logox').model, {provider: 'receipt', model: 'second'});
@@ -137,7 +137,8 @@ test('direct and picker model/effort changes update real status and actor/tool b
   assert.equal(f.app.tools.modelStorage.get('automa'), undefined);
   const receipts = systemMessages(f).filter(message => message.systemPresentation !== 'welcome');
   assert.equal(receipts.length, 9);
-  assert.ok(receipts.every(message => message.systemPresentation === 'silent' && message.systemReplay === false));
+  // Model switches give visible feedback (a footer flash) but never enter the timeline.
+  assert.ok(receipts.every(message => message.systemPresentation === 'status' && message.systemReplay === false));
   assertEmptyTimeline(f);
   assert.equal(f.requests.length, 0);
   assert.equal(f.app.isSessionPersistent(), false);
@@ -145,7 +146,7 @@ test('direct and picker model/effort changes update real status and actor/tool b
   await f.app.close();
   const events = await f.app.journal.systemEvents(f.app.sessionId);
   assert.deepEqual(events.map(event => event.id), receipts.map(message => message.id));
-  assert.ok(events.every(event => event.presentation === 'silent'));
+  assert.ok(events.every(event => event.presentation === 'status'));
   assert.deepEqual(await f.app.journal.loadRaw(f.app.sessionId, 'logox'), []);
 }));
 
@@ -252,7 +253,7 @@ test('long command queries open matching read-only result surfaces and cancellat
   assert.deepEqual(await f.app.journal.loadRaw(f.app.sessionId, 'logox'), []);
 }));
 
-test('undo with real snapshot changes opens a result panel without changing model history; empty undo stays silent', async () => withFixture(async f => {
+test('undo with real snapshot changes opens a result panel without changing model history; empty undo flashes a receipt', async () => withFixture(async f => {
   await f.app.submit('Create an isolated task boundary');
   await waitForSnapshot(f.app.store, snapshot => snapshot.activities.at(-1)?.status === 'completed');
   const activity = f.app.store.getSnapshot().activities.at(-1)!;
@@ -271,7 +272,8 @@ test('undo with real snapshot changes opens a result panel without changing mode
   f.app.surfaces.cancel();
   await f.app.submit('/undo');
   assert.equal(f.app.surfaces.getSnapshot(), null);
-  assert.equal(lastReceipt(f).systemPresentation, 'silent');
+  assert.equal(lastReceipt(f).systemPresentation, 'status');
+  assert.equal(lastReceipt(f).text, 'No file changes to undo');
   assert.deepEqual(await f.app.journal.loadRaw(f.app.sessionId, 'logox'), rawBefore);
   assert.equal(f.requests.length, 1);
 }));
@@ -361,7 +363,7 @@ test('unknown commands throw with explicit timeline errors, old events survive, 
   assert.equal(lastReceipt(f).systemPresentation, 'panel');
   f.app.surfaces.cancel();
   await f.app.submit('/model receipt/second');
-  assert.equal(lastReceipt(f).systemPresentation, 'silent');
+  assert.equal(lastReceipt(f).systemPresentation, 'status');
   await f.app.submit('Use only this real user task as model input');
   await waitForSnapshot(f.app.store, snapshot => snapshot.activities.at(-1)?.status === 'completed');
   assert.equal(f.requests.length, 1);

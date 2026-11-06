@@ -181,7 +181,8 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     return operation.finally(() => {transition = undefined;});
   };
   async function openResume(): Promise<void> {
-    await current.surfaces.replacePicker({title: 'Resume Session', description: 'Current project history · search by title or ID · Ctrl+X deletes the selected entry', current: JSON.stringify([current.sessionId, false])},
+    await current.surfaces.replacePicker({title: 'Resume Session', description: 'Current project history · search by title or ID · Ctrl+X deletes the selected entry', current: JSON.stringify([current.sessionId, false]),
+      emptyText: 'No saved sessions for this project yet. Keep working; sessions are saved as you go, then use /resume again.'},
       async () => {
         const {sessions, issues} = await manager.list();
         const items = await Promise.all(sessions.map(async info => {
@@ -245,7 +246,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     }
     if (text === '/rewind') {
       requireIdle();
-      await current.surfaces.openPicker({title: 'Rewind to Before Round', description: 'Undo the selected round and later conversation and file tool changes; Shell/MCP side effects are not restored', current: ''},
+      await current.surfaces.openPicker({title: 'Rewind to Before Round', description: 'Undo the selected round and later conversation and file tool changes; Shell/MCP side effects are not restored', current: '', emptyText: 'No conversation rounds to rewind yet. Send a message first; rounds appear here once a task has run.'},
         async () => {
           const rounds = await turns(), pending = await journal.pending(current.sessionId);
           return {items: pending ? [{id: pending.target, label: 'Retry unfinished rewind', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + (round.memory?.title ?? round.text.replace(/\s+/g, ' ').slice(0, 100)),

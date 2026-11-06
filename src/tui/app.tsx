@@ -1345,12 +1345,13 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       onScroll={scrollOffset => setComposerMode(previous => previous && previous.scrollOffset !== scrollOffset ? {...previous, scrollOffset} : previous)}/>
   </MouseContext.Provider>;
   if (surface?.kind === 'result' && surfaces) return <MouseContext.Provider value={subscribeMouse}>
-    <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} width={width} height={screenRows}
+    <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} width={width} height={screenRows}
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
   </MouseContext.Provider>;
   if (surface?.kind === 'page' && surfaces) return <MouseContext.Provider value={subscribeMouse}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
     saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
+    {...(surface.confirm ? {confirm: surface.confirm} : {})}
     onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseContext.Provider>;
   const hairline = '─'.repeat(width);
   return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
@@ -1374,6 +1375,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     {loginState?.phase === 'wizard' && authentication && <MouseContext.Provider value={subscribeMouse}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseContext.Provider>}
     {surface?.kind === 'picker' && surfaces ? <Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
+      {...(surface.emptyText !== undefined ? {emptyText: surface.emptyText} : {})}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
       effort={surface.effort} effortLevels={surface.effortLevels}
       notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/>

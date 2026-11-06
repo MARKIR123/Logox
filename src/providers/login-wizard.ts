@@ -222,6 +222,10 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
     }
     if (root.value !== 'edit') return 'cancelled';
     const rows = (await deps.rows()).filter(row => row.saved);
+    if (!rows.length) {
+      deps.notify('No saved providers to edit yet. Run /login again and choose Add a new provider.');
+      return 'cancelled';
+    }
     const provider = await ask(menu('Choose a provider to edit', rows.map(row => option(row.name, row.name))));
     if (!provider) return 'cancelled';
     const row = rows.find(row => row.name === provider.value);
