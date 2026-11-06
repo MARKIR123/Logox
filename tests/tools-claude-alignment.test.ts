@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {PermissionEngine} from '../src/permissions/engine.js';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {mkdtemp, writeFile, rm} from 'node:fs/promises';
@@ -129,7 +130,7 @@ test('WebFetch 实际 HTTP 获取与执行', async () => {
 test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-tools-exec-'));
   try {
-    const tools = new Tools(cwd);
+    const tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'default'));
     const context = mockContext(cwd);
 
     // 1. Write

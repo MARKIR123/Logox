@@ -45,7 +45,7 @@ async function fixture() {
 
     async ask() {return {status: 'cancelled', reason: '测试取消'};}};
 
-  const permissions = new PermissionEngine(cwd), tools = new Tools(cwd, undefined, permissions);
+  const permissions = new PermissionEngine(cwd, 'default'), tools = new Tools(cwd, undefined, permissions);
 
   return {cwd, tools, permissions, context, controller, messages, requests, async close() {await rm(cwd, {recursive: true, force: true});}};
 
@@ -319,7 +319,7 @@ test('正式应用 /permissions 页签、新增、撤销和模式重启恢复', 
 
   const cwd = await mkdtemp(join(tmpdir(), 'logox-permission-command-'));
 
-  const config = await loadConfig(cwd, {provider: {model: 'test'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test'}}, {}, cwd, cwd);
 
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, sessionId: 's'});
 

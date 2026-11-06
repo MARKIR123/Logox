@@ -78,3 +78,55 @@ export function shellImpact(command: string, depth = 0, root?: string): ShellImp
   if (!parsed.compound && !parsed.dynamic && !unsafeOption && (readOnly.has(name) || safeGit)) return {kind: 'safe', reason: 'Verifiably read-only command'};
   return {kind: 'unknown', reason: "The command's actual impact needs further assessment"};
 }
+
+const execName = (word: string) => word.split('/').at(-1)?.replace(/\.(?:exe|cmd|bat|ps1)$/, '') ?? '';
+const flagged = (args: readonly string[], blocked: RegExp) => args.some(arg => blocked.test(arg));
+const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const NPM_SUBCOMMANDS = new Set(['install', 'i', 'ci', 'add', 'uninstall', 'remove', 'rm', 'update', 'up', 'upgrade', 'run', 'run-script', 'test', 't', 'start', 'ls', 'list',
+  'outdated', 'audit', 'why', 'view', 'info', 'explain', 'dedupe', 'rebuild', 'prune', 'fund']);
+const PACKAGE_DENIED = new Set(['publish', 'login', 'logout', 'adduser', 'token', 'owner', 'access', 'config', 'set', 'link', 'unlink', 'exec', 'dlx', 'create', 'x', 'init', 'deprecate', 'unpublish', 'dist-tag', 'team', 'org']);
+const PACKAGE_UNSAFE_FLAG = /^(?:-g|--global|--global-dir(?:=.*)?|--location(?:=.*)?|--prefix(?:=.*)?|--registry(?:=.*)?|--userconfig(?:=.*)?|-c|--dir(?:=.*)?)$/;
+const TOOL_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string> | '*'>> = {
+  cargo: new Set(['build', 'b', 'test', 't', 'check', 'c', 'clippy', 'fmt', 'run', 'r', 'doc', 'bench', 'clean', 'tree', 'metadata', 'add', 'remove', 'update', 'fetch']),
+  go: new Set(['build', 'test', 'vet', 'fmt', 'run', 'mod', 'get', 'list', 'clean', 'env', 'version']),
+  dotnet: new Set(['build', 'test', 'restore', 'run', 'format', 'clean', 'pack', 'publish', '--version', '--info']),
+  mvn: '*', mvnw: '*', gradle: '*', gradlew: '*', make: '*', cmake: '*', ninja: '*', msbuild: '*',
+  tsc: '*', eslint: '*', prettier: '*', vitest: '*', jest: '*', mocha: '*', ava: '*', vite: '*', webpack: '*', rollup: '*', esbuild: '*', biome: '*', stylelint: '*',
+  ruff: '*', mypy: '*', pytest: '*', black: '*', flake8: '*', isort: '*', pyright: '*', tsx: '*', 'ts-node': '*', playwright: '*',
+};
+const GIT_ROUTINE = new Set(['status', 'diff', 'log', 'show', 'add', 'commit', 'ls-files', 'rev-parse', 'blame', 'branch', 'stash', 'remote']);
+const UTILITIES = new Set(['pwd', 'ls', 'dir', 'cat', 'head', 'tail', 'wc', 'rg', 'grep', 'findstr', 'type', 'echo', 'mkdir', 'touch', 'cd', 'sl', 'set-location',
+  'get-childitem', 'gci', 'get-content', 'gc', 'get-location', 'select-string', 'sls', 'sort', 'uniq', 'cut', 'which', 'where', 'date', 'true', 'false', 'tee', 'new-item',
+  'select-object', 'sort-object', 'measure-object', 'format-table', 'ft', 'format-list', 'fl', 'out-string', 'write-host', 'write-output', 'test-path', 'resolve-path', 'get-item', 'get-command', 'gcm', 'get-date', 'get-process']);
+/** One ordinary development command; anything not positively recognised is not routine. */
+function routineSegment(segment: string): boolean {
+  const lower = shellWords(segment).words.map(word => word.toLowerCase().replaceAll('\\', '/')), name = execName(lower[0] ?? ''), args = lower.slice(1);
+  const positional = args.filter(arg => !arg.startsWith('-'));
+  if (!name) return false;
+  if (PACKAGE_MANAGERS.has(name)) {
+    if (flagged(args, PACKAGE_UNSAFE_FLAG)) return false;
+    const sub = args[0] ?? '';
+    if (!sub) return name !== 'npm';
+    if (sub.startsWith('-')) return args.every(arg => /^--?(?:version|v|help|h)$/.test(arg));
+    return name === 'npm' ? NPM_SUBCOMMANDS.has(sub) : !PACKAGE_DENIED.has(sub);
+  }
+  const table = TOOL_SUBCOMMANDS[name];
+  if (table === '*') return !(name === 'make' && flagged(args, /^(?:-c|--directory(?:=.*)?|-f|--file(?:=.*)?)$/));
+  if (table) return args.length > 0 && table.has(args.find(arg => !arg.startsWith('-')) ?? args[0]!);
+  if (name === 'git') return GIT_ROUTINE.has(lower[1] ?? '') && (lower[1] !== 'stash' || ['list', 'show'].includes(lower[2] ?? '')) && (lower[1] !== 'remote' || lower.length === 2 || lower[2] === '-v');
+  if (name === 'node') {
+    if (flagged(args, /^(?:-e|--eval|-p|--print|-|-r|--require|--import|--loader|--experimental-loader)(?:=.*)?$/)) return false;
+    return positional.length === 0 ? args.some(arg => /^(?:-v|--version)$/.test(arg)) : /\.(?:[cm]?js|ts)$|\*/.test(positional[0]!);
+  }
+  if (['python', 'python3', 'py'].includes(name)) {
+    if (args[0] === '-m') return ['pytest', 'unittest', 'compileall'].includes(args[1] ?? '');
+    return positional.length > 0 && !args.some(arg => /^-[a-z]*[cm]/.test(arg)) && /\.py$/.test(positional[0]!);
+  }
+  return UTILITIES.has(name);
+}
+/** Ordinary workspace development: build, test, lint, project package-manager installs, routine git and project scripts. Dynamic syntax never qualifies. */
+export function routineShell(command: string): boolean {
+  if (shellWords(command).dynamic) return false;
+  const segments = shellCommands(command);
+  return segments.length > 0 && segments.every(routineSegment);
+}

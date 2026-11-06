@@ -173,7 +173,7 @@ test('正式 /model 实际 Ink 查询、筛选、跨提供商切换，取消和 
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   const cwd = await mkdtemp(join(tmpdir(), 'logox-model-ui-')), input = new TerminalInput(), output = new TerminalOutput();
-  const config = await loadConfig(cwd, {provider: {name: 'alpha', model: 'same'}, providers: {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha', model: 'same'}, providers: {
     alpha: {base_url: 'http://127.0.0.1:' + address.port + '/alpha'}, beta: {base_url: 'http://127.0.0.1:' + address.port + '/beta'},
   }}, {}, cwd, cwd);
   let calls = 0;

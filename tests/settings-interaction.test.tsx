@@ -118,7 +118,7 @@ test('Statusbar rapid style and module edits are included when Enter arrives in 
     await ui.key('\x1b[C\r');
     assert.equal(ui.appearances[0]?.style, 'starship', 'Save receives the most recent style, not the previous render');
     await act(async () => {finish(); await delay(5);});
-    await ui.reopen(); await ui.key('\x1b[B\x1b[B'); await ui.key('\x1b[32u\r');
+    await ui.reopen(); await ui.key('\x1b[B\x1b[B\x1b[B'); await ui.key('\x1b[32u\r');
     assert.equal(ui.saved[1]?.find(item => item.id === 'role')?.enabled, false, 'Save receives the most recent module toggle');
   } finally {finish(); await ui.close();}
 });
@@ -144,7 +144,7 @@ test('Only Status Bar arrows reorder; Space toggles independently and help names
   try {
     assert.match(ui.screen(), /Style: Pipes/);
     await ui.key('\x1b[C'); assert.match(ui.screen(), /Style: Starship/);
-    await ui.key('\x1b[B'); await ui.key('\x1b[B');
+    await ui.key('\x1b[B'); await ui.key('\x1b[B'); await ui.key('\x1b[B');
     assert.match(ui.screen(), /←→ Reorder/);
     assert.match(ui.screen(), /Space Toggle/);
     await ui.key('\x1b[C'); assert.ok(ui.screen().indexOf('Model') < ui.screen().indexOf('Role'));

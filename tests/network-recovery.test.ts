@@ -28,7 +28,7 @@ async function fixture(reply: (res: ServerResponse, count: number) => void) {
   const transport = createHttpTransport({});
   const provider = createProvider({kind: 'openai_compat', baseUrl: `http://127.0.0.1:${address.port}`, model: 'test', key: '',
     maxTokens: 512, temperature: 0.2, timeoutMs: 3000}, transport.fetch);
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const options = {cwd, config, provider, sessionId: 'network', resourceOptions: {home: cwd, boundary: cwd}};
   const app = await createApplication(options);
   return {app, cwd, requests, options, async close() {

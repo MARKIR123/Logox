@@ -38,7 +38,7 @@ test('ToolModelStorage reads, writes, and deletes tool model configurations atom
 
 test('/model automa configures automa model via slash command, opens picker, and supports inherit', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-app-automa-model-'));
-  const config = await loadConfig(cwd, {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, 
     provider: {name: 'alpha', model: 'session-model'},
     providers: {
       alpha: {base_url: 'http://127.0.0.1:7777/v1'},

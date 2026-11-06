@@ -158,9 +158,9 @@ test('gateway catalog mapping resolves windows and aliases; bare-id matches are 
 test('catalogs config validates strictly', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-model-table-'));
   try {
-    await assert.rejects(loadConfig(cwd, {catalogs: {x: {mirror: '', aliases: {}}}}, {}, cwd, cwd));
-    await assert.rejects(loadConfig(cwd, {catalogs: {x: {catalog: 'google'}}}, {}, cwd, cwd));
-    const ok = await loadConfig(cwd, {catalogs: {x: {mirror: ['google', 'anthropic']}}}, {}, cwd, cwd);
+    await assert.rejects(loadConfig(cwd, {permissions: {mode: 'default'}, catalogs: {x: {mirror: '', aliases: {}}}}, {}, cwd, cwd));
+    await assert.rejects(loadConfig(cwd, {permissions: {mode: 'default'}, catalogs: {x: {catalog: 'google'}}}, {}, cwd, cwd));
+    const ok = await loadConfig(cwd, {permissions: {mode: 'default'}, catalogs: {x: {mirror: ['google', 'anthropic']}}}, {}, cwd, cwd);
     assert.deepEqual(ok.catalogs.x, {mirror: ['google', 'anthropic'], aliases: {}});
   } finally {await rm(cwd, {recursive: true, force: true});}
 });

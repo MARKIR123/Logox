@@ -112,7 +112,7 @@ test('saved Responses protocol reaches the Responses wire endpoint after reload'
   try {
     const storage = new CustomProviderStorage(join(cwd, 'custom.json'));
     await storage.save({name: 'gateway', base_url: 'https://example.invalid/v1', kind: 'openai_compat', api: 'responses', models: ['fixture']});
-    const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
     const registry = new ProviderRegistry(config, {}, async () => {throw new Error('No real network');}, new AuthStorage(join(cwd, 'auth.json')), storage);
     await registry.syncCustom();
     const settings = await registry.candidate('gateway', 'fixture').settings(false);
@@ -171,7 +171,7 @@ test('editing configured Responses models preserves protocol and connection sett
   const authPath = join(cwd, 'auth.json');
   try {
     await new AuthStorage(authPath).save('test-provider', 'fixture-key', new AbortController().signal);
-    const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}, providers: {
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}, providers: {
       'test-provider': {base_url: 'https://example.invalid/v1', kind: 'openai_compat', api: 'responses', default_model: 'fixture-default', api_key_env: 'FIXTURE_KEY'},
     }}, {}, cwd, cwd);
     let authenticated = false;
@@ -203,7 +203,7 @@ test('editing configured Responses models preserves protocol and connection sett
 test('application /login uses local form, never runtime interactions or external imports', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-login-wizard-'));
   try {
-    const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
     const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'),
       provider: {respond: async () => {throw new Error('Must not invoke model');}}});
     try {

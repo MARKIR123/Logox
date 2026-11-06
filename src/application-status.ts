@@ -1,12 +1,13 @@
 import type {ActorCatalog} from './actors/catalog.js';
 import type {TaskModels} from './actors/task-models.js';
 import type {Config} from './config/config.js';
-import {costOf} from './context/cost.js';
+import {costOf, modelPrice} from './context/cost.js';
 import type {UsageRecord} from './context/budget.js';
 import type {ContextManager} from './context/manager.js';
 import type {PermissionEngine} from './permissions/engine.js';
 import type {ProviderRegistry} from './providers/registry.js';
 import type {RuntimeStore} from './runtime/store.js';
+import {modelTable} from './providers/model-table.js';
 import type {GitStatus, StageStatus, TokenTotals} from './runtime/stage-status.js';
 
 const states = {queued: 'Queued', running: 'Running', waiting_input: 'Awaiting answer', paused: 'Paused',
@@ -59,15 +60,21 @@ export function stageStatus(options: StageStatusOptions, ownerId: string): Stage
   const reading = contexts.status(identity), meter = contexts.meter(identity);
   const metersBySession = [...contexts.sessionMeters(sessionId).values()];
   const sessionRecords = metersBySession.flatMap(item => item.usageRecords());
-  const window = totals(meter.usageRecords()), session = totals(sessionRecords);
+  const windowTotals = totals(meter.usageRecords()), session = totals(sessionRecords);
   const subscriptions = options.subscriptions?.() ?? new Set<string>();
   const cost = costOf(sessionRecords, config, provider => subscriptions.has(provider));
   const actor = actors.find(ownerId);
   const git = options.git?.();
-  return {ownerId, name: actor?.name ?? ownerId, ...(actor?.color ? {color: actor.color} : {}), model: {provider: selected.provider, model: selected.model},
+  const hit = modelTable.resolve(selected.provider, selected.model, {catalogs: config.catalogs}), price = modelPrice(config, selected.provider, selected.model);
+  const window = reading?.window ?? hit?.model.window;
+  const modelInfo = {...(window ? {window} : {}), ...(hit?.model.maxOutput ? {maxOutput: hit.model.maxOutput} : {}),
+    ...(price ? {currency: price.currency, ...(price.input !== undefined ? {input: price.input} : {}), ...(price.output !== undefined ? {output: price.output} : {}),
+      ...(price.cache_read !== undefined ? {cacheRead: price.cache_read} : {}), ...(price.subscription ? {subscription: true} : {})} : {})};
+  return {ownerId, name: actor?.name ?? ownerId, ...(actor?.color ? {color: actor.color} : {}), model: {provider: selected.provider, model: selected.model}, modelInfo,
     effort, ...(effortError ? {effortError} : {}), permission: permissions.mode, state: windowState(store, ownerId),
-    ...(reading ? {context: {tokens: reading.input, window: reading.window, high: reading.high, estimated: reading.estimated, over: reading.input > reading.window}} : {}),
-    tokens: session.input + session.output, usage: {window, session},
+    ...(reading ? {context: {tokens: reading.input, window: reading.window, high: reading.high, estimated: reading.estimated, over: reading.input > reading.window,
+      ...(reading.categories ? {categories: reading.categories} : {})}} : {}),
+    tokens: session.input + session.output, usage: {window: windowTotals, session},
     ...(cost ? {cost: cost.amount, costCurrency: cost.currency, ...(cost.partial ? {costPartial: true} : {})} : {}),
     ...(git ? {git} : {}), session: sessionId, project: cwd};
 }

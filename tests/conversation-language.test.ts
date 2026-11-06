@@ -46,7 +46,7 @@ test('human input drives the language for Director and actor requests; tool outp
     return {stop: 'tools', message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'done' + requests.length, name: '_FinishRound',
       arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   const contextText = (request: ModelRequest) => request.messages.flatMap(message => message.role === 'context' ? [message.text] : []).join('\n');
   try {

@@ -53,7 +53,7 @@ export const themeSchema = z.object({
 export type ThemeConfig = z.infer<typeof themeSchema>;
 const schema = z.object({
   theme: themeSchema,
-  permissions: z.object({mode: z.enum(['default', 'auto', 'creative']).default('default'), readonly_concurrency: z.number().int().min(1).max(8).default(4)}).default({mode: 'default', readonly_concurrency: 4}),
+  permissions: z.object({mode: z.enum(['default', 'auto', 'creative']).default('auto'), readonly_concurrency: z.number().int().min(1).max(8).default(4)}).default({mode: 'auto', readonly_concurrency: 4}),
   mcp: z.object({playwright: z.boolean().default(true), servers: z.record(z.string().min(1), mcpServerSchema).default({})})
     .default({playwright: true, servers: {}}),
   hooks: hooksSchema.default({enabled: false, timeout_s: 5, entries: []}),

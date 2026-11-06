@@ -26,10 +26,11 @@ test('权限卡显示真实参数、原因和默认拒绝；问题卡支持自�
   const permission: Interaction = {kind: 'permission', requestId: 'p', sessionId: 's', activityId: 'a', ownerId: 'techne',
     title: '权限', tool: 'write', arguments: {path: 'src/a.ts'}, reason: '写入源码', status: 'pending'};
   const output = renderToString(<InteractionCard request={permission}
-    draft={{questionIndex: 0, selected: 1, text: '', error: ''}} focused/>, {columns: 60});
+    draft={{questionIndex: 0, selected: 1, text: '', error: ''}} focused/>, {columns: 80});
   assert.match(output, /src\/a\.ts/);
-  assert.match(output, /❯ \[■\] Deny \(default\)/);
-  assert.match(output, /Allow this tool run only once/);
+  assert.match(output, /❯ Deny and tell Techne why…/);
+  assert.match(output, /Allow once\s+y/);
+  assert.match(output, /wants to run · Write/);
   const question: Interaction = {kind: 'question', requestId: 'q', sessionId: 's', activityId: 'a', ownerId: 'kalon',
     title: '问题', questions: [{id: 'q', header: '方向', question: '你想做什么？'}], status: 'pending'};
   assert.match(renderToString(<InteractionCard request={question}

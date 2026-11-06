@@ -14,9 +14,11 @@ import {COMPOSER_EXPAND_LABEL, COMPOSER_EXPAND_PADDING, FullscreenEditor} from '
 import type {LoginFlow} from '../providers/login.js';
 import type {StageStatus} from '../runtime/stage-status.js';
 import type {SubmitDelivery} from '../application.js';
-import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
-import {statusbarText, statusbarParts} from './status/statusbar.js';
-import {computeActivePills, calculatePillsWidth, ActorPills, type ActivePillItem} from './status/actor-pills.js';
+import type {StatusbarId, StatusbarPreferences} from '../config/statusbar-preferences.js';
+import {statusbarText, statusbarLayout, usedPercent, type WidgetRegion} from './status/statusbar.js';
+import {computeActivePills, calculatePillsWidth, ActorPills, FAILED_PILL_MS, type ActivePillItem} from './status/actor-pills.js';
+import {footerHints, notificationSegments, pillDetail, widgetCommand, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './status/notification-line.js';
+import {extractNarration} from '../runtime/narration.js';
 import {findLatestActorRowIndex} from './timeline/actor-location.js';
 import {extractStatusBarSlice} from './status/statusbar.js';
 import {MouseContext, type MouseSubscriber} from './terminal/mouse.js';
@@ -42,6 +44,7 @@ import type {Answer, Interaction} from '../runtime/contracts.js';
 import {cast, type ActorId} from '../actors/ensemble.js';
 import {ActivityCard} from './timeline/activity-card.js';
 import {InteractionCard} from './interactions/interaction-card.js';
+import {approvalModel, optionIndex, type ApprovalDecision} from './interactions/approval-view.js';
 import {ownerColor, ownerHeader, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
 import {splashLines} from './appearance/emblem.js';
 
@@ -82,7 +85,7 @@ function reduceResponse(request: Interaction, response: ResponseDraft, action: T
     editor: next.draft.questionIndex !== response.questionIndex ? emptyDraft : response.editor};
 }
 function initialResponse(request: Interaction): ResponseDraft {
-  return {questionIndex: 0, selected: request.kind === 'permission' ? 1 : 0, text: '', error: '', answers: {}, editor: emptyDraft};
+  return {questionIndex: 0, selected: 0, text: '', error: '', answers: {}, editor: emptyDraft};
 }
 export interface AppProps {
   store: RuntimeStore;
@@ -167,6 +170,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const hoveredFoldIdRef = useRef<string | null>(null);
   const [hoveredPill, setHoveredPill] = useState<string | null>(null);
   const hoveredPillRef = useRef<string | null>(null);
+  const [hoveredWidget, setHoveredWidget] = useState<StatusbarId | null>(null);
+  const hoveredWidgetRef = useRef<StatusbarId | null>(null);
   const contentSelection = useRef<ContentSelection | null>(null);
   const gesture = useRef<{x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow; lastDragX?: number; lastDragY?: number} | null>(null);
   const lastHoverRef = useRef<{x: number; y: number}>({x: -1, y: -1});
@@ -186,16 +191,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const [expanded, setExpanded] = useState(false);
   const [selectedActivityId, setSelectedActivityId] = useState('');
   const [detailOffset, setDetailOffset] = useState(0);
-  const [notice, setNotice] = useState('');
+  const [notice, setNoticeText] = useState('');
+  const [noticeTone, setNoticeTone] = useState<NoticeTone>('info');
+  const setNotice = (text: string, tone: NoticeTone = 'info') => {setNoticeText(text); setNoticeTone(tone);};
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
   const [completion, setCompletion] = useState({query: '', selected: 0, dismissed: false});
   const exitDeadline = useRef(0);
   const statusSelectionRef = useRef<{startX: number; currentX: number; active: boolean; text: string} | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const flash = (text: string, duration = 1800) => {
+  const flash = (text: string, duration = 3500, tone: NoticeTone = 'info') => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    setNotice(text); noticeTimer.current = setTimeout(() => setNotice(''), duration);
+    setNotice(text, tone); noticeTimer.current = setTimeout(() => setNotice(''), duration);
   };
   useEffect(() => () => {if (noticeTimer.current) clearTimeout(noticeTimer.current);}, []);
 
@@ -222,14 +229,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
       setNotice('');
     }
-    let latest = '';
+    let latest = '', latestTone: NoticeTone = 'info';
     for (const message of snapshot.messages) {
       if (previous.ids.has(message.id)) continue;
       previous.ids.add(message.id);
       if (message.role === 'system' && message.systemPresentation === 'status' && !message.systemReplay &&
-          message.sessionId === sessionId && (currentView === 'logox' || message.ownerId === currentView)) latest = message.text;
+          message.sessionId === sessionId && (currentView === 'logox' || message.ownerId === currentView)) {
+        latest = message.text;
+        latestTone = message.systemEventKind === 'command_error' || message.systemEventKind === 'model_error' ? 'error' : message.systemEventKind === 'command_result' ? 'success' : 'info';
+      }
     }
-    if (latest) flash(safeText(latest).replace(/\n/g, ' '), 1800);
+    if (latest) flash(safeText(latest).replace(/\n/g, ' '), 3500, latestTone);
   }, [store, sessionId, currentView, snapshot.messages]);
   const inputHistories = useRef(new Map<string, InputHistory>());
   const historyMessages = useRef(new Set<string>());
@@ -323,9 +333,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const steerTarget = selectedSteerTask && ['running', 'waiting_input'].includes(selectedSteerTask.status) ? selectedSteerTask : undefined;
   const own = currentView !== 'logox';
   const cachedStageStatus = useMemo(() => {
-    if (!getStatus || notice) return undefined;
+    if (!getStatus) return undefined;
     return getStatus(currentView);
-  }, [getStatus, notice, currentView, snapshot.revision, themeVersion]);
+  }, [getStatus, currentView, snapshot.revision, themeVersion]);
   const statusLeft = notice
     ? notice
     : cachedStageStatus ? statusbarText(cachedStageStatus, width, layout?.modules, layout ?? undefined)
@@ -356,7 +366,9 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     : width < 60
       ? own ? 'Esc Back to Logox · Enter Send' : 'Enter Send · Shift+Enter Newline'
       : backLabel + keysLabel;
-  const footerHeight = screenRows < 2 ? 0 : 1;
+  /** Row 1 is the status line; row 2 (notices, hover detail, key hints) needs a real status source and some height. */
+  const footerHeight = screenRows < 2 ? 0 : getStatus && screenRows >= 8 ? 2 : 1;
+  const footerStatusY = screenRows - footerHeight;
   const hairlineHeight = screenRows >= 4 ? 2 : 0;
   const freeAnswer = (!inlineRequest || stage) && focus === 'question' && request && response &&
     getInteractionUI(request)?.describe(interactionState(request, response)).editing;
@@ -389,7 +401,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       : 'Choice: ' + (scene.choice === 'minimal' ? 'Restrained text portfolio' : scene.choice === 'editorial' ? 'Warm editorial' : 'Free-form answer') + ' · Enter Confirm'
     : request && response
     ? request.kind === 'permission'
-      ? 'Permission: ' + (response.selected === 0 ? 'Allow once' : 'Deny (default)') + ' · Enter Confirm'
+      ? 'Permission: ' + (approvalModel(request, '').options[response.selected]?.id ?? 'allow_once').replace('_', ' ') + ' · Enter Confirm'
       : getInteractionUI(request)?.describe(interactionState(request, response)).hint ?? ''
     : '↑↓ Select · Enter Confirm · Esc Later';
 
@@ -409,9 +421,26 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
   const activeOwners = useMemo(() => {
-    const running = snapshot.activities.filter(a => a.sessionId === sessionId && a.status === 'running' && a.ownerId && a.ownerId !== 'logox');
-    return new Set(running.map(a => a.ownerId));
+    const live = snapshot.activities.filter(a => a.sessionId === sessionId && ['running', 'waiting_input', 'paused', 'queued'].includes(a.status) && a.ownerId && a.ownerId !== 'logox' && a.kind !== 'anamnesis');
+    return new Set(live.map(a => a.ownerId));
   }, [snapshot.activities, sessionId]);
+  // A failed actor keeps its pill briefly; existing failures at mount or session change never count as new.
+  const failedSeen = useRef<{sessionId: string; since: Map<string, number>} | null>(null);
+  const [pillTick, setPillTick] = useState(0);
+  const failedSince = useMemo(() => {
+    const failed = snapshot.activities.filter(a => a.sessionId === sessionId && a.status === 'failed' && a.ownerId !== 'logox' && a.kind !== 'anamnesis');
+    if (failedSeen.current?.sessionId !== sessionId) failedSeen.current = {sessionId, since: new Map(failed.map(a => [a.activityId, 0] as const))};
+    for (const a of failed) if (!failedSeen.current.since.has(a.activityId)) failedSeen.current.since.set(a.activityId, Date.now());
+    return failedSeen.current.since;
+  }, [snapshot.activities, sessionId]);
+  useEffect(() => {
+    const live = [...failedSince.values()].filter(since => since > 0 && Date.now() - since < FAILED_PILL_MS);
+    if (!live.length) return;
+    const timer = setTimeout(() => setPillTick(value => value + 1), Math.min(...live) + FAILED_PILL_MS - Date.now() + 20);
+    return () => clearTimeout(timer);
+  }, [failedSince, pillTick]);
+  const askingOwners = useMemo(() => new Map(snapshot.interactions.filter(item => item.sessionId === sessionId && item.status === 'pending')
+    .map(item => [item.ownerId, item.kind === 'permission' ? 'permission' as const : 'question' as const] as const)), [snapshot.interactions, sessionId]);
 
   const activationOrderRef = useRef<string[]>([]);
   useEffect(() => {
@@ -428,17 +457,42 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     roles,
     0,
     width,
-    activationOrderRef.current
-  ), [themeVersion, snapshot.activities, sessionId, roles, width]);
+    activationOrderRef.current,
+    {asking: askingOwners, failedSince, maxWidth: Math.max(0, width - Math.min(width, 14))}
+  ), [themeVersion, snapshot.activities, sessionId, roles, width, askingOwners, failedSince, pillTick]);
 
   const pillsWidth = calculatePillsWidth(activePills);
   const footerStatus = cachedStageStatus;
   const footerStatusWidth = Math.max(0, width - pillsWidth - (pillsWidth > 0 ? 1 : 0));
-  const footerStatusParts = useMemo(() => {
-    if (!footerStatus) return [];
-    return statusbarParts(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined);
-  }, [footerStatus, footerStatusWidth, layout]);
-  const footerStatusText = footerStatus ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
+  const noticeInline = Boolean(notice) && (!getStatus || footerHeight < 2);
+  // The same layout draws row 1 and answers hover and click hit tests.
+  const footerLayout = useMemo(() => footerStatus
+    ? statusbarLayout(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined, {hovered: hoveredWidget})
+    : {parts: [], regions: [] as WidgetRegion[], width: 0},
+  [footerStatus, footerStatusWidth, layout, hoveredWidget]);
+  const footerStatusParts = footerLayout.parts;
+  const footerStatusText = footerStatus && !noticeInline ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
+  const queuedHere = pendingAll.length;
+  /** Row 2: a held notice, else the detail of the hovered widget or pill, else faint key hints. */
+  const pillHoverDetail = (): NoteSegment[] | undefined => {
+    const pill = hoveredPill ? activePills.find(item => item.ownerId === hoveredPill) : undefined;
+    if (!pill) return undefined;
+    const activity = snapshot.activities.find(item => item.activityId === pill.id);
+    const own = snapshot.messages.filter(message => message.activityId === pill.id);
+    const stage = pill.state === 'question' ? 'Awaiting your answer' : pill.state === 'approval' ? 'Awaiting approval' : pill.state === 'paused' ? 'Paused'
+      : pill.state === 'queued' ? (activity?.stage.startsWith('Waiting on ') ? activity.stage : 'Queued')
+      : pill.state === 'failed' ? (activity?.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() || 'Failed')
+      : (own.findLast(message => message.role === 'assistant' && !message.kind && extractNarration(message.text))?.text
+        ? extractNarration(own.findLast(message => message.role === 'assistant' && !message.kind && extractNarration(message.text))!.text)?.narration : undefined) ?? activity?.stage ?? 'Working';
+    const first = own.find(message => message.time !== undefined)?.time;
+    const reading = getStatus?.(pill.ownerId), percent = reading ? usedPercent(reading) : undefined;
+    return pillDetail({symbol: roles[pill.ownerId]?.symbol ?? '◈', name: roles[pill.ownerId]?.name ?? pill.ownerId, color: roles[pill.ownerId]?.color,
+      title: activity?.taskTitle ?? activity?.title, stage, ...(first !== undefined ? {elapsedMs: Date.now() - first} : {}), ...(percent !== undefined ? {contextPercent: percent} : {})});
+  };
+  const noteNotice: Notice | undefined = notice && !noticeInline ? {text: notice, tone: noticeTone} : undefined;
+  const hoverDetail = hoveredPill ? pillHoverDetail() : hoveredWidget && footerStatus ? widgetDetail(hoveredWidget, footerStatus, windowColor) : undefined;
+  const footerNote = footerHeight > 1 ? notificationSegments({notice: noteNotice, detail: hoverDetail,
+    hints: footerHints({own, queued: queuedHere, menu: Boolean(menuHeight), closing, width})}, width) : [];
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -530,10 +584,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     if (closing || surface?.kind === 'result') return;
     const copied = !composerExpanded && !surface && (!loginState || loginFolded)
       ? (editableComposer ? selectedText(activeDraft) : '') || copySelection() : '';
-    if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection to clipboard'); return;}
+    if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection to clipboard', 3500, 'success'); return;}
     const now = Date.now();
     if (exitDeadline.current > now) {close(); return;}
-    exitDeadline.current = now + 1500; flash('Press Ctrl+C again to exit', 1500);
+    exitDeadline.current = now + 1500; flash('Press Ctrl+C again to exit', 1500, 'warning');
   };
   const interruptRef = useRef(interrupt); interruptRef.current = interrupt;
   useEffect(() => registerInterrupt?.(() => interruptRef.current()), [registerInterrupt]);
@@ -610,7 +664,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const confirmScenePermission = () => {
     if (!request || request.kind !== 'permission' || request.activityId !== scenario?.techne) return;
     const result = store.interactions.respond(answerEnvelope(request, {kind: 'permission', decision: scene.permissionChoice === 'allow' ? 'allow_once' : 'deny'}));
-    if (!result.ok) {setNotice(result.reason); return;}
+    if (!result.ok) {setNotice(result.reason, 'error'); return;}
     setScene(prev => ({...prev, folds: {...prev.folds, 'main-techne': false, 'history-techne-question': false}}));
     setFocus('input');
   };
@@ -624,7 +678,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       ? {type: 'text', text: (base + (scene.choice !== 'custom' && custom ? ', ' + custom : '')).slice(0, 500)}
       : {type: 'option', optionId: scene.choice};
     const result = store.interactions.respond(answerEnvelope(request, {kind: 'question', answers: {style: answer}}));
-    if (!result.ok) {setNotice(result.reason); return;}
+    if (!result.ok) {setNotice(result.reason, 'error'); return;}
     setScene(prev => ({...prev, customError: false, folds: {...prev.folds, 'main-kalon': false, 'history-kalon-question': false}}));
     setEditingCustom(false);
     setFocus('input');
@@ -644,7 +698,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       history.record(text);
       setDrafts(prev => ({...prev, [currentView]: prev[currentView]?.text === text && (draftRevisions.current.get(currentView) ?? 0) === revision ? emptyDraft : prev[currentView] ?? emptyDraft}));
       if (!text.trim().startsWith('/')) setAnchor(null);
-    }, error => {flash(error instanceof Error ? error.message : String(error));}).finally(() => {submitting.current = false;});
+    }, error => {flash(error instanceof Error ? error.message : String(error), 3500, 'error');}).finally(() => {submitting.current = false;});
   };
 
   const complete = (suggestion: CommandSuggestion, execute: boolean) => {
@@ -682,7 +736,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return {...prev, [clicked.requestId]: clicked.kind === 'permission'
           ? {...current, selected: Number(act.value), error: ''}
           : reduceResponse(clicked, current, {kind: 'select', index: Number(act.value)})};
-      }); setFocus('question');}
+      }); setFocus('question');
+      // A click on an approval option is deliberate: it answers (Deny opens the note first).
+      const option = clicked.kind === 'permission' ? approvalModel(clicked, actorNameOf(clicked)).options[Number(act.value)] : undefined;
+      if (option) choosePermission(clicked, option.id);}
       return;
     }
     if (stage && act.kind === 'confirm_answer' && act.requestId) {
@@ -815,16 +872,18 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       const overPending = pendingAt(event);
       const nextPending = overPending?.control ? {id: overPending.item.id, control: overPending.control} : null;
       setPendingHover(previous => previous?.id === nextPending?.id && previous?.control === nextPending?.control ? previous : nextPending);
-      if (event.y >= screenRows - footerHeight) {
-        const hovered = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
-        const nextHoveredPill = hovered ? hovered.ownerId : null;
-        if (hoveredPillRef.current !== nextHoveredPill) {
-          hoveredPillRef.current = nextHoveredPill;
-          setHoveredPill(nextHoveredPill);
-        }
-      } else if (hoveredPillRef.current !== null) {
-        hoveredPillRef.current = null;
-        setHoveredPill(null);
+      const overStatus = footerHeight > 0 && event.y === footerStatusY;
+      const hoveredPillItem = overStatus ? activePills.find(pill => event.x >= pill.startX && event.x < pill.endX) : undefined;
+      const nextHoveredPill = hoveredPillItem ? hoveredPillItem.ownerId : null;
+      const hoveredRegion = overStatus && !hoveredPillItem && !noticeInline ? footerLayout.regions.find(region => event.x >= region.startX && event.x < region.endX) : undefined;
+      const nextHoveredWidget = hoveredRegion ? hoveredRegion.id : null;
+      if (hoveredPillRef.current !== nextHoveredPill) {
+        hoveredPillRef.current = nextHoveredPill;
+        setHoveredPill(nextHoveredPill);
+      }
+      if (hoveredWidgetRef.current !== nextHoveredWidget) {
+        hoveredWidgetRef.current = nextHoveredWidget;
+        setHoveredWidget(nextHoveredWidget);
       }
       if (lastHoverRef.current.x === event.x && lastHoverRef.current.y === event.y) return;
       lastHoverRef.current = {x: event.x, y: event.y};
@@ -854,9 +913,17 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       // The shared menu handles its own item coordinates through MouseContext.
       // Keep presses on its title/footer away from the timeline/composer handlers.
       if (menuHeight && event.y >= menuY && event.y < menuY + menuHeight) return;
-      // Footer click
+      // Footer click: row 2 (notifications) is passive.
+      if (footerHeight > 1 && event.y > footerStatusY) return;
       if (event.y >= screenRows - footerHeight) {
         const clickedPill = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
+        const clickedRegion = clickedPill || noticeInline ? undefined : footerLayout.regions.find(region => event.x >= region.startX && event.x < region.endX);
+        const command = clickedRegion ? widgetCommand(clickedRegion.id) : undefined;
+        if (command) {
+          clearSelection();
+          void onSubmit(command, currentView, {mode: 'queue'}).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));
+          return;
+        }
         if (clickedPill) {
           const now = Date.now();
           if (now - lastClickRef.current.time < 350 && lastClickRef.current.key === 'pill:' + clickedPill.ownerId) {
@@ -954,7 +1021,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           if (copied) {
             stdout?.write(osc52Clipboard(copied));
             exitDeadline.current = 0;
-            flash('Copied statusbar content');
+            flash('Copied statusbar content', 3500, 'success');
           }
         }
         return;
@@ -969,7 +1036,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return;
       }
       const copied = copySelection();
-      if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection (excluding rail)');}
+      if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection (excluding rail)', 3500, 'success');}
     }
   };
 
@@ -1001,12 +1068,28 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     };
   }, [stdin, stdout]);
 
+  const actorNameOf = (item: Interaction) => ownerHeader(item.ownerId, roles).replace(/^\S+\s+/, '');
+  const patchResponse = (item: Interaction, update: (current: ResponseDraft) => ResponseDraft) =>
+    setResponses(previous => ({...previous, [item.requestId]: update(previous[item.requestId] ?? initialResponse(item))}));
+  /** Sends an approval answer; Deny first opens the inline note and only a second confirmation sends it. */
+  const choosePermission = (item: Interaction, decision: ApprovalDecision, note?: string) => {
+    if (item.kind !== 'permission') return;
+    if (decision === 'deny' && note === undefined) {
+      const at = approvalModel(item, actorNameOf(item)).options.findIndex(option => option.id === 'deny');
+      patchResponse(item, current => ({...current, selected: at, noting: true, error: ''}));
+      setFocus('question');
+      return;
+    }
+    const text = note?.trim();
+    const result = store.interactions.respond(answerEnvelope(item, {kind: 'permission', decision, ...(decision === 'deny' && text ? {note: text} : {})}));
+    if (result.ok) { setFocus('input'); setDetailOffset(0); }
+    else patchResponse(item, current => ({...current, error: result.reason}));
+  };
   const commitAnswer = () => {
     if (!request || !response) return;
     if (request.kind === 'permission') {
-      const result = store.interactions.respond(answerEnvelope(request, {kind: 'permission', decision: response.selected === 0 ? 'allow_once' : 'deny'}));
-      if (result.ok) { setFocus('input'); setDetailOffset(0); }
-      else changeResponse(current => ({...current, error: result.reason}));
+      const option = approvalModel(request, actorNameOf(request)).options[response.selected];
+      if (option) choosePermission(request, option.id, response.noting === true ? response.text : undefined);
       return;
     }
     const transition = getInteractionUI(request)?.reduce(interactionState(request, response), {kind: 'submit'});
@@ -1030,7 +1113,12 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       });
       return;
     }
-    if ((!inlineRequest || stage) && focus === 'question' && request?.kind === 'question' && response) {
+    if (!demoScene && focus === 'question' && request?.kind === 'permission' && response?.noting) {
+      changeResponse(current => {
+        const editor = fn(current.editor);
+        return {...current, editor, text: editor.text.replace(/[\r\n]+/g, ' ').slice(0, 500)};
+      });
+    } else if ((!inlineRequest || stage) && focus === 'question' && request?.kind === 'question' && response) {
       changeResponse(current => {
         const editor = fn(current.editor);
         return reduceResponse(request, {...current, editor, text: editor.text}, {kind: 'text', text: editor.text});
@@ -1044,7 +1132,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   };
   const sendPending = (id: string) => {
     setPendingHover(null);
-    void Promise.resolve(onSendPending?.(id)).catch(error => flash(error instanceof Error ? error.message : String(error)));
+    void Promise.resolve(onSendPending?.(id)).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));
   };
   /** The `×` control: the message leaves the pending list and returns to the composer for editing (appended when the draft holds text). */
   const takePendingBack = (id: string) => {
@@ -1060,7 +1148,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (newest) sendPending(newest.id);
       return;
     }
-    if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.'); return;}
+    if (/^[@/]/.test(draft.text.trim())) {flash('Steering cannot execute commands or actor-routing syntax. Use Queue instead.', 3500, 'warning'); return;}
     if (!steerTarget) {flash(selectedActivityId ? 'The selected task is no longer active. The draft was retained.' : 'Select an active task with Ctrl+N before steering.'); return;}
     sendSceneInput(draft.text, {mode: 'steer', activityId: steerTarget.activityId});
   };
@@ -1201,6 +1289,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       switchView(target);
       return;
     }
+    if (!demoScene && focus === 'question' && request?.kind === 'permission' && response) {
+      if (response.noting) {
+        if (key.escape) {changeResponse(current => ({...current, noting: false, error: ''})); return;}
+        if (key.return && !key.shift && !key.meta) {choosePermission(request, 'deny', response.text); return;}
+      } else if (!key.ctrl && !key.meta && input.length === 1) {
+        const at = optionIndex(approvalModel(request, actorNameOf(request)), input.toLowerCase());
+        const option = approvalModel(request, actorNameOf(request)).options[at];
+        if (option) {choosePermission(request, option.id); return;}
+      }
+    }
     if (key.ctrl && input === 'x' && focus === 'question' && request) {
       store.interactions.cancel(request.requestId); setFocus('input'); return;
     }
@@ -1233,7 +1331,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         setDraft(current => original && !current.text ? insert(emptyDraft, original.text) : current);
         if (original) {
           setCompletion({query: '', selected: 0, dismissed: true});
-          if (draft.text) flash('Task stopped. Your current draft was kept; use Up for earlier input.');
+          if (draft.text) flash('Task stopped. Your current draft was kept; use Up for earlier input.', 3500, 'warning');
         }
       }
       return;
@@ -1273,7 +1371,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     }
     if ((!inlineRequest || stage) && focus === 'question' && request && response && (key.upArrow || key.downArrow)) {
       changeResponse(current => request.kind === 'permission'
-        ? {...current, selected: (current.selected + 1) % 2}
+        ? current.noting ? current : (() => {
+          const count = approvalModel(request, '').options.length;
+          return {...current, selected: ((current.selected + (key.upArrow ? -1 : 1)) % count + count) % count, error: ''};
+        })()
         : reduceResponse(request, current, {kind: 'move', delta: key.upArrow ? -1 : 1}));
       return;
     }
@@ -1409,7 +1510,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     </Box>}
     {!questionPanel && !stage && (!demoScene || !inlineRequest) && request && response && questionHeight > 0 && <Box height={questionHeight} flexShrink={0} overflow="hidden" contentOffsetY={detailStart} flexDirection="column">
       <Box ref={detailRef} flexDirection="column" flexShrink={0}>
-        <InteractionCard request={request} draft={response} focused={focus === 'question'}/>
+        <InteractionCard request={request} draft={response} focused={focus === 'question'} height={questionHeight}/>
       </Box>
     </Box>}
     {menuHeight > 0 && <MouseContext.Provider value={subscribeMouse}>
@@ -1445,14 +1546,21 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       </Box>) : <Text color={palette.muted} wrap="truncate">{clipLine(choiceSummary, width)}</Text>}
     </Box>
     {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
-    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="row" justifyContent="space-between">
-      <Text color={statusLeftColor} wrap="truncate">{getStatus && !notice
-        ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.bold ? {bold: true} : {})} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
-        : footerStatusText}</Text>
-      {activePills.length > 0 ? <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
-        <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
-        <Text color={palette.muted}>{renderedFooterKeys}</Text>
-      </> : null}
+    {footerHeight > 0 && <Box height={footerHeight} flexShrink={0} flexDirection="column">
+      <Box height={1} flexShrink={0} flexDirection="row">
+        <Text color={statusLeftColor} wrap="truncate">{getStatus && !noticeInline
+          ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.bold ? {bold: true} : {})} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
+          : footerStatusText}</Text>
+        {activePills.length > 0 ? <>
+          <Text>{' '.repeat(Math.max(0, width - (getStatus && !noticeInline ? footerLayout.width : stringWidth(footerStatusText)) - pillsWidth))}</Text>
+          <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/>
+        </> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
+          <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
+          <Text color={palette.muted}>{renderedFooterKeys}</Text>
+        </> : null}
+      </Box>
+      {footerHeight > 1 && <Box height={1} flexShrink={0}><Text wrap="truncate">{footerNote.map((segment, index) =>
+        <Text key={index} {...(segment.color ? {color: segment.color} : {})} {...(segment.bold ? {bold: true} : {})} {...(segment.italic ? {italic: true} : {})}>{segment.text}</Text>)}</Text></Box>}
     </Box>}
     </>}
   </Box>;

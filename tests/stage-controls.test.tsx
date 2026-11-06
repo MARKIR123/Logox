@@ -52,10 +52,11 @@ test('用户状态栏偏好原子保存、重读与坏文件保护，模块顺�
     await assert.rejects(prefs.load()); await assert.rejects(prefs.save(defaultStatusbar)); assert.equal(await readFile(path, 'utf8'), '{invalid');
     const status = {ownerId: 'logox', name: 'Logox', model: {provider: 'demo', model: 'flash'}, effort: 'high', permission: '工作区',
       context: {tokens: 20, window: 100}, state: 'Running'};
-    assert.equal(statusbarText(status, 5), '\uf007 Lo…');
-    assert.equal(statusbarText(status, 25), '\uf007 Logox │ \uf4b8 demo/flash');
-    assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*Context \[.*\] 20% USED.*running/);
-    assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Session cost|Cost|费用) CNY 1.2500/);
+    assert.equal(statusbarText(status, 5), '', 'a widget that does not fit is dropped whole, never cut');
+    assert.equal(statusbarText(status, 9), ' Logox', 'strict priority: role first, nothing less important squeezed in');
+    assert.equal(statusbarText(status, 40, [{id: 'model', enabled: true}, {id: 'role', enabled: true}]), ' flash │  Logox', 'user order sets display order');
+    assert.match(statusbarText(status, 160), /Thinking high.*Permission 工作区.*█+ 20%/);
+    assert.match(statusbarText({...status, cost: 1.25, costCurrency: 'CNY'}, 50, [{id: 'cost', enabled: true}]), /(?:Session cost|Cost) CNY 1.2500/);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 
@@ -153,14 +154,14 @@ test('status modules and the queue badge share one line across actor views and n
     effort: 'high', permission: '工作区', context: {tokens: 25, window: 100}, state: '就绪'})});
   try {
     await delay(80);
-    assert.ok(ui.output.lines.at(-1)?.includes('\uf007 logox │ \uf4b8 demo/logox-model'));
-    await ui.key('\x07'); assert.ok(ui.output.lines.at(-1)?.includes('\uf007 aletheia │ \uf4b8 demo/aletheia-model'));
+    assert.ok(ui.output.lines.at(-2)?.includes('\uf007 logox │ \uf4b8 logox-model'));
+    await ui.key('\x07'); assert.ok(ui.output.lines.at(-2)?.includes('\uf007 aletheia │ \uf4b8 aletheia-model'));
     await prefs.save(defaultStatusbar.map(item => ({...item, enabled: item.id === 'context'}))); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /25% USED/);
+    assert.match(ui.output.lines.at(-2)?.trim() ?? '', /25%/);
     ui.output.resize(16, 12); await delay(80); await ui.instance.waitUntilRenderFlush();
-    assert.match(ui.output.lines.at(-1)?.trim() ?? '', /25% USED/);
-    assert.doesNotMatch(ui.output.lines.at(-1)?.trim() ?? '', /Q0/, 'Noisy Q0 badge is removed from footer');
-    assert.ok(!ui.output.lines.at(-2)?.match(/25% USED/), 'Status does not wrap to a second line');
+    assert.match(ui.output.lines.at(-2)?.trim() ?? '', /25%/);
+    assert.doesNotMatch(ui.output.lines.at(-2)?.trim() ?? '', /Q0/, 'Noisy Q0 badge is removed from footer');
+    assert.ok(!ui.output.lines.at(-3)?.match(/25%/), 'Status does not wrap to a second line');
   } finally {await ui.cleanup(); await rm(dir, {recursive: true, force: true});}
 });
 
@@ -174,7 +175,7 @@ test('/status toggle Space 开关、左右排序、鼠标与取消保存互相�
     assert.ok(ui.output.lines.join('\n').includes('[■]')); assert.ok(ui.output.lines.join('\n').includes('[ ]'));
     await ui.key(' '); await ui.key('\x1b[C'); await ui.key('\x1b'); assert.equal(saved.length, 0);
     open(); await delay(80); await ui.key(' '); await ui.key('\x1b[C'); await ui.key('\r');
-    assert.deepEqual(saved[0], ['model', 'effort', 'permission', 'context', 'state']);
+    assert.deepEqual(saved[0], ['model', 'effort', 'permission', 'context', 'cache']);
     open(); await delay(80);
     await ui.key('\x1b[<0;5;5M'); await ui.key('\r'); assert.ok(!saved[1]!.includes('role'), '鼠标点击toggle开关');
     assert.equal(store.getSnapshot().messages.length, 0, '设置界面不产生任务历史');

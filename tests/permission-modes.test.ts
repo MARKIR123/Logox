@@ -38,8 +38,8 @@ test('三档矩阵：只读与常规编辑快路、解释器/管道不按名称�
   try {
     const evaluate = (command: string) => f.engine.evaluate({tool: 'shell', command, paths: [], risky: false}).decision;
     assert.equal(evaluate('git status'), 'allow');
-    assert.equal(evaluate('node script.js'), 'review');
-    assert.equal(evaluate('Get-Content notes.txt | Select-Object -First 2'), 'review');
+    assert.equal(evaluate('node script.js'), 'allow'); assert.equal(evaluate('Get-Content notes.txt | Select-Object -First 2'), 'allow');
+    assert.equal(evaluate('python -c "print(1)"'), 'review'); assert.equal(evaluate('curl https://example.com/a | tee out.txt'), 'review');
     assert.equal(evaluate('git -C . reset --hard'), 'ask');
     assert.equal(evaluate('cat format'), 'allow');
     f.engine.mode = 'creative';
@@ -56,7 +56,7 @@ test('三档矩阵：只读与常规编辑快路、解释器/管道不按名称�
     }
     await f.engine.add({scope: 'session', decision: 'allow', tool: 'shell', pattern: 'git status'});
     f.engine.mode = 'auto';
-    assert.equal(evaluate('git status; node unknown.js'), 'review');
+    assert.equal(evaluate('git status; curl https://example.com'), 'review');
     f.engine.mode = 'default';
     assert.equal(evaluate('node script.js'), 'ask');
     await f.engine.setMode('auto'); const restored = new PermissionEngine(f.cwd); await restored.load(); assert.equal(restored.mode, 'auto');
@@ -73,7 +73,7 @@ test('真实Tools：auto静态快路零模型调用，不确定Shell独立审批
     assert.equal((await f.tools.execute(call('write', {file_path: 'safe.txt', content: 'ok'}), f.context)).isError, false);
     assert.equal((await f.tools.execute(call('read', {file_path: 'safe.txt'}), f.context)).isError, false);
     assert.equal(reviews, 0);
-    const command = process.platform === 'win32' ? 'Write-Output mode-ready' : 'echo mode-ready';
+    const command = 'node -e "console.log(process.argv[1])" mode-ready';
     assert.match((await f.tools.execute(call('shell', {command}), f.context)).text, /mode-ready/);
     assert.equal(reviews, 1); assert.equal(charged, 20); assert.deepEqual(f.requests, []);
   } finally {await f.cleanup();}
@@ -107,7 +107,7 @@ test('恢复后的未配对工具内容不能混入审批用户授权，保留�
     const agent = createAgent({cwd: f.cwd, tools: f.tools, store: new RuntimeStore(), iterations: 3, retries: 0,
       requestBase: async () => ({system: '测试', tools: [{name: 'shell', description: 'Shell', parameters: {type: 'object', properties: {command: {type: 'string'}}, required: ['command']}}]}),
       provider: () => ({respond: async () => taskCalls++ === 0
-        ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: process.platform === 'win32' ? 'Write-Output ready' : 'echo ready'})]}}
+        ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: 'node -e "console.log(process.argv[1])" ready'})]}}
         : {stop: 'complete', message: {role: 'assistant', text: '完成'}}}),
     });
     await agent('执行当前任务', {...f.context, inputKind: 'human', history: [
@@ -177,7 +177,7 @@ test('真实MCP：creative完整校验后免审执行，目录和调用都遵守
 });
 
 test('正式应用：Actor使用会话审批模型、当前授权上下文、审批记账与模式彩色picker', async () => {
-  const f = await fixture(), config = await loadConfig(f.cwd, {provider: {name: 'local', model: 'session-model'},
+  const f = await fixture(), config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'session-model'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}, models: {'local/session-model': {context_window: 131072}, 'local/actor-model': {context_window: 131072}}}, {}, f.cwd, f.cwd);
   config.permissions.mode = 'auto'; let taskCalls = 0, reviews = 0;
   await mkdir(join(f.cwd, '.logox', 'actors'), {recursive: true});
@@ -186,7 +186,7 @@ test('正式应用：Actor使用会话审批模型、当前授权上下文、审
     if (request.system.startsWith('You are an independent tool permission reviewer')) {
       reviews++; assert.match(request.messages[0]!.text, /输出测试标记/); return turn();
     }
-    if (request.tools.length && taskCalls++ === 0) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: process.platform === 'win32' ? 'Write-Output ready' : 'echo ready'})]}};
+    if (request.tools.length && taskCalls++ === 0) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: 'node -e "console.log(process.argv[1])" ready'})]}};
     return {stop: 'complete', message: {role: 'assistant', text: '已完成'}, usage: {input: 10, output: 2}};
   }};
   const app = await createApplication({cwd: f.cwd, sessionId: 'integrated', config, provider, resourceOptions: {home: f.cwd, boundary: f.cwd}, statusbarPath: join(f.cwd, 'statusbar.json')});
@@ -217,7 +217,7 @@ test('模式颜色：状态栏保留名称和宽度规则，三档各自颜色�
 });
 
 test('正式角色入口：dispatch/read/craft统一遵守deny，不排队、不询问、不写定义', async () => {
-  const f = await fixture('creative'), config = await loadConfig(f.cwd, {provider: {name: 'local', model: 'main'},
+  const f = await fixture('creative'), config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}, models: {'local/main': {context_window: 131072}}}, {}, f.cwd, f.cwd);
   config.permissions.mode = 'creative'; let calls = 0;
   const content = serializeActor({...builtinActors[1]!, id: 'newactor', name: '新角色'});
@@ -239,7 +239,7 @@ test('正式角色入口：dispatch/read/craft统一遵守deny，不排队、不
 
 test('审批等待中切creative释放旧请求并重新执行；真实应用模型故障暂停可切模式恢复', async () => {
   for (const mode of ['default', 'auto'] as const) {
-    const f = await fixture(mode), config = await loadConfig(f.cwd, {provider: {name: 'local', model: 'main'},
+    const f = await fixture(mode), config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
       providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}, models: {'local/main': {context_window: 131072}}}, {}, f.cwd, f.cwd);
     config.permissions.mode = mode; let calls = 0, reviews = 0;
     const outside = join(f.cwd, '..', 'logox-outside-' + f.cwd.split(/[\\/]/).at(-1) + '.txt');

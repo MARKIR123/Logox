@@ -256,6 +256,9 @@ async function fileVersion(path: string): Promise<string> {
   return bytes ? String(bytes.length) : 'missing';
 }
 
+/** Static denial text for the model; the user's note, when given, is appended verbatim as their stated reason. */
+const DENIED = 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.';
+const deniedText = (note?: string) => note ? DENIED + ' The user said why: "' + note + '"' : DENIED;
 export class Tools {
   readonly snapshots: Snapshots;
   readonly modelStorage: ToolModelStorage;
@@ -545,9 +548,8 @@ export class Tools {
       if (!context.via) this.report(context, name + ' · ' + (targetPath ?? (name === 'Shell' ? schemas.Shell.parse(parsed).command : 'url' in parsed ? (parsed as {url: string}).url : '')));
       let policy: string;
       do {
-        if (!await guard.authorize(target, permissionArgs, context)) {
-          return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
-        }
+        const verdict = await guard.authorizeDetailed(target, permissionArgs, context);
+        if (!verdict.allowed) return {text: deniedText(verdict.note), isError: true, disposition: 'denied'};
         policy = guard.policy();
         context.signal.throwIfAborted();
         for (const item of shellPaths) {

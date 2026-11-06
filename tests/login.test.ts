@@ -65,7 +65,7 @@ test('/login 保存后重建应用直接认证，密钥不进入舞台或会话'
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();assert.ok(address && typeof address === 'object');
-  const config = await loadConfig(cwd, {provider: {name: 'test-cloud', model: 'test'}, providers: {'test-cloud': {base_url: 'http://127.0.0.1:' + address.port, api_key_env: 'LOGIN_TEST_KEY'}}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'test-cloud', model: 'test'}, providers: {'test-cloud': {base_url: 'http://127.0.0.1:' + address.port, api_key_env: 'LOGIN_TEST_KEY'}}}, {}, cwd, cwd);
   let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, authPath, config, sessionId: 'first'});
   try {
     await app.submit('/login test-cloud');

@@ -50,11 +50,11 @@ test('statusbar: tokens label states what is shown (session total)', () => {
 
 test('statusbar: context never rounds 99.6 up to 100 and flags overruns and estimates', () => {
   const context = (tokens: number, extra: object = {}): StageStatus => ({...base, context: {tokens, window: 1000, estimated: false, over: false, ...extra}});
-  assert.match(statusbarText(context(996), 80, only('context')), /99% USED/);
-  assert.match(statusbarText(context(1000), 80, only('context')), /[^>~]100% USED/);
-  assert.match(statusbarText(context(1400, {over: true}), 80, only('context')), />100% USED/);
-  assert.match(statusbarText(context(500, {estimated: true}), 80, only('context')), /~50% USED/);
-  assert.match(statusbarText(context(500), 80, only('context')), /[^~>]50% USED/);
+  assert.match(statusbarText(context(996), 80, only('context')), / 99%$/);
+  assert.match(statusbarText(context(1000), 80, only('context')), /[^>~]100%$/);
+  assert.match(statusbarText(context(1400, {over: true}), 80, only('context')), />100%$/);
+  assert.match(statusbarText(context(500, {estimated: true}), 80, only('context')), / ~50%$/);
+  assert.match(statusbarText(context(500), 80, only('context')), /[^~>]50%$/);
 });
 
 test('statusbar: git module is data only, hidden outside a repository', () => {

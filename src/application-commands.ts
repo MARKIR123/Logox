@@ -1,4 +1,4 @@
-import type {CommandTab, CommandToggle, CommandResult, TabLine} from './runtime/command-surface.js';
+import type {CommandTab, CommandToggle, CommandResult, TabLine, PermissionsPageData} from './runtime/command-surface.js';
 import {row, tabContent} from './commands/tab-rows.js';
 import {applyThemePreset, applyCursorStyle, type CursorStyleName} from './config/theme-presets.js';
 import type {StatusbarAppearance} from './config/statusbar-preferences.js';
@@ -17,6 +17,7 @@ export interface ApplicationCommandContext {
     readonly color?: string;
     readonly lines: readonly TabLine[];
     readonly modes?: readonly {readonly id: string; readonly description: string}[];
+    readonly page?: PermissionsPageData;
     readonly readonly_concurrency: number;
     readonly approvalTokens: number;
   };
@@ -92,7 +93,8 @@ export function createCommandTabsFor(
         id: 'permissions',
         title: 'Permissions',
         ...(context.permissions.color ? {color: context.permissions.color} : {}),
-        ...(context.permissions.modes ? {mode: {current: context.permissions.mode, options: context.permissions.modes}} : {}),
+        ...(context.permissions.page ? {permissions: context.permissions.page}
+          : context.permissions.modes ? {mode: {current: context.permissions.mode, options: context.permissions.modes}} : {}),
         ...tabContent(context.permissions.lines),
       }],
       initialTab: 'permissions',

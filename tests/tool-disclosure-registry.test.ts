@@ -70,7 +70,7 @@ test('application startup and reload apply tool overrides without global state o
   await mkdir(join(cwd, '.logox'));
   const path = join(cwd, '.logox', 'tools.json');
   await writeFile(path, JSON.stringify({Read: {roles: []}, CraftActor: {roles: []}, _GitStatus: {loading: 'eager'}}));
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd},
     provider: {async respond(request) {
       seen.push(request);

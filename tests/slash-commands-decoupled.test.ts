@@ -94,7 +94,7 @@ test('createCommandTabsFor returns status and usage tabs for /status and /usage'
 
 test('toggling permission mode updates dedicated single-tab surface without flashing monolithic tabs', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-perm-flash-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 8192}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 8192}}, {}, cwd, cwd);
   const app = await createApplication({cwd, config, env: {}, sessionId: 'test', authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     await app.submit('/permissions');

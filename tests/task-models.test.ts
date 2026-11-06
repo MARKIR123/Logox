@@ -35,7 +35,7 @@ async function fixture(handle: (body: Record<string, unknown>, response: ServerR
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address === 'object');
-  const config = await loadConfig(directory, {provider: {name: 'main', model: 'same', max_tokens: 3000},
+  const config = await loadConfig(directory, {permissions: {mode: 'default'}, provider: {name: 'main', model: 'same', max_tokens: 3000},
     providers: Object.fromEntries(['main', 'actor', 'other'].map(name => [name, {base_url: 'http://127.0.0.1:' + address.port + '/' + name, default_model: 'same', kind}])),
     models: {'main/same': {context_window: 8192, max_output_tokens: 1000}, 'actor/same': {context_window: 16384, max_output_tokens: 2000}, 'other/same': {context_window: 8192}}}, {}, directory, directory);
   const registry = new ProviderRegistry(config, {}, fetch, new AuthStorage(join(directory, 'auth.json')));

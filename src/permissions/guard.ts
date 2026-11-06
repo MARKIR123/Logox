@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import type {ActorContext} from '../actors/ensemble.js';
+import type {ActorContext, PermissionAnswer} from '../actors/ensemble.js';
 import type {ModelMessage, ModelTurn, Provider} from '../runtime/messages.js';
 import {PermissionEngine, type PermissionTarget} from './engine.js';
+import {suggestRule} from './suggest.js';
 import {inputKind} from '../runtime/provenance.js';
 import type {TabRow} from '../runtime/command-surface.js';
 import {row, rowText} from '../commands/tab-rows.js';
@@ -33,14 +34,19 @@ If you cannot reach a valid judgment, do not fabricate an allow verdict.`;
 
 /** All execution entry points share adjudication, one-time grants and denial de-duplication; the UI only answers runtime requests. */
 export class PermissionGuard {
-  private readonly denied = new Set<string>();
+  /** Denied operation fingerprints with the user's note, if any. */
+  private readonly denied = new Map<string, string | undefined>();
+  private approvals = 0;
+  private asked = 0;
   private readonly records: PermissionRecord[] = [];
   private calls = 0;
   private input = 0;
   private output = 0;
   private missingUsage = 0;
   constructor(readonly engine: PermissionEngine, private readonly options: GuardOptions = {}) {}
-  policy(): string {return digest([this.engine.mode, this.engine.snapshot()]);}
+  policy(): string {return digest(this.engine.policyKey());}
+  /** Approval statistics of this run: calls that needed adjudication, prompts shown to the user, model reviews and their tokens. */
+  stats() {return {approvals: this.approvals, asked: this.asked, reviewed: this.calls, tokens: this.input + this.output};}
   snapshot(): readonly PermissionRecord[] {return this.records.map(record => ({...record}));}
   rows(): TabRow[] {
     return [row.field('Model approval requests this run', this.calls), row.field('Approval input / output this run', this.input + ' / ' + this.output + ' token' +
@@ -90,13 +96,21 @@ export class PermissionGuard {
     return verdictSchema.parse(JSON.parse(turn.message.text));
   }
   async authorize(target: PermissionTarget, args: Arguments, context: ActorContext): Promise<boolean> {
+    return (await this.authorizeDetailed(target, args, context)).allowed;
+  }
+  /** Like `authorize`, and also returns the note the user gave when denying, for the model. */
+  async authorizeDetailed(target: PermissionTarget, args: Arguments, context: ActorContext): Promise<{allowed: boolean; note?: string}> {
     const key = this.fingerprint(context, target, args);
+    let counted = false;
+    const deny = (note?: string) => ({allowed: false, ...note ? {note} : {}});
     for (;;) {
       context.signal.throwIfAborted();
-      const policy = this.policy(), evaluation = this.engine.evaluate(target);
-      if (evaluation.decision === 'deny') {this.record(context, target, 'deny', 'rule', evaluation.reason); return false;}
-      if (this.denied.has(key)) {this.record(context, target, 'deny', 'user', 'The user already denied this operation and authorization is unchanged; find another approach.'); return false;}
-      if (evaluation.decision === 'allow') {this.record(context, target, 'allow', 'rule', evaluation.reason); return true;}
+      let policy = this.policy();
+      const evaluation = this.engine.evaluate(target);
+      if (evaluation.decision === 'deny') {this.record(context, target, 'deny', 'rule', evaluation.reason); return deny();}
+      if (this.denied.has(key)) {this.record(context, target, 'deny', 'user', 'The user already denied this operation and authorization is unchanged; find another approach.'); return deny(this.denied.get(key));}
+      if (evaluation.decision === 'allow') {this.record(context, target, 'allow', 'rule', evaluation.reason); return {allowed: true};}
+      if (!counted) {counted = true; this.approvals++;}
       let reason = evaluation.reason, source: PermissionRecord['source'] = 'rule';
       if (evaluation.decision === 'review') {
         let verdict: z.infer<typeof verdictSchema> | undefined;
@@ -115,24 +129,39 @@ export class PermissionGuard {
             ]}]});
           context.signal.throwIfAborted();
           if (policy !== this.policy()) continue;
-          if (outcome.status !== 'answered' || outcome.response.kind !== 'question') return false;
+          if (outcome.status !== 'answered' || outcome.response.kind !== 'question') return deny();
           const answer = outcome.response.answers.retry;
-          if (answer?.type !== 'option') return false;
+          if (answer?.type !== 'option') return deny();
           if (answer.optionId === 'default' || answer.optionId === 'creative') await this.engine.setMode(answer.optionId);
-          else if (answer.optionId !== 'retry') return false;
+          else if (answer.optionId !== 'retry') return deny();
           continue;
         }
         reason = verdict.reason; source = 'model';
-        if (verdict.decision === 'allow') {this.record(context, target, 'allow', source, reason); return true;}
+        if (verdict.decision === 'allow') {this.record(context, target, 'allow', source, reason); return {allowed: true};}
       }
-      const allowed = await context.permission({kind: 'permission', title: (context.via ? context.via.label + ': allow ' : 'Allow ') + target.tool + '?', tool: target.tool, arguments: args, reason});
+      const suggestion = suggestRule(target, this.engine.dangerOf(target));
+      const prompt = {kind: 'permission' as const, title: (context.via ? context.via.label + ': allow ' : 'Allow ') + target.tool + '?', tool: target.tool, arguments: args, reason,
+        mode: this.engine.mode, ...suggestion ? {suggestion} : {}};
+      this.asked++;
+      const answer: PermissionAnswer = context.askPermission ? await context.askPermission(prompt)
+        : {decision: await context.permission(prompt) ? 'allow_once' : 'deny'};
       context.signal.throwIfAborted();
-      if (policy !== this.policy()) continue;
-      if (!allowed) {
-        this.denied.add(key); if (this.denied.size > 1000) this.denied.delete(this.denied.values().next().value!);
-        this.record(context, target, 'deny', 'user', 'User denied: ' + reason); return false;
+      let granted = '';
+      if (suggestion && (answer.decision === 'allow_session' || answer.decision === 'allow_project')) {
+        // The grant is created from the suggestion computed here, never from anything the answer carries.
+        try {
+          await this.engine.add({scope: answer.decision === 'allow_session' ? 'session' : 'project', decision: 'allow', tool: suggestion.tool, pattern: suggestion.pattern});
+          granted = answer.decision === 'allow_session' ? ' (rule added for this session)' : ' (rule added for this project)';
+          policy = this.policy();
+        } catch {granted = ' (the rule could not be saved; allowed once)';}
       }
-      this.record(context, target, 'allow', 'user', 'Allowed once: ' + reason); return true;
+      if (policy !== this.policy()) continue;
+      if (answer.decision === 'deny') {
+        const note = answer.note?.replace(/\s+/g, ' ').trim() || undefined;
+        this.denied.set(key, note); if (this.denied.size > 1000) this.denied.delete(this.denied.keys().next().value!);
+        this.record(context, target, 'deny', 'user', 'User denied: ' + reason + (note ? ' · "' + note + '"' : '')); return deny(note);
+      }
+      this.record(context, target, 'allow', 'user', (granted ? 'Allowed' : 'Allowed once') + ': ' + reason + granted); return {allowed: true};
     }
   }
 }

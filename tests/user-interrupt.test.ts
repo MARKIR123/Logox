@@ -86,7 +86,7 @@ const done = (): ModelTurn => ({stop: 'complete', message: {role: 'assistant', t
 
 async function fixture(provider: Provider) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-interrupt-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
@@ -153,7 +153,7 @@ test('recovery wording for crashed runs is unchanged and only deliberate stops r
 
 test('the marker is a hidden ledger note: no timeline row live or after the session is restored', {timeout: 20000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-interrupt-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const open = () => createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider: scripted([writeTurn()])});
   const first = await open();
   try {

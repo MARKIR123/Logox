@@ -26,7 +26,7 @@ for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisf
       seen.push(request);
       return {stop: 'tools', message: {role: 'assistant', text: 'Verified fixture response.', toolCalls: [finish('finish-' + seen.length)]}};
     }};
-    const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
     const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
     try {
       for (const id of [...builtinActors.map(actor => actor.id), 'custom-specialist']) {
@@ -93,7 +93,7 @@ test('application-owned terminal visibility overrides do not leak into a second 
       let calls = 0;
       const provider: Provider = {async respond() {return ++calls === 1 ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'read', name: 'Read', arguments: '{"file_path":"evidence.txt"}'}]}} :
         {stop: 'tools', message: {role: 'assistant', text: 'Read completed.', toolCalls: [finish('finish')]}};}};
-      const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+      const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
       const options = {cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}};
       let app = await createApplication(options);
       try {
@@ -116,7 +116,7 @@ test('stored OAuth capabilities are resolved before the first production request
   const authPath = join(cwd, 'auth.json');
   await writeFile(authPath, JSON.stringify({openai: {type: 'oauth', access_token: 'oauth-fixture'}}));
   const bodies: Array<Record<string, any>> = [];
-  const config = await loadConfig(cwd, {provider: {name: 'openai', model: 'gpt-5.4', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-5.4', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, authPath, resourceOptions: {home: cwd, boundary: cwd}, fetcher: async (url, init) => {
     assert.ok(String(url).endsWith('/responses'), 'No capability probe or model catalog request');
     bodies.push(JSON.parse(String(init?.body)));

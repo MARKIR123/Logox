@@ -75,7 +75,10 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   record(message: ModelMessage, step?: Step): Promise<void>;
   ask(input: Omit<Extract<InteractionInput, {kind: 'question'}>, 'sessionId' | 'activityId' | 'ownerId'>): Promise<InteractionOutcome>;
   permission(input: Omit<Extract<InteractionInput, {kind: 'permission'}>, 'sessionId' | 'activityId' | 'ownerId'>): Promise<boolean>;
+  /** Like `permission`, but returns the user's full answer (grant scope, denial note). Absent in minimal contexts; callers fall back to `permission`. */
+  askPermission?(input: Omit<Extract<InteractionInput, {kind: 'permission'}>, 'sessionId' | 'activityId' | 'ownerId'>): Promise<PermissionAnswer>;
 }
+export interface PermissionAnswer {readonly decision: 'allow_once' | 'allow_session' | 'allow_project' | 'deny'; readonly note?: string}
 export type ActorExecutor<Id extends string = ActorId> = (prompt: string, context: ActorContext<Id>) => Promise<void>;
 export interface EnsembleOptions<Id extends string = ActorId> {
   concurrency?: 'serial' | 'actor';
@@ -506,10 +509,16 @@ export class EnsembleRuntime<Id extends string> {
         report: (stage, detail) => { signal.throwIfAborted(); update('running', stage, detail); },
         say: text => { signal.throwIfAborted(); output.push(text); this.store.message(this.sessionId, ownerId, 'assistant', text, {activityId}); },
         ask: input => request({...identity, ...input}),
+        askPermission: async input => {
+          const result = await request({...identity, ...input});
+          signal.throwIfAborted();
+          if (result.status !== 'answered' || result.response.kind !== 'permission') return {decision: 'deny'};
+          return {decision: result.response.decision, ...(result.response.note ? {note: result.response.note} : {})};
+        },
         permission: async input => {
           const result = await request({...identity, ...input});
           signal.throwIfAborted();
-          return result.status === 'answered' && result.response.kind === 'permission' && result.response.decision === 'allow_once';
+          return result.status === 'answered' && result.response.kind === 'permission' && result.response.decision !== 'deny';
         },
       };
       await this.options.taskStart?.(context);

@@ -11,8 +11,9 @@ import {ToggleList, moveToggle, cycleToggleOption} from './toggle-list.js';
 import {useMouse} from '../terminal/mouse.js';
 import type {StatusbarAppearance} from '../../config/statusbar-preferences.js';
 import {StatusbarEditor} from '../status/statusbar-editor.js';
+import {initialPermissionsUi, permissionsView, reducePermissions, type PermissionsUi} from './permissions-editor.js';
 
-interface Cell {readonly text: string; readonly color: string; readonly bold?: boolean}
+interface Cell {readonly text: string; readonly color: string; readonly bold?: boolean; readonly bg?: string}
 type DisplayRow = readonly Cell[];
 const blankRow: DisplayRow = [];
 /** Word wrap by display cells (long words break hard); continuation rows are the caller's to indent. */
@@ -58,7 +59,7 @@ export function tabDisplay(tab: CommandTab | undefined, columns: number): Displa
 }
 function DisplayLine({row}: {row: DisplayRow}) {
   return <Box height={1} flexShrink={0} overflow="hidden">
-    {row.length ? <Text wrap="truncate">{row.map((cell, at) => <Text key={at} color={cell.color} bold={cell.bold === true}>{cell.text}</Text>)}</Text> : <Text> </Text>}
+    {row.length ? <Text wrap="truncate">{row.map((cell, at) => <Text key={at} color={cell.color} bold={cell.bold === true} {...(cell.bg ? {backgroundColor: cell.bg} : {})}>{cell.text}</Text>)}</Text> : <Text> </Text>}
   </Box>;
 }
 
@@ -73,6 +74,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   const [active, setActive] = useState(initialTab);
   // Permission mode is edited as a draft; nothing is saved until Enter.
   const [modeDraft, setModeDraft] = useState<string | undefined>(undefined);
+  const [permissionsUi, setPermissionsUi] = useState<PermissionsUi>(initialPermissionsUi);
   const hasTabBar = tabs.length > 1;
   const [focusArea, setFocusArea] = useState<'tabs' | 'content'>(hasTabBar && !tabs.find(tab => tab.id === initialTab)?.toggles ? 'tabs' : 'content');
   const [appearances, setAppearances] = useState<Record<string, StatusbarAppearance>>({});
@@ -89,14 +91,18 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
   const modeTab = tab?.mode, draftMode = modeTab && modeDraft && modeDraft !== modeTab.current ? modeDraft : undefined;
   const shownMode = draftMode ?? modeTab?.current;
   const modeDescription = modeTab?.options.find(option => option.id === shownMode)?.description ?? '';
-  const lines: DisplayRow[] = [
+  const permissionsView_ = tab?.permissions ? permissionsView(tab.permissions, permissionsUi, columns) : undefined;
+  const lines: DisplayRow[] = permissionsView_ ? [...permissionsView_.rows] : [
     ...(confirm && confirm.tabId === tab?.id ? [[{text: '▲ ' + confirm.prompt, color: palette.warning, bold: true}] as DisplayRow,
       [{text: '  [y] / Enter Confirm · any other key Cancel', color: palette.muted}] as DisplayRow, blankRow] : []),
     ...(modeTab && shownMode ? [[{text: 'Mode:', color: palette.panelLabel}, {text: ' ' + shownMode, color: palette.fg, bold: true},
       ...(draftMode ? [{text: ' · unsaved (Enter applies, Esc discards)', color: palette.warning, bold: true}] : []),
       {text: ' · ' + modeDescription, color: palette.muted}] as DisplayRow, blankRow] : []),
     ...tabDisplay(tab, columns)];
-  const max = Math.max(0, lines.length - contentHeight), offset = Math.min(max, offsets[tab?.id ?? ''] ?? 0);
+  const max = Math.max(0, lines.length - contentHeight);
+  // The permissions page keeps its selected rule (or form field) in view instead of scrolling freely.
+  const offset = permissionsView_ ? Math.max(0, Math.min(max, permissionsView_.focusRow - contentHeight + 2, Math.max(0, permissionsView_.focusRow - 3)))
+    : Math.min(max, offsets[tab?.id ?? ''] ?? 0);
   const items = tab?.toggles ? choices[tab.id] ?? tab.toggles : undefined;
   const selected = Math.min(Math.max(0, (items?.length ?? 1) - 1), focused[tab?.id ?? ''] ?? 0);
   const toggleHeight = Math.max(1, contentHeight - 1);
@@ -151,6 +157,12 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     if (key.eventType === 'release') return;
     if (confirm) {
       onAction?.(confirm.tabId, input === 'y' || input === 'Y' || key.return ? confirm.action : 'cancel_confirm');
+      return;
+    }
+    if (tab?.permissions && (permissionsUi.form || permissionsUi.confirmDelete)) {
+      const step = reducePermissions(tab.permissions, permissionsUi, input, key);
+      setPermissionsUi(step.ui);
+      if (step.action) onAction?.(tab.id, step.action);
       return;
     }
     if (key.escape) {
@@ -232,6 +244,12 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
       return;
     }
 
+    if (tab.permissions) {
+      const step = reducePermissions(tab.permissions, permissionsUi, input, key);
+      setPermissionsUi(step.ui);
+      if (step.action) onAction?.(tab.id, step.action);
+      if (step.handled) return;
+    }
     if (modeTab) {
       const ids = modeTab.options.map(option => option.id), at = Math.max(0, ids.indexOf(shownMode ?? modeTab.current));
       const step = key.leftArrow ? -1 : (input === ' ' || input === 'm' || input === 'M' || key.rightArrow) ? 1 : 0;
@@ -286,6 +304,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, onClose, onS
     : '← Off · → On · Space Toggle';
   const footer = saving ? 'Saving...'
     : confirm ? 'y Confirm · any other key Cancel'
+    : permissionsView_ ? permissionsView_.footer
     : modeTab ? (draftMode ? 'Enter Apply and save · Space / ←→ Change · Esc Discard' : 'Space / m / ←→ Change mode · ↑↓ Scroll · Esc Back')
     : tab?.id === 'providers' ? '[t] Test   [r] Refresh   [x] Logout   [←→] Provider   [↑↓] Scroll   [Esc] Back'
     : items ? `${hasTabBar ? focusArea === 'tabs' ? '←→ / Tab Switch · ↓ Edit · ' : 'Tab Switch · ' : ''}↑↓ Select · Enter ${hasTabBar ? 'Apply tab' : 'Save'} · Esc ${hasTabBar ? 'Close / discard unsaved' : 'Discard'}`

@@ -222,7 +222,6 @@ test('多行输入真实 Ink 接线：Shift+Enter、粘贴、五行视口、缩�
     await key('\r');
     assert.deepEqual(submissions, ['first\nsecond\n三🙂\n四\n五\n六\n七!\n八']);
     await key('\t');
-    await key('\x1b[A');
     await key('\r');
     const result = await permission.result;
     assert.equal(result.status, 'answered');
@@ -336,7 +335,7 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
   const directory = await mkdtemp(join(tmpdir(), 'logox-real-ui-'));
   let round = 0;
   const runtime = await createApplication({cwd: directory, resourceOptions: {home: directory, boundary: directory}, sessionId: 'real-ui',
-    config: await loadConfig(directory, {provider: {model: 'test', context_window: 131072}}, {}, directory, directory),
+    config: await loadConfig(directory, {provider: {model: 'test', context_window: 131072}, permissions: {mode: 'default'}}, {}, directory, directory),
     provider: {async respond(_request, onDelta) {
       round++;
       if (round === 1) return {message: {role: 'assistant', text: '', toolCalls: [{
@@ -363,12 +362,12 @@ test('真实舞台 Ink 接线：内联许可可稍后回答，草稿保留，拒
     await key('@techne 写文件'); await key('\r');
     await act(async () => {await waitForSnapshot(runtime.store, snapshot => snapshot.interactions.some(item => item.status === 'pending'));});
     await flushRender(instance);
-    assert.match(output.text, /Allow write\?/);
+    assert.match(output.text, /wants to run · Write/);
     assert.ok(!output.text.includes('首屏布局'));
     await key('保留的主草稿');
     await key('\t'); await key('\x1b');
     assert.equal(runtime.store.interactions.list()[0]?.status, 'pending');
-    await key('\t'); await key('\r'); // 默认拒绝
+    await key('\t'); await key('n'); await key('\r'); // 拒绝：n 打开说明，Enter 发送
     await act(async () => {await waitForSnapshot(runtime.store, snapshot => snapshot.activities.some(item => item.status === 'completed'));});
     await assert.rejects(readFile(join(directory, 'never.txt')));
     await key('\r'); // 草稿仍能提交
@@ -508,7 +507,7 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
   const actWarnings = captureActWarnings();
   const cwd = await mkdtemp(join(tmpdir(), 'logox-login-tui-'));
   const authPath = join(cwd, 'user-auth.json');
-  const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
   const fetcher: typeof fetch = async () => new Response(JSON.stringify({data: []}), {status: 200});
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, authPath, sessionId: 'login-ui', fetcher});
   const input = new TerminalInput(), output = new TerminalOutput();

@@ -48,7 +48,7 @@ test('native Anthropic loading carries actual references while eager tools and s
       {type: 'message_delta', delta: {stop_reason: 'tool_use'}, usage: {output_tokens: 5}}, {type: 'message_stop'}];
     return new Response(frames.map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
   });
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     const task = app.ensemble.dispatch('logox', 'Load Git inspection, but do not execute it.', 'direct', {inputKind: 'human'});

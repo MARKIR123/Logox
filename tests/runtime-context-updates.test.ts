@@ -38,7 +38,7 @@ test('a retry re-reads permission state, commits its delta once and preserves pr
     return {stop: 'tools', message: {role: 'assistant', text: 'Delivered.', toolCalls: [{id: 'done', name: '_FinishRound',
       arguments: JSON.stringify({title: 'Delivered', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}, kernel: {max_retries: 1}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, kernel: {max_retries: 1}}, {}, cwd, cwd);
   app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     const task = app.ensemble.dispatch('logox', 'Explain.', 'direct', {inputKind: 'human'});

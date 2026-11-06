@@ -29,7 +29,7 @@ test('云端兼容流允许空用量，保留推理、正文和最终真实用�
 async function registryFixture(env: NodeJS.ProcessEnv = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-provider-'));
   const file = join(cwd, 'auth.json');
-  const config = await loadConfig(cwd, {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, 
     provider: {name: 'cloud', model: 'fixture'},
     providers: {cloud: {base_url: 'https://example.com/v1', api_key_env: 'CLOUD_KEY', auth_file: file, auth_provider: 'deepseek', default_model: 'fixture'}},
   }, {}, cwd, cwd);

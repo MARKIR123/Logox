@@ -88,7 +88,7 @@ test('thinking from before a compaction is not sent again; thinking produced aft
 
 test('/rewind names each round by its _FinishRound title and outcome', async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-rewind-title-')));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const app = await createTestApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'), sessionId: 'first', config,
     provider: {async respond() { return {message: {role: 'assistant', text: 'ok'}, stop: 'complete'}; }}});
   try {

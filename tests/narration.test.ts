@@ -47,7 +47,7 @@ test('extractNarration strips trailing punctuation from narration and cleans exc
 
 test('agent loop extracts ⏵ narration into activity progress and keeps the stage line in the stored message (root cause: it used to be stripped, so the timeline never saw it)', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-narration-test-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const turns: ModelTurn[] = [
     {
       message: {

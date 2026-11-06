@@ -1,3 +1,4 @@
+import type {ContextBreakdown} from '../context/breakdown.js';
 /** Token totals split so a design can choose what to show: `input` excludes cache reads, `cached` is cache reads, output is generated tokens. */
 export interface TokenTotals {readonly input: number; readonly output: number; readonly cached: number}
 export interface GitStatus {readonly branch: string; readonly dirty: number; readonly ahead: number; readonly behind: number}
@@ -7,6 +8,8 @@ export interface StageStatus {
   readonly name: string;
   readonly color?: string;
   readonly model?: {readonly provider: string; readonly model: string};
+  /** Table facts about the selected model; unknown fields are omitted. Prices are per million tokens. */
+  readonly modelInfo?: {readonly window?: number; readonly maxOutput?: number; readonly currency?: string; readonly input?: number; readonly output?: number; readonly cacheRead?: number; readonly subscription?: boolean};
   readonly effort?: string;
   /** Why effort is not a level: `unsupported` (model has no levels) or an error such as an unregistered provider. */
   readonly effortError?: string;
@@ -15,7 +18,9 @@ export interface StageStatus {
    * `tokens`: last known context size (provider-reported when `estimated` is false); `high`: compaction watermark;
    * `over`: tokens exceed the window.
    */
-  readonly context?: {readonly tokens: number; readonly window: number; readonly high?: number; readonly estimated?: boolean; readonly over?: boolean};
+  readonly context?: {readonly tokens: number; readonly window: number; readonly high?: number; readonly estimated?: boolean; readonly over?: boolean;
+    /** Whole tokens per category, summing exactly to `tokens`; absent until a request has been measured. */
+    readonly categories?: ContextBreakdown};
   readonly state: string;
   /** Session total across all windows: fresh input plus output (cache reads excluded). */
   readonly tokens?: number;

@@ -81,7 +81,7 @@ test('应用提供公开候选：模型查询缓存按提供商隔离，切换�
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   const cwd = await mkdtemp(join(tmpdir(), 'logox-completion-'));
   const base_url = 'http://127.0.0.1:' + address.port + '/v1';
-  const config = await loadConfig(cwd, {provider: {name: 'alpha'}, providers: {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha'}, providers: {
     alpha: {kind: 'openai_compat', base_url, default_model: 'alpha-default'},
     beta: {kind: 'openai_compat', base_url, default_model: 'beta-default'},
   }}, {}, cwd, cwd);

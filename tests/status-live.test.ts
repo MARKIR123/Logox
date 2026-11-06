@@ -12,7 +12,7 @@ async function fixture(sessionId?: string, shared?: {root: string}) {
   const root = shared?.root ?? await realpath(await mkdtemp(join(tmpdir(), 'logox-status-live-')));
   const project = join(root, 'project'), home = join(root, 'home');
   await mkdir(join(project, '.logox'), {recursive: true}); await mkdir(join(home, '.logox'), {recursive: true});
-  const config = await loadConfig(project, {provider: {model: 'main', context_window: 131072}}, {}, home, project);
+  const config = await loadConfig(project, {permissions: {mode: 'default'}, provider: {model: 'main', context_window: 131072}}, {}, home, project);
   const app = await createApplication({cwd: project, config, env: {}, resourceOptions: {home, boundary: project}, ...(sessionId ? {sessionId} : {}),
     authPath: join(home, '.logox', 'auth.json'), statusbarPath: join(home, '.logox', 'statusbar.json'),
     fetcher: async () => {throw new Error('offline');},
@@ -110,10 +110,11 @@ test('permissions page saves the mode only through set_mode and closes with a re
   try {
     await app.submit('/permissions');
     const open = page(app);
-    assert.equal(open.tabs[0]!.mode?.current, 'default');
-    assert.deepEqual(open.tabs[0]!.mode?.options.map(option => option.id), ['default', 'auto', 'creative']);
+    const initial = app.permissions.mode;
+    assert.equal(open.tabs[0]!.permissions?.mode.current, initial);
+    assert.deepEqual(open.tabs[0]!.permissions?.mode.options.map(option => option.id), ['default', 'auto', 'creative']);
     await app.surfaces.triggerTabAction(open.id, 'permissions', 'toggle_mode');
-    assert.equal(app.permissions.mode, 'default', 'the old one-key cycle no longer changes anything');
+    assert.equal(app.permissions.mode, initial, 'the old one-key cycle no longer changes anything');
     await app.surfaces.triggerTabAction(open.id, 'permissions', 'set_mode:creative');
     assert.equal(app.permissions.mode, 'creative');
     assert.equal(app.surfaces.getSnapshot(), null);
@@ -148,5 +149,21 @@ test('a failed theme/cursor save is reported instead of swallowed', async () => 
     const receipt = app.store.getSnapshot().messages.filter(message => message.role === 'system').at(-1)!;
     assert.match(receipt.text, /could not be saved/);
     assert.equal(receipt.systemEventKind, 'command_error');
+  } finally {app.surfaces.cancel(); await app.close(); await rm(root, {recursive: true, force: true});}
+});
+
+test('permissions page adds and deletes rules through validated actions and refreshes its rows', async () => {
+  const {root, app} = await fixture();
+  try {
+    await app.submit('/permissions');
+    const open = page(app);
+    const add = JSON.stringify({scope: 'session', decision: 'ask', tool: 'shell', pattern: 'git push'});
+    await app.surfaces.triggerTabAction(open.id, 'permissions', 'add_rule:' + add);
+    assert.deepEqual(page(app).tabs[0]!.permissions?.rules.map(rule => [rule.scope, rule.decision, rule.tool, rule.pattern, rule.hits]), [['session', 'ask', 'shell', 'git push', 0]]);
+    await app.surfaces.triggerTabAction(open.id, 'permissions', 'add_rule:' + JSON.stringify({scope: 'session', decision: 'allow', tool: 'shell', pattern: 'a && b'}));
+    assert.match(page(app).error ?? '', /static token prefixes/);
+    assert.equal(page(app).tabs[0]!.permissions?.rules.length, 1);
+    await app.surfaces.triggerTabAction(open.id, 'permissions', 'delete_rule:' + page(app).tabs[0]!.permissions!.rules[0]!.id);
+    assert.equal(page(app).tabs[0]!.permissions?.rules.length, 0);
   } finally {app.surfaces.cancel(); await app.close(); await rm(root, {recursive: true, force: true});}
 });

@@ -13,7 +13,20 @@ export type TabRow =
   | {readonly kind: 'rule'; readonly title?: string | undefined}
   | {readonly kind: 'blank'};
 export type TabLine = string | TabRow;
+/** One permission rule as the /permissions page shows it. */
+export interface PermissionRuleItem {readonly id: string; readonly scope: 'user' | 'project' | 'session'; readonly decision: 'allow' | 'ask' | 'deny';
+  readonly tool: string; readonly pattern: string; readonly hits: number; readonly lastHit?: number | undefined}
+/** Data of the interactive /permissions page: a mode selector, an editable rule list and this run's approval statistics. */
+export interface PermissionsPageData {
+  readonly mode: {readonly current: string; readonly options: readonly {readonly id: string; readonly description: string}[]};
+  readonly rules: readonly PermissionRuleItem[];
+  readonly stats: {readonly approvals: number; readonly asked: number; readonly reviewed: number; readonly tokens: number};
+  /** False when the user-global rule file is not wired (tests); the add form then offers only project and session. */
+  readonly userScope: boolean;
+}
 export interface CommandTab {readonly id: string; readonly title: string; readonly lines: readonly string[]; readonly rows?: readonly TabRow[] | undefined;
+  /** Interactive permissions page; actions are `set_mode:<id>`, `delete_rule:<id>` and `add_rule:<json>`. */
+  readonly permissions?: PermissionsPageData | undefined;
   /** Permission-mode editor: the page cycles a local draft; Enter sends `set_mode:<id>`, Esc discards it. */
   readonly mode?: {readonly current: string; readonly options: readonly {readonly id: string; readonly description: string}[]} | undefined; readonly toggles?: readonly CommandToggle[] | undefined; readonly color?: string | undefined; readonly statusbar?: {readonly appearance: StatusbarAppearance; readonly status: StageStatus} | undefined}
 /** Semantic tone of one styled result line; the renderer maps it to palette colours. */

@@ -44,7 +44,8 @@ import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
 import {submitDeliverySchema, type SubmitDelivery} from './runtime/delivery.js';
 export type {SubmitDelivery} from './runtime/delivery.js';
-import {PermissionEngine, permissionModeSchema} from './permissions/engine.js';
+import {PermissionEngine, permissionDecisionSchema, permissionModeSchema, permissionScopeSchema} from './permissions/engine.js';
+import {validateRuleInput} from './permissions/rule-input.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools} from './tools/tools.js';
 import {USER_STOP_REASON, killActiveProcess} from './tools/process.js';
@@ -357,7 +358,12 @@ export async function createSessionApplication(options: SessionApplicationOption
   const statusListeners = new Set<() => void>();
   const bumpStatus = () => {statusTick++; for (const listener of [...statusListeners]) listener();};
   const gitStatus = new GitStatusSource(cwd, bumpStatus);
-  gitStatus.start();
+  // The git module is off by default: only spawn git once the user enables it.
+  const gitEnabled = () => statusbar.getSnapshot().modules.some(module => module.id === 'git' && module.enabled);
+  let gitStarted = false;
+  const startGit = () => {if (!gitStarted && gitEnabled()) {gitStarted = true; gitStatus.start();}};
+  startGit();
+  const stopGitWatch = statusbar.subscribe(startGit);
   const subscriptionProviders = new Set<string>();
   let subscriptionsDone: Promise<void> = Promise.resolve();
   const refreshSubscriptions = () => {subscriptionsDone = (async () => {
@@ -632,23 +638,23 @@ export async function createSessionApplication(options: SessionApplicationOption
       description: permissionModes[permissions.mode].description,
       modes: Object.entries(permissionModes).map(([id, mode]) => ({id, description: mode.description})),
       color: palette[permissionModes[permissions.mode].colorToken],
+      page: {
+        mode: {current: permissions.mode, options: Object.entries(permissionModes).map(([id, mode]) => ({id, description: mode.description}))},
+        rules: permissions.snapshot().map(rule => ({id: rule.id, scope: rule.scope, decision: rule.decision, tool: rule.tool, pattern: rule.pattern, hits: rule.hits ?? 0,
+          ...rule.lastHit ? {lastHit: rule.lastHit} : {}})),
+        stats: tools.permissionGuard({sessionId: session}).stats(),
+        userScope: permissions.userScopeAvailable,
+      },
       lines: [
         ...tools.permissionGuard({sessionId: session}).rows(),
         row.field('Readonly concurrency', config.permissions.readonly_concurrency),
         row.field('Cumulative approval tokens', sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens'),
-        row.blank(),
-        row.rule('Active Rules'),
-        ...permissions.snapshot().map(rule => row.bullet(rule.id + ' · ' + rule.scope + ' · ' + rule.decision + ' · ' + rule.tool + ' · ' + rule.pattern)),
-        row.blank(),
-        row.rule('Guidance'),
-        row.text('Space, m or ←→ change the mode as an unsaved draft; Enter applies and saves it, Esc leaves without applying.'),
-        row.text('Paths support *, **, ?; shell matches static token prefixes.'),
       ],
       readonly_concurrency: config.permissions.readonly_concurrency,
       approvalTokens: sessionUsageRecords().filter(record => record.category === 'approval').reduce((sum, record) => sum + record.input + record.output, 0),
     },
     statusbarModules: statusbar.getSnapshot().modules,
-    statusbarAppearance: {style: statusbar.getSnapshot().style, colorScheme: statusbar.getSnapshot().colorScheme},
+    statusbarAppearance: {style: statusbar.getSnapshot().style, colorScheme: statusbar.getSnapshot().colorScheme, gaugeCells: statusbar.getSnapshot().gaugeCells},
     statusbarStatus: status(pageOwner),
     statusLines: (() => {
       const shown = status(pageOwner), snapshot = resources.snapshot(), automaModel = tools.modelStorage.get('automa');
@@ -1052,7 +1058,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       item.kind === 'human_steer' && item.status === 'pending' && (!ownerId || item.ownerId === ownerId))}),
     getStatusSnapshot: () => store.getSnapshot().revision + ':' + statusbar.getSnapshot().revision + ':' + statusTick,
     subscribeStatus(listener: () => void) {
-      const stopStore = store.subscribe(() => {gitStatus.touch(); listener();}), stopPreferences = statusbar.subscribe(listener);
+      const stopStore = store.subscribe(() => {if (gitStarted) gitStatus.touch(); listener();}), stopPreferences = statusbar.subscribe(listener);
       statusListeners.add(listener);
       return () => {stopStore(); stopPreferences(); statusListeners.delete(listener);};
     },
@@ -1108,9 +1114,9 @@ export async function createSessionApplication(options: SessionApplicationOption
     async close() {
       closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); store.interactions.close(); compactTask?.controller.abort();
       try {
-        await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone]);
+        await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone, permissions.flushStats()]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
-      } finally {await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
+      } finally {stopGitWatch(); await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();
@@ -1169,7 +1175,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           const parts = text.slice(13).trim().split(/\s+/);
           if (parts[0] === 'mode') {if (parts.length !== 2) throw new Error('Usage: /permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
           else if (parts[0] === 'revoke' && parts.length === 2) await permissions.revoke(parts[1]!);
-          else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: z.enum(['session', 'project']).parse(parts[1]), decision: z.enum(['allow', 'deny']).parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')});
+          else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: permissionScopeSchema.parse(parts[1]), decision: permissionDecisionSchema.parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')});
           else throw new Error('Run /permissions to view usage');
           receipt('Permissions updated.', 'status', undefined, source);
         })();
@@ -1289,6 +1295,17 @@ export async function createSessionApplication(options: SessionApplicationOption
               const nextMode = permissionModeSchema.parse(action.slice('set_mode:'.length));
               await permissions.setMode(nextMode);
               return {message: 'Permission mode set to ' + nextMode, presentation: 'status', close: true};
+            }
+            if (tabId === 'permissions' && action.startsWith('delete_rule:')) {
+              await permissions.revoke(action.slice('delete_rule:'.length));
+              return {message: 'Permission rule deleted', presentation: 'status'};
+            }
+            if (tabId === 'permissions' && action.startsWith('add_rule:')) {
+              const input = z.strictObject({scope: permissionScopeSchema, decision: permissionDecisionSchema, tool: z.string(), pattern: z.string()}).parse(JSON.parse(action.slice('add_rule:'.length)));
+              const checked = validateRuleInput(input, permissions.userScopeAvailable);
+              if (!checked.ok) throw new Error(checked.error);
+              await permissions.add(checked.rule);
+              return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
             }
             if (tabId === 'providers') {
               const names = registry.names();

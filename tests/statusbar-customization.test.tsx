@@ -21,7 +21,7 @@ class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;}
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'logox-statusbar-composition-')), path = join(root, '.logox', 'statusbar.json');
   const oldTheme = {...palette};
-  const config = await loadConfig(root, {provider: {model: 'test-model', context_window: 8192}}, {}, root, root);
+  const config = await loadConfig(root, {permissions: {mode: 'default'}, provider: {model: 'test-model', context_window: 8192}}, {}, root, root);
   let calls = 0, networkCalls = 0;
   const app = await createApplication({cwd: root, config, env: {}, resourceOptions: {home: root, boundary: root}, authPath: join(root, 'auth.json'),
     fetcher: async () => {networkCalls++; throw new Error('No network request is allowed for settings configuration');},
@@ -95,7 +95,7 @@ test('style, palette and modules preview locally; rapid edits accumulate and Esc
     await f.key('\x1b[C\x1b[C'); assert.match(f.text(), /Style: Pipes/, 'Two rapid cycles return to Pipes');
     await f.key('\x1b[C'); assert.match(f.text(), /Style: Starship/);
     await f.key('\x1b[B'); await f.key('\x1b[C\x1b[C'); assert.match(f.text(), /Palette: dracula/);
-    await f.key('\x1b[B'); await f.key(' '); await f.key('\x1b[C');
+    await f.key('\x1b[B'); await f.key('\x1b[B'); await f.key(' '); await f.key('\x1b[C');
     assert.ok(f.text().indexOf('[■] Model') < f.text().indexOf('[ ] Role'), 'Reordering affects the selected module, not Style or Palette');
     assert.match(f.text(), /\ue0b0|\ue0b6/, 'Preview uses actual Starship framing');
     assert.equal(f.app.statusbar.getSnapshot(), original, 'Preview never publishes live preferences');
@@ -181,7 +181,7 @@ test('failed composition save retains the exact draft and original file, then re
     await act(async () => {await f.app.statusbar.save(defaultStatusbar);});
     const original = await readFile(f.path, 'utf8'), before = f.app.statusbar.getSnapshot();
     await f.open('/statusbar'); await f.key('\x1b[C');
-    await f.key('\x1b[B\x1b[B'); await f.key(' ');
+    await f.key('\x1b[B\x1b[B\x1b[B'); await f.key(' ');
     await writeFile(f.path, '{broken');
     await f.key('\r');
     const failed = f.app.surfaces.getSnapshot(); assert.equal(failed?.kind, 'page');
@@ -202,7 +202,7 @@ test('mouse controls match keyboard and narrow layouts retain an editable module
     await f.open('/statusbar'); await f.clickLabel('Style:'); assert.match(f.text(), /Style: Starship/);
     await f.clickLabel('Style:', 94); assert.match(f.text(), /Style: Pipes/, 'Left chevron cycles backward');
     await f.clickLabel('Palette:'); assert.match(f.text(), /Palette: gruvbox/);
-    await f.key('\x1b[B');
+    await f.key('\x1b[B'); await f.key('\x1b[B');
     await f.resize(32, 10); assert.match(f.text(), /\[■\] Role/);
     await f.resize(24, 6); assert.match(f.text(), /\[■\] Role/);
     await f.key(' '); await f.resize(100, 24); assert.match(f.text(), /\[ \] Role/);

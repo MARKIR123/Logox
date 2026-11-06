@@ -38,13 +38,13 @@ test('legacy layouts retain order, enabled flags and motion while missing module
   } finally {await rm(home, {recursive: true, force: true});}
 });
 
-test('Pipes returns the complete colored plan including subdued separators and a USED context gauge', () => {
+test('Pipes returns the complete colored plan including subdued separators and a context gauge', () => {
   const parts = statusbarParts(status, 240);
   assert.equal(parts.map(part => part.text).join(''), statusbarText(status, 240));
   assert.ok(parts.some(part => part.text === ' │ '));
   assert.ok(parts.every(part => part.color));
   assert.match(statusbarText(status, 240), /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}]/u);
-  assert.match(statusbarText(status, 240), /[■□]+.*20% USED/);
+  assert.match(statusbarText(status, 240), /█+.*20%/);
 });
 
 test('selection follows display cells without splitting CJK, emoji, combining marks or Powerline caps', () => {
@@ -159,11 +159,14 @@ test('every tiny width fits complete modules, Nerd icons and complete Starship f
 test('model compact variants retain meaningful model information instead of disappearing at narrow widths', () => {
   const model: StageStatus = {...status, model: {provider: 'anthropic', model: 'claude-opus-very-long-model'}};
   const modules = [{id: 'model', enabled: true}] as const;
-  const compact = statusbarText(model, 22, modules);
-  assert.ok(stringWidth(compact) <= 22);
-  assert.match(compact, /claude/);
-  assert.match(compact, /…/);
-  assert.match(statusbarText(model, 80, modules), /anthropic\/claude-opus-very-long-model/);
+  // Whole model or nothing: a fragment such as `claude-opus-…` is never drawn.
+  assert.match(statusbarText(model, 40, modules), /claude-opus-very-long-model/);
+  assert.equal(statusbarText(model, 22, modules), '');
+  const dated: StageStatus = {...status, model: {provider: 'anthropic', model: 'claude-sonnet-4-5-20250929'}};
+  assert.match(statusbarText(dated, 80, modules), /claude-sonnet-4-5-20250929/);
+  const short = statusbarText(dated, 21, modules);
+  assert.match(short, /claude-sonnet-4-5$/u, 'a shorter whole name is used when the dated one does not fit');
+  assert.doesNotMatch(short, /2025/u);
 });
 
 test('live themes recolor segments while decorative palettes preserve role and permission semantics', () => {
@@ -216,7 +219,7 @@ test('valid Actor identity overrides decorative schemes but malformed colors nev
 test('context never loses its usage gauge or USED label when compacted', () => {
   for (let width = 0; width < 60; width++) {
     const text = statusbarText(status, width, [{id: 'context', enabled: true}]);
-    if (text) {assert.match(text, /[■□]/); assert.match(text, /20% USED/);}
+    if (text) {assert.match(text, /█/); assert.match(text, /20%$/);}
   }
 });
 
@@ -236,10 +239,10 @@ test('default scheme follows the window Actor: tinted identity segment, slate st
   const modules = [{id: 'role', enabled: true}, {id: 'model', enabled: true}, {id: 'effort', enabled: true}, {id: 'context', enabled: true}] as const;
   const actor = '#b3a0d4', quiet = {...status, color: actor};
   const pipes = statusbarParts(quiet, 240, modules, {style: 'pipes', colorScheme: 'theme'});
-  assert.deepEqual(pipes[0], {text: pipes[0]!.text, color: actor, bold: true});
+  assert.deepEqual({...pipes[0]}, {text: pipes[0]!.text, color: actor, bold: true, widget: 'role'});
   assert.ok(pipes.filter(part => part.text === ' │ ').every(part => part.color === mixHex(palette.muted, palette.bg, 0.55)));
-  assert.equal(pipes.find(part => part.text.includes('demo/flash'))?.color, palette.muted);
-  assert.equal(pipes.find(part => /^■+$/u.test(part.text))?.color, actor, 'filled gauge cells use the Actor colour');
+  assert.equal(pipes.find(part => part.text.includes('flash'))?.color, palette.muted);
+  assert.ok(pipes.some(part => part.gauge === 'used' && /^█+$/u.test(part.text)), 'used gauge cells are drawn from the Actor colour ramp');
   assert.equal(pipes.map(part => part.text).join(''), statusbarText(quiet, 240, modules, {style: 'pipes'}));
 
   const blocks = statusbarParts(quiet, 240, modules, {style: 'starship', colorScheme: 'theme'});
@@ -250,5 +253,5 @@ test('default scheme follows the window Actor: tinted identity segment, slate st
   assert.equal(role.color, mixHex(actor, palette.strong, 0.9));
   const slate = blocks.filter(part => part.backgroundColor && part.backgroundColor !== roleBg && part.text.trim()).map(part => part.backgroundColor);
   assert.ok(slate.length >= 3 && slate.every(color => color !== actor));
-  assert.equal(blocks.find(part => /^■+$/u.test(part.text))?.color, actor);
+  assert.ok(blocks.some(part => part.gauge === 'used'));
 });

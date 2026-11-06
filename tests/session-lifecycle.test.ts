@@ -17,7 +17,7 @@ const run = promisify(execFile);
 type Application = Awaited<ReturnType<typeof createApplication>>;
 async function fixture(provider: Provider = completed) {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-lifecycle-')));
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const apps: Application[] = [];
   const open = async (options: {sessionId?: string; resume?: boolean} = {}) => {
     const app = await createApplication({cwd, config, provider, resourceOptions: {home: cwd, boundary: cwd}, env: {},

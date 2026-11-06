@@ -199,7 +199,7 @@ test('createProvider carries Retry-After from an HTTP 429 into the ProviderError
 test('registry wraps provider() and candidate().provider() in one shared gate per normalized base URL', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-gate-'));
   try {
-    const config = await loadConfig(cwd, {provider: {name: 'alpha', model: 'm'}, providers: {
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha', model: 'm'}, providers: {
       alpha: {kind: 'openai_compat', base_url: 'http://127.0.0.1:7777/v1'},
       beta: {kind: 'openai_compat', base_url: 'HTTP://127.0.0.1:7777/v1/'},
       gamma: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8888/v1'},

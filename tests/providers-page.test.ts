@@ -10,7 +10,7 @@ import type {Provider} from '../src/runtime/messages.js';
 test('Application /providers tab opens Providers page with actions support', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-providers-tab-'));
   try {
-    const config = await loadConfig(cwd, {provider: {name: 'openai', model: 'gpt-4o'}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-4o'}}, {}, cwd, cwd);
     const mockProvider: Provider = {
       async respond() {
         return {message: {role: 'assistant', text: 'LOGOX_PROVIDER_READY'}, stop: 'complete'};
@@ -58,7 +58,7 @@ test('Application /providers tab opens Providers page with actions support', asy
 test('/provider is removed, including parameter forms; /providers remains the management page', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-provider-status-'));
   try {
-    const config = await loadConfig(cwd, {provider: {name: 'openai', model: 'gpt-4o'}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-4o'}}, {}, cwd, cwd);
     const mockProvider: Provider = {
       async respond() {
         return {message: {role: 'assistant', text: 'LOGOX_PROVIDER_READY'}, stop: 'complete'};

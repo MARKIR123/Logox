@@ -197,7 +197,7 @@ test('a screenshot does not trigger premature compaction with a calibrated usage
 test('gpt-6.1-sol retains a 350k working context within a declared 1M window', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-sol-capacity-'));
   try {
-    const config = await loadConfig(directory, {provider: {name: 'openai', model: 'gpt-6.1-sol'}, models: {'openai/gpt-6.1-sol': {context_window: 1_000_000}}}, {}, directory, directory);
+    const config = await loadConfig(directory, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-6.1-sol'}, models: {'openai/gpt-6.1-sol': {context_window: 1_000_000}}}, {}, directory, directory);
     const model = new ProviderRegistry(config, {}, undefined, new AuthStorage(join(directory, 'auth.json'))).capacity();
     const f = await fixture({}, model);
     try {
@@ -334,14 +334,14 @@ test('round summaries retain the real outcome and local fallback makes no model 
 test('model capacity honors explicit configuration and live metadata without leaking across switches', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-capacity-'));
   try {
-    const config = await loadConfig(cwd, {provider: {name: 'local', model: 'first', context_window: 8192}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'first', context_window: 8192}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}}}, {}, cwd, cwd);
     const registry = new ProviderRegistry(config, {}, async () => Response.json({data: [{id: 'second', context_window: 4096, max_output_tokens: 500}]}), new AuthStorage(join(cwd, 'auth.json')));
     assert.equal(registry.capacity().window, 8192);
     await registry.models(signal);
     registry.select('local', 'second'); assert.equal(registry.capacity().window, 4096); assert.equal(registry.capacity().maxOutput, 500);
     registry.select('local', 'unknown'); assert.throws(() => registry.capacity(), /is unknown/);
-    await assert.rejects(loadConfig(cwd, {context: {keep_recent_rounds: -1}}, {}, cwd, cwd));
-    await assert.rejects(loadConfig(cwd, {context: {max_budget_tokens: 100, target_budget_tokens: 100}}, {}, cwd, cwd));
+    await assert.rejects(loadConfig(cwd, {permissions: {mode: 'default'}, context: {keep_recent_rounds: -1}}, {}, cwd, cwd));
+    await assert.rejects(loadConfig(cwd, {permissions: {mode: 'default'}, context: {max_budget_tokens: 100, target_budget_tokens: 100}}, {}, cwd, cwd));
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
@@ -352,7 +352,7 @@ test('application auto-compaction and manual compaction share policy and restore
     requests.push(request);
     return {message: {role: 'assistant', text: '完成'.repeat(3200) + '\n【轮次摘要】\n标题：已完成核对\n报告：保留确认决定与结果，尚未执行额外验证。'}, stop: 'complete'};
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 16384}, context: {keep_recent_rounds: 0, keep_recent_tools: 0}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 16384}, context: {keep_recent_rounds: 0, keep_recent_tools: 0}}, {}, cwd, cwd);
   let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
   try {
     for (let index = 0; index < 3; index++) await app.ensemble.dispatch('logox', '目标' + index).done;

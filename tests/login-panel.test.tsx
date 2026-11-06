@@ -15,7 +15,7 @@ Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
 async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-local-login-'));
-  const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
   const app = await createApplication({cwd, config, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'),
     fetcher: async () => new Response(JSON.stringify({data: [{id: 'fixture-model'}]})),
     provider: {respond: async () => {throw new Error('No model call is allowed');}}});

@@ -566,6 +566,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
                 reportSwarm: (swarm: NonNullable<Step['swarm']>) => steps.swarm(id, swarm),
                 permission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.permission(input)),
+                ...context.askPermission ? {askPermission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.askPermission!(input))} : {},
                 ask: (input: Parameters<typeof context.ask>[0]) => waiting('Awaiting answer', () => context.ask(input))};
               if (canonical === 'LoadTools') {
                 const result = resolveToolLoad(loadToolsSchema.parse(JSON.parse(call.arguments)), instruction.pool ?? [], extractDiscoveredToolNames(messages));

@@ -97,6 +97,10 @@ export const interactionInputSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     ...identity, kind: z.literal('permission'), title: z.string().min(1),
     tool: id, arguments: z.record(z.string(), z.json()), reason: z.string().min(1),
+    /** Permission mode in force, shown faint on the card. */
+    mode: z.string().min(1).optional(),
+    /** The static rule a session/project grant would create; absent when no rule could cover the call. */
+    suggestion: z.strictObject({tool: id, pattern: z.string().min(1), label: z.string().min(1)}).optional(),
   }),
 ]);
 export type InteractionInput = z.infer<typeof interactionInputSchema>;
@@ -111,7 +115,9 @@ export const responseSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     ...identity, requestId: id, kind: z.literal('permission'),
-    decision: z.enum(['allow_once', 'deny']),
+    decision: z.enum(['allow_once', 'allow_session', 'allow_project', 'deny']),
+    /** Why the user denied; returned to the model with the denial. */
+    note: z.string().trim().min(1).max(500).optional(),
   }),
 ]);
 export type InteractionResponse = z.infer<typeof responseSchema>;

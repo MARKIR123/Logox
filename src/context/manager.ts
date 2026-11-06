@@ -12,6 +12,7 @@ import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool
 import {canonicalToolName} from '../tools/types.js';
 import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discovery.js';
 import {contextSnapshot, retainRuntimeContext} from './continuity.js';
+import {allocateContext, categoryWeights, type ContextBreakdown} from './breakdown.js';
 
 type Identity = {sessionId: string; ownerId: string; activityId?: string};
 interface Round {start: number; end: number; closed: boolean; record?: RoundRecord}
@@ -74,7 +75,7 @@ function toolPairs(entries: readonly HistoryEntry[]): Pair[] {
   return pairs;
 }
 /** `estimated` is false only when `input` is anchored on provider-reported usage of the latest response. */
-export interface ContextReading {input: number; high: number; low: number; window: number; output: number; estimated: boolean}
+export interface ContextReading {input: number; high: number; low: number; window: number; output: number; estimated: boolean; categories?: ContextBreakdown}
 export class ContextManager {
   private readonly meters = new Map<string, TokenMeter>();
   private readonly statistics = new Map<string, ContextReading>();
@@ -109,7 +110,8 @@ export class ContextManager {
     const key = this.key(identity), previous = this.statistics.get(key);
     const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
     const marks = watermarks(model, policy);
-    this.statistics.set(key, {high: marks.high, low: marks.low, window: model.window, output: previous?.output ?? 0, input: usage.input + usage.output, estimated: false});
+    const total = usage.input + usage.output, categories = allocateContext(total, categoryWeights(request, [turn.message]));
+    this.statistics.set(key, {high: marks.high, low: marks.low, window: model.window, output: previous?.output ?? 0, input: total, estimated: false, ...(categories ? {categories} : {})});
   }
   /** Rebuilds a reading for an owner that has stored history but has not run in this process (session resume); always an estimate. */
   async restoreReading(identity: Identity): Promise<void> {
@@ -122,7 +124,8 @@ export class ContextManager {
       const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
       const marks = watermarks(model, policy);
       const input = estimateRequest({system: '', tools: [], messages: normalizeMessages(entries.map(message))});
-      if (!this.statistics.has(key)) this.statistics.set(key, {input, high: marks.high, low: marks.low, window: model.window, estimated: true,
+      const restored = normalizeMessages(entries.map(message)), categories = allocateContext(input, categoryWeights({system: '', tools: [], messages: restored}));
+      if (!this.statistics.has(key)) this.statistics.set(key, {input, high: marks.high, low: marks.low, window: model.window, estimated: true, ...(categories ? {categories} : {}),
         output: Math.max(0, Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety)))});
     } catch {}
   }
@@ -312,7 +315,9 @@ export class ContextManager {
     }
     const input = meter.estimate(request, model);
     const output = Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety));
-    this.statistics.set(this.key(identity), {input, high: marks.high, low: marks.low, window: model.window, output: Math.max(0, output), estimated: !meter.anchored(request, model)});
+    // Rebuilt from the request actually sent, so a compaction resets the split together with the total.
+    const categories = allocateContext(input, categoryWeights(request));
+    this.statistics.set(this.key(identity), {input, high: marks.high, low: marks.low, window: model.window, output: Math.max(0, output), estimated: !meter.anchored(request, model), ...(categories ? {categories} : {})});
     if (input >= marks.high || output < 1) throw new ContextBudgetError('[Context] Input still exceeds the safe budget; no request sent. Retry /compact, configure the actual model window, or reduce input. Raw history and completed effects are retained.');
     return {request: {...request, maxTokens: output}, model, compacted};
   }

@@ -59,7 +59,7 @@ test('live saves replace one footer status slot, expire without timeline rows, a
     assert.doesNotMatch(f.text(), /Saved one|Saved two/);
     assert.deepEqual(f.text().match(/history row \d+/g), history, 'Success notices leave the reading anchor unchanged');
     assert.doesNotMatch(timeline(), /Saved latest/);
-    await act(async () => {await delay(1850);}); await f.flush();
+    await act(async () => {await delay(3600);}); await f.flush();
     assert.doesNotMatch(f.text(), /Saved latest/); assert.match(f.output.lines.at(-1)!, /alpha/);
     assert.deepEqual(f.text().match(/history row \d+/g), history);
   } finally {await f.close();}

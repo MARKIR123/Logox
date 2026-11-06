@@ -75,7 +75,7 @@ test('Agent requests display Thinking immediately and tool cards preserve execut
     if (++requests === 1) {entered.resolve(); await release.promise; return tool('write', {path: 'result.txt', content: 'ok'});}
     onDelta({kind: 'text', text: '已写入'}); return complete('已写入');
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, config, provider, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd}});
   try {
     await app.submit('写入 result.txt'); await entered.promise;
@@ -110,7 +110,7 @@ test('Agent requests display Thinking immediately and tool cards preserve execut
 
 test('Actor assignments and reports preserve provenance without granting authority or rewriting legacy history', {timeout: 15000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-report-provenance-'));
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   // Seed the actual application's journal path after creation, then restore it.
   const seed = await createApplication({cwd, config, sessionId: 's', provider: {async respond() {return complete('unused');}}, resourceOptions: {home: cwd, boundary: cwd}});
   const journalPath = seed.journal.path('s', 'logox');
@@ -165,7 +165,7 @@ test('model requests retain independent Thinking identities and visible tool pee
     if (requests === 3) {entered.resolve(); await release.promise; delta({kind: 'reasoning', text: '已经确认'}); delta({kind: 'text', text: '第一段正文'}); const result = tool('glob', {pattern: '*.txt'}); return {...result, message: {...result.message, text: '第一段正文'}};}
     delta({kind: 'reasoning', text: '补充确认'}); delta({kind: 'text', text: '完成'}); return complete('完成');
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const options = {cwd, config, provider, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd}};
   const app = await createApplication(options);
   try {

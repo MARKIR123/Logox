@@ -37,6 +37,10 @@ export class Interactions {
         request.ownerId !== response.ownerId || request.kind !== response.kind) {
       return {ok: false, reason: 'Answer does not match the request identity'};
     }
+    if (request.kind === 'permission' && response.kind === 'permission') {
+      if ((response.decision === 'allow_session' || response.decision === 'allow_project') && !request.suggestion) return {ok: false, reason: 'No rule can cover this call; allow it once'};
+      if (response.note !== undefined && response.decision !== 'deny') return {ok: false, reason: 'A note belongs only to a denial'};
+    }
     if (request.kind === 'question' && response.kind === 'question') {
       const keys = Object.keys(response.answers);
       if (keys.length !== request.questions.length || request.questions.some(question => {

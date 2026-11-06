@@ -26,7 +26,7 @@ test('each actual role request receives one common memory contract and one resid
     seen.push(request);
     return {stop: 'tools', message: {role: 'assistant', text: 'Normal response', toolCalls: [{id: 'finish-' + seen.length, name: '_FinishRound', arguments: JSON.stringify({title: 'Answered request', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, provider, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     for (const role of builtinActors) {

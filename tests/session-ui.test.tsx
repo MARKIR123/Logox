@@ -23,7 +23,7 @@ class Input extends PassThrough {
 }
 test('实际 Ink 和独立画布切换会话：picker 取消保留草稿，切换清理窗口草稿/旧画布/阅读锚点，退出释放锁', {timeout: 10000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-session-ui-'));
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072},
     models: {'openai-compatible/retained': {context_window: 131072, thinking_protocol: 'deepseek'}}}, {}, cwd, cwd);
   let calls = 0;
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, "auth.json"), sessionId: 'first', config, provider: {async respond() {

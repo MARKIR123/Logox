@@ -16,7 +16,7 @@ test('Actor 状态显示当前实际任务模型；后续排队不遮住运行�
   await mkdir(join(cwd, '.logox', 'actors'), {recursive: true});
   const role = {...builtinActors[1]!, id: 'scout', name: '侦察者', defaultModel: {provider: 'local', model: 'special'}};
   await writeFile(join(cwd, '.logox', 'actors', 'scout.md'), serializeActor(role));
-  const config = await loadConfig(cwd, {provider: {name: 'local', model: 'main'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/main': {context_window: 131072, thinking_protocol: 'deepseek'}, 'local/special': {context_window: 131072}}}, {}, cwd, cwd);
   let calls = 0;
   const app = await createApplication({cwd, config, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd},

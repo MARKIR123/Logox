@@ -28,7 +28,7 @@ max_iterations = 0 # Unlimited round trips; cancellation still applies.
 max_retries = 3
 
 [permissions]
-mode = "default" # default, auto, or creative; not an OS sandbox.
+mode = "auto" # auto (default), default, or creative; not an OS sandbox.
 readonly_concurrency = 4
 
 # Optional theme overrides.

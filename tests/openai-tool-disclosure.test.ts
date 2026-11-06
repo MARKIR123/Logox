@@ -59,7 +59,7 @@ test('SSE client search outputs contain full selected definitions and original I
     return sse([{type: 'response.output_text.delta', delta: 'Loaded contracts; evidence preserved.'},
       {type: 'response.output_item.done', output_index: 1, item: {...final, call_id: 'finish-' + requests.length}}, {type: 'response.completed', response: {status: 'completed'}}]);
   });
-  const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     const task = app.ensemble.dispatch('logox', 'Load tools and read existing evidence.', 'direct', {inputKind: 'human'}); await task.done;

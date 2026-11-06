@@ -13,7 +13,7 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
   const cwd = await mkdtemp(join(tmpdir(), 'logox-automa-app-'));
   try {
     await writeFile(join(cwd, 'notes.txt'), 'the answer is 42\n');
-    const config = await loadConfig(cwd, {provider: {name: 'alpha', model: 'session-model'}, providers: {alpha: {base_url: 'http://127.0.0.1:7777/v1'}},
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha', model: 'session-model'}, providers: {alpha: {base_url: 'http://127.0.0.1:7777/v1'}},
       models: {'alpha/session-model': {context_window: 64000}, 'alpha/my-worker': {context_window: 64000}}}, {}, cwd, cwd);
     let requests = 0;
     const sse = (chunk: unknown) => 'data: ' + JSON.stringify(chunk) + '\n\n';

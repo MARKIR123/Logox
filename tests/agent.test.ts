@@ -22,7 +22,7 @@ function call(name: string, args: unknown, id = 'c'): ModelTurn {
 }
 async function fixture(provider: Provider, iterations = 50) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-agent-'));
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}, 'antigravity/local-fixture': {context_window: 131072}}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}, 'antigravity/local-fixture': {context_window: 131072}}}, {}, cwd, cwd);
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, config, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }

@@ -110,7 +110,7 @@ test('/resume 删除默认取消、确认刷新、当前/新建项保护、活�
   const f = await fixture(); let app: Application | undefined;
   try {
     await f.seed('victim'); await f.seed('current');
-    const config = await loadConfig(f.cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, f.cwd, f.cwd);
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, f.cwd, f.cwd);
     app = await createApplication({cwd: f.cwd, sessionId: 'current', config, env: {}, authPath: join(f.cwd, 'auth.json'),
       resourceOptions: {home: f.cwd, boundary: f.cwd}});
     await app.submit('/resume'); const list = picker(app);
@@ -135,7 +135,7 @@ test('实际Ink：恢复列表Ctrl+X进入确认，默认取消；明确确认�
   const input = new Input(), output = new TerminalScreen(); output.columns = 100; output.rows = 24;
   try {
     await f.seed('victim');
-    const config = await loadConfig(f.cwd, {provider: {model: 'fixture', context_window: 131072}}, {}, f.cwd, f.cwd);
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, f.cwd, f.cwd);
     app = await createApplication({cwd: f.cwd, sessionId: 'current', config, env: {}, authPath: join(f.cwd, 'auth.json'), resourceOptions: {home: f.cwd, boundary: f.cwd}});
     await act(async () => {instance = renderTerminal(<ApplicationStage application={app!}/>, {stdout: output, stdin: input, stderr: output,
       interactive: true, alternateScreen: true, incrementalRendering: true, patchConsole: false, exitOnCtrlC: false, maxFps: 60});});

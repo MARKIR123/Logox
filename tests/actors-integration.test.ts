@@ -48,7 +48,7 @@ async function fixture(respond: Provider['respond'], defaultModel = false) {
   await writeFile(join(cwd, '.logox', 'actors', 'scout.md'), serializeActor(role));
   await mkdir(join(cwd, '.logox', 'skills', 'paint'), {recursive: true});
   await writeFile(join(cwd, '.logox', 'skills', 'paint', 'SKILL.md'), '---\nname: paint\ndescription: 配色技能\n---\n检查配色。');
-  const config = await loadConfig(cwd, {provider: {name: 'local', model: 'main'},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/main': {context_window: 131072}, 'local/special': {context_window: 131072}},
     context: {reserve_tokens: 20000}}, {}, cwd, cwd);

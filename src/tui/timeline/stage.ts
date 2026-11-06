@@ -1,7 +1,8 @@
 import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
 import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
-import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
+import {ownerColor, ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
+import {approvalHint, approvalModel, noteSegments, optionLabelWidth, optionSegments, riskSegments, targetSegments} from '../interactions/approval-view.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
 import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment, type TurnActivity} from './scene.js';
@@ -214,33 +215,33 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     // The focused question is rendered in the dedicated panel above the composer.
     if (request.requestId === controls.focusedQuestionId) return;
     const rail = railFor(request.ownerId);
-    const draft = responses[request.requestId] ?? {questionIndex: 0, selected: request.kind === 'permission' ? 1 : 0, text: '', error: ''};
+    const draft = responses[request.requestId] ?? {questionIndex: 0, selected: 0, text: '', error: ''};
     if (request.kind === 'question') {
       getToolUI('AskUserQuestion').interaction?.render({builder, request, draft, answers: {},
         ...(parent ? {frame: parent} : {}), open: open(request.requestId), accent: rail});
       return;
     }
-    builder.pushOrdinaryCard({id: request.requestId, kind: 'Permission', title: request.title, status: 'Awaiting answer', bodyLines: [], open: open(request.requestId), railColor: rail,
+    const actorName = ownerHeader(request.ownerId, roles).replace(/^\S+\s+/, ''), model = approvalModel(request, actorName);
+    builder.pushOrdinaryCard({id: request.requestId, kind: 'Approval', title: actorName + ' wants to run · ' + model.tool, status: 'Awaiting approval', bodyLines: [], open: open(request.requestId), railColor: rail,
       ...(parent ? {parentFrame: parent} : {})});
     if (!open(request.requestId)) return;
     const frame = insetFrame(parent ?? {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth}, parent?.bg);
+    const segments = (parts: ReturnType<typeof targetSegments>): SceneSegment[] => parts.map(part => ({text: part.text, color: part.color, ...part.bold ? {bold: true} : {}, ...part.italic ? {italic: true} : {}}));
     builder.pushBlank(rail, frame);
-    builder.pushProse(request.requestId + '-question', request.reason + '\n' + request.tool + ' · ' + JSON.stringify(request.arguments, null, 2), rail, 'body', frame);
-    const options = [{label: 'Allow once', description: 'Allow this tool run only once.'}, {label: 'Deny (default)', description: 'Keep the suggestion; do not run the tool.'}];
-    for (const [index, option] of options.entries()) {
-      const style = choiceStyle(index === draft.selected, rail);
+    // The command wraps in full (capped by the model); the reason and mode follow on their own line.
+    builder.pushProse(request.requestId + '-target', (model.target.kind === 'shell' ? '$ ' : '') + model.target.text, rail, 'body', frame, undefined, palette.path);
+    builder.pushFramedLine(request.requestId + '-risk', rail, segments(riskSegments(model)), frame);
+    const labelWidth = optionLabelWidth(model);
+    for (const [index, option] of model.options.entries()) {
       const action: SceneAction = {kind: 'select_answer', requestId: request.requestId, value: String(index)};
       builder.pushBlank(rail, frame, action);
-      builder.pushFramedLine(request.requestId + '-option-' + index, rail, [
-        {text: style.marker, color: style.markerColor, selectionOffset: 0},
-        {text: option.label, color: style.color, selectionOffset: style.marker.length},
-      ], frame, action);
-      builder.pushProse(request.requestId + '-description-' + index, ' '.repeat(style.indent) + option.description, rail, 'body', frame, action, style.descriptionColor);
+      builder.pushFramedLine(request.requestId + '-option-' + index, rail, segments(optionSegments(option, index === draft.selected, labelWidth, rail)), frame, action);
+      if (option.id === 'deny' && draft.noting) builder.pushFramedLine(request.requestId + '-note', rail, segments([{text: '    ', color: palette.muted}, ...noteSegments(actorName, draft.text)]), frame, action);
     }
     builder.pushBlank(rail, frame);
     if (draft.error) builder.pushProse(request.requestId + '-error', draft.error, rail, 'body', frame, undefined, palette.error);
-    builder.pushProse(request.requestId + '-confirm', 'Enter Confirm · Esc Later · Tab Switch focus', rail, 'body', frame,
-      {kind: 'confirm_answer', requestId: request.requestId}, rail);
+    builder.pushProse(request.requestId + '-confirm', approvalHint(draft.noting === true), rail, 'body', frame,
+      {kind: 'confirm_answer', requestId: request.requestId}, faintColor());
     builder.pushBlank(rail, frame);
   };
   // Runs of collapsible calls (Read/Grep/Glob/Shell/browser reads) fold into one group row.

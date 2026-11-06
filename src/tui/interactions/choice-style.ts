@@ -2,7 +2,7 @@ import stringWidth from 'string-width';
 import {palette} from '../appearance/theme.js';
 import {toggleColor, toggleMarker} from '../components/toggle-marker.js';
 
-export interface QuestionDraft {questionIndex: number; selected: number; text: string; error: string; checked?: readonly number[]}
+export interface QuestionDraft {questionIndex: number; selected: number; text: string; error: string; checked?: readonly number[]; /** Approval cards: the inline denial note is open. */ noting?: boolean}
 
 /** Focus, committed checks and ordinary text keep distinct semantic colors. */
 export function choiceStyle(selected: boolean, accent = palette.accent, textColor = palette.fg, mutedColor = palette.muted, checked?: boolean) {

@@ -1,7 +1,7 @@
 # Module: Permissions & Security Sandbox (`src/permissions/`)
 
 ## 1. Scope
-- **Owns**: Permission evaluation (`engine.ts:PermissionEngine.evaluate()`), the three modes (`default`, `auto`, `creative`), session and project rules (`.logox/permissions.json`), path danger classification (`paths.ts`), shell impact classification (`shell.ts`), and the run-time guard that asks the user or an independent approval model (`guard.ts:PermissionGuard.authorize()`).
+- **Owns**: Permission evaluation (`engine.ts:PermissionEngine.evaluate()`), the three modes (`default`, `auto` (the default via `engine.ts:DEFAULT_PERMISSION_MODE`), `creative`), rules in three scopes with decisions `allow` / `ask` / `deny` and hit statistics (session in memory, project `.logox/permissions.json`, user `~/.logox/user-permissions.json`), routine-shell classification (`shell.ts:routineShell`), approval rule suggestions (`suggest.ts:suggestRule`), rule input validation (`rule-input.ts:validateRuleInput`), path danger classification (`paths.ts`), shell impact classification (`shell.ts`), and the run-time guard that asks the user or an independent approval model (`guard.ts:PermissionGuard.authorize()`).
 - **Does not own**: Building permission targets from tool arguments and executing tools ([`src/tools/AGENTS.md`](../tools/AGENTS.md), `src/tools/index.ts:Tools.execute()`); the scratchpad path itself (`src/kernel/scratchpad.ts`, see [`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); the `/permissions` panel and approval cards (`src/tui/`).
 
 ## 2. Start Here
@@ -11,7 +11,9 @@
 | Change what counts as a dangerous shell command | `shell.ts:shellImpact()` | `shell.ts:shellWords()`, `shell.ts:shellCommands()` |
 | Protect or exclude a path | `paths.ts:pathDanger()` | `paths.ts:searchExclusions()`, `paths.ts:runtimePath()` |
 | Change user approval, denial memory or the approval model | `guard.ts:PermissionGuard.authorize()` | `guard.ts:PermissionGuard.review()`, `guard.ts:reviewSystem` |
-| Add, revoke or persist rules and mode | `engine.ts:PermissionEngine.add()` | `engine.ts:PermissionEngine.setMode()`, `src/store/file-lock.ts:withFileLock()` |
+| Decide what auto runs without review | `shell.ts:routineShell` | `engine.ts:PermissionEngine.evaluate()` (auto branch) |
+| Add, revoke or persist rules, hit statistics and mode | `engine.ts:PermissionEngine.add()` | `engine.ts:PermissionEngine.setMode()`, `src/store/file-lock.ts:withFileLock()` |
+| Change the rule offered on the approval card | `suggest.ts:suggestRule` | `guard.ts:PermissionGuard.authorizeDetailed()` |
 | See where targets are built | `src/tools/index.ts:Tools.execute()` | `src/tools/index.ts:Tools.permissionGuard()` |
 
 ## 3. Common Changes
@@ -32,6 +34,11 @@
 - Tests: `tests/permission-modes.test.ts`, `tests/creative-reading.test.ts`.
 
 ## 4. Hard Boundaries
+- **Precedence is by decision, never by scope or actor**: `deny` > `ask` > `allow` across `user`, `project` and `session` rules; `ask` forces a prompt even in `creative`, in the scratchpad or with an allow rule, but never overrides a deny rule, a forbidden command or `creative`'s refusal of credentials. There are no per-actor rules. Enforced by `tests/permission-rules.test.ts`.
+- **`auto` sends only risky work to the review model**: reads, workspace edits and routine dev commands (`routineShell`: static, non-dynamic, positively recognised build/test/lint/install/git/script commands) are allowed; danger classes still ask the human, forbidden stays denied. Enforced by `tests/permission-rules.test.ts` (matrix), `tests/permission-modes.test.ts`.
+- **Hit statistics never change the authorization state**: `policyKey()` excludes them and their persistence does not notify listeners (which would cancel pending approvals). Project and user files are rewritten under lock with pending hits merged. Enforced by `tests/permission-rules.test.ts`.
+- **The user rule file is separate from the project file** (`user-permissions.json`, `StateFile`); a corrupt or mismatched file is never overwritten, and without a configured user file the user scope is unavailable. Enforced by `tests/permission-rules.test.ts`.
+- **A grant from an approval card comes from the guard's own suggestion**, never from the answer; no suggestion exists for danger classes or compound/dynamic shell. Enforced by `tests/permission-rules.test.ts`, `tests/permission-ui.test.ts`.
 - **Explicit `deny` rules win in every mode**, including `creative`, and before scratchpad and allow rules. Enforced by `tests/permission-modes.test.ts`, `tests/permissions.test.ts`.
 - **Forbidden shell commands are denied in every mode** (self-destructing commands, root deletion, any path segment named legacy). Enforced by `tests/permissions.test.ts`.
 - **Credentials (`.env*`, `auth.json`, `id_rsa`, `.ssh`, `.aws`) and `.git` are never writable by default**: `default`/`auto` ask, `creative` denies. Enforced by `tests/permissions.test.ts`, `tests/creative-reading.test.ts`.

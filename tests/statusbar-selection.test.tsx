@@ -45,7 +45,7 @@ test('mouse dragging on status bar copies selected text via OSC 52', async () =>
     });
   });
 
-  const footerY = 24; // 1-based row 24
+  const footerY = 23; // status line (row 24 is the notification line)
   // Drag across statusbar text columns 1..25
   await act(async () => {
     input.write(`\x1b[<0;1;${footerY}M`); // press

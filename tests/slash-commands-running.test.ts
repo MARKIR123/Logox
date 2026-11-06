@@ -8,7 +8,7 @@ import {loadConfig} from '../src/config/config.js';
 
 test('slash commands can be viewed, opened, and executed while tasks are actively running', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-busy-slash-'));
-  const config = await loadConfig(cwd, {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, 
     provider: {name: 'alpha', model: 'session-model'},
     providers: {
       alpha: {base_url: 'http://127.0.0.1:7777/v1'},

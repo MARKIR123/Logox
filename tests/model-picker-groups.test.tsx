@@ -93,7 +93,7 @@ test('正式 /model：按供应商标签页呈现，标题带目标角色，Tab 
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const cwd = await mkdtemp(join(tmpdir(), 'logox-model-tabs-')), input = new TerminalInput(), output = new TerminalOutput();
-  const config = await loadConfig(cwd, {provider: {name: 'alpha', model: 'same'}, providers: {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha', model: 'same'}, providers: {
     alpha: {base_url: 'http://127.0.0.1:' + address.port + '/alpha'},
     beta: {base_url: 'http://127.0.0.1:' + address.port + '/beta'},
   }}, {}, cwd, cwd);

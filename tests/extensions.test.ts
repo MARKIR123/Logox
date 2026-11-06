@@ -110,7 +110,7 @@ test('collapseRepeatedLines is conservative', () => {
 
 test('MCP images reach the next model request through the application', async () => {
   const f = await fixture('image');
-  const config = await loadConfig(f.cwd, {provider: {model: 'test', context_window: 131072},
+  const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072},
     mcp: {playwright: false, servers: {fixture: f.config}}}, {}, f.cwd, f.cwd);
   const extensions = new ProjectExtensions(f.cwd, config, {home: f.cwd, boundary: f.cwd}, async () => true);
   let turns = 0;
@@ -140,7 +140,7 @@ test('Playwright is a lazy local default and can be disabled or explicitly overr
   try {
     for (const [mcp, expected] of [[{}, true], [{playwright: false}, false],
       [{servers: {playwright: {command: process.execPath, args: ['custom-browser.mjs'], enabled: false}}}, true]] as const) {
-      const config = await loadConfig(cwd, {mcp}, {}, cwd, cwd);
+      const config = await loadConfig(cwd, {permissions: {mode: 'default'}, mcp}, {}, cwd, cwd);
       const extensions = new ProjectExtensions(cwd, config, {home: cwd, boundary: cwd});
       try {
         const server = extensions.mcp.servers.playwright;
@@ -242,7 +242,7 @@ test('Application MCP 经真实交互审批与 Agent 落账，拒绝后能继续
   const f = await fixture(); let turns = 0;
   const entries = ['session_start', 'post_tool_use', 'pre_compact', 'notification', 'stop'].map(event => ({event, command: process.execPath,
     args: ['-e', "process.stdin.on('data', d => process.stdout.write(d))"]}));
-  const config = await loadConfig(f.cwd, {provider: {model: 'test', context_window: 131072}, mcp: {servers: {fixture: f.config}},
+  const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, mcp: {servers: {fixture: f.config}},
     hooks: {enabled: true, entries}}, {}, f.cwd, f.cwd);
   const app = await createApplication({cwd: f.cwd, config, resourceOptions: {home: f.cwd, boundary: f.cwd}, authPath: join(f.cwd, 'auth.json'),
     provider: {async respond(request) {
@@ -270,7 +270,7 @@ test('Application MCP 经真实交互审批与 Agent 落账，拒绝后能继续
 test('外层项目扩展跨会话保留 MCP 连接，最终关闭才回收', async () => {
   const f = await fixture();
   try {
-    const config = await loadConfig(f.cwd, {mcp: {servers: {fixture: f.config}}}, {}, f.cwd, f.cwd);
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, mcp: {servers: {fixture: f.config}}}, {}, f.cwd, f.cwd);
     const extensions = new ProjectExtensions(f.cwd, config, {home: f.cwd, boundary: f.cwd}, async () => true);
     await extensions.initialize();
     const first = await createApplication({cwd: f.cwd, config, extensions, authPath: join(f.cwd, 'auth.json')});

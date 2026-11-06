@@ -100,7 +100,7 @@ test('an unanswered ask reads "no reply" once its sender is done and the recipie
 test('resume closes a step the ledger left running (an old ask, an unfinished thinking step) instead of reviving its clock', async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-send-step-resume-')));
   await mkdir(join(cwd, '.logox'), {recursive: true});
-  const config = await loadConfig(cwd, {provider: {name: 'local', model: 'first'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'first'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/first': {context_window: 131072, thinking_protocol: 'deepseek'}}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 'first', config, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd},
     provider: {async respond() { return {message: {role: 'assistant', text: 'ok'}, stop: 'complete', usage: {input: 1, output: 1}}; }}});

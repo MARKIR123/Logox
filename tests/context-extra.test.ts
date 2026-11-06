@@ -46,7 +46,7 @@ test('手动扬弃运行期间阻止新输入和切换，取消/关闭解除汇�
       await new Promise<void>((_resolve, reject) => {signal.addEventListener('abort', () => reject(signal.reason), {once: true});});
       throw new Error('取消后不能到达这里');
     }};
-    const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 4096}, context: {keep_recent_rounds: 0}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 4096}, context: {keep_recent_rounds: 0}}, {}, cwd, cwd);
     const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'manual', env: {}, authPath: join(cwd, 'auth.json')});
     try {
       await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId: 'old', role: 'user', text: '过去要求'.repeat(2200)});
@@ -73,7 +73,7 @@ test('未知模型窗口在调用前说明配置方法，终态与重启后的�
   const cwd = await mkdtemp(join(tmpdir(), 'logox-unknown-window-'));
   let calls = 0;
   const provider: Provider = {async respond() {calls++; throw new Error('未知窗口不能发送');}};
-  const config = await loadConfig(cwd, {provider: {model: 'unknown-fixture'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'unknown-fixture'}}, {}, cwd, cwd);
   let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'unknown', env: {}, authPath: join(cwd, 'auth.json')});
   try {
     const task = app.ensemble.dispatch('logox', '你好');

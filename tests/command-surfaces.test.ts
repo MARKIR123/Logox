@@ -40,7 +40,7 @@ test('选择结果由命令处理：禁用、身份、失败重试与重复确�
 });
 test('模型目录汇集已认证提供商、区分同名模型、保留部分成功和当前选择', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-catalog-'));
-  const config = await loadConfig(cwd, {provider: {name: 'local', model: 'original'}, providers: {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'original'}, providers: {
     alpha: {base_url: 'https://alpha.invalid/v1', api_key_env: 'ALPHA'},
     beta: {base_url: 'https://beta.invalid/v1', api_key_env: 'BETA'},
     offline: {base_url: 'https://offline.invalid/v1', api_key_env: 'OFFLINE'},
@@ -69,7 +69,7 @@ test('模型目录汇集已认证提供商、区分同名模型、保留部分�
 });
 test('页签命令和提供商选择不触发模型、不进账本；确认才更新并支持限定模型名', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-pages-'));
-  const config = await loadConfig(cwd, {provider: {name: 'alpha', model: 'first'}, providers: {
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'alpha', model: 'first'}, providers: {
     alpha: {base_url: 'http://127.0.0.1:7777/v1'}, beta: {base_url: 'http://127.0.0.1:8888/v1', default_model: 'second'},
   }}, {}, cwd, cwd);
   let calls = 0;

@@ -170,7 +170,7 @@ test('参数校验错误原位返回 ToolResult 且不扣截断预算，整批�
       },
     };
 
-    const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
     const app = await createApplication({cwd, sessionId: 'schema-test', config, provider, resourceOptions: {home: cwd, boundary: cwd}});
 
     try {

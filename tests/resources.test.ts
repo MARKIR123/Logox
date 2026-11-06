@@ -86,7 +86,7 @@ test('正式任务、compact 共用资源；reload 更新提示与命令但保�
   try {
     await f.put(join(f.cwd, 'AGENTS.md'), '规则第一版');
     await f.put(join(f.cwd, '.logox', 'commands', 'review.md'), '审查 {{args}}');
-    const config = await loadConfig(f.cwd, {provider: {model: 'test', context_window: 131072}}, {}, f.home, f.root);
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, f.home, f.root);
     const app = await createApplication({cwd: f.cwd, config, provider, resourceOptions: {home: f.home, boundary: f.root}, authPath: join(f.root, 'auth.json')});
     try {
       await app.submit('/review 当前变更'); await waitForSnapshot(app.store, state => state.activities.some(item => item.status === 'completed'));
@@ -120,7 +120,7 @@ test('处理中拒绝 reload；项目扩展由外层拥有，可跨会话重用'
   try {
     let release!: () => void;
     const provider: Provider = {async respond() {await new Promise<void>(resolve => {release = resolve;}); return {message: {role: 'assistant', text: '完成'}, stop: 'complete'};}};
-    const config = await loadConfig(f.cwd, {provider: {model: 'test', context_window: 131072}}, {}, f.home, f.root);
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, f.home, f.root);
     const extensions = new ProjectExtensions(f.cwd, config, {home: f.home, boundary: f.root}); await extensions.initialize();
     const app = await createApplication({cwd: f.cwd, config, provider, extensions, authPath: join(f.root, 'auth.json')});
     const handle = app.ensemble.dispatch('logox', '测试');

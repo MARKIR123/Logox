@@ -29,7 +29,7 @@ test('真实断流的错误码与已有输出保存到原任务，重启可查�
   const address = server.address(); assert.ok(address && typeof address === 'object');
   const provider = createProvider({kind: 'openai_compat', baseUrl: 'http://127.0.0.1:' + address.port,
     model: 'deepseek-flash', key: '', temperature: 0, maxTokens: 512, timeoutMs: 5000});
-  const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}, kernel: {max_retries: 0}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}, kernel: {max_retries: 0}}, {}, cwd, cwd);
   const options = {cwd, config, provider, sessionId: 'diagnostic', resourceOptions: {home: cwd, boundary: cwd}};
   let app: Awaited<ReturnType<typeof createApplication>> | undefined;
   try {
@@ -70,7 +70,7 @@ test('思考阶段取消后重启会话，空助手消息不污染下一次 HTTP
   };
   const provider = createProvider({kind: 'openai_compat', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', key: '',
     temperature: 0.2, maxTokens: 512, timeoutMs: 5000, thinkingControl: true}, fetcher);
-  const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}}, {}, cwd, cwd);
   const options = {cwd, config, provider, sessionId: 'recovery', resourceOptions: {home: cwd, boundary: cwd}};
   let app = await createApplication(options);
   try {
@@ -154,7 +154,7 @@ test('完整回复的思考字段经上下文投影和 HTTP 回传，格式失�
   };
   const provider = createProvider({kind: 'openai_compat', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', key: '',
     temperature: 0.2, maxTokens: 512, timeoutMs: 5000, thinkingControl: true}, fetcher);
-  const config = await loadConfig(cwd, {provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'deepseek-flash', context_window: 131072}}, {}, cwd, cwd);
   const options = {cwd, config, provider, sessionId: 'thinking', resourceOptions: {home: cwd, boundary: cwd}};
   let app = await createApplication(options);
   try {

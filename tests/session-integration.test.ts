@@ -17,7 +17,7 @@ async function fixture(provider?: Provider) {
   await mkdir(join(cwd, '.logox'), {recursive: true});
   await writeFile(join(cwd, 'AGENTS.md'), '规则第一版'); await writeFile(join(cwd, 'sample.txt'), '合成内容');
   const log = join(cwd, 'mcp.jsonl'), requests: ModelRequest[] = [];
-  const config = await loadConfig(cwd, {provider: {name: 'local', model: 'first'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'first'}, providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/first': {context_window: 131072, thinking_protocol: 'deepseek'}, 'local/second': {context_window: 131072, thinking_protocol: 'deepseek'}},
     mcp: {servers: {fixture: {command: process.execPath, args: [resolve('tests/fixtures/mcp-server.mjs'), log], timeout: 2}}},
     hooks: {enabled: true, entries: [{event: 'session_start', command: process.execPath, args: ['-e', 'process.stdin.on("data",d=>process.stdout.write(d))']},

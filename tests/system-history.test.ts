@@ -43,7 +43,7 @@ test('系统历史缓冲空白、首次正式任务保存；事件重启去重�
 test('命令和模型错误保存为系统历史，环境变化合并为下一次请求的真实状态', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-environment-history-'));
   const seen: ModelRequest[] = [];
-  const config = await loadConfig(cwd, {provider: {model: 'first'},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'first'},
     models: Object.fromEntries(['first', 'second', 'final', 'next', 'latest'].map(model => ['openai-compatible/' + model, {context_window: 131072}]))}, {}, cwd, cwd);
   const options = {cwd, config, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'),
     provider: {async respond(request: ModelRequest) {

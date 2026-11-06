@@ -24,7 +24,7 @@ async function fixture(turns: ModelTurn[]) {
     if (turn.message.text) onDelta({kind: 'text', text: turn.message.text});
     return structuredClone(turn);
   }};
-  const config = await loadConfig(cwd, {provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 'task-flow', config, provider, resourceOptions: {home: cwd, boundary: cwd}});
   return {cwd, config, app, provider, requests, async close() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }

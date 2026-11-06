@@ -193,15 +193,40 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 
 ## 权限
 
-`/permissions` 打开权限页，查看规则并切换模式：Space / `m` / ←→ 只改页内草稿（标记为 unsaved），Enter 才应用并保存并提示 “Permission mode set to …”，Esc 离开且不应用；也可以用 `/permissions mode [default|auto|creative]` 直接选择，或用 `/permissions add <session|project> <allow|deny> <工具> <模式>`、`/permissions revoke <id>` 管理规则。
+`/permissions` 打开权限页：
+
+- **模式行**：`←` `→`（或 Space / `m`）只改页内草稿并标记 `unsaved`，下方一行说明所选模式的实际后果；Enter 才保存并提示 “Permission mode set to …”，Esc 离开且不应用。
+- **规则列表**：按作用域（`user` / `project` / `session`）分组，每条显示决定（`allow` 绿、`ask` 琥珀、`deny` 红）、工具、匹配模式、命中次数和最近命中时间。`↑` `↓` 选择，`d` 或 Del 删除（行内 `y / n` 确认），`a` 打开新增表单（决定、工具、模式、作用域；输入会先校验，shell 模式必须是静态词元前缀）。
+- **This run**：本次运行的审批统计（审批次数、询问你的次数、审查模型次数、审查用的 token）。
+
+也可以用 `/permissions mode [default|auto|creative]` 直接选择，或用 `/permissions add <session|project|user> <allow|ask|deny> <工具> <模式>`、`/permissions revoke <id>` 管理规则。
 
 | 模式 | 默认行为 |
 |---|---|
 | `default` | 普通只读操作走安全快路，其余需要人工授权 |
-| `auto` | 常规安全操作直接执行，不确定的交给审批模型，必要时仍询问人工 |
+| `auto`（默认） | 读取、工作区内的编辑与写入、常见开发命令（构建、测试、lint、项目内装依赖、`git status/diff/log/add/commit`、运行项目脚本）直接执行；只有真正有风险的操作（工作区外写入或删除、`curl`/`sudo` 一类无法确认影响的命令、内联代码执行、外部 MCP 调用等）交给审批模型，凭据与 `.git` 等危险类仍询问人工 |
 | `creative` | 在显式拒绝和危险过滤之后，其他操作默认允许 |
 
-显式 `deny` 优先于任何允许规则。规则可按 `session` 或 `project` 保存；项目规则和模式存放在 `.logox/permissions.json`，并绑定项目的真实路径，所以移动项目后不能把旧路径当作同一个安全身份。会话临时目录（scratchpad）内的操作自动放行。
+没有保存过模式的项目（新安装）使用 `auto`；显式保存的模式永远优先。
+
+### 审批卡
+
+请求审批的卡片显示 `<角色符号> <名称> wants to run · <工具>` 与右侧的 `Awaiting approval`；Shell 以 `$ 命令` 展示，其他工具展示紧凑的路径或 URL，不显示原始 JSON。风险行 `▲ <原因>` 后面是当前模式（弱化）。选项与单键快捷键：
+
+| 选项 | 键 |
+|---|---|
+| Allow once | `y` |
+| Allow `<前缀>` for this session | `s` |
+| Always allow `<前缀>` in this project | `a` |
+| Deny and tell `<角色>` why… | `n`（打开单行说明，Enter 发送，Esc 返回；说明会随拒绝一起返回给模型） |
+
+`↑` `↓` 选择、Enter 确认、Esc 稍后回答；鼠标单击选项即作答（Deny 先打开说明）。前缀取自静态词元前缀（如 `npm ci`），不可编辑；复合或动态命令、危险类没有可生效的规则，因此不提供会话/项目授权。
+
+### 规则
+
+规则有三种决定：`allow`、`ask`（即使模式或允许规则会放行也一定询问你）、`deny`。优先级与作用域无关：**`deny` > `ask` > `allow`**；`forbidden` 命令和 `creative` 对凭据的拒绝仍在其上。作用域有三层：`user`（`~/.logox/user-permissions.json`，所有项目共享）、`project`（`.logox/permissions.json`）、`session`（仅内存）。规则对所有角色一视同仁，不存在按角色的规则；Automa 的授权仍只收窄派遣者已有的权限。每条规则记录命中次数和最近命中时间（项目和用户规则会落盘，会话规则只在内存）。
+
+项目规则绑定项目的真实路径，所以移动项目后不能把旧路径当作同一个安全身份。会话临时目录（scratchpad）内的操作自动放行；`ask` 规则同样适用于它。
 
 `creative` 允许写运行目录，但凭据和 Git 内部文件仍有独立保护。项目外访问、符号链接和 Shell 的实际影响仍要经过入口检查；获准执行的进程拥有当前系统用户的真实能力。这是应用内的权限机制，**不是操作系统级沙箱**。
 
@@ -241,7 +266,9 @@ playwright = false
 
 ## 状态栏
 
-`/statusbar` 打开状态栏编辑器，`/settings` 的 Statusbar 标签页是同一个入口。可以选择风格（Pipes：彩色字段加竖线和上下文进度条；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色，开关各模块并调整顺序。实时预览不写盘，Enter 保存，Esc 丢弃未保存的草稿。在 `/settings` 中应用当前标签页后页面保留，独立的 `/statusbar` 保存后会收起。
+`/statusbar` 打开状态栏编辑器，`/settings` 的 Statusbar 标签页是同一个入口。可以选择风格（Pipes：彩色字段加竖线和上下文仪表；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色和上下文仪表宽度，开关各模块并调整显示顺序。默认显示角色、模型、思考档位、权限、上下文仪表和缓存命中率，Git 与费用需要手动打开。
+
+页脚有两行：上面是状态行，下面是通知行。通知行平时显示弱化的按键提示；鼠标悬停在任一模块（含右侧的 Actor 胶囊）上时显示它的详情，例如上下文各类别的用量和压缩水位、模型窗口与价格；操作结果（保存、复制等）会以 ✓ / ▲ / ✗ 短暂占用这一行。点击模型、思考档位或权限模块分别打开 `/model`、`/effort`、`/permissions`。终端高度小于 8 行时只保留状态行。窄屏下按“角色 > 权限 > 上下文仪表 > 模型 > 缓存 > Git > 费用”的优先级整项取舍，不会出现被截断的半截文字。实时预览不写盘，Enter 保存，Esc 丢弃未保存的草稿。在 `/settings` 中应用当前标签页后页面保留，独立的 `/statusbar` 保存后会收起。
 
 先安装带 Nerd Font 字形的等宽字体并在终端中选用，推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)，也可以用任意 [Nerd Font](https://www.nerdfonts.com/font-downloads) 的 Mono 变体，例如 `JetBrainsMono NFM`。偏好保存在 `~/.logox/statusbar.json`，旧布局自动兼容。按键与布局细节见[终端操作](UI-SPEC.md)。
 
