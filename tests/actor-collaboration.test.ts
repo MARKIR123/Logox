@@ -159,3 +159,20 @@ test('SendMessage to an already-completed peer records the message passively wit
     assert.equal(enqueued, 1, 'Explicit wake: true wakes the idle peer');
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
+
+test('只有 Director 派发与人类任务结束才触发 taskEnd，协作与唤醒活动不触发', async () => {
+  const f = await fixture();
+  try {
+    const store = new RuntimeStore(), ends: Array<string | undefined> = [];
+    const ensemble = new Ensemble('s', store, f.journal, async (_prompt, context) => context.say('【轮次摘要】\n标题：完成\n报告：好'), {
+      taskEnd: async context => {ends.push(context.inputKind);},
+    });
+    await ensemble.dispatch('techne', '问题', 'kalon', {inputKind: 'collaboration'}).done;
+    await ensemble.dispatch('techne', '唤醒', 'kalon', {inputKind: 'actor'}).done;
+    assert.deepEqual(ends, []);
+    await ensemble.dispatch('techne', '任务', 'logox', {inputKind: 'director'}).done;
+    await ensemble.dispatch('techne', '私聊', 'direct').done;
+    assert.deepEqual(ends, ['director', 'human']);
+    await ensemble.close();
+  } finally {await rm(f.directory, {recursive: true, force: true});}
+});

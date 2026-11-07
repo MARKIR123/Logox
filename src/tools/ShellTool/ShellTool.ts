@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import type {ToolResult} from '../types.js';
-import {ProcessStoppedError, runProcess} from '../process.js';
-import {SHELL_CUT_SHORT_LINE, SHELL_STOPPED_BY_USER, shellStoppedByDirector} from './prompt.js';
+import {ProcessStoppedError, runProcess, startBackgroundProcess} from '../process.js';
+import {SHELL_CUT_SHORT_LINE, SHELL_STOPPED_BY_USER, backgroundStartedText, shellStoppedByDirector} from './prompt.js';
 
 export const shellSchema = z.preprocess(
   // Legacy callers used seconds; values <= 600 are treated as seconds and converted to milliseconds.
@@ -14,7 +14,8 @@ export const shellSchema = z.preprocess(
   z.strictObject({
     command: z.string().min(1).describe('The command to execute'),
     description: z.string().optional().describe('Clear, concise description of what this command does in active voice (5-10 words)'),
-    timeout: z.number().int().min(1).max(600_000).optional().describe('Optional timeout. For legacy compatibility, positive values up to 600 are interpreted as seconds; values above 600 are milliseconds, up to 600000. Omission uses 120000 milliseconds.'),
+    timeout: z.number().int().min(1).max(600_000).optional().describe('Optional timeout. For legacy compatibility, positive values up to 600 are interpreted as seconds; values above 600 are milliseconds, up to 600000. Omission uses 120000 milliseconds. Ignored with run_in_background.'),
+    run_in_background: z.boolean().optional().describe('Start the command detached and return immediately with its job id and initial output, for servers and watchers. Read later output or stop it with ShellJob.'),
   }),
 );
 
@@ -31,13 +32,21 @@ export async function executeShell(
   const command = args.command;
 
   const timeoutMs = args.timeout ?? DEFAULT_TIMEOUT_MS;
+  const executable = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
+  const shellArgs = process.platform === 'win32' ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] : ['-c', command];
+
+  if (args.run_in_background) {
+    signal.throwIfAborted();
+    const job = await startBackgroundProcess(executable, shellArgs, cwd, metadata);
+    const initial = job.unread;
+    job.unread = ''; job.dropped = false;
+    return {text: backgroundStartedText(job, initial), isError: job.exitCode !== undefined && job.exitCode !== 0};
+  }
 
   let result;
   try {result = await runProcess(
-    process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',
-    process.platform === 'win32'
-      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]
-      : ['-c', command],
+    executable,
+    shellArgs,
     cwd,
     signal,
     timeoutMs,

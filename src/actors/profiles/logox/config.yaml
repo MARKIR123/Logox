@@ -29,7 +29,8 @@ activity_verbs:
   run: ["Running/Ran", "Invoking/Invoked", "Executing/Executed", "Enacting/Enacted"]
 automa:
   name: runners
-  default_preset: scout
+  default_style: scout
   model: haiku
-  presets:
-    scout: {tools: read}
+  styles:
+    scout:
+      flavor: Answer the question asked, quickly and precisely. Prefer search over reading whole files.

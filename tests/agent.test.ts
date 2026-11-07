@@ -13,6 +13,7 @@ import {createProvider, ProviderError} from '../src/providers/http.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {runProcess} from '../src/tools/process.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
+import {EMPTY_REPLY_REMINDER} from '../src/prompts/runtime/recovery.js';
 
 function assistant(text = '完成', stop: ModelTurn['stop'] = 'complete'): ModelTurn {
   return {message: {role: 'assistant', text}, stop};
@@ -424,5 +425,44 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
     await f.app.submit('/status');
     const localStatus = f.app.surfaces.getSnapshot(); assert.ok(localStatus?.kind === 'page');
     assert.match(localStatus.tabs[0]!.lines.join('\n'), /antigravity[\s\S]*local-fixture/);
+  } finally {await f.cleanup();}
+});
+
+test('stage lines stay out of the ledger text but are kept in a stage field and the progress history', async () => {
+  const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
+  const f = await fixture(scripted([staged('⏵ Understanding the brief\nLooking around.', 'g1'), staged('⏵ Building the page', 'g2'), assistant('done')]));
+  try {
+    const handle = f.app.ensemble.dispatch('techne', 'build');
+    await handle.done;
+    await f.app.journal.flush();
+    const entries = (await f.app.journal.load('test', 'techne')).filter(entry => entry.role === 'assistant');
+    assert.deepEqual(entries.map(entry => entry.message?.role === 'assistant' ? entry.message.stage : 'x'), ['Understanding the brief', 'Building the page', undefined]);
+    assert.equal(entries[0]!.text, 'Looking around.');
+    const progress = f.app.store.activities.get('test', handle.activityId)?.progress;
+    assert.deepEqual(progress && 'stageHistory' in progress ? progress.stageHistory : undefined, ['Understanding the brief', 'Building the page']);
+    const saved = (await f.app.journal.tasks('test')).find(task => task.activityId === handle.activityId)?.progress;
+    assert.deepEqual(saved && 'stageHistory' in saved ? saved.stageHistory : undefined, ['Understanding the brief', 'Building the page']);
+  } finally {await f.cleanup();}
+});
+
+test('an empty reply gets one static reminder and a fresh request before the task can fail', async () => {
+  const seen: string[] = [];
+  const f = await fixture(scripted([assistant('', 'complete'), request => {seen.push(JSON.stringify(request.messages)); return assistant('recovered answer');}]));
+  try {
+    const handle = f.app.ensemble.dispatch('techne', 'say something');
+    await handle.done;
+    assert.equal(f.app.store.activities.get('test', handle.activityId)?.status, 'completed');
+    assert.equal(seen.length, 1);
+    assert.ok(seen[0]!.includes(EMPTY_REPLY_REMINDER));
+    assert.ok(f.app.store.getSnapshot().messages.some(message => message.text === 'recovered answer'));
+  } finally {await f.cleanup();}
+});
+
+test('repeated empty replies still end in a failed task after the reminder and the shared budget', async () => {
+  const f = await fixture(scripted([assistant('', 'complete'), assistant('', 'complete'), assistant('', 'complete')]));
+  try {
+    const handle = f.app.ensemble.dispatch('techne', 'say something');
+    await handle.done;
+    assert.notEqual(f.app.store.activities.get('test', handle.activityId)?.status, 'completed');
   } finally {await f.cleanup();}
 });

@@ -230,12 +230,14 @@ test('invalid metadata repair is bounded and falls back without fabricating veri
 });
 
 test('metadata without a delivered answer cannot complete a round', async () => {
-  const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn('', [finish('no-text-' + index)]);});
+  // The first textless close gets one static reminder; the second ends the round as failed.
+  const f = await fixture((_request, index) => {assert.ok(index <= 3); return turn('', [finish('no-text-' + index)]);});
   try {
     const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
     await task.done;
     assert.equal(f.store.activities.get('s', task.activityId)?.status, 'failed');
-    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests.length, 3);
+    assert.ok(JSON.stringify(f.requests[2]!.messages).includes('Your previous reply was empty.'));
     const entries = await f.journal.load('s', 'logox');
     assert.ok(entries.filter(entry => entry.message?.role === 'tool').every(entry => entry.message?.role === 'tool' && entry.message.isError));
   } finally {await f.cleanup();}

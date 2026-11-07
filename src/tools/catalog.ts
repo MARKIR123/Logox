@@ -9,6 +9,7 @@ import {metadata as meta2} from './EditTool/EditTool.js';
 import {metadata as meta3} from './GlobTool/GlobTool.js';
 import {metadata as meta4} from './GrepTool/GrepTool.js';
 import {metadata as meta5} from './ShellTool/ShellTool.js';
+import {metadata as metaShellJob} from './ShellJobTool/ShellJobTool.js';
 import {metadata as meta6} from './AskUserQuestionTool/AskUserQuestionTool.js';
 import {metadata as meta7} from './WebFetchTool/WebFetchTool.js';
 import {metadata as meta8} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
@@ -27,7 +28,7 @@ export interface ToolRegistration {metadata: ToolMetadataInput; definition: Tool
 export interface ResolvedTool {metadata: ToolMetadata; definition: ToolDefinition}
 
 export function builtinToolRegistrations(): readonly ToolRegistration[] {
-  return [meta0, meta1, meta2, meta3, meta4, meta5, meta6, meta7, meta8, meta9, meta10, meta11, meta13, meta14, meta15, meta16, meta17, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
+  return [meta0, meta1, meta2, meta3, meta4, meta5, metaShellJob, meta6, meta7, meta8, meta9, meta10, meta11, meta13, meta14, meta15, meta16, meta17, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
     name: metadata.name,
     description: descriptions[metadata.name as keyof typeof descriptions],
     parameters: z.toJSONSchema(schemas[metadata.name as keyof typeof schemas], {io: 'input'}),

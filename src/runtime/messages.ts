@@ -12,6 +12,8 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     contextExcluded: z.literal(true).optional(),
     toolsExcluded: z.literal(true).optional(),
     memoryOnly: z.literal(true).optional(),
+    /** The `⏵` stage this turn declared (observability only; the text keeps no stage line). */
+    stage: z.string().optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),
     discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional()}),

@@ -29,6 +29,8 @@ import {grepSchema, executeGrep} from './GrepTool/GrepTool.js';
 import {GREP_DESCRIPTION} from './GrepTool/prompt.js';
 import {shellSchema, executeShell} from './ShellTool/ShellTool.js';
 import {SHELL_DESCRIPTION} from './ShellTool/prompt.js';
+import {shellJobSchema, executeShellJob} from './ShellJobTool/ShellJobTool.js';
+import {SHELL_JOB_DESCRIPTION} from './ShellJobTool/prompt.js';
 import {askUserQuestionSchema, executeAskUserQuestion} from './AskUserQuestionTool/AskUserQuestionTool.js';
 import {ASK_USER_QUESTION_DESCRIPTION} from './AskUserQuestionTool/prompt.js';
 import {webFetchSchema, executeWebFetch} from './WebFetchTool/WebFetchTool.js';
@@ -49,8 +51,8 @@ import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
-import {automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
-import {grantTools, isExclusiveCommand, pathDenial, planDispatch, shellDenial} from './orchestration/AutomaTool/grant.js';
+import {AUTOMA_SYSTEM_PROMPT, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
+import {grantTools, isExclusiveCommand, pathDenial, planDispatch} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
@@ -115,6 +117,7 @@ export const schemas = {
   Glob: globSchema,
   Grep: grepSchema,
   Shell: shellSchema,
+  ShellJob: shellJobSchema,
   AskUserQuestion: askUserQuestionSchema,
   WebFetch: webFetchSchema,
   Actor: actorSchema,
@@ -138,6 +141,7 @@ export const descriptions: Record<ToolName, string> = {
   Glob: GLOB_DESCRIPTION,
   Grep: GREP_DESCRIPTION,
   Shell: SHELL_DESCRIPTION,
+  ShellJob: SHELL_JOB_DESCRIPTION,
   AskUserQuestion: ASK_USER_QUESTION_DESCRIPTION,
   WebFetch: WEB_FETCH_DESCRIPTION,
   Actor: ACTOR_DESCRIPTION,
@@ -152,7 +156,7 @@ export const descriptions: Record<ToolName, string> = {
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
-  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'AskUserQuestion', 'WebFetch', 'Automa', '_FinishRound'] as const
+  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'ShellJob', 'AskUserQuestion', 'WebFetch', 'Automa', '_FinishRound'] as const
 ).map(name => ({
   name,
   description: descriptions[name],
@@ -240,7 +244,7 @@ const AUTOMA_DEFAULT_PARALLEL = 4;
 
 /** What the application supplies so Automa can run; tests supply fakes. */
 export interface AutomaEnvironment {
-  /** Picks the model: `/model automa` first, then `preferred` (preset, then role) when it resolves, then the session model. */
+  /** Picks the model: `/model automa` first, then `preferred` (style, then role) when it resolves, then the session model. */
   resolveModel(preferred: string | undefined): ResolvedAutomaModel;
   profile?(ownerId: string): AutomaProfile | undefined;
   actorName?(ownerId: string): string | undefined;
@@ -297,6 +301,8 @@ export class Tools {
   /** In memory only: a kept instance never outlives its task or this process. */
   private readonly instances = new Map<string, OwnedInstance>();
   private readonly dispatches = new Map<string, {readonly ownerId: string; readonly files: readonly string[]}>();
+  /** Per principal: dispatches refused whole, by their normalised arguments, so an identical retry is answered without planning again. */
+  private readonly refusals = new Map<string, Map<string, string>>();
 
   setAutomaEnvironment(environment: AutomaEnvironment): void {
     this.automa = environment;
@@ -313,50 +319,62 @@ export class Tools {
     return undefined;
   }
 
-  /** Grant check for a worker's call. Refusals here never reach the permission engine or an approval card. */
+  /**
+   * Grant check for a worker's call. Only workspace writes are scoped here (to the job's `writes`, plus the dispatcher's own scratchpad);
+   * reads and commands are left to the permission engine, which judges them under the dispatcher's name exactly as it would the dispatcher's own.
+   * Refusals here never reach the permission engine or an approval card.
+   */
   private async workerDenial(name: ToolName, parsed: unknown, context: ActorContext): Promise<string | undefined> {
     const grant = context.via!.grant;
-    if (!grantTools(grant).includes(name)) return `Tool \`${name}\` is not available to this job. Available: ${grantTools(grant).join(', ')}.`;
-    if (name === 'WebFetch') return undefined;
-    if (name === 'Shell') return shellDenial(grant, schemas.Shell.parse(parsed).command);
+    if (!grantTools(grant).includes(name)) return `Tool \`${name}\` is not available to a worker. Available: ${grantTools(grant).join(', ')}.`;
+    if (name !== 'Edit' && name !== 'Write') return undefined;
     const target = filePathOf(parsed);
     const lexical = target ? resolve(this.cwd, target) : this.cwd;
     const canonical = await resolvedPath(lexical), root = await realpath(this.cwd);
-    if (name === 'Read' && inside(getScratchpadDir(this.cwd, context.sessionId), lexical)) return undefined;
-    const scratchDir = getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId);
-    const scratch = {lexical: resolve(scratchDir), canonical: await resolvedPath(scratchDir)};
-    const denial = pathDenial(name, grant, {lexical, cwd: this.cwd, canonical, root, scratch});
-    if (denial || (name !== 'Edit' && name !== 'Write')) return denial;
+    const denial = pathDenial(name, grant, {lexical, canonical, root, scratch: getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId)});
+    if (denial) return denial;
     const owner = this.activities ? overreach(this.activities(), context.ownerId, canonical, root) : undefined;
     if (!owner) return undefined;
     const actor = owner.ownerId.charAt(0).toUpperCase() + owner.ownerId.slice(1);
-    return `Not written: ${relative(root, canonical).replaceAll('\\', '/')} belongs to ${actor}'s active assignment. Report it in notes.`;
+    return `Not written: ${relative(root, canonical).replaceAll('\\', '/')} belongs to ${actor}'s active assignment. Report it under "Not verified".`;
   }
 
   /** The single Automa entry: every worker tool call re-enters `execute()` under the principal's identity. */
-  private async runAutoma(args: AutomaArgs, context: ActorContext): Promise<ToolResult> {
+  private async runAutoma(args: AutomaArgs, context: ActorContext, inputNotes: readonly string[] = []): Promise<ToolResult> {
     const environment = this.automa;
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
     const {sessionId, ownerId, activityId} = context;
-    if (!args.jobs?.length && !args.release?.length) return refuse('Automa needs `jobs`, for example {"jobs": [{"brief": "Find every caller of parseConfig and list path:line"}]}, or `release` with ids of kept workers.');
     const key = JSON.stringify([sessionId, ownerId]);
+    // An identical call that was already refused gets the same answer at once: nothing changed, so nothing can run differently.
+    const fingerprint = JSON.stringify(args);
+    const refusals = this.refusals.get(key) ?? this.refusals.set(key, new Map()).get(key)!;
+    const earlier = refusals.get(fingerprint);
+    if (earlier) return refuse('Identical call, refused again without running. ' + earlier);
+    const refuseAndRemember = (text: string): ToolResult => {
+      if (refusals.size >= 16) refusals.delete(refusals.keys().next().value!);
+      refusals.set(fingerprint, text);
+      return refuse(text);
+    };
+    if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of kept workers.');
     if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
     const mine = (instance: OwnedInstance) => instance.sessionId === sessionId && instance.ownerId === ownerId;
     // An instance belongs to one task: anything left over from an earlier task of this actor ends here.
     for (const [id, instance] of this.instances) if (mine(instance) && instance.activityId !== activityId) this.instances.delete(id);
     const retained = [...this.instances.values()].filter(mine);
     const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
-    const plan = planDispatch({jobs: args.jobs ?? [], preset: args.preset, release: args.release ?? [], profile, cwd: this.cwd, retained,
+    const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained,
+      scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: AUTOMA_SYSTEM_PROMPT,
       holder: pattern => this.patternHolder(ownerId, pattern)});
-    if (!plan.ok) return refuse(plan.error);
+    if (!plan.ok) return refuseAndRemember(plan.error);
+    const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
     const released = plan.release;
     for (const id of released) this.instances.delete(id);
-    if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, plan.note].filter(Boolean).join('\n'), isError: false};
+    if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, note].filter(Boolean).join('\n'), isError: false};
     const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
     const {startTool: _principalStep, reportSwarm, ...principal} = context;
-    const parallel = args.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
-    this.dispatches.set(key, {ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.files)});
+    const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
+    this.dispatches.set(key, {ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
     try {
       const result = await executeAutomaDispatch({
         jobs: plan.jobs, parallel, swarmName: profile.name, signal: context.signal,
@@ -371,7 +389,7 @@ export class Tools {
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
       });
-      return plan.note ? {...result, text: result.text + '\n\n' + plan.note} : result;
+      return note ? {...result, text: result.text + '\n\n' + note} : result;
     } finally {
       this.dispatches.delete(key);
     }
@@ -461,7 +479,8 @@ export class Tools {
       }
       const name = canonical as ToolName;
       const raw: unknown = JSON.parse(call.arguments);
-      const parsed = schemas[name].parse(name === 'Automa' ? normalizeAutomaInput(raw) : raw);
+      const automaNotes: string[] = [];
+      const parsed = schemas[name].parse(name === 'Automa' ? normalizeAutomaInput(raw, automaNotes) : raw);
 
       if (context.via) {
         const denial = await this.workerDenial(name, parsed, context);
@@ -491,7 +510,17 @@ export class Tools {
           return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }
         context.startTool?.();
-        return await this.runAutoma(args, context);
+        return await this.runAutoma(args, context, automaNotes);
+      }
+
+      if (name === 'ShellJob') {
+        const args = schemas.ShellJob.parse(parsed);
+        context.startTool?.();
+        return await executeShellJob(args);
+      }
+
+      if (name === 'Shell' && context.via && schemas.Shell.parse(parsed).run_in_background) {
+        return {text: 'Background jobs are not available to Automa workers; run the command in the foreground.', isError: true, disposition: 'denied'};
       }
 
       if (name === '_GitStatus') {

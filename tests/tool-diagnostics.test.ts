@@ -161,3 +161,17 @@ test('MCP diagnostics: direct mcp__ names reuse the same rules and unrelated err
   const unrelated = diagnoseToolError(mcpCall('browser_click'), {isError: true, text: 'Timeout 5000ms exceeded'});
   assert.equal(unrelated.text, 'Timeout 5000ms exceeded');
 });
+
+test('Shell ENOENT without a path argument names the path from the error, never the literal "target"', () => {
+  const named = diagnoseToolError(
+    {id: '9', name: 'Shell', arguments: JSON.stringify({command: 'node /tmp/scratch/motion-test.cjs'})},
+    {isError: true, text: "Exit code: 1\nError: ENOENT: no such file or directory, open '/tmp/scratch/motion-input.json'"},
+  );
+  assert.match(named.text, /File or path "\/tmp\/scratch\/motion-input\.json" does not exist/);
+  const unnamed = diagnoseToolError(
+    {id: '10', name: 'Shell', arguments: JSON.stringify({command: 'node motion-test.cjs'})},
+    {isError: true, text: 'Exit code: 1\nENOENT'},
+  );
+  assert.doesNotMatch(unnamed.text, /"target"/);
+  assert.match(unnamed.text, /does not exist\. Call Glob/);
+});

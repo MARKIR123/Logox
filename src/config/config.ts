@@ -33,6 +33,10 @@ export const contextPolicySchema = z.object({
   reserve_tokens: z.number().int().nonnegative().default(32768),
   high_watermark_ratio: z.number().positive().lt(1).default(0.8),
   low_watermark_ratio: z.number().positive().lt(1).default(0.5),
+  /** A real task end skips compaction while the context is below this share of the high watermark (default 0.5). */
+  task_end_floor_ratio: z.number().min(0).max(1).optional(),
+  /** A task-end compaction is kept only when the result is at most this share of the original estimate (default 0.75). */
+  compact_accept_ratio: z.number().positive().max(1).optional(),
   max_budget_tokens: z.number().int().positive().optional(),
   target_budget_tokens: z.number().int().positive().optional(),
   summary_provider: z.string().min(1).optional(),

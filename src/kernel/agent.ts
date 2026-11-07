@@ -18,7 +18,7 @@ import {diagnoseToolError} from '../tools/diagnostics.js';
 import type {ContextManager} from '../context/manager.js';
 import {inputKind, inputMessage} from '../runtime/provenance.js';
 import {Steps} from '../runtime/steps.js';
-import type {Step} from '../runtime/contracts.js';
+import {STAGE_HISTORY_LIMIT, type Step} from '../runtime/contracts.js';
 import type {TaskModels} from '../actors/task-models.js';
 import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
@@ -27,7 +27,7 @@ import {ToolPacing} from './tool-pacing.js';
 import {PeerWait} from './peer-wait.js';
 import {asksFor} from '../runtime/asks.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
-import {ASK_SENT_NOTE, ASK_SENT_NOTE_DIRECTOR, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
+import {EMPTY_REPLY_REMINDER, ASK_SENT_NOTE, ASK_SENT_NOTE_DIRECTOR, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
@@ -136,6 +136,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
   return async (prompt, context) => {
     if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
     const progress = new TaskProgress(options.store, context);
+    const stages: string[] = [...(context.progress && 'stageHistory' in context.progress ? context.progress.stageHistory ?? [] : [])];
     const steps = new Steps(options.store, context);
     const root = context.rootActivityId ?? context.activityId;
     let localRecovery = localRecoveries.get(context.sessionId);
@@ -161,6 +162,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       let recovery = '';
       let recoveringKind: ExecutionRecoveryKind | undefined;
       let adjustments = 0;
+      let emptyReplyReminded = false;
+      /** A round-memory close without any delivered text gets one static reminder and a fresh request before it fails; plain empty turns use the shared budget in `recoverOutput`. */
+      const remindEmptyReply = (): boolean => {
+        if (emptyReplyReminded) return false;
+        emptyReplyReminded = true;
+        recovery = EMPTY_REPLY_REMINDER;
+        recoveringKind = 'no_delivery';
+        return true;
+      };
       let memoryRepair = false;
       let finalText = '';
       const correctionCalls = new Set<string>();
@@ -402,11 +412,13 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const storedText = turn.message.text;
         const extracted = extractNarration(turn.message.text);
         if (extracted) {
-          turn = {...turn, message: {...turn.message, text: extracted.cleanText}};
-          void context.saveProgress?.({label: extracted.narration});
-          options.store.activities.update(context.sessionId, context.activityId, {
-            progress: {label: extracted.narration},
-          });
+          // The ledger text drops the stage line; the `stage` field keeps it for later audits.
+          turn = {...turn, message: {...turn.message, text: extracted.cleanText, stage: extracted.narration}};
+          stages.push(extracted.narration);
+          if (stages.length > STAGE_HISTORY_LIMIT) stages.splice(0, stages.length - STAGE_HISTORY_LIMIT);
+          const next = {label: extracted.narration, stageHistory: [...stages]};
+          void context.saveProgress?.(next);
+          options.store.activities.update(context.sessionId, context.activityId, {progress: next});
         }
         if (metadataOnly) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
         if (storedText && !textId && !metadataOnly) {
@@ -482,7 +494,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           context.signal.throwIfAborted();
           if (valid) {context.acceptRoundMemory?.(calls[0]!.id); outcome = 'completed'; return;}
           if (memoryRepair) {
-            if (!finalText && !directorWaiting()) throw new ExecutionRecoveryError('no_delivery', 'stop');
+            if (!finalText && !directorWaiting()) {
+            if (remindEmptyReply()) continue requestLoop;
+            throw new ExecutionRecoveryError('no_delivery', 'stop');
+          }
             outcome = 'completed'; return;
           }
           memoryRepair = true;
@@ -681,7 +696,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           if (await holdClose()) continue requestLoop;
           if (await drainInbox(true)) continue;
           context.signal.throwIfAborted();
-          if (!finalText && !directorWaiting()) throw new ExecutionRecoveryError('no_delivery', 'stop');
+          if (!finalText && !directorWaiting()) {
+            if (remindEmptyReply()) continue requestLoop;
+            throw new ExecutionRecoveryError('no_delivery', 'stop');
+          }
           outcome = 'completed'; return;
         }
         if (turn.stop === 'complete' && !turn.message.text.trim() && (wait.pending || owesReply())) {

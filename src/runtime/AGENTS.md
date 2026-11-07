@@ -10,6 +10,7 @@
 |---|---|---|
 | Follow one model round trip, stop conditions or `_FinishRound` closure | `src/kernel/agent.ts:createAgent()` | `src/kernel/execution-recovery.ts:ExecutionRecoveryError`, `src/tools/protocol/_FinishRoundTool/_FinishRoundTool.ts` |
 | Change activity labels (`UpdateTaskProgress`) | `task-progress.ts:TaskProgress` | `contracts.ts:activityProgressSchema`, `contracts.ts:currentTaskProgress()` |
+| Audit how many `⏵` stages a task emitted | `contracts.ts:activityProgressSchema` (`stageHistory`, last `STAGE_HISTORY_LIMIT`) | the `stage` field of ledger assistant messages (`messages.ts:modelMessageSchema`), `src/kernel/agent.ts` (stage extraction); observability only, never read back for behavior |
 | Fix step timing, Thinking groups or tool clocks | `steps.ts:Steps` | `contracts.ts:stepSchema`, `steps.ts:stepElapsed()` |
 | Change what a snapshot contains | `contracts.ts:RuntimeSnapshot` | `store.ts:RuntimeStore`, `contracts.ts:immutable()`, `activities.ts:Activities` |
 | Change who an input came from | `provenance.ts:inputKind()` | `contracts.ts:taskOriginSchema`, `provenance.ts:inputMessage()` |

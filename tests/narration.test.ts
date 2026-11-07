@@ -70,7 +70,7 @@ test('agent loop extracts ⏵ narration into activity progress and keeps the sta
     await task.done;
     const activity = app.store.getSnapshot().activities.find(a => a.activityId === task.activityId)!;
     assert.equal(activity.status, 'completed');
-    assert.deepEqual(activity.progress, {label: '正在检索项目结构'});
+    assert.deepEqual(activity.progress, {label: '正在检索项目结构', stageHistory: ['正在检索项目结构']});
 
     const msg = app.store.getSnapshot().messages.find(m => m.activityId === task.activityId && m.role === 'assistant' && !m.kind);
     assert.ok(msg);

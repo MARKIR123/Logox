@@ -2,28 +2,58 @@ import {z} from 'zod';
 
 const inline = z.string().trim().min(1).max(200).regex(/^[^\r\n\t]+$/);
 
-export const automaPresetSchema = z.strictObject({
-  tools: z.enum(['read', 'write']),
-  commands: z.array(inline).max(32).optional(),
-  /** Commands that produce shared artifacts; they run one at a time across every job in the workspace. */
-  exclusive: z.array(inline).max(32).optional(),
+/** A worker style: the system-prompt flavour, model and concurrency of a kind of worker. It grants nothing. */
+export const automaStyleSchema = z.strictObject({
   model: inline.optional(),
-}).refine(preset => (preset.exclusive ?? []).every(command => preset.commands?.includes(command)), 'exclusive commands must also be listed in commands');
+  /** How many workers of this style run at once; the dispatch can still ask for fewer. */
+  parallel: z.number().int().min(1).max(8).optional(),
+  /** A short paragraph appended to the worker's system prompt. */
+  flavor: z.string().trim().min(1).max(800).optional(),
+});
 
-export const automaProfileSchema = z.strictObject({
+/** Accepts the retired `default_preset` / `presets` shape: grants (`tools`, `commands`) are dropped, `exclusive` moves to the profile. */
+function migrateLegacyProfile(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const raw = {...(value as Record<string, unknown>)};
+  if (raw.presets === undefined || raw.styles !== undefined) return raw;
+  const exclusive = new Set<string>(Array.isArray(raw.exclusive) ? raw.exclusive.filter((item): item is string => typeof item === 'string') : []);
+  const styles: Record<string, unknown> = {};
+  for (const [name, preset] of Object.entries(raw.presets as Record<string, unknown>)) {
+    const item = preset && typeof preset === 'object' ? preset as Record<string, unknown> : {};
+    if (Array.isArray(item.exclusive)) for (const command of item.exclusive) if (typeof command === 'string') exclusive.add(command);
+    styles[name] = {...(item.model !== undefined ? {model: item.model} : {}), ...(item.flavor !== undefined ? {flavor: item.flavor} : {})};
+  }
+  const {presets: _presets, default_preset, ...rest} = raw;
+  return {...rest, ...(default_preset !== undefined ? {default_style: default_preset} : {}), styles, ...(exclusive.size ? {exclusive: [...exclusive]} : {})};
+}
+
+export const automaProfileSchema = z.preprocess(migrateLegacyProfile, z.strictObject({
   name: inline,
-  default_preset: inline,
+  /** The style the runtime uses unless a dispatch names another. */
+  default_style: inline,
+  /** The style used when a job edits the workspace (`writes`); falls back to `default_style`. */
+  write_style: inline.optional(),
   model: inline.optional(),
-  presets: z.record(inline, automaPresetSchema),
-}).refine(profile => Object.hasOwn(profile.presets, profile.default_preset), 'default_preset must name an entry in presets');
+  /** Command prefixes that run one at a time across a dispatch's workers (shared build artifacts). */
+  exclusive: z.array(inline).max(32).optional(),
+  styles: z.record(inline, automaStyleSchema),
+}).refine(profile => Object.hasOwn(profile.styles, profile.default_style) && (!profile.write_style || Object.hasOwn(profile.styles, profile.write_style)),
+  'default_style and write_style must name entries in styles'));
 
-export type AutomaPreset = z.infer<typeof automaPresetSchema>;
-export type AutomaProfile = z.infer<typeof automaProfileSchema>;
+export type AutomaStyle = z.infer<typeof automaStyleSchema>;
+export type AutomaProfile = z.output<typeof automaProfileSchema>;
+
+/** The runtime picks the style; a valid name from the model wins, an unknown one is ignored with a note. */
+export function chooseStyle(profile: AutomaProfile, requested: string | undefined, writes: boolean): {name: string; note?: string} {
+  if (requested && Object.hasOwn(profile.styles, requested)) return {name: requested};
+  const name = writes && profile.write_style ? profile.write_style : profile.default_style;
+  return requested ? {name, note: `Style "${requested}" does not exist (available: ${Object.keys(profile.styles).join(', ')}); used "${name}". You never need to name one.`} : {name};
+}
 
 export interface AutomaModelChoice {readonly provider: string; readonly model: string}
 
 /**
- * The user's `/model automa` choice always wins. Otherwise `preferred` (preset, then role) applies when this account has it,
+ * The user's `/model automa` choice always wins. Otherwise `preferred` (style, then role) applies when this account has it,
  * as an exact name or a family such as `haiku` on the session's provider; otherwise the session model.
  */
 export function chooseAutomaModel(input: {
@@ -45,5 +75,5 @@ export function chooseAutomaModel(input: {
   return family ? {provider: session.provider, model: family} : session;
 }
 
-/** Used by actors whose profile has no `automa` block: read-only, with no commands. */
-export const DEFAULT_AUTOMA_PROFILE: AutomaProfile = {name: 'automa', default_preset: 'scout', presets: {scout: {tools: 'read'}}};
+/** Used by actors whose profile has no `automa` block: one plain style. */
+export const DEFAULT_AUTOMA_PROFILE: AutomaProfile = {name: 'automa', default_style: 'scout', styles: {scout: {}}};

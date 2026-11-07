@@ -2,6 +2,7 @@ export const previousBrowserSkills: Readonly<Record<string, readonly string[]>> 
   'public/browser-screenshot.md': [
     '6afd07dafdefb817e871c43610eab2ff63f86ce5b489f29156307637bccc6a25',
     '34ecc02c28e7b6b86247540f32b99785861853c916ba1c22b78516978804e7b4',
+    '3aa23afaccf1e95446daa50f211e33e8d786c1a16b258c5b4adc8e9cb6932b57',
   ],
   'aletheia/inspection/visual-qa.md': ['cb2886c4b7bfd2d2546a3e57b1e6805ef86f22b6dffcde98664c1dc7e9b3522b'],
   'aletheia/investigation-principles.md': ['6588f6ecd6d168bf4e6d98d21029b05b0d70a738a4be939a751684ad0e95593e'],

@@ -37,7 +37,7 @@ export function registerActiveProcess(id: string, execution: ActiveToolExecution
 
 export function killActiveProcess(id: string, reason = 'Terminated by director', by: StopSource = 'system'): boolean {
   const execution = activeExecutions.get(id);
-  if (!execution) return false;
+  if (!execution) return [...backgroundJobs.values()].some(job => (job.callId === id || job.id === id) && stopBackgroundJob(job.id) !== undefined);
   execution.kill(reason, by);
   activeExecutions.delete(id);
   return true;
@@ -196,4 +196,97 @@ export function runProcess(
 
     if (signal.aborted) abort();
   });
+}
+
+/** Kills a process and everything it started. */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore'});
+    killer.on('error', () => child.kill());
+    killer.once('close', code => {if (code !== 0) child.kill();});
+  } else {
+    try {process.kill(-child.pid, 'SIGKILL');} catch {child.kill('SIGKILL');}
+  }
+}
+
+/** A command started with `run_in_background`: it outlives the Shell call and ends with its activity, on `ShellJob` stop, or at shutdown. */
+export interface BackgroundJob {
+  readonly id: string;
+  readonly pid: number;
+  readonly command: string;
+  readonly activityId: string | undefined;
+  readonly callId: string | undefined;
+  readonly startedAt: number;
+  /** Exit code once the process has ended (`null` when it was killed). */
+  exitCode: number | null | undefined;
+  stopped: boolean;
+  /** Output not yet returned to the model, bounded to its most recent bytes. */
+  unread: string;
+  /** True when older unread output was dropped to stay bounded. */
+  dropped: boolean;
+  readonly child: ChildProcess;
+}
+
+const BACKGROUND_OUTPUT_LIMIT = 32_000;
+const BACKGROUND_SETTLE_MS = 1_000;
+const backgroundJobs = new Map<string, BackgroundJob>();
+let backgroundCounter = 0;
+
+export function startBackgroundProcess(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  metadata?: {activityId?: string; toolId?: string},
+  settleMs = BACKGROUND_SETTLE_MS,
+): Promise<BackgroundJob> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {cwd, env: process.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
+    let started = false;
+    child.once('error', error => {if (!started) reject(error);});
+    if (!child.pid) return;
+    started = true;
+    const job: BackgroundJob = {id: 'job-' + ++backgroundCounter, pid: child.pid, command: args[args.length - 1] ?? command,
+      activityId: metadata?.activityId, callId: metadata?.toolId, startedAt: Date.now(), exitCode: undefined, stopped: false, unread: '', dropped: false, child};
+    backgroundJobs.set(job.id, job);
+    const collect = (data: string) => {
+      job.unread += data;
+      if (job.unread.length > BACKGROUND_OUTPUT_LIMIT) {job.unread = job.unread.slice(-BACKGROUND_OUTPUT_LIMIT); job.dropped = true;}
+    };
+    child.stdout?.setEncoding('utf8'); child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', collect); child.stderr?.on('data', collect);
+    child.once('close', code => {job.exitCode = code;});
+    // Initial output: wait briefly for startup lines or an early exit, then hand control back.
+    const timer = setTimeout(() => resolve(job), settleMs);
+    timer.unref?.();
+    child.once('close', () => {clearTimeout(timer); resolve(job);});
+  });
+}
+
+/** Returns the output produced since the last read and clears it. */
+export function takeBackgroundOutput(id: string): {job: BackgroundJob; output: string; dropped: boolean} | undefined {
+  const job = backgroundJobs.get(id);
+  if (!job) return undefined;
+  const output = job.unread, dropped = job.dropped;
+  job.unread = ''; job.dropped = false;
+  return {job, output, dropped};
+}
+
+/** Kills one background job, keeping it listed so its remaining output can still be read. */
+export function stopBackgroundJob(id: string): BackgroundJob | undefined {
+  const job = backgroundJobs.get(id);
+  if (!job) return undefined;
+  if (job.exitCode === undefined && !job.stopped) {job.stopped = true; killTree(job.child);}
+  return job;
+}
+
+/** Kills the background jobs a finished activity started and forgets every job it owned. */
+export function killBackgroundJobs(activityId?: string): number {
+  let count = 0;
+  for (const job of [...backgroundJobs.values()]) {
+    if (activityId !== undefined && job.activityId !== activityId) continue;
+    if (job.exitCode === undefined && !job.stopped) {job.stopped = true; killTree(job.child); count++;}
+    if (job.exitCode !== undefined || job.stopped) setTimeout(() => backgroundJobs.delete(job.id), 60_000).unref?.();
+  }
+  return count;
 }

@@ -1,23 +1,24 @@
-import {resolve} from 'node:path';
+import {relative, resolve} from 'node:path';
 import {shellWords} from '../../../permissions/shell.js';
-import {classifyShellCommand} from '../../ShellTool/classify.js';
-import {inside, ownsPath, patternBase, patternsOverlap} from '../../ownership.js';
-import type {AutomaProfile} from './preset.js';
+import {ownsPath, patternsOverlap} from '../../ownership.js';
+import {canonicalPath, within} from './paths.js';
+import {chooseStyle, type AutomaProfile} from './preset.js';
 
-/** What one job may touch. It only narrows: the principal's tool access and the permission engine still apply to every call. */
+/**
+ * What one job may do beyond the baseline (read whatever the dispatcher can read, run commands the permission engine allows,
+ * write the dispatcher's own scratchpad): the workspace paths it may edit. It only narrows; the permission engine still judges every call.
+ */
 export interface JobGrant {
-  /** Read scope; absent means the whole workspace. */
-  readonly read?: readonly string[];
-  readonly files: readonly string[];
-  readonly commands: readonly string[];
+  /** Workspace-relative paths or globs the job may edit. */
+  readonly writes: readonly string[];
+  /** Command prefixes that run one at a time across jobs (shared build artifacts). */
   readonly exclusive: readonly string[];
 }
 
-const READ_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'] as const;
+const TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write', 'Shell'] as const;
 
-export function grantTools(grant: JobGrant): readonly string[] {
-  // Edit and Write are always offered: without `files` they are confined to the dispatcher's own scratchpad subdirectory.
-  return [...READ_TOOLS, 'Edit', 'Write', ...(grant.commands.length ? ['Shell'] : [])];
+export function grantTools(_grant: JobGrant): readonly string[] {
+  return TOOLS;
 }
 
 function matchesCommand(prefix: string, command: string): boolean {
@@ -30,47 +31,33 @@ export function isExclusiveCommand(grant: JobGrant, command: string): boolean {
   return grant.exclusive.some(prefix => matchesCommand(prefix, command));
 }
 
-export function shellDenial(grant: JobGrant, command: string): string | undefined {
-  if (grant.commands.some(prefix => matchesCommand(prefix, command))) return undefined;
-  // A narrowed read scope cannot be checked against arbitrary shell words, so read-only commands need the whole workspace.
-  if (!grant.read && classifyShellCommand(command) !== 'command') return undefined;
-  return `Command is outside this job's grant. Allowed command prefixes: ${grant.commands.join(', ') || 'none'}. Compound and dynamic commands never match.`;
-}
-
 export interface GrantPath {
-  /** The requested path and the base it is measured from, before and after resolving links; both must pass. */
+  /** The requested path (absolute) and the same path after resolving links. */
   readonly lexical: string;
-  readonly cwd: string;
   readonly canonical: string;
+  /** The workspace root. */
   readonly root: string;
-  /** The dispatcher's own scratchpad subdirectory (lexical and canonical): the only place outside the grant where a worker may write. */
-  readonly scratch?: {readonly lexical: string; readonly canonical: string};
+  /** The dispatcher's own scratchpad subdirectory: the one place outside `writes` where a worker may write. */
+  readonly scratch?: string;
 }
 
+/** Only workspace writes are scoped: reads and commands go to the permission engine under the dispatcher's name. */
 export function pathDenial(tool: string, grant: JobGrant, path: GrantPath): string | undefined {
-  const both = (check: (target: string, base: string) => boolean) => check(path.lexical, path.cwd) && check(path.canonical, path.root);
-  if (tool === 'Edit' || tool === 'Write') {
-    const scratch = path.scratch;
-    if (scratch && inside(scratch.lexical, path.lexical) && inside(scratch.canonical, path.canonical)) return undefined;
-    return both((target, base) => inside(base, target) && ownsPath(grant.files, target, base)) ? undefined
-      : `Path is outside this job's write grant: ${path.lexical}. ${grant.files.length ? `Writable: ${grant.files.join(', ')}` : 'No workspace files are writable'}${scratch ? ` and your scratchpad ${scratch.lexical}` : ''}. Put scratch scripts in the scratchpad and report anything else in notes.`;
-  }
-  if (!inside(path.root, path.canonical)) return `Path is outside the workspace: ${path.lexical}.`;
-  if (!grant.read) return undefined;
-  const scope = [...grant.read, ...grant.files];
-  const allowed = tool === 'Read'
-    ? both((target, base) => ownsPath(scope, target, base))
-    : both((target, base) => scope.some(pattern => inside(resolve(base, patternBase(pattern, base)), target)));
-  return allowed ? undefined : `Path is outside this job's read scope (${scope.join(', ')}): ${path.lexical}. Search within the scope.`;
+  if (tool !== 'Edit' && tool !== 'Write') return undefined;
+  // Every spelling is canonicalised (links, 8.3 names, case, slashes) before it is compared with a scope.
+  const forms = [path.lexical, path.canonical].map(item => canonicalPath(item));
+  if (path.scratch && forms.every(form => within(path.scratch!, form))) return undefined;
+  const root = canonicalPath(path.root);
+  if (forms.every(form => within(root, form) && ownsPath(grant.writes, form, root))) return undefined;
+  const scratchHint = path.scratch ? ` Scratch scripts and notes go in your scratchpad ${path.scratch}.` : '';
+  return `Not written: ${path.lexical} is outside this job's writes (${grant.writes.length ? grant.writes.join(', ') : 'none: a read-only job'}).${scratchHint} Report the change under "Not verified" instead of making it.`;
 }
 
 export interface AutomaJobArgs {
   readonly title?: string | undefined;
   readonly brief: string;
-  readonly read?: readonly string[] | undefined;
-  readonly files?: readonly string[] | undefined;
-  readonly commands?: readonly string[] | undefined;
-  readonly output?: 'text' | 'json' | undefined;
+  /** Workspace paths or globs this job may edit; absent means read-only. */
+  readonly writes?: readonly string[] | undefined;
   /** Keep this worker's context after the job so a later job can continue it. */
   readonly keep?: boolean | undefined;
   /** Id of a live kept worker to continue; anything else is ignored with a note. */
@@ -80,42 +67,60 @@ export interface AutomaJobArgs {
 export interface RetainedGrant {
   readonly id: string;
   readonly grant: JobGrant;
+  readonly system: string;
 }
 
 export interface PlannedJob {
   readonly job: AutomaJobArgs & {readonly title: string};
   readonly grant: JobGrant;
   readonly model?: string | undefined;
+  /** The worker's full system prompt (base contract plus style flavour). */
+  readonly system: string;
   readonly denial?: string | undefined;
 }
 
 export const AUTOMA_MAX_RETAINED = 2;
 
-const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+)$/;
+const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+|\/)$/;
 
 export function titleFrom(brief: string): string {
   const line = brief.trim().split(/\r?\n/)[0]!.replace(/\s+/g, ' ');
   return line.length <= 60 ? line : line.slice(0, 59).trimEnd() + '…';
 }
 
-function filesError(pattern: string, cwd: string): string | undefined {
-  const text = pattern.trim().replaceAll('\\', '/');
-  if (WORKSPACE_WIDE.test(text) || text === '/') return `\`files\` must name specific paths, not the whole workspace: ${pattern}`;
-  if (text.split('/').includes('..') || !inside(cwd, resolve(cwd, text.replace(/[*?].*$/, '')))) return `\`files\` must stay inside the workspace: ${pattern}.`;
-  return undefined;
+type Normalized = {kind: 'write'; pattern: string} | {kind: 'scratch'} | {kind: 'outside'} | {kind: 'wide'};
+
+/** One `writes` entry as a workspace-relative pattern; any spelling of a path inside the dispatcher's scratchpad counts as scratch. */
+export function normalizeWrite(entry: string, cwd: string, scratch: string | undefined): Normalized {
+  const text = entry.trim().replaceAll('\\', '/');
+  if (WORKSPACE_WIDE.test(text)) return {kind: 'wide'};
+  const segments = text.split('/');
+  const wild = segments.findIndex(segment => /[*?]/.test(segment));
+  const fixed = (wild < 0 ? segments : segments.slice(0, wild)).join('/'), tail = wild < 0 ? '' : segments.slice(wild).join('/');
+  // A bare glob such as `*.css` or `**/*.ts` matches anywhere in the workspace.
+  if (wild === 0) return {kind: 'write', pattern: text};
+  const root = canonicalPath(cwd), target = canonicalPath(resolve(cwd, fixed || '.'));
+  if (scratch && within(scratch, target)) return {kind: 'scratch'};
+  if (!within(root, target)) return {kind: 'outside'};
+  const pattern = [relative(root, target).replaceAll('\\', '/'), tail].filter(Boolean).join('/');
+  return pattern ? {kind: 'write', pattern} : {kind: 'wide'};
 }
 
-/** Validates a dispatch against the principal's profile before any worker starts; a refused dispatch has no side effects. */
+/** Validates a dispatch against the principal's profile. Fixable mistakes are normalised with a note; only a few shapes are refused, each with its fix. */
 export function planDispatch(input: {
   readonly jobs: readonly AutomaJobArgs[];
-  readonly preset?: string | undefined;
+  readonly style?: string | undefined;
   readonly release: readonly string[];
   readonly profile: AutomaProfile;
   readonly cwd: string;
+  /** The dispatcher's own scratchpad subdirectory. */
+  readonly scratch?: string | undefined;
   readonly retained: readonly RetainedGrant[];
   /** Who currently holds a write pattern, when it is not the principal. */
   readonly holder: (pattern: string) => string | undefined;
-}): {ok: true; jobs: readonly PlannedJob[]; /** Ids this dispatch really releases. */ release: readonly string[]; note?: string} | {ok: false; error: string} {
+  /** The base worker system prompt; the style flavour is appended. */
+  readonly system: string;
+}): {ok: true; jobs: readonly PlannedJob[]; style: string; parallel?: number; /** Ids this dispatch really releases. */ release: readonly string[]; note?: string} | {ok: false; error: string} {
   const {profile, cwd} = input;
   const refuse = (error: string) => ({ok: false as const, error});
   const live = new Set(input.retained.map(item => item.id));
@@ -137,68 +142,50 @@ export function planDispatch(input: {
     return true;
   });
   const fresh = resolved.filter(item => !item.resume);
-  const needsWrite = fresh.some(item => item.job.files?.length);
-  const wanted = fresh.flatMap(item => item.job.commands ?? []);
-  const fits = (name: string) => {
-    const item = profile.presets[name]!;
-    return (!needsWrite || item.tools === 'write') && wanted.every(command => (item.commands ?? []).some(prefix => matchesCommand(prefix, command)));
-  };
-  let presetName = input.preset ?? '';
-  if (!Object.hasOwn(profile.presets, presetName)) {
-    // Presets are a means, not a decision: pick the first one that covers the files and commands the jobs ask for.
-    const chosen = [profile.default_preset, ...Object.keys(profile.presets)].find(fits) ?? profile.default_preset;
-    if (input.preset) notes.push(`Preset "${input.preset}" does not exist (available: ${Object.keys(profile.presets).join(', ')}); used "${chosen}".`);
-    presetName = chosen;
-  }
-  const preset = profile.presets[presetName]!;
+  const choice = chooseStyle(profile, input.style, fresh.some(item => item.job.writes?.length));
+  if (choice.note) notes.push(choice.note);
+  const style = profile.styles[choice.name]!;
+  const system = input.system + (style.flavor ? '\n\nStyle: ' + style.flavor : '');
   const planned: PlannedJob[] = [];
   let slots = AUTOMA_MAX_RETAINED - input.retained.filter(item => !release.includes(item.id)).length;
   const heldBy = (files: readonly string[]) => files.flatMap(pattern => {
     const holder = input.holder(pattern);
     return holder ? [`${pattern} is held by ${holder}`] : [];
   });
+  const coordinate = (held: readonly string[]) => held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {};
   for (const {job: raw, resume} of resolved) {
     const {continue: _requested, ...base} = raw;
     const job = {...base, title: raw.title ?? titleFrom(raw.brief)};
     if (resume) {
       const instance = input.retained.find(item => item.id === resume)!;
-      if (job.read || job.files || job.commands) notes.push(`Kept worker "${resume}" keeps the grant it was created with; read, files and commands on "${job.title}" were ignored.`);
-      const {read: _read, files: _files, commands: _commands, ...rest} = job;
-      const held = heldBy(instance.grant.files);
-      planned.push({job: {...rest, continue: resume}, grant: instance.grant, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
+      if (job.writes) notes.push(`Kept worker "${resume}" keeps the writes it was created with; \`writes\` on "${job.title}" was ignored.`);
+      const {writes: _writes, ...rest} = job;
+      planned.push({job: {...rest, continue: resume}, grant: instance.grant, system: instance.system, ...coordinate(heldBy(instance.grant.writes))});
       continue;
     }
-    if (job.files?.length && preset.tools !== 'write') {
-      const writable = Object.entries(profile.presets).filter(([, item]) => item.tools === 'write').map(([name]) => name);
-      return refuse(`Preset "${presetName}" is read-only, so \`files\` cannot be granted. ${writable.length ? 'Writable presets: ' + writable.join(', ') + '.' : 'This actor has no writable preset.'}`);
-    }
-    for (const pattern of job.files ?? []) {
-      const error = filesError(pattern, cwd);
-      if (error) return refuse(error);
-    }
-    const allowed = preset.commands ?? [];
-    const outside = (job.commands ?? []).filter(command => !allowed.some(prefix => matchesCommand(prefix, command)));
-    if (outside.length) {
-      const others = Object.entries(profile.presets).filter(([name, item]) => name !== presetName && (item.commands?.length)).map(([name, item]) => `${name} (${item.commands!.join(', ')})`);
-      return refuse(`Preset "${presetName}" does not allow the command prefix: ${outside.join(', ')}. Allowed: ${allowed.join(', ') || 'none'}.${others.length ? ' Other presets: ' + others.join('; ') + '.' : ''} Put the command in a Shell call of your own if no preset fits.`);
+    const writes: string[] = [];
+    for (const entry of job.writes ?? []) {
+      const found = normalizeWrite(entry, cwd, input.scratch);
+      if (found.kind === 'wide') return refuse(`\`writes\` on "${job.title}" names the whole workspace (${entry}). Name the specific files or directories the job edits (for example "src/parser/**"), or remove \`writes\` if the job only reads.`);
+      if (found.kind === 'scratch') continue;
+      if (found.kind === 'outside') {notes.push(`\`writes\` entry "${entry}" on "${job.title}" is outside the workspace and was dropped (your scratchpad is always writable without a grant).`); continue;}
+      if (!writes.includes(found.pattern)) writes.push(found.pattern);
     }
     let keep = job.keep;
     if (keep) {
       if (slots > 0) slots--;
       else {keep = false; notes.push(`"${job.title}" was not kept: at most ${AUTOMA_MAX_RETAINED} workers may be kept at once. Release one with \`release\`, or let it end with your task.`);}
     }
-    const commands = job.commands ?? allowed;
-    const exclusive = (preset.exclusive ?? []).filter(prefix => commands.some(command => matchesCommand(prefix, command)));
-    const grant: JobGrant = {...(job.read?.length ? {read: job.read} : {}), files: job.files ?? [], commands, exclusive};
-    const held = heldBy(job.files ?? []);
-    planned.push({job: {...job, keep}, grant, model: preset.model ?? profile.model, ...(held.length ? {denial: held.join('; ') + '. Coordinate with its owner, then dispatch again.'} : {})});
+    const {writes: _given, ...rest} = job;
+    const grant: JobGrant = {writes, exclusive: profile.exclusive ?? []};
+    planned.push({job: {...rest, ...(writes.length ? {writes} : {}), keep}, grant, system, model: style.model ?? profile.model, ...coordinate(heldBy(writes))});
   }
   for (let left = 0; left < planned.length; left++) {
     for (let right = left + 1; right < planned.length; right++) {
-      for (const a of planned[left]!.grant.files) for (const b of planned[right]!.grant.files) {
-        if (patternsOverlap(a, b, cwd)) return refuse(`Jobs "${planned[left]!.job.title}" and "${planned[right]!.job.title}" have overlapping files: ${a} and ${b}. Give each job a disjoint file set.`);
+      for (const a of planned[left]!.grant.writes) for (const b of planned[right]!.grant.writes) {
+        if (patternsOverlap(a, b, cwd)) return refuse(`Jobs "${planned[left]!.job.title}" and "${planned[right]!.job.title}" have overlapping writes: ${a} and ${b}. Give each job a disjoint set, or merge them into one job.`);
       }
     }
   }
-  return {ok: true, jobs: planned, release, ...(notes.length ? {note: notes.join('\n')} : {})};
+  return {ok: true, jobs: planned, style: choice.name, ...(style.parallel ? {parallel: style.parallel} : {}), release, ...(notes.length ? {note: notes.join('\n')} : {})};
 }

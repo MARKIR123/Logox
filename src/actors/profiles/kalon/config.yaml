@@ -35,8 +35,12 @@ activity_verbs:
   run: ["Staging/Staged", "Rehearsing/Rehearsed", "Performing/Performed", "Conjuring/Conjured", "Running/Ran"]
 automa:
   name: atelier hands
-  default_preset: scout
+  default_style: scout
+  write_style: variant
   model: haiku
-  presets:
-    scout: {tools: read}
-    variant: {tools: write, model: sonnet}
+  styles:
+    scout:
+      flavor: Look and report. Prefer search over reading whole files.
+    variant:
+      model: sonnet
+      flavor: Produce the requested variant inside your writes, check it renders or builds, and name what you compared.

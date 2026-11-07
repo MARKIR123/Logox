@@ -37,7 +37,7 @@ test('Actor compaction notices retain activity ownership, folding and restart id
 
 // Chinese fixtures retain compatibility coverage for legacy summaries and custom role text.
 const complete = (title: string, report = '验证通过'): ModelTurn => ({stop: 'complete',
-  message: {role: 'assistant', text: '原始工作细节\n【轮次摘要】\n标题：' + title + '\n报告：' + report}});
+  message: {role: 'assistant', text: '原始工作细节' + '过程记录'.repeat(3000) + '\n【轮次摘要】\n标题：' + title + '\n报告：' + report}});
 const call = (name: string, args: unknown): ModelTurn => ({stop: 'tools', message: {role: 'assistant', text: '',
   toolCalls: [{id: name, name, arguments: JSON.stringify(args)}]}});
 async function fixture(respond: Provider['respond'], defaultModel = false) {
@@ -51,7 +51,7 @@ async function fixture(respond: Provider['respond'], defaultModel = false) {
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/main': {context_window: 131072}, 'local/special': {context_window: 131072}},
-    context: {reserve_tokens: 20000}}, {}, cwd, cwd);
+    context: {reserve_tokens: 20000, task_end_floor_ratio: 0}}, {}, cwd, cwd);
   const options = {cwd, sessionId: 'actors', config, env: {}, authPath: join(cwd, 'auth.json'),
     resourceOptions: {home: cwd, boundary: cwd}, provider: {respond}};
   const app = await createApplication(options);

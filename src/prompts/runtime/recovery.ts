@@ -39,6 +39,9 @@ export function askOwedAtClose(asks: readonly {readonly from: string; readonly l
   return `Do not finish yet: you have not answered ${list}. Send SendMessage type "reply" to each with your answer, or with what stopped you from answering, then finish.`;
 }
 
+/** Sent once per run when the model returns only thinking or an empty reply, before the runtime counts it as a failure. */
+export const EMPTY_REPLY_REMINDER = 'Your previous reply was empty. Continue the task: call a tool or give your answer.';
+
 /** Appended once per run to a long streak of read-only results. */
 export const AUTOMA_STREAK_NOTE = '[Runtime] That is several read-only calls in a row. If more are coming and you only need the conclusion, hand the rest to `Automa` so the raw output stays out of your context. If you must understand this material yourself, carry on.';
 
@@ -58,7 +61,7 @@ export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerI
   const next = kind === 'no_delivery'
     ? adjustment && ownerId === 'logox'
       ? 'Pivot the action plan: narrow the current phase or delegate explicit smaller steps to a suitable actor. Deliver concrete artifacts or complete tool calls first.'
-      : 'Previous turn returned only thinking or an empty response (output quota exhausted before tools were called). Narrow to the minimum deliverable step, avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
+      : EMPTY_REPLY_REMINDER + ' Narrow to the minimum deliverable step, avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
     : kind === 'truncated_tools'
       ? 'Previous tool arguments were truncated; the entire batch was not executed. Issue smaller, complete tool calls without replaying completed tools.'
       : 'Previous output reached token limits. Continue the current step from the break point using existing text; do not replan or regenerate delivered content.';

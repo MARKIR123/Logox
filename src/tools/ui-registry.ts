@@ -9,6 +9,7 @@ import {UI as Edit} from './EditTool/UI.js';
 import {UI as Glob} from './GlobTool/UI.js';
 import {UI as Grep} from './GrepTool/UI.js';
 import {UI as Shell} from './ShellTool/UI.js';
+import {UI as ShellJob} from './ShellJobTool/UI.js';
 import {UI as AskUserQuestion} from './AskUserQuestionTool/UI.js';
 import {UI as WebFetch} from './WebFetchTool/UI.js';
 import {UI as Actor} from './orchestration/ActorTool/UI.js';
@@ -25,7 +26,7 @@ import {UI as Automa} from './orchestration/AutomaTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
-  Read, Write, Edit, Glob, Grep, Shell, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
+  Read, Write, Edit, Glob, Grep, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
   ListActors, CancelActor, UpdateTaskProgress, SendMessage, Automa,
   _FinishRound: FinishRound, _GitStatus: GitStatus, LoadTools, mcp: Mcp,
 };

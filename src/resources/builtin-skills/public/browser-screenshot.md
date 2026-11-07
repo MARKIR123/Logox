@@ -13,6 +13,7 @@ Use the local `playwright` MCP server for HTML, SVG, canvas, and browser UI veri
 - Every actor has its own isolated browser instance. Never wait for another actor to release a browser, and never send "browser free" handoffs.
 - Local files open directly with `file:///` URLs (for example `file:///G:/project/index.html`, forward slashes, three slashes); the server runs with unrestricted file access, so workspace and scratchpad paths both work. Prefer this over starting an HTTP server. Use HTTP only when the page needs a real origin (fetch, ES modules, service workers).
 - Save temporary screenshots and other artifacts in scratchpad. Omit a screenshot filename to use the server's isolated scratchpad output directory.
+- `browser_run_code` runs in a sandbox without `require` or dynamic `import`: use only the Playwright `page` object it provides, and run Node-side work (file reads, scripts) with `Shell` instead.
 - Never replace real clicks with synthetic DOM events to claim an interaction passed.
 - Ordinary screenshots capture the current state; they do not promise deterministic animation time or byte-identical images.
 

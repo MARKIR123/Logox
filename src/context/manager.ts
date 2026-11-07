@@ -4,7 +4,7 @@ import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeMessages} from '../runtime/messages.js';
 import {inputMessage} from '../runtime/provenance.js';
 import {Journal, storedMessage, type HistoryEntry} from '../store/journal.js';
-import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
+import {COMPACT_ACCEPT_RATIO, digest, estimateRequest, estimateText, TASK_END_FLOOR_RATIO, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
 import {historyForkInstruction, PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
 import {formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
@@ -134,9 +134,10 @@ export class ContextManager {
     return base;
   }
   async taskEnd(identity: Identity, base: Pick<ModelRequest, "system" | "tools">, signal: AbortSignal): Promise<void> {
-    if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true);
+    // Called only when a real task (Director assignment or human request) ends; the floor and benefit gate live in prepare().
+    if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true, new Set(), true);
   }
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, preserveCallIds: ReadonlySet<string> = new Set()):
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, preserveCallIds: ReadonlySet<string> = new Set(), taskEnd = false):
     Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
     signal.throwIfAborted();
     base = this.requestBase(identity, base);
@@ -161,9 +162,6 @@ export class ContextManager {
     state ??= empty;
     if (rounds.some(round => !round.closed && (state!.folded.includes(round.start) || state!.memo && round.start < state!.memo.end))) state = empty;
     const original = state, closed = rounds.filter(round => round.closed);
-    // Abnormal closure cannot wait for summarization; fold closed history on the next Actor request.
-    if (identity.ownerId !== 'logox') force ||= closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds))
-      .some(round => !original.folded.includes(round.start) && (!original.memo || round.end > original.memo.end));
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
     const projected = (candidate: ContextState, end = entries.length): ModelMessage[] => {
       // After a compaction, earlier thinking is never sent again: its signature bound the history that was replaced.
@@ -238,7 +236,10 @@ export class ContextManager {
     const meter = this.meter(identity);
     const before = meter.estimate(requestFor(state), model);
     let compacted = false, request = requestFor(state);
-    if (force || before >= marks.high) {
+    // A task end below the floor keeps the cached view; above the high watermark the normal watermark rules apply.
+    const floored = taskEnd && before < marks.high * (policy.task_end_floor_ratio ?? TASK_END_FLOOR_RATIO);
+    const gated = taskEnd && before < marks.high;
+    if (force && !floored || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
       this.options.compacting?.(identity, true);
       try {
@@ -294,7 +295,8 @@ export class ContextManager {
           }
         }
         const candidateRequest = requestFor(candidate);
-        if (estimateRequest(candidateRequest) < estimateRequest(requestFor(original)) ||
+        const after = estimateRequest(candidateRequest), previous = estimateRequest(requestFor(original));
+        if (gated ? after <= previous * (policy.compact_accept_ratio ?? COMPACT_ACCEPT_RATIO) : after < previous ||
           force && estimateRequest(candidateRequest) < marks.high && JSON.stringify({...candidate, thinkingCut: undefined}) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages), thinkingCut: undefined})) {
           candidate.sourceLength = entries.length; candidate.sourceHash = digest(entries);
           signal.throwIfAborted();
@@ -303,7 +305,7 @@ export class ContextManager {
           state = candidate; request = candidateRequest; compacted = true; meter.invalidate();
           const trigger = force ? 'history cleanup' : 'automatic';
           this.options.report?.(identity, `[Context] Compacted ~${before} to ~${estimateRequest(request)} tokens (${trigger}; high watermark ${marks.high}; window ${model.window}). Raw ledger retained.`);
-        } else if (force) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');
+        } else if (force && !gated) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');
       } catch (error) {
         signal.throwIfAborted();
         request = requestFor(original);

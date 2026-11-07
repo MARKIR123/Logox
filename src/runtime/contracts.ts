@@ -38,9 +38,13 @@ const legacyTaskProgressSchema = z.strictObject({planned: z.boolean(), revision:
     if (active.length > 1 || active[0]?.id !== progress.activeStageId) ctx.addIssue({code: 'custom', message: 'Only one stage can be active at a time'});
     if (!progress.planned && progress.stages.length > 0) ctx.addIssue({code: 'custom', message: 'Stages cannot exist without a registered plan'});
   });
+/** How many declared stages an activity's progress keeps. */
+export const STAGE_HISTORY_LIMIT = 30;
 export const activityProgressSchema = z.strictObject({
   label: z.string().trim().min(1).max(160).regex(/^[^\r\n]+$/, 'Use a single-line activity label'),
   detail: z.string().trim().min(1).max(1000).optional(),
+  /** The most recent stages this activity declared, oldest first (observability only). */
+  stageHistory: z.array(z.string().max(160)).max(STAGE_HISTORY_LIMIT).optional(),
 });
 export type ActivityProgress = z.infer<typeof activityProgressSchema>;
 // Legacy milestones remain readable as historical data, never rewritten on load.

@@ -32,12 +32,12 @@ activity_verbs:
   run: ["Testing/Tested", "Reproducing/Reproduced", "Verifying/Verified", "Probing/Probed", "Running/Ran"]
 automa:
   name: drone swarm
-  default_preset: scout
+  default_style: scout
   model: haiku
-  presets:
-    scout: {tools: read}
+  exclusive: ["npm test"]
+  styles:
+    scout:
+      flavor: Scout one slice of the question and report what you saw, not what you suppose.
     probe:
-      tools: read
-      commands: ["npm test", "npx tsc --noEmit", "python", "python3", "py", "node"]
-      exclusive: ["npm test"]
       model: sonnet
+      flavor: Verify by running things. Write a small script in your scratchpad or run the project's checks, and quote the command and its key output as evidence.

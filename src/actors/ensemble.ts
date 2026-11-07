@@ -11,7 +11,7 @@ import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
-import {killActiveProcess, killActivityProcesses} from '../tools/process.js';
+import {killActiveProcess, killActivityProcesses, killBackgroundJobs} from '../tools/process.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker} from '../prompts/runtime/interruption.js';
 
@@ -300,6 +300,7 @@ export class EnsembleRuntime<Id extends string> {
     this.closed = true;
     for (const task of [...this.tasks.values()]) this.cancel(task.activityId, 'shutdown');
     await Promise.allSettled([...this.activeSlots.values()]);
+    killBackgroundJobs();
     await Promise.allSettled([...this.pendingWrites]);
   }
   private identityOrigin(origin: TaskOrigin) {
@@ -531,7 +532,8 @@ export class EnsembleRuntime<Id extends string> {
       if (summary) task.outcome = {status: 'completed', title: summary.title, text: delivery?.text ?? summary.report};
       if (summary) {
         this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: 'Wrapping up', detail: summary.report});
-        try {await this.options.taskEnd?.(context, summary, 'completed');}
+        // Only a real task end (Director assignment or human request) may compact; collaboration and peer wakes never do.
+        try {if (origin.inputKind === 'director' || origin.inputKind === 'human') await this.options.taskEnd?.(context, summary, 'completed');}
         catch {this.store.message(this.sessionId, ownerId, 'notice', 'Task completed, but wrap-up did not finish; the raw ledger is preserved.', {activityId});}
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status: 'completed'});
@@ -592,6 +594,7 @@ export class EnsembleRuntime<Id extends string> {
         });
       }
     } finally {
+      killBackgroundJobs(activityId);
       this.store.interactions.cancelActivity(this.sessionId, activityId);
       this.controllers.delete(activityId);
     }

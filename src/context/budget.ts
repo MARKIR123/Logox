@@ -27,6 +27,10 @@ export function estimateRequest(request: ModelRequest): number {
   return estimateText(request.system) + estimateText(JSON.stringify(tools)) + 16 +
     request.messages.reduce((sum, message) => sum + estimateMessage(message), 0);
 }
+/** A real task end compacts only at or above this share of the high watermark. */
+export const TASK_END_FLOOR_RATIO = 0.5;
+/** A task-end compaction is accepted only when the result is at most this share of the original estimate. */
+export const COMPACT_ACCEPT_RATIO = 0.75;
 export interface BudgetPolicy {
   reserve_tokens: number; low_watermark_ratio: number; high_watermark_ratio?: number | undefined;
   max_budget_tokens?: number | undefined; target_budget_tokens?: number | undefined;

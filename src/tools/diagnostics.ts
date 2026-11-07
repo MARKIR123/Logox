@@ -25,6 +25,15 @@ export const diagnosticHandlers: Record<string, DiagnosticFn> = {
   mcp: diagnoseMcp,
 };
 
+/** The missing path: a path argument, else the quoted path the OS error names (`open 'x'`, `cannot access 'x'`); undefined when neither is known. */
+export function missingPath(args: Record<string, unknown>, rawError: string): string | undefined {
+  const argument = String(args.file_path ?? args.path ?? '').trim();
+  if (argument) return argument;
+  const quoted = /(?:open|stat|scandir|lstat|access|unlink|mkdir|rmdir|rename|copyfile|readdir|chdir|cannot access|cannot find path)\s*,?\s*['"`]([^'"`\r\n]+)['"`]/i.exec(rawError)
+    ?? /['"`]([^'"`\r\n]+)['"`][^\r\n]*(?:ENOENT|no such file or directory)/i.exec(rawError);
+  return quoted?.[1]?.trim() || undefined;
+}
+
 /**
  * Enriches tool errors with clean, two-part actionable self-healing guidance:
  * [Error Context]. [Actionable Prescription].
@@ -62,10 +71,10 @@ export function diagnoseToolError(call: ToolCall, result: ToolResult): ToolResul
 
   // 3. Generic OS I/O error enhancement (ENOENT, EISDIR, EACCES)
   if (result.text.includes('ENOENT') || result.text.includes('no such file or directory')) {
-    const targetPath = String(args.file_path ?? args.path ?? '');
+    const targetPath = missingPath(args, result.text);
     return {
       ...result,
-      text: `File or path "${targetPath || 'target'}" does not exist. Call Glob to locate the actual path before retrying. Do not guess file names.`,
+      text: `${targetPath ? `File or path "${targetPath}"` : 'A file or path named in the error'} does not exist. Call Glob to locate the actual path before retrying. Do not guess file names.`,
     };
   }
 

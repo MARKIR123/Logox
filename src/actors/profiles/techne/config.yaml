@@ -34,12 +34,13 @@ activity_verbs:
   run: ["Running/Ran", "Firing/Fired", "Cranking/Cranked", "Bench-testing/Bench-tested", "Driving/Drove"]
 automa:
   name: work crew
-  default_preset: scout
+  default_style: scout
+  write_style: edit
   model: haiku
-  presets:
-    scout: {tools: read}
+  exclusive: ["npm test", "npm run build"]
+  styles:
+    scout:
+      flavor: Investigate and report. Prefer search over reading whole files; edit nothing outside your scratchpad.
     edit:
-      tools: write
-      commands: ["npm test", "npm run build", "npx tsc --noEmit"]
-      exclusive: ["npm test", "npm run build"]
       model: sonnet
+      flavor: Make the requested change inside your writes, then verify it with the project's own check and quote its result as evidence.

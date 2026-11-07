@@ -24,22 +24,19 @@ import {shellSchema} from '../../ShellTool/ShellTool.js';
 import {SHELL_DESCRIPTION} from '../../ShellTool/prompt.js';
 import {grantTools, titleFrom, type JobGrant, type PlannedJob} from './grant.js';
 
-const pathList = (description: string) => z.array(z.string().min(1)).min(1).max(64).optional().describe(description);
+export const REPORT_WORD_LIMIT = 600;
 
 const automaJobSchema = z.strictObject({
   brief: z.string().trim().min(1).describe('What the worker must do. Stands alone: goal, scope, what not to touch, what to report. When continuing a kept worker, only the next step'),
   title: z.string().trim().min(1).max(80).optional().describe('Short label for the stage; omit to use the start of the brief'),
-  read: pathList('Narrow the paths or globs the job may read. Omit for the whole workspace'),
-  files: pathList('Paths or globs the job may write. Omit for a read-only job; never a placeholder'),
-  commands: pathList('Command prefixes the job may run, such as "npm test". Omit unless the job must run commands'),
-  output: z.enum(['text', 'json']).optional().describe('Set json only when the report must be a JSON value'),
+  writes: z.array(z.string().min(1)).min(1).max(64).optional().describe('Workspace paths or globs the job may edit. Omit for read-only work: reading, searching, commands and scratch scripts need no grant'),
   keep: z.boolean().optional().describe('Rare: true keeps this worker\'s context after the job; the receipt gives its id. Omit for single use'),
   continue: z.string().min(1).optional().describe('Rare: id a receipt returned for a kept worker, to give it a next step. Omit for a new job'),
 });
 
 export const automaArgs = z.strictObject({
   jobs: z.array(automaJobSchema).min(1).max(8).optional().describe('Independent jobs to run in parallel; one per question or file set'),
-  preset: z.string().min(1).optional().describe('Omit: the right preset is chosen from the files and commands you grant'),
+  style: z.string().min(1).optional().describe('Rare: a worker style from your profile. Omit: the runtime picks yours'),
   parallel: z.number().int().min(1).max(8).optional().describe('Omit unless you need fewer at once'),
   release: z.array(z.string().min(1)).min(1).max(8).optional().describe('Rare: ids of kept workers to end early; they also end with your task'),
 });
@@ -48,24 +45,33 @@ export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const WORKSPACE_READ = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+)$/;
+const JOB_KEYS = new Set(['brief', 'title', 'writes', 'keep', 'continue']);
+const TOP_KEYS = new Set(['jobs', 'style', 'parallel', 'release']);
 
-function cleanList(value: unknown, extra?: RegExp, keep?: RegExp): unknown {
+function cleanList(value: unknown, keep?: RegExp): unknown {
+  if (typeof value === 'string') value = [value];
   if (!Array.isArray(value)) return value;
-  const kept = value.filter(item => typeof item !== 'string' || keep?.test(item.trim()) || !(PLACEHOLDER.test(item.trim()) || extra?.test(item.trim())));
+  const kept = value.filter(item => typeof item === 'string' && item.trim() && (keep?.test(item.trim()) || !PLACEHOLDER.test(item.trim())));
   return kept.length ? kept : undefined;
 }
 
 /**
- * Forgiving front door for what models naturally write: `tasks` or bare strings for `jobs`, `task` for `brief`, a missing title,
- * and the placeholders ("n/a", "none", "new", "default") they put in optional fields. Real values pass through untouched.
+ * Forgiving front door for what models naturally write: `tasks` or bare strings for `jobs`, `task` for `brief`, `files` for `writes`,
+ * a missing title, and the placeholders ("n/a", "none", "new", "default") they put in optional fields. Retired fields (`read`,
+ * `commands`, `output`, `preset`) and unknown ones are dropped; each drop is reported through `notes`. Real values pass through untouched.
  */
-export function normalizeAutomaInput(input: unknown): unknown {
+export function normalizeAutomaInput(input: unknown, notes: string[] = []): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   const raw = {...(input as Record<string, unknown>)};
   if (raw.jobs === undefined && raw.tasks !== undefined) raw.jobs = raw.tasks;
   delete raw.tasks;
   if (typeof raw.jobs === 'string') raw.jobs = [raw.jobs];
+  const dropped = new Set<string>();
+  const drop = (key: string, value: unknown) => {
+    const empty = (item: unknown) => typeof item === 'string' && PLACEHOLDER.test(item.trim());
+    if (value === undefined || key === 'output' || empty(value) || (Array.isArray(value) && value.every(empty))) return;
+    dropped.add(key);
+  };
   if (Array.isArray(raw.jobs)) {
     raw.jobs = raw.jobs.map(item => {
       const job: Record<string, unknown> = typeof item === 'string' ? {brief: item} : item && typeof item === 'object' ? {...item as Record<string, unknown>} : {};
@@ -75,17 +81,21 @@ export function normalizeAutomaInput(input: unknown): unknown {
       }
       if (typeof job.title === 'string' && !job.title.trim()) delete job.title;
       if (job.title === undefined && typeof job.brief === 'string' && job.brief.trim()) job.title = titleFrom(job.brief);
-      job.read = cleanList(job.read, WORKSPACE_READ); job.files = cleanList(job.files, undefined, /^[./]$/); job.commands = cleanList(job.commands);
-      // Old names stay accepted: persistence -> keep, instance -> continue.
+      // Old names stay accepted: files -> writes, persistence -> keep, instance -> continue.
+      if (job.writes === undefined && job.files !== undefined) job.writes = job.files;
+      delete job.files;
+      job.writes = cleanList(job.writes, /^[./]$/);
       if (job.keep === undefined && job.persistence !== undefined) job.keep = job.persistence;
       if (job.continue === undefined && job.instance !== undefined) job.continue = job.instance;
       delete job.persistence; delete job.instance;
       if (job.keep === 'true' || job.keep === 'false') job.keep = job.keep === 'true';
       if (typeof job.keep !== 'boolean') delete job.keep;
       if (typeof job.continue !== 'string' || PLACEHOLDER.test(job.continue.trim())) delete job.continue; else job.continue = job.continue.trim();
-      if (job.output !== 'json') delete job.output;
       if (job.keep === false && !job.continue) delete job.keep;
-      for (const key of Object.keys(job)) if (job[key] === undefined) delete job[key];
+      for (const key of Object.keys(job)) {
+        if (!JOB_KEYS.has(key)) {drop(key, job[key]); delete job[key];}
+        else if (job[key] === undefined) delete job[key];
+      }
       return job;
     });
   }
@@ -97,18 +107,25 @@ export function normalizeAutomaInput(input: unknown): unknown {
   else if (raw.release !== undefined) {
     delete raw.release;
   }
-  if (typeof raw.preset === 'string' && PLACEHOLDER.test(raw.preset.trim())) delete raw.preset;
-  if (raw.parallel === 0 || raw.parallel === null) delete raw.parallel;
+  if (typeof raw.style !== 'string' || PLACEHOLDER.test(raw.style.trim())) delete raw.style; else raw.style = raw.style.trim();
+  if (typeof raw.parallel !== 'number' || !Number.isInteger(raw.parallel) || raw.parallel < 1 || raw.parallel > 8) delete raw.parallel;
+  for (const key of Object.keys(raw)) {
+    if (!TOP_KEYS.has(key)) {drop(key, raw[key]); delete raw[key];}
+  }
+  if (dropped.has('preset')) {dropped.delete('preset'); notes.push('`preset` is retired and was ignored: the runtime picks the worker style; workers can run commands under your permission rules.');}
+  if (dropped.has('commands')) {dropped.delete('commands'); notes.push('`commands` was ignored: workers run commands without a grant, judged by the same permission rules as yours.');}
+  if (dropped.has('read')) {dropped.delete('read'); notes.push('`read` was ignored: workers read whatever you can read.');}
+  if (dropped.size) notes.push('Ignored unknown fields: ' + [...dropped].join(', ') + '.');
   return raw;
 }
 
 export const AUTOMA_SYSTEM_PROMPT = `You are Automa, a stateless worker in LOGOX. You have no personality and nobody to talk to: the brief is everything you know, and your final message is the only thing your dispatcher reads.
-Do exactly what the brief asks, inside the grant it lists. Your tools are checked on every call. If a call is refused, do not look for another way around it; report it.
-Report what you actually found or did. Do not claim work you did not verify, and do not fix anything the brief did not ask for: if you find something that matters outside your scope, leave it and name it in notes.
-No greetings, no explanations of your method, no closing remarks. End with exactly this report:
-summary: what you found or did, or NO_MATCHES if nothing matched
-evidence: path:line coordinates or short verbatim excerpts that back the summary
-notes: anything found but left unhandled, including dependencies outside your scope; omit if none`;
+Do exactly what the brief asks. You may read anything your dispatcher can read and run commands, and you may write only the paths the brief lists plus your scratchpad. Every call is judged by your dispatcher's permission rules; if one is refused, do not look for another way around it, report it.
+Report what you actually found or did. Do not claim work you did not verify, and do not fix anything the brief did not ask for: if you find something that matters outside your scope, leave it and name it under Not verified.
+No greetings, no explanations of your method, no closing remarks. End with exactly this report, at most ${REPORT_WORD_LIMIT} words in total:
+Verdict: the answer or what you did, in one or two sentences, or NO_MATCHES if nothing matched. It must follow from the Evidence; if the Evidence does not support a claim, do not make it.
+Evidence: one line per item, either path:line or the command you ran with its key output.
+Not verified: what you did not check, could not do, or left unhandled; "none" if nothing.`;
 
 const toolDefinitions: Readonly<Record<string, ToolDefinition>> = {
   Read: {name: 'Read', description: READ_DESCRIPTION, parameters: z.toJSONSchema(readSchema)},
@@ -137,6 +154,7 @@ export interface RetainedInstance {
   readonly id: string;
   readonly workerId: string;
   readonly grant: JobGrant;
+  readonly system: string;
   readonly messages: readonly ModelMessage[];
   readonly resolved: ResolvedAutomaModel;
 }
@@ -165,23 +183,48 @@ export interface DispatchOptions {
   charge?(usage: ModelTurn['usage'], model: string): void;
 }
 
-interface Report {summary: string; evidence: string; notes: string}
+interface Report {verdict: string; evidence: string; notVerified: string}
 
-/** Splits the worker's closing report; anything unlabelled stays in the summary so nothing a worker said is lost. */
+const SECTION = /^\s*(?:[-*#]+\s*)?\*{0,2}(verdict|summary|evidence|not verified|notes)\*{0,2}\s*:\*{0,2}\s*(.*)$/i;
+const SECTION_KEY: Readonly<Record<string, keyof Report>> = {verdict: 'verdict', summary: 'verdict', evidence: 'evidence', 'not verified': 'notVerified', notes: 'notVerified'};
+
+/** Splits the worker's closing report; anything unlabelled stays in the verdict so nothing a worker said is lost. The old summary/notes labels still parse. */
 export function parseReport(text: string): Report {
-  let current: keyof Report = 'summary', labelled = false;
-  const unlabelled: string[] = [], collected: Record<keyof Report, string[]> = {summary: [], evidence: [], notes: []};
+  let current: keyof Report = 'verdict', labelled = false;
+  const unlabelled: string[] = [], collected: Record<keyof Report, string[]> = {verdict: [], evidence: [], notVerified: []};
   for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*(?:[-*]\s*)?\*{0,2}(summary|evidence|notes)\*{0,2}\s*:\*{0,2}\s*(.*)$/i.exec(line);
+    const match = SECTION.exec(line);
     if (match) {
       labelled = true;
-      current = match[1]!.toLowerCase() as keyof Report;
+      current = SECTION_KEY[match[1]!.toLowerCase()]!;
       if (match[2]) collected[current].push(match[2]);
     } else if (labelled) collected[current].push(line);
     else unlabelled.push(line);
   }
   const body = (key: keyof Report) => collected[key].join('\n').trim();
-  return {summary: [unlabelled.join('\n').trim(), body('summary')].filter(Boolean).join('\n'), evidence: body('evidence'), notes: body('notes')};
+  return {verdict: [unlabelled.join('\n').trim(), body('verdict')].filter(Boolean).join('\n'), evidence: body('evidence'), notVerified: body('notVerified')};
+}
+
+const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
+
+/** Keeps whole lines until the word budget is spent; an overlong first line is cut at a word. */
+function clipWords(text: string, budget: number): {text: string; cut: boolean} {
+  if (wordCount(text) <= budget) return {text, cut: false};
+  const kept: string[] = [];
+  let left = budget;
+  for (const line of text.split('\n')) {
+    const count = wordCount(line);
+    if (count <= left) {kept.push(line); left -= count; continue;}
+    if (left > 0 && !kept.length) kept.push(line.split(/\s+/).filter(Boolean).slice(0, left).join(' ') + ' …');
+    break;
+  }
+  return {text: kept.join('\n') || '…', cut: true};
+}
+
+/** Enforces the report cap section by section (verdict 150, evidence 330, not verified 120 words: 600 in all). */
+export function capReport(report: Report): {report: Report; cut: boolean} {
+  const verdict = clipWords(report.verdict, 150), evidence = clipWords(report.evidence, 330), notVerified = clipWords(report.notVerified, REPORT_WORD_LIMIT - 480);
+  return {report: {verdict: verdict.text, evidence: evidence.text, notVerified: notVerified.text}, cut: verdict.cut || evidence.cut || notVerified.cut};
 }
 
 function seconds(ms: number): string {
@@ -207,11 +250,10 @@ function changeLine(files: ReadonlyMap<string, {before: Buffer | null; after: Bu
 function briefText(planned: PlannedJob, scratch: string): string {
   const {job, grant} = planned;
   return [job.brief, '', 'Grant:',
-    '- read: ' + (grant.read ? [...grant.read, ...grant.files].join(', ') : 'the whole workspace'),
-    '- write: ' + (grant.files.join(', ') || 'no workspace files; this job is read-only'),
-    `- scratchpad: ${scratch} (you may write scratch scripts and notes here; nothing else outside the write list)`,
-    '- commands: ' + (grant.commands.join(', ') || 'none'),
-    ...(job.output === 'json' ? ['', 'Make the summary a single valid JSON value.'] : [])].join('\n');
+    '- read: anything your dispatcher can read',
+    '- write: ' + (grant.writes.join(', ') || 'no workspace files; this job is read-only'),
+    `- scratchpad: ${scratch} (write scratch scripts and notes here; nothing else outside the write list)`,
+    "- commands: allowed, judged by your dispatcher's permission rules"].join('\n');
 }
 
 async function respondWithRetry(resolved: ResolvedAutomaModel, request: Parameters<AutomaProvider['respond']>[0], signal: AbortSignal): Promise<ModelTurn> {
@@ -234,6 +276,11 @@ function callTitle(call: ToolCall): string {
     if (typeof value === 'string') detail = value;
   } catch {}
   return (call.name + ' ' + detail).replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/** The commands a worker ran, compact: the first few, then a count. */
+function ranLine(ran: readonly string[]): string {
+  return ran.length > 6 ? ran.slice(0, 6).join(', ') + `, +${ran.length - 6} more` : ran.join(', ');
 }
 
 function safeId(value: string): string {
@@ -270,7 +317,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
 
   const runJob = async (index: number): Promise<void> => {
     const planned = jobs[index]!, started = Date.now();
-    if (planned.denial) {await finish(index, 'denied', started, [['summary', planned.denial]]); return;}
+    if (planned.denial) {await finish(index, 'denied', started, [['verdict', planned.denial]]); return;}
     if (signal.aborted) {await finish(index, 'cancelled', started, []); return;}
     const kept = planned.job.continue ? options.instance(planned.job.continue) : undefined;
     const workerId = kept?.workerId ?? 'automa:' + options.activityId + ':' + randomUUID().slice(0, 8);
@@ -291,7 +338,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       let finalText = '', truncated = false;
       for (;;) {
         signal.throwIfAborted();
-        const turn = await respondWithRetry(resolved, {system: AUTOMA_SYSTEM_PROMPT, messages, tools, thinking: false}, signal);
+        const turn = await respondWithRetry(resolved, {system: planned.system, messages, tools, thinking: false}, signal);
         options.charge?.(turn.usage, resolved.model);
         signal.throwIfAborted();
         lastInput = turn.usage?.input ?? lastInput;
@@ -326,34 +373,32 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       stopTracking();
       if (!finalText) {
         if (kept) options.forget(kept.id);
-        await finish(index, 'failed', started, [['summary', 'The worker returned no report.'], ['changed', changeLine(written, options.root)], ['denied', refused.join(', ')]]);
+        await finish(index, 'failed', started, [['verdict', 'The worker returned no report.'], ['changed', changeLine(written, options.root)], ['denied', refused.join(', ')]]);
         return;
       }
-      const report = parseReport(finalText), notes: string[] = [];
+      const capped = capReport(parseReport(finalText)), report = capped.report, notes: string[] = [];
       if (truncated) notes.push('The report was cut off at the output limit.');
-      if (planned.job.output === 'json') {
-        try {JSON.parse(report.summary);} catch {notes.push('The summary is not valid JSON as requested.');}
-      }
+      if (capped.cut) notes.push(`Report trimmed to the ${REPORT_WORD_LIMIT}-word limit.`);
       const allDenied = refused.length > 0 && succeeded === 0 && written.size === 0;
       const wantsKeep = kept ? planned.job.keep !== false : planned.job.keep === true;
       let keptLine = '';
       if (wantsKeep && !allDenied && lastInput < AUTOMA_RETAINED_INPUT_LIMIT) {
         const id = kept?.id ?? 'w' + randomUUID().slice(0, 8);
-        options.retain({id, workerId, grant, messages, resolved});
+        options.retain({id, workerId, grant, system: planned.system, messages, resolved});
         keptLine = `${id} · continue with {"continue": "${id}"} and the next step as its brief; it ends with your task, or earlier with {"release": ["${id}"]}`;
       } else {
         if (kept) options.forget(kept.id);
         if (wantsKeep && !allDenied) notes.push(`Instance closed: its context reached ${lastInput} input tokens. Dispatch a fresh job with a complete brief.`);
       }
       await finish(index, allDenied ? 'denied' : 'done', started, [
-        ['summary', report.summary], ['changed', changeLine(written, options.root)], ['ran', ran.join(', ')], ['denied', refused.join(', ')],
-        ['evidence', report.evidence], ['notes', [report.notes, ...notes].filter(Boolean).join('\n')], ['kept', keptLine]]);
+        ['verdict', report.verdict], ['evidence', report.evidence], ['not verified', [report.notVerified, ...notes].filter(Boolean).join('\n')],
+        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')], ['kept', keptLine]]);
     } catch (error) {
       stopTracking();
       if (kept) options.forget(kept.id);
       await finish(index, signal.aborted ? 'cancelled' : 'failed', started, [
-        ...(signal.aborted ? [] : [['summary', error instanceof Error ? error.message : String(error)] as const]),
-        ['changed', changeLine(written, options.root)], ['ran', ran.join(', ')], ['denied', refused.join(', ')]]);
+        ...(signal.aborted ? [] : [['verdict', error instanceof Error ? error.message : String(error)] as const]),
+        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')]]);
     }
   };
 

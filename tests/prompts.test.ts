@@ -7,6 +7,7 @@ import {
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
 import {createRuntimeContextMessage} from '../src/runtime/context-updates.js';
+import {EMPTY_REPLY_REMINDER} from '../src/prompts/runtime/recovery.js';
 
 test('提示词工程：基础系统提示词按静态切片分层组装，核心准则在最前，定制人设追加在后', () => {
   const result = composeBaseSystemPrompt({
@@ -98,4 +99,23 @@ test('brief, scope and ownership rules live in the lowest layer that can enforce
   assert.match(profile('techne', 'execution.md'), /Edit, Never Rewrite/);
   assert.match(profile('aletheia', 'execution.md'), /Behaviour first[\s\S]*Skip what the brief lists as already verified/);
   assert.match(profile('kalon', 'execution.md'), /Own the Visual Artifacts[\s\S]*review the rendered result/);
+});
+
+test('stage rule: a phase defined by its deliverable, never re-emitted for rephrasing, with one contrasting example', () => {
+  assert.match(SHARED_EXECUTION_RULES, /phase of work[\s\S]*deliverable or decision/);
+  assert.match(SHARED_EXECUTION_RULES, /Re-checking, fixing small issues you find and re-running checks on the same artifact stay in the current stage/);
+  assert.match(SHARED_EXECUTION_RULES, /rephrasing a stage is never a reason to write a new one/);
+  assert.match(SHARED_EXECUTION_RULES, /- Good, one task:[\s\S]*- Bad, the same verification restated:/);
+  assert.equal(SHARED_EXECUTION_RULES.split('Good, one task').length - 1, 1);
+});
+
+test('final reports separate unverified checks and known risks; verification is incremental in both layers', () => {
+  assert.match(SHARED_EXECUTION_RULES, /a check you did not run or that does not apply is reported as not verified, and risks you found along the way are listed/);
+  assert.match(collaborationFor('techne'), /Verify incrementally: read the evidence a teammate's report or the brief's `verified` list already provides/);
+  assert.doesNotMatch(collaborationFor('logox'), /Verify incrementally/);
+  assert.match(profile('logox', 'collaboration.md'), /Verify incrementally: read the evidence in each report first[\s\S]*which teammate evidence you relied on/);
+});
+
+test('the empty-reply reminder is one static constant', () => {
+  assert.equal(EMPTY_REPLY_REMINDER, 'Your previous reply was empty. Continue the task: call a tool or give your answer.');
 });
