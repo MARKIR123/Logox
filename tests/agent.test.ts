@@ -466,3 +466,43 @@ test('repeated empty replies still end in a failed task after the reminder and t
     assert.notEqual(f.app.store.activities.get('test', handle.activityId)?.status, 'completed');
   } finally {await f.cleanup();}
 });
+
+test('the model sees its own stage as a plain "Stage:" first line, once per change and never with the glyph', async () => {
+  const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
+  const seen: ModelRequest[] = [];
+  const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
+  const f = await fixture(scripted([
+    watch(staged('⏵ Understanding the brief\nLooking around.', 'g1')),
+    watch(staged('⏵ Understanding the brief\nStill looking.', 'g2')),
+    watch(staged('⏵ Building the page', 'g3')),
+    watch(assistant('done')),
+  ]));
+  try {
+    await f.app.ensemble.dispatch('techne', 'build').done;
+    const last = seen.at(-1)!;
+    const texts = last.messages.filter(message => message.role === 'assistant').map(message => message.text);
+    assert.deepEqual(texts, ['Stage: Understanding the brief\nLooking around.', 'Still looking.', 'Stage: Building the page']);
+    assert.ok(!JSON.stringify(last.messages).includes('⏵'), 'the glyph never reaches the model');
+    // The same history renders identically on the next request: earlier messages never change.
+    const earlier = seen.at(-2)!.messages.filter(message => message.role === 'assistant').map(message => message.text);
+    assert.deepEqual(earlier, texts.slice(0, earlier.length));
+    // The timeline keeps the raw line for the UI.
+    assert.ok(f.app.store.getSnapshot().messages.some(message => message.role === 'assistant' && message.text.startsWith('⏵ Building the page')));
+  } finally {await f.cleanup();}
+});
+
+test('a failed or cancelled partial turn keeps no stage line in the ledger text', async () => {
+  const provider: Provider = {async respond(_request, onDelta) {
+    onDelta({kind: 'text', text: '⏵ Building the animation\nPartial report'});
+    throw new ProviderError('provider rejected the request');
+  }};
+  const f = await fixture(provider);
+  try {
+    await f.app.ensemble.dispatch('techne', 'build').done;
+    await f.app.journal.flush();
+    const entries = (await f.app.journal.load('test', 'techne')).filter(entry => entry.role === 'assistant');
+    assert.ok(entries.length > 0);
+    for (const entry of entries) assert.ok(!entry.text.includes('⏵'), entry.text);
+    assert.ok(entries.some(entry => entry.message?.role === 'assistant' && entry.message.stage === 'Building the animation'));
+  } finally {await f.cleanup();}
+});

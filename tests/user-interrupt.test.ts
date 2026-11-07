@@ -5,12 +5,13 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createTestApplication as createApplication, waitForSnapshot} from './runtime-fixture.js';
+import {stopNotice} from '../src/actors/ensemble.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
 import {ProcessStoppedError, USER_STOP_REASON, killActiveProcess, runProcess} from '../src/tools/process.js';
 import {executeShell} from '../src/tools/ShellTool/ShellTool.js';
 import {SHELL_CUT_SHORT_LINE, SHELL_STOPPED_BY_USER} from '../src/tools/ShellTool/prompt.js';
-import {DIRECTOR_INTERRUPTED_TOOL_TEXT, USER_INTERRUPTED_TOOL_TEXT, USER_INTERRUPT_MARKER, directorStopMarker} from '../src/prompts/runtime/interruption.js';
+import {DIRECTOR_INTERRUPTED_TOOL_TEXT, USER_INTERRUPTED_TOOL_TEXT, USER_INTERRUPT_MARKER, directorStopMarker, userInterruptMarkerWithWorking} from '../src/prompts/runtime/interruption.js';
 import {deliberateStopLabel, summarizeRound} from '../src/context/contracts.js';
 import {createRuntimeContextMessage} from '../src/runtime/context-updates.js';
 import {repairToolResults} from '../src/runtime/messages.js';
@@ -170,4 +171,22 @@ test('the marker is a hidden ledger note: no timeline row live or after the sess
       assert.ok(!messages.some(message => message.text.includes('Interrupted by user]')), 'restored timeline');
     } finally {await second.close();}
   } finally {await first.close().catch(() => {}); await rm(cwd, {recursive: true, force: true});}
+});
+
+test('stopping Logox while companions keep working: the marker names them, and a plain Esc keeps the standard marker', {timeout: 20000}, async () => {
+  const f = await fixture(scripted([writeTurn(), done()]));
+  try {
+    f.app.store.activities.create({sessionId: 'test', activityId: 'kalon-1', ownerId: 'kalon', kind: 'actor', title: 'Polish', stage: 'Working',
+      detail: '', status: 'running', inputKind: 'director'});
+    const first = f.app.ensemble.dispatch('logox', 'write it');
+    await waitForSnapshot(f.app.store, snapshot => snapshot.interactions.some(item => item.status === 'pending'));
+    f.app.cancel(first.activityId);
+    await first.done;
+    const entries = await f.app.journal.load('test', 'logox');
+    const marker = entries.filter(entry => entry.message?.role === 'context' && entry.message.kind === 'interruption');
+    assert.equal(marker.length, 1);
+    assert.equal(marker[0]!.text, userInterruptMarkerWithWorking(['Kalon']));
+    assert.ok(marker[0]!.text.startsWith('[Interrupted by user]') && marker[0]!.text.includes('Kalon'));
+    assert.equal(stopNotice('user', undefined, 'x')?.text, USER_INTERRUPT_MARKER);
+  } finally {await f.cleanup();}
 });

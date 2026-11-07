@@ -20,7 +20,6 @@ import {metadata as meta13} from './orchestration/ActorTool/ActorTool.js';
 import {metadata as meta14} from './orchestration/CraftActorTool/CraftActorTool.js';
 import {metadata as meta15} from './orchestration/ReadActorTool/ReadActorTool.js';
 import {metadata as meta16} from './orchestration/CancelActorTool/CancelActorTool.js';
-import {metadata as meta17} from './orchestration/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
 import {metadata as loadToolsMetadata} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {metadata as meta18} from './orchestration/AutomaTool/AutomaTool.js';
 
@@ -28,7 +27,7 @@ export interface ToolRegistration {metadata: ToolMetadataInput; definition: Tool
 export interface ResolvedTool {metadata: ToolMetadata; definition: ToolDefinition}
 
 export function builtinToolRegistrations(): readonly ToolRegistration[] {
-  return [meta0, meta1, meta2, meta3, meta4, meta5, metaShellJob, meta6, meta7, meta8, meta9, meta10, meta11, meta13, meta14, meta15, meta16, meta17, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
+  return [meta0, meta1, meta2, meta3, meta4, meta5, metaShellJob, meta6, meta7, meta8, meta9, meta10, meta11, meta13, meta14, meta15, meta16, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
     name: metadata.name,
     description: descriptions[metadata.name as keyof typeof descriptions],
     parameters: z.toJSONSchema(schemas[metadata.name as keyof typeof schemas], {io: 'input'}),

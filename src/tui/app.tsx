@@ -59,6 +59,7 @@ import {safeText} from './terminal/text.js';
 import {type QuestionDraft} from './interactions/choice-style.js';
 import {cursorAt, draftSelection, emptyDraft, erase, graphemes, InputHistory, inputViewport, insert, layoutInput, move, moveToLineEdge, moveVertical, moveWord, navigateDraft, removeDraftSelection, selectedText, type Draft} from './input/editor.js';
 import {inputKind} from '../runtime/provenance.js';
+import {ESC_STOP_WINDOW_MS, actorsStoppedNotice, actorsWorkingNotice, logoxStoppedNotice, roundScope, workingNames} from '../runtime/round-scope.js';
 import {
   hoveredCardAt,
   actionAt,
@@ -260,6 +261,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   }
   const draftRevisions = useRef(new Map<string, number>());
   const cancelledInputs = useRef(new Set<string>());
+  const escArmedUntil = useRef(0);
   const inputDrag = useRef<{key: string; anchor: number} | null>(null);
   const draft = drafts[currentView] ?? emptyDraft;
   const anchor = anchors.current[currentView] ?? null;
@@ -1172,6 +1174,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   useInput((input, key) => {
     plane?.noteInput();
     if (closing || key.eventType === 'release') return;
+    if (!key.escape) escArmedUntil.current = 0; // Any other key ends the second-Esc window.
     if (composerExpanded) {
       if (!(key.ctrl && input === 'c')) exitDeadline.current = 0;
       return;
@@ -1336,19 +1339,33 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (currentView !== 'logox') { switchView('logox'); return; }
       if (focus === 'stop') {setFocus('input'); return;}
       if (selection) { clearSelection(); return; }
-      const running = activities.find(item => item.ownerId === 'logox' && ['running', 'waiting_input', 'queued'].includes(item.status));
-      if (running && !cancelledInputs.current.has(running.activityId)) {
-        cancelledInputs.current.add(running.activityId);
-        onCancel(running.activityId);
+      const scope = roundScope(snapshot.activities, sessionId);
+      const nameOf = (ownerId: string) => roles[ownerId]?.name ?? ownerId;
+      const running = scope.director && !cancelledInputs.current.has(scope.director.activityId) ? scope.director : undefined;
+      const others = scope.actors.filter(item => !cancelledInputs.current.has(item.activityId));
+      const names = workingNames(others, nameOf);
+      const armed = escArmedUntil.current > Date.now();
+      escArmedUntil.current = 0;
+      if (running) {
+        // First Esc: only the Logox round. Its companions keep going; the notice says so and arms the second Esc.
+        cancelledInputs.current.add(running.activityId); onCancel(running.activityId);
+        if (others.length) escArmedUntil.current = Date.now() + ESC_STOP_WINDOW_MS;
         const original = snapshot.messages.findLast(message => message.sessionId === sessionId && message.activityId === running.activityId &&
           message.role === 'user' && inputKind(message) === 'human' && message.source !== 'steered');
         // Check the updater's draft, not the render's: typing and Esc can be batched.
         // Bumping the revision also protects it from a pending submission acknowledgment.
         setDraft(current => original && !current.text ? insert(emptyDraft, original.text) : current);
-        if (original) {
-          setCompletion({query: '', selected: 0, dismissed: true});
-          if (draft.text) flash('Task stopped. Your current draft was kept; use Up for earlier input.', 3500, 'warning');
-        }
+        if (others.length) flash(logoxStoppedNotice(names), ESC_STOP_WINDOW_MS, 'warning');
+        else if (original && draft.text) flash('■ Logox stopped · your current draft was kept; use Up for earlier input', 3500, 'warning');
+        else flash(logoxStoppedNotice([]), 2000, 'warning');
+        if (original) setCompletion({query: '', selected: 0, dismissed: true});
+      } else if (others.length && armed) {
+        // Second Esc inside the window: everything Logox's work still has running or queued, with the user reason.
+        for (const item of others) {cancelledInputs.current.add(item.activityId); onCancel(item.activityId);}
+        flash(actorsStoppedNotice(names), 3500, 'warning');
+      } else if (others.length) {
+        escArmedUntil.current = Date.now() + ESC_STOP_WINDOW_MS;
+        flash(actorsWorkingNotice(names), ESC_STOP_WINDOW_MS, 'warning');
       }
       return;
     }

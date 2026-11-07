@@ -1,4 +1,5 @@
 import type {JobGrant} from '../tools/orchestration/AutomaTool/grant.js';
+import {stripNarration} from '../runtime/narration.js';
 import type {AutomaSwarm} from '../runtime/contracts.js';
 import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
@@ -13,7 +14,7 @@ import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses, killBackgroundJobs} from '../tools/process.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
-import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker} from '../prompts/runtime/interruption.js';
+import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker, userInterruptMarkerWithWorking} from '../prompts/runtime/interruption.js';
 
 import {builtinActors} from './builtins.js';
 
@@ -35,7 +36,8 @@ export type StopReason = 'user' | 'shutdown' | 'interrupted' | 'director_cancel'
 
 /** The ledger marker for a deliberate stop, or nothing for shutdown and crash recovery (their wording lives in runtime recovery texts). */
 export function stopNotice(reason: StopReason | undefined, detail: string | undefined, activityId: string): RuntimeContextMessage | undefined {
-  if (reason === 'user') return createRuntimeContextMessage('interruption', USER_INTERRUPT_MARKER, {activityId, slot: 'interruption', by: 'user'});
+  // For a user stop the detail, when present, is the comma-separated names of companions that keep working.
+  if (reason === 'user') return createRuntimeContextMessage('interruption', detail ? userInterruptMarkerWithWorking(detail.split(', ')) : USER_INTERRUPT_MARKER, {activityId, slot: 'interruption', by: 'user'});
   if (reason === 'director_cancel') return createRuntimeContextMessage('interruption', directorStopMarker(detail?.trim() || DIRECTOR_STOP_DEFAULT_REASON), {activityId, slot: 'interruption', by: 'director'});
   return undefined;
 }
@@ -267,8 +269,8 @@ export class EnsembleRuntime<Id extends string> {
     if (index >= 0) {
       this.queue.splice(index, 1);
       this.controllers.delete(activityId); this.tasks.delete(activityId);
-      this.finished.set(activityId, {ownerId: task.ownerId, status: 'cancelled', title: 'Queued task cancelled', text: detail ?? 'The task had not started.'});
-      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: detail ?? 'Queued task cancelled'});
+      this.finished.set(activityId, {ownerId: task.ownerId, status: 'cancelled', title: 'Queued task cancelled', text: (reason === 'user' ? undefined : detail) ?? 'The task had not started.'});
+      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: (reason === 'user' ? undefined : detail) ?? 'Queued task cancelled'});
       void this.trackWrite(task.ready.catch(() => {}).then(async () => {
         await this.checkpoint(task, 'cancelled');
         await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId, source: task.source,
@@ -430,8 +432,8 @@ export class EnsembleRuntime<Id extends string> {
         const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
         const messages: ModelMessage[] = entries.map(storedMessage);
         const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly), status);
-        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && message.text.trim())?.text;
-        if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text};
+        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && stripNarration(message.text).trim())?.text;
+        if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
         return summary;
       }
     };

@@ -1,4 +1,5 @@
 import {appendFile, mkdir, readFile} from 'node:fs/promises';
+import {stripNarration} from '../runtime/narration.js';
 import {createHash, randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -315,7 +316,7 @@ export class Journal implements HistoryStore {
       carryForward: [legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'],
       source: modernClosure ? 'runtime' : 'legacy',
     };
-    const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && message.text.trim())?.text ?? '');
+    const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && stripNarration(message.text).trim())?.text ?? '');
     const summary: RoundSummary = accepted ? {title: legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
     const raw = await this.loadRaw(sessionId, ownerId);
     const activities = [...new Set(raw.filter(entry => entry.role === 'user' && entry.activityId).map(entry => entry.activityId!))];

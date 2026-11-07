@@ -24,7 +24,7 @@ test('all built-in and collaboration tool names resolve to explicitly owned pres
   for (const name of [...Object.keys(schemas), 'SendMessage']) {
     assert.ok(Object.hasOwn(toolUIs, name), name);
     assert.equal(getToolUI(name), toolUIs[name]);
-    assert.equal(getToolUI(name).visibility, ['_FinishRound', '_GitStatus', 'LoadTools', 'Actor', 'ListActors', 'ReadActor', 'UpdateTaskProgress'].includes(name) ? 'hidden' : 'visible');
+    assert.equal(getToolUI(name).visibility, ['_FinishRound', '_GitStatus', 'LoadTools', 'Actor', 'ListActors', 'ReadActor'].includes(name) ? 'hidden' : 'visible');
   }
   assert.equal(getToolUI('bash'), getToolUI('Shell'));
   assert.equal(getToolUI('read'), getToolUI('Read'));

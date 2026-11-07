@@ -17,7 +17,7 @@ test('loading defaults are independent from role and terminal presentation', () 
   assert.equal(Reflect.get(registry.getMetadata('_FinishRound')!, 'loading'), 'eager');
   assert.equal(registry.getTerminalVisibility('_GitStatus'), 'silent');
   assert.ok(registry.getToolsForActor('logox').some(tool => tool.name === 'SendMessage'));
-  assert.ok(registry.getToolsForActor('new-scout').some(tool => tool.name === 'UpdateTaskProgress'));
+  assert.ok(!registry.getToolsForActor('new-scout').some(tool => tool.name === 'UpdateTaskProgress'));
 });
 
 test('the discovery directory lists every eligible deferred name with short descriptions, never schemas', () => {
@@ -81,7 +81,7 @@ test('application startup and reload apply tool overrides without global state o
     await app.ensemble.dispatch('logox', 'Inspect the catalog.', 'direct', {inputKind: 'human'}).done;
     const names = seen[0]!.tools.map(tool => tool.name);
     assert.ok(!names.includes('Read') && !names.includes('CraftActor'));
-    assert.equal(names.filter(name => name === 'UpdateTaskProgress').length, 1);
+    assert.ok(!names.includes('UpdateTaskProgress'));
     await writeFile(path, JSON.stringify({Write: {roles: []}}));
     await app.submit('/reload');
     await app.ensemble.dispatch('logox', 'Inspect the updated catalog.', 'direct', {inputKind: 'human'}).done;

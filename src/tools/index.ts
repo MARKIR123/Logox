@@ -45,8 +45,6 @@ import {listActorsSchema, executeListActors, type ListActorsArgs} from './coordi
 import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './coordination/ListActorsTool/prompt.js';
 import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './orchestration/CancelActorTool/CancelActorTool.js';
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './orchestration/CancelActorTool/prompt.js';
-import {updateTaskProgressSchema, type UpdateTaskProgressArgs} from './orchestration/UpdateTaskProgressTool/UpdateTaskProgressTool.js';
-import {UPDATE_TASK_PROGRESS_DESCRIPTION, UPDATE_TASK_PROGRESS_TOOL_NAME} from './orchestration/UpdateTaskProgressTool/prompt.js';
 import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
@@ -100,10 +98,6 @@ export {
   type CancelActorArgs,
   CANCEL_ACTOR_DESCRIPTION,
   CANCEL_ACTOR_TOOL_NAME,
-  updateTaskProgressSchema,
-  type UpdateTaskProgressArgs,
-  UPDATE_TASK_PROGRESS_DESCRIPTION,
-  UPDATE_TASK_PROGRESS_TOOL_NAME,
   ToolModelStorage,
   type ToolModel,
   type ToolModelMap,
@@ -125,7 +119,6 @@ export const schemas = {
   ReadActor: readActorSchema,
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
-  UpdateTaskProgress: updateTaskProgressSchema,
   Automa: automaSchema,
   _FinishRound: finishRoundSchema,
   _GitStatus: gitStatusSchema,
@@ -149,7 +142,6 @@ export const descriptions: Record<ToolName, string> = {
   ReadActor: READ_ACTOR_DESCRIPTION,
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
-  UpdateTaskProgress: UPDATE_TASK_PROGRESS_DESCRIPTION,
   Automa: AUTOMA_DESCRIPTION,
   _FinishRound: FINISH_ROUND_DESCRIPTION,
   _GitStatus: GIT_STATUS_DESCRIPTION,

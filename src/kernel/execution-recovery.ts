@@ -17,7 +17,7 @@ export class ExecutionRecoveryError extends Error {
 
 export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
-const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor', 'update_task_progress', 'UpdateTaskProgress',
+const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor',
   'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
 
 /** Differences in argument JSON key order or formatting do not count as new progress, and re-reading the same result does not refresh the budget. */

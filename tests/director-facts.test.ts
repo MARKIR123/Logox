@@ -204,7 +204,6 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
   const store = new RuntimeStore();
   const journal = new Journal(join(directory, 'journal'));
   const {EnsembleRuntime} = await import('../src/actors/ensemble.js');
-  const {TaskProgress} = await import('../src/runtime/task-progress.js');
   const {buildStageRows} = await import('../src/tui/timeline/stage.js');
 
   let receivedPrompt = '';
@@ -262,8 +261,7 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
     assert.ok(act);
     assert.equal(act.taskTitle, 'Audit theme contrast');
 
-    const progress = new TaskProgress(store, runningContext);
-    assert.equal((await progress.update({label: 'Checking statusbar tokens'})).isError, false);
+    store.activities.update('s', runningContext.activityId, {progress: {label: 'Checking statusbar tokens'}});
 
     const runningRows = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {[runningContext.activityId]: false}, null)
       .map(row => row.text).join('\n');

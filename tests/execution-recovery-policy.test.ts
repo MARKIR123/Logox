@@ -41,10 +41,6 @@ test('only new execution evidence resets recovery; duplicate tools, labels and d
   assert.equal(await recovery.execution('root', 'no_delivery', 'logox'), 'retry');
   assert.equal(await recovery.progress('root', signature), false);
   assert.equal(toolProgressFingerprint({...read, name: 'dispatch_role'}, {text: '已排队', isError: false}), undefined);
-  assert.equal(toolProgressFingerprint({...read, name: 'update_task_progress'}, {text: '计划已更新', isError: false}), undefined);
-  for (const name of ['UpdateTaskProgress', 'update_task_progress', 'updatetaskprogress', 'UPDATETASKPROGRESS']) {
-    assert.equal(toolProgressFingerprint({...read, name, arguments: '{"label":"Reading layout"}'}, {text: 'Current activity: Reading layout.', isError: false}), undefined);
-  }
   assert.equal(toolProgressFingerprint(read, {text: '未获许可', isError: true, disposition: 'denied'}), undefined);
   assert.equal(await recovery.execution('root', 'no_delivery', 'logox'), 'stop');
   const changed = toolProgressFingerprint(read, {text: '1: improved scene', isError: false})!;
@@ -166,10 +162,10 @@ test('application continuation retains Actor labels and root identity without to
   const app = await createApplication({cwd: directory, config, sessionId: 's', resourceOptions: {home: directory, boundary: directory},
     env: {}, authPath: join(directory, 'auth.json'), provider: {async respond(request, delta): Promise<ModelTurn> {
       requests.push(request);
-      if (requests.length === 1) return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'plan',
-        name: 'update_task_progress', arguments: JSON.stringify({label: 'Building the runnable baseline'})}]}};
+      if (requests.length === 1) return {stop: 'tools', message: {role: 'assistant', text: '⏵ Building the runnable baseline', toolCalls: [{id: 'plan',
+        name: 'glob', arguments: JSON.stringify({pattern: '*.logox-none'})}]}};
       if (allowedContinue) {
-        assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'task-state')?.text ?? '', /Current activity label.*Building the runnable baseline/);
+        assert.ok(request.messages.some(message => message.role === 'assistant' && message.text === 'Stage: Building the runnable baseline'));
         assert.ok(request.messages.every(message => message.role !== 'assistant' || !!message.text || !!message.toolCalls?.length));
         return {stop: 'complete', message: {role: 'assistant', text: '已有阶段和工具结果已核对，当前步骤可以继续。'}};
       }
@@ -182,18 +178,18 @@ test('application continuation retains Actor labels and root identity without to
   };
   try {
     await app.ensemble.dispatch('techne', '建立可运行页面', 'logox', {inputKind: 'director', authorization: ['建立可运行页面']}).done; await idle();
-    assert.equal(requests.length, 4, 'One label update, two Actor no-delivery turns and one Director recovery turn');
+    assert.equal(requests.length, 4, 'One stage-declaring tool turn, two Actor no-delivery turns and one Director recovery turn');
     const tasks = app.store.getSnapshot().activities;
     const actor = tasks.find(task => task.ownerId === 'techne')!;
-    assert.equal(actor.status, 'failed'); assert.deepEqual(actor.progress, {label: 'Building the runnable baseline'});
+    assert.equal(actor.status, 'failed'); assert.equal(actor.progress && 'label' in actor.progress ? actor.progress.label : undefined, 'Building the runnable baseline');
     assert.equal(tasks.filter(task => task.ownerId === 'logox').length, 1, 'No extra model request merely to explain failure');
     allowedContinue = true;
     await app.submit('@techne 继续'); await idle();
     const continued = app.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)!;
     assert.equal(continued.rootActivityId, actor.rootActivityId ?? actor.activityId);
-    assert.equal(continued.status, 'completed'); assert.deepEqual(continued.progress, {label: 'Building the runnable baseline'});
+    assert.equal(continued.status, 'completed'); assert.equal(continued.progress && 'label' in continued.progress ? continued.progress.label : undefined, 'Building the runnable baseline');
     const records = await app.journal.load('s', 'techne');
-    assert.equal(records.filter(entry => entry.message?.role === 'tool' && entry.message.name === 'update_task_progress').length, 1);
+    assert.equal(records.filter(entry => entry.message?.role === 'tool' && entry.message.name === 'glob').length, 1);
     assert.ok(app.store.getSnapshot().messages.every(message => message.ownerId !== 'logox' ||
       message.role !== 'user' || message.inputKind !== 'actor'));
   } finally {await app.close(); await rm(directory, {recursive: true, force: true});}

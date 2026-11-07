@@ -7,7 +7,6 @@ import {diagnoseWrite} from './WriteTool/diagnostic.js';
 import {diagnoseShell} from './ShellTool/diagnostic.js';
 import {diagnoseGrep} from './GrepTool/diagnostic.js';
 import {diagnoseGlob} from './GlobTool/diagnostic.js';
-import {diagnoseUpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/diagnostic.js';
 import {diagnoseMcp} from '../extensions/diagnostic.js';
 import {diagnoseSendMessage} from './coordination/SendMessageTool/diagnostic.js';
 
@@ -20,7 +19,6 @@ export const diagnosticHandlers: Record<string, DiagnosticFn> = {
   Shell: diagnoseShell,
   Grep: diagnoseGrep,
   Glob: diagnoseGlob,
-  UpdateTaskProgress: diagnoseUpdateTaskProgress,
   SendMessage: diagnoseSendMessage,
   mcp: diagnoseMcp,
 };

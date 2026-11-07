@@ -17,7 +17,6 @@ import {UI as CraftActor} from './orchestration/CraftActorTool/UI.js';
 import {UI as ReadActor} from './orchestration/ReadActorTool/UI.js';
 import {UI as ListActors} from './coordination/ListActorsTool/UI.js';
 import {UI as CancelActor} from './orchestration/CancelActorTool/UI.js';
-import {UI as UpdateTaskProgress} from './orchestration/UpdateTaskProgressTool/UI.js';
 import {UI as SendMessage} from './coordination/SendMessageTool/UI.js';
 import {UI as FinishRound} from './protocol/_FinishRoundTool/UI.js';
 import {UI as LoadTools} from './protocol/LoadToolsTool/UI.js';
@@ -27,7 +26,7 @@ import {UI as Mcp} from '../extensions/UI.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
   Read, Write, Edit, Glob, Grep, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
-  ListActors, CancelActor, UpdateTaskProgress, SendMessage, Automa,
+  ListActors, CancelActor, SendMessage, Automa,
   _FinishRound: FinishRound, _GitStatus: GitStatus, LoadTools, mcp: Mcp,
 };
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));

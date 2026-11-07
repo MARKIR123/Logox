@@ -21,7 +21,7 @@ function steer(app: Awaited<ReturnType<typeof createTestApplication>>, text: str
 }
 const done = () => ({stop: 'complete' as const, message: {role: 'assistant' as const, text: 'Completed the requested work.'}});
 const label = () => ({stop: 'tools' as const, message: {role: 'assistant' as const, text: '',
-  toolCalls: [{id: 'label', name: 'UpdateTaskProgress', arguments: '{"label":"Checking the current work"}'}]}});
+  toolCalls: [{id: 'label', name: 'Glob', arguments: '{"pattern":"*.logox-none"}'}]}});
 async function idle(app: Awaited<ReturnType<typeof createTestApplication>>) {
   const end = Date.now() + 5000;
   while (app.ensemble.isBusy() || app.store.getSnapshot().pending.length) {if (Date.now() > end) throw new Error('Input delivery did not settle'); await new Promise(resolve => setTimeout(resolve, 5));}

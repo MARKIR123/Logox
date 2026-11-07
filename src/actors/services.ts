@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {stripNarration} from '../runtime/narration.js';
 import {randomUUID} from 'node:crypto';
 import type {ActorContext, TaskHandle, TaskOrigin, TaskResult} from './ensemble.js';
 import {ActorRecovery, modelUnavailable} from './recovery.js';
@@ -309,7 +310,7 @@ export class ActorServices {
         const rounds = await this.options.journal.rounds(context.sessionId, ownerId, entries);
         const relevantRounds = rounds.filter(round => !activityId || round.activityId === activityId).slice(-4);
         const relevantEntries = entries.filter(entry => !activityId || entry.activityId === activityId);
-        const finalAssistant = relevantEntries.findLast(entry => entry.role === 'assistant' && entry.text.trim());
+        const finalAssistant = relevantEntries.findLast(entry => entry.role === 'assistant' && stripNarration(entry.text).trim());
         const toolsCalled = [...new Set(relevantEntries.flatMap(e => (e.message && e.message.role === 'assistant' ? e.message.toolCalls?.map(c => c.name) ?? [] : [])))];
 
         const summaryText = relevantRounds.map(r => `[Round ${r.activityId}]: ${r.summary.title}\n${r.summary.report}`).join('\n\n');

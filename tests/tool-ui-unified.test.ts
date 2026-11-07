@@ -276,7 +276,6 @@ const hiddenCases: [string, Record<string, unknown>, string][] = [
   ['ListActors', {}, 'ListActors'],
   ['ReadActor', {ownerId: 'kalon'}, 'ReadActor(kalon)'],
   ['LoadTools', {names: ['x']}, 'LoadTools'],
-  ['UpdateTaskProgress', {label: 'x'}, 'UpdateTaskProgress'],
   ['_FinishRound', {title: 'Done'}, '_FinishRound'],
   ['_GitStatus', {}, '_GitStatus'],
 ];

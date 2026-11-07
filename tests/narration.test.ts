@@ -85,3 +85,19 @@ test('agent loop extracts ⏵ narration into activity progress and keeps the sta
   }
 });
 
+
+test('withStageLines renders Stage: once per change, never with the glyph, and is stable for a given prefix', async () => {
+  const {withStageLines} = await import('../src/runtime/narration.js');
+  const history = [
+    {role: 'user' as const, text: 'go'},
+    {role: 'assistant' as const, text: 'Looking.', stage: 'Understanding'},
+    {role: 'assistant' as const, text: 'More.', stage: 'Understanding'},
+    {role: 'assistant' as const, text: '', stage: 'Building'},
+    {role: 'assistant' as const, text: '⏵ Legacy leak\nBody.'},
+  ];
+  const out = withStageLines(history);
+  assert.deepEqual(out.map(m => m.text), ['go', 'Stage: Understanding\nLooking.', 'More.', 'Stage: Building', 'Stage: Legacy leak\nBody.']);
+  assert.ok(!JSON.stringify(out).includes('⏵'));
+  assert.deepEqual(withStageLines(history.slice(0, 3)).map(m => m.text), out.slice(0, 3).map(m => m.text));
+  assert.equal(history[1]!.text, 'Looking.', 'input is not mutated');
+});

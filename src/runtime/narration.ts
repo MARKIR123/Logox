@@ -1,3 +1,4 @@
+import type {ModelMessage} from './messages.js';
 /**
  * Utility for extracting and stripping leading `⏵` self-narration lines.
  *
@@ -28,4 +29,26 @@ export function extractNarration(text: string): ExtractedNarration | null {
 export function stripNarration(text: string): string {
   const extracted = extractNarration(text);
   return extracted ? extracted.cleanText : text;
+}
+
+/** How a declared stage appears in model-facing history: a plain first line, deliberately without the `⏵` glyph. */
+export const STAGE_HISTORY_PREFIX = 'Stage: ';
+
+/**
+ * Model-facing history: an assistant message that changed the stage opens with `Stage: <text>`. Pure and order-only
+ * (a message renders from itself and the messages before it), so the same prefix of history always yields the same bytes.
+ * A legacy ledger text that still opens with `⏵` is read as the stage it declared, so the glyph never reaches the model.
+ */
+export function withStageLines(messages: readonly ModelMessage[]): ModelMessage[] {
+  let current: string | undefined;
+  return messages.map(message => {
+    if (message.role !== 'assistant') return message;
+    let stage = message.stage, text = message.text;
+    const legacy = extractNarration(text);
+    if (legacy) {stage ??= legacy.narration; text = legacy.cleanText;}
+    const changed = stage !== undefined && stage !== current;
+    if (stage !== undefined) current = stage;
+    if (!changed && !legacy) return message;
+    return {...message, text: changed ? STAGE_HISTORY_PREFIX + stage + (text ? '\n' + text : '') : text};
+  });
 }

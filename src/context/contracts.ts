@@ -50,7 +50,7 @@ export function deliberateStopLabel(messages: readonly ModelMessage[]): string |
 }
 
 /** A persona micro-action such as "（核对色板与标尺）" or "(checks the palette)": a whole line wrapped in full-width or ASCII brackets. */
-const ACTION_LINE = /^\s*(?:（[^（）\n]{1,160}）|\([^()\n]{1,160}\)|【[^【】\n]{1,160}】)\s*$/;
+const ACTION_LINE = /^\s*(?:⏵.*|（[^（）\n]{1,160}）|\([^()\n]{1,160}\)|【[^【】\n]{1,160}】)\s*$/;
 
 /** The first line that can name a task or round: blank lines and leading bracketed micro-action lines are skipped. */
 export function titleLine(text: string): string {

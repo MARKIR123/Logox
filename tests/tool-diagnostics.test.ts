@@ -86,16 +86,6 @@ test('GlobTool diagnostics: 0 files matched returns two-part context and directo
   );
 });
 
-test('UpdateTaskProgress diagnostics: obsolete plan parameters point to the activity label contract', () => {
-  const result = diagnoseToolError(
-    {id: '7', name: 'UpdateTaskProgress', arguments: JSON.stringify({stages: [{title: 'Build'}]})},
-    {isError: true, text: 'Parameter validation failed: label: Required'}
-  );
-  assert.equal(result.isError, true);
-  assert.match(result.text, /short, single-line label and optional detail/);
-  assert.match(result.text, /omit stages, status, result, and reason/);
-});
-
 test('SendMessage diagnostics: unknown target returns two-part context and ListActors prescription', () => {
   const result = diagnoseToolError(
     {id: '8', name: 'SendMessage', arguments: JSON.stringify({to: 'nobody', message: 'hello'})},

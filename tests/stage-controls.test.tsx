@@ -14,6 +14,7 @@ import {StatusbarPreferences, defaultStatusbar} from '../src/config/statusbar-pr
 import {statusbarText} from '../src/tui/status/statusbar.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {palette} from '../src/tui/appearance/theme.js';
+import {ESC_STOP_WINDOW_MS} from '../src/runtime/round-scope.js';
 
 class Input extends PassThrough {
   isTTY = true;
@@ -105,12 +106,13 @@ test('Ctrl+C 复制不计入退出，其它输入解除提示，原生中断与�
 
 test('Actor Esc 始终返回，主窗口 Esc 只停止 Logox，卡片独立鼠标与键盘停止', {timeout: 7000}, async () => {
   const store = new RuntimeStore(); task(store, 'main', 'logox'); task(store, 'actor');
-  const ui = mount(store);
+  const ui = mount(store, withStatus);
   try {
     await delay(80);
     await ui.key('\x07'); await ui.key('\x07'); // Ctrl+G -> running Techne.
     await ui.key('\x1b'); assert.deepEqual(ui.stopped, []);
     await ui.key('\x1b'); assert.deepEqual(ui.stopped, ['main']);
+    assert.ok(ui.output.lines.join('\n').includes('Logox stopped · Techne still working · press Esc again to stop it'), 'first Esc names the actors still working');
     const rows = buildStageRows(store.getSnapshot(), 's', 'logox', ui.output.columns - 1, {}, null);
     const at = rows.findIndex(row => row.controls?.[0]?.action.foldId === 'actor'), control = rows[at]!.controls![0]!;
     await ui.key(`\x1b[<0;${control.startCol + 1};${at + 1}M\x1b[<0;${control.startCol + 1};${at + 1}m`.repeat(2));
@@ -121,6 +123,53 @@ test('Actor Esc 始终返回，主窗口 Esc 只停止 Logox，卡片独立鼠�
     await ui.key('\t'); await ui.key('\r'); assert.deepEqual(ui.stopped, ['main', 'actor', 'second']);
     const terminal = buildStageRows(store.getSnapshot(), 's', 'logox', 79, {}, null);
     assert.ok(!terminal.some(row => row.controls?.some(control => control.action.foldId === 'actor')));
+  } finally {await ui.cleanup();}
+});
+
+const withStatus = {getStatus: (ownerId: string) => ({ownerId, name: ownerId, model: {provider: 'demo', model: 'm'}, effort: 'high', permission: 'auto', context: {tokens: 1, window: 100}, state: 'ready'})};
+function actorTask(store: RuntimeStore, id: string, ownerId: string, extra: Record<string, unknown> = {}) {
+  store.activities.create({sessionId: 's', activityId: id, ownerId, kind: 'actor', title: 'work ' + id, stage: 'Working', detail: '',
+    status: 'running', inputKind: 'director', rootActivityId: 'main', ...extra} as Parameters<RuntimeStore['activities']['create']>[0]);
+}
+
+test('Logox Esc: first stops only Logox with a detailed notice, second within the window stops dispatched work, user-started tasks stay', {timeout: 9000}, async () => {
+  const store = new RuntimeStore(); task(store, 'main', 'logox');
+  actorTask(store, 'kalon', 'kalon'); actorTask(store, 'techne', 'techne', {status: 'queued', after: ['kalon']});
+  actorTask(store, 'own', 'aletheia', {inputKind: 'human', rootActivityId: 'own'});
+  const ui = mount(store, withStatus);
+  try {
+    await delay(80);
+    await ui.key('\x1b'); assert.deepEqual(ui.stopped, ['main']);
+    assert.ok(ui.output.lines.join('\n').includes('■ Logox stopped · Kalon, Techne still working · press Esc again to stop them'));
+    store.activities.update('s', 'main', {status: 'cancelled'}); await delay(40);
+    await ui.key('\x1b');
+    assert.deepEqual(ui.stopped, ['main', 'techne', 'kalon'], 'queued first, then running; the user-started task is untouched');
+    assert.ok(ui.output.lines.join('\n').includes('■ Stopped Kalon and Techne'));
+  } finally {await ui.cleanup();}
+});
+
+test('Logox Esc while Logox is idle: first press only warns, second stops, a late second press is a new first press', {timeout: 9000}, async () => {
+  const store = new RuntimeStore();
+  actorTask(store, 'kalon', 'kalon', {rootActivityId: 'gone'});
+  const ui = mount(store, withStatus);
+  try {
+    await delay(80);
+    await ui.key('\x1b'); assert.deepEqual(ui.stopped, []);
+    assert.ok(ui.output.lines.join('\n').includes('Kalon is working · press Esc again to stop it'));
+    await delay(ESC_STOP_WINDOW_MS + 200);
+    await ui.key('\x1b'); assert.deepEqual(ui.stopped, [], 'after the window Esc is a new first press');
+    await ui.key('\x1b'); assert.deepEqual(ui.stopped, ['kalon']);
+    assert.ok(ui.output.lines.join('\n').includes('■ Stopped Kalon'));
+  } finally {await ui.cleanup();}
+});
+
+test('a user-started actor task is never stopped by Logox Esc', {timeout: 7000}, async () => {
+  const store = new RuntimeStore();
+  actorTask(store, 'own', 'techne', {inputKind: 'human', rootActivityId: 'own'});
+  const ui = mount(store);
+  try {
+    await delay(80);
+    await ui.key('\x1b'); await ui.key('\x1b'); assert.deepEqual(ui.stopped, []);
   } finally {await ui.cleanup();}
 });
 

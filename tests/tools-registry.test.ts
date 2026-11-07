@@ -92,6 +92,6 @@ test('ToolRegistry discovery omits eager tools and includes every eligible defer
   assert.doesNotMatch(workerText, /^\s*(?:- )?(Read|_FinishRound):/m);
   assert.match(workerText, /^    - _GitStatus: /m);
   assert.doesNotMatch(workerText, /^    - SendMessage: /m, 'SendMessage is offered directly to everyone');
-  assert.match(workerText, /^    - UpdateTaskProgress: /m);
+  assert.doesNotMatch(workerText, /UpdateTaskProgress/, 'the retired UpdateTaskProgress tool is gone');
   assert.doesNotMatch(workerText, /^    - (Actor|CancelActor): /m);
 });

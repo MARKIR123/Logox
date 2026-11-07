@@ -69,11 +69,12 @@ test('truncated batches execute no effects and preserve valid history across bou
   } finally {await f.close();}
 });
 
+const staged = (text: string, turn: ModelTurn): ModelTurn => ({...turn, message: {...turn.message, text}});
+
 test('activity labels execute through Agent, remain self-reports and restore without step phases', async () => {
   const f = await fixture([
-    tool('update_task_progress', {label: 'Reading facts'}),
-    tool('read', {path: 'facts.txt'}), thought(),
-    tool('update_task_progress', {label: 'Preparing the report'}),
+    staged('⏵ Reading facts', tool('read', {path: 'facts.txt'})), thought(),
+    staged('⏵ Preparing the report', tool('read', {path: 'facts.txt'})),
     thought(), answer(),
   ]);
   try {
@@ -81,18 +82,19 @@ test('activity labels execute through Agent, remain self-reports and restore wit
     const handle = f.app.ensemble.dispatch('logox', '读取并核对事实'); await handle.done;
     const activity = f.app.store.activities.get('task-flow', handle.activityId)!;
     assert.equal(activity.status, 'completed');
-    assert.deepEqual(activity.progress, {label: 'Preparing the report'});
-    assert.equal(f.requests.length, 6);
-    assert.match(f.requests[4]!.messages.findLast(message => message.role === 'context' && message.kind === 'task-state')?.text ?? '', /Current activity label \(self-reported, not verification\): Preparing the report/);
+    assert.deepEqual(activity.progress, {label: 'Preparing the report', stageHistory: ['Reading facts', 'Preparing the report']});
+    assert.equal(f.requests.length, 5);
+    const seen = f.requests[4]!.messages.filter(message => message.role === 'assistant').map(message => message.text);
+    assert.deepEqual(seen, ['Stage: Reading facts', 'Stage: Preparing the report'], 'the model sees each stage once, without the glyph');
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.ok(history.every(entry => entry.step?.stage === undefined));
     await f.app.close();
     const restored = await createApplication({cwd: f.cwd, sessionId: 'task-flow', config: f.config, provider: f.provider,
       resourceOptions: {home: f.cwd, boundary: f.cwd}});
     try {
-      assert.equal(f.requests.length, 6);
+      assert.equal(f.requests.length, 5);
       assert.deepEqual(restored.store.activities.get('task-flow', handle.activityId)?.progress, activity.progress);
-      assert.equal(restored.store.getSnapshot().messages.filter(message => message.kind === 'thinking').length, 6);
+      assert.equal(restored.store.getSnapshot().messages.filter(message => message.kind === 'thinking').length, 5);
     } finally {await restored.close();}
   } finally {await f.close();}
 });

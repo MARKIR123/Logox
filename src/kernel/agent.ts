@@ -20,7 +20,6 @@ import {inputKind, inputMessage} from '../runtime/provenance.js';
 import {Steps} from '../runtime/steps.js';
 import {STAGE_HISTORY_LIMIT, type Step} from '../runtime/contracts.js';
 import type {TaskModels} from '../actors/task-models.js';
-import {TaskProgress, taskProgressTool} from '../runtime/task-progress.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFingerprint, type ExecutionRecoveryKind} from './execution-recovery.js';
 import {ToolPacing} from './tool-pacing.js';
@@ -38,7 +37,7 @@ import {omitInternalToolPairs} from '../context/round-memory.js';
 import {clampText} from '../context/contracts.js';
 import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
-import {extractNarration, stripNarration} from '../runtime/narration.js';
+import {extractNarration, stripNarration, withStageLines} from '../runtime/narration.js';
 
 /** The tool result for a call cut off by a stop: names the user or the Director, else the generic fallback. */
 export function interruptedToolText(reason: 'user' | 'shutdown' | 'interrupted' | 'director_cancel' | undefined, fallback: string): string {
@@ -135,7 +134,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('Read-only concurrency must be 1-8');
   return async (prompt, context) => {
     if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
-    const progress = new TaskProgress(options.store, context);
     const stages: string[] = [...(context.progress && 'stageHistory' in context.progress ? context.progress.stageHistory ?? [] : [])];
     const steps = new Steps(options.store, context);
     const root = context.rootActivityId ?? context.activityId;
@@ -284,8 +282,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           owedSeen.set(ask.id, seen);
           if (seen === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('task-state', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
         }
-        const activityState = progress.instruction();
-        if (activityState) await appendUpdate(createRuntimeContextMessage('task-state', activityState, {slot: 'activity-label'}));
         if (recovery) await appendUpdate(createRuntimeContextMessage('recovery', recovery));
         if (memoryRepair) await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
         const base = {system: instruction.system,
@@ -305,9 +301,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
           .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
         // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
-        let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
+        let request: ModelRequest = foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: withStageLines(projected.messages).map(message =>
           message.role === 'assistant' && message.signature && foreignSignatures.has(message.signature)
-            ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled};
+            ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled, messages: withStageLines(projected.messages)};
         if (!memoryRepair) iteration++;
         const metadataOnly = memoryRepair && !!finalText;
         context.report(recoveringKind ? recoveringKind === 'no_delivery' ? 'Adjusting' : 'Resuming' : 'Model processing',
@@ -393,7 +389,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
             const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
             const step = steps.finish(thinkingId, context.signal.aborted ? 'cancelled' : 'failed');
-            await persist({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), ...(metadataOnly ? {memoryOnly: true as const} : {})}, step);
+            // The store keeps the raw `⏵` line for the timeline; the ledger never does.
+            const partial = extractNarration(text);
+            await persist({role: 'assistant', text: partial ? partial.cleanText : text, ...(partial ? {stage: partial.narration} : {}), ...(reasoning ? {reasoning} : {}), ...(metadataOnly ? {memoryOnly: true as const} : {})}, step);
             if (memoryRepair && finalText && !context.signal.aborted) {
               if (await drainInbox(true)) continue requestLoop;
               context.signal.throwIfAborted();
@@ -526,12 +524,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                 schemaError = {callId: call.id, name: call.name, error: 'Unknown tool: ' + call.name + '. Available tools: ' + base.tools.map(t => t.name).join(', ')};
                 break;
               }
-              const extra = (call.name.toLowerCase() === taskProgressTool.name.toLowerCase() || canonical === 'UpdateTaskProgress')
-                ? taskProgressTool
-                : options.extraTools?.find(tool =>
-                    tool.name.toLowerCase() === call.name.toLowerCase() ||
-                    (canonical && canonicalToolName(tool.name) === canonical)
-                  );
+              const extra = options.extraTools?.find(tool =>
+                tool.name.toLowerCase() === call.name.toLowerCase() ||
+                (canonical && canonicalToolName(tool.name) === canonical)
+              );
               try {
                 const args = JSON.parse(call.arguments);
                 if (extra) {
@@ -586,10 +582,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               if (canonical === 'LoadTools') {
                 const result = resolveToolLoad(loadToolsSchema.parse(JSON.parse(call.arguments)), instruction.pool ?? [], extractDiscoveredToolNames(messages));
                 return {text: JSON.stringify(result), isError: false, discoveredTools: [...result.loaded, ...result.alreadyLoaded]};
-              }
-              if (call.name === taskProgressTool.name || canonical === 'UpdateTaskProgress') {
-                toolContext.startTool();
-                return progress.update(JSON.parse(call.arguments));
               }
               const matchedExtra = options.extraTools?.find(tool =>
                 tool.name.toLowerCase() === call.name.toLowerCase() ||

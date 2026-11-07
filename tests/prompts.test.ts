@@ -76,8 +76,8 @@ test('runtime facts remain typed messages rather than rewriting the system promp
 const profile = (id: string, file: string) => readFileSync(new URL('../src/actors/profiles/' + id + '/' + file, import.meta.url), 'utf8');
 
 test('stage line is unambiguously the first line of work turns; personas never put the flourish on line one', () => {
-  assert.match(SHARED_EXECUTION_RULES, /always the very first line of your text[\s\S]*nothing precedes it/);
-  assert.equal(SHARED_EXECUTION_RULES.split('very first line').length - 1, 1);
+  assert.match(SHARED_EXECUTION_RULES, /begin your text with one line[\s\S]*before any greeting/);
+  assert.equal(SHARED_EXECUTION_RULES.split('begin your text with one line').length - 1, 1);
   for (const id of ['logox', 'techne', 'kalon', 'aletheia']) {
     const persona = profile(id, 'persona.md');
     const rule = persona.split('\n').find(line => line.includes('Micro-Actions'))!;
@@ -101,12 +101,18 @@ test('brief, scope and ownership rules live in the lowest layer that can enforce
   assert.match(profile('kalon', 'execution.md'), /Own the Visual Artifacts[\s\S]*review the rendered result/);
 });
 
-test('stage rule: a phase defined by its deliverable, never re-emitted for rephrasing, with one contrasting example', () => {
-  assert.match(SHARED_EXECUTION_RULES, /phase of work[\s\S]*deliverable or decision/);
-  assert.match(SHARED_EXECUTION_RULES, /Re-checking, fixing small issues you find and re-running checks on the same artifact stay in the current stage/);
-  assert.match(SHARED_EXECUTION_RULES, /rephrasing a stage is never a reason to write a new one/);
-  assert.match(SHARED_EXECUTION_RULES, /- Good, one task:[\s\S]*- Bad, the same verification restated:/);
-  assert.equal(SHARED_EXECUTION_RULES.split('Good, one task').length - 1, 1);
+test('stage rule: short, stated once, rare by design, no priming examples', () => {
+  const rule = SHARED_EXECUTION_RULES.slice(SHARED_EXECUTION_RULES.indexOf('## Status line'), SHARED_EXECUTION_RULES.indexOf('## Seeing'));
+  assert.match(rule, /When you start a task, and again only when the deliverable you are working on changes/);
+  assert.match(rule, /Most turns have none: a task has two to four in all/);
+  assert.match(rule, /do not deliberate over it/);
+  assert.match(rule, /your history shows your current stage as `Stage: …` until you write a new one/);
+  assert.doesNotMatch(rule, /UpdateTaskProgress|will not see it/);
+  assert.ok(rule.length < 700, 'the rule stays short: ' + rule.length);
+  assert.equal(rule.split('⏵').length - 1, 2, 'one format mention plus one example');
+  assert.doesNotMatch(rule, /Good, one task|Bad, the same/);
+  const everywhere = [collaborationFor('logox'), collaborationFor('techne'), ...['logox', 'techne', 'kalon', 'aletheia'].flatMap(id => ['persona.md', 'execution.md', 'collaboration.md'].map(f => profile(id, f)))].join('\n');
+  assert.ok(!everywhere.includes('⏵'), 'no other layer restates the stage rule');
 });
 
 test('final reports separate unverified checks and known risks; verification is incremental in both layers', () => {

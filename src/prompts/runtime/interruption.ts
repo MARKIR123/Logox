@@ -1,6 +1,11 @@
 /** Marker text appended to a ledger after the user stopped a whole run (Esc / Ctrl+C). */
 export const USER_INTERRUPT_MARKER = '[Interrupted by user]\nThe user stopped your previous run before it finished. Tool calls that were still unfinished have no complete result; the round record lists the unfinished items. Read the user\'s next message first: if it gives new instructions, follow them. Otherwise re-check the current state and ask before resuming the interrupted work.';
 
+/** Marker text when the user stopped this run while the named companions kept working (the names are data). */
+export function userInterruptMarkerWithWorking(names: readonly string[]): string {
+  return USER_INTERRUPT_MARKER + `\nCompanions you dispatched are still working and were not stopped: ${names.join(', ')}. The user's next message may redirect them or ask you to cancel them (CancelActor).`;
+}
+
 /** Prefix on a human message that reached the model between steps of a run it was already executing (the message follows). */
 export const USER_STEER_NOTICE = '[The user sent this while you were working. Take it into account now; it may change your direction.]';
 

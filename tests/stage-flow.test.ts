@@ -10,7 +10,6 @@ import {expandedTint} from '../src/tui/appearance/colors.js';
 import {cast} from '../src/actors/ensemble.js';
 import {contentPoint, selectionRange} from '../src/tui/timeline/selection.js';
 import {extractSelection} from '../src/tui/timeline/viewport.js';
-import {TaskProgress} from '../src/runtime/task-progress.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 
 // CJK fixtures exercise wrapping, selection and historical stage snapshots.
@@ -129,10 +128,10 @@ test('live label changes affect only the actor card and disappear on every termi
     store.message('s', 'techne', 'user', 'Create an animation', {activityId: 'a', inputKind: 'director'});
     const context: ActorContext = {sessionId: 's', activityId: 'a', ownerId: 'techne', signal: new AbortController().signal, history: [],
       say() {}, report() {}, async record() {}, async ask() {return {status: 'cancelled', reason: 'test'};}, async permission() {return true;}};
-    const progress = new TaskProgress(store, context), steps = new Steps(store, context, () => 100);
+    const steps = new Steps(store, context, () => 100);
     const initial = steps.thinking(); steps.finish(initial, 'completed');
-    await progress.update({label: 'Building animation'});
-    await progress.update({label: 'Comparing screenshots'});
+    store.activities.update('s', 'a', {progress: {label: 'Building animation'}});
+    store.activities.update('s', 'a', {progress: {label: 'Comparing screenshots'}});
     steps.thinking();
     for (const view of ['logox', 'techne']) {
       const rows = buildStageRows(store.getSnapshot(), 's', view, 99, {a: true}, null);

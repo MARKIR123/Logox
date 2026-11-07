@@ -305,6 +305,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   }
   let round: Round | null = null;
   let lastUserTime: number | undefined;
+  // 'UpdateTaskProgress' stays for ledgers saved before the tool was removed.
   const hiddenSteps = ['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress', 'Actor'];
   let finalRound = false;
   const describeRound = (r: Round, until: number): TurnActivity | undefined => {

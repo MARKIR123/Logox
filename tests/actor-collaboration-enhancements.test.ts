@@ -203,20 +203,3 @@ test('SendMessage: injects into active task without opening a new card, and drai
   }
 });
 
-test('UpdateTaskProgressTool: registered in tools/index, aliases update_task_progress to UpdateTaskProgress', async () => {
-  const {canonicalToolName, schemas, descriptions} = await import('../src/tools/index.js');
-  const {UPDATE_TASK_PROGRESS_TOOL_NAME, UPDATE_TASK_PROGRESS_DESCRIPTION} = await import('../src/tools/orchestration/UpdateTaskProgressTool/prompt.js');
-
-  assert.equal(canonicalToolName('update_task_progress'), 'UpdateTaskProgress');
-  assert.equal(canonicalToolName('UpdateTaskProgress'), 'UpdateTaskProgress');
-  assert.equal(canonicalToolName('updatetaskprogress'), 'UpdateTaskProgress');
-
-  assert.equal(UPDATE_TASK_PROGRESS_TOOL_NAME, 'UpdateTaskProgress');
-  assert.ok(schemas.UpdateTaskProgress, 'schemas.UpdateTaskProgress must be exported');
-  assert.equal(descriptions.UpdateTaskProgress, UPDATE_TASK_PROGRESS_DESCRIPTION);
-
-  const valid = schemas.UpdateTaskProgress.safeParse({label: 'Comparing screenshots', detail: 'Desktop and mobile.'});
-  assert.equal(valid.success, true);
-  assert.equal(schemas.UpdateTaskProgress.safeParse({stages: [{title: 'Verify'}]}).success, false);
-});
-

@@ -13,6 +13,7 @@ import {DynamicEnsemble} from './actors/ensemble.js';
 import {ActorCatalog} from './actors/catalog.js';
 import {ActorServices} from './actors/services.js';
 import {steeredText} from './prompts/runtime/interruption.js';
+import {roundScope, workingNames} from './runtime/round-scope.js';
 import {DeliveryQueue} from './actors/delivery-queue.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
@@ -54,7 +55,7 @@ import {PermissionEngine, permissionDecisionSchema, permissionModeSchema, permis
 import {validateRuleInput} from './permissions/rule-input.js';
 import {permissionModes} from './runtime/permission-mode.js';
 import {Tools} from './tools/tools.js';
-import {USER_STOP_REASON, killActiveProcess} from './tools/process.js';
+import {USER_STOP_REASON, killActiveProcess, killActivityProcesses, killBackgroundJobs} from './tools/process.js';
 import {markInterruptedJobs} from './tools/orchestration/AutomaTool/AutomaTool.js';
 import {chooseAutomaModel} from './tools/orchestration/AutomaTool/preset.js';
 import {finishRoundTool} from './tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
@@ -1271,8 +1272,13 @@ export async function createSessionApplication(options: SessionApplicationOption
     /** Stops one running tool call (its child process) without ending the owner's step; false when the call is not cancellable or already done. */
     cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user');},
     cancel(activityId: string) {if (compactTask?.activityId === activityId) compactTask.controller.abort(); else {
-      if (store.activities.get(session, activityId)?.ownerId === 'logox') actorServices.stopDirector(activityId); else actorServices.stopActor(activityId);
-      ensemble.cancel(activityId, 'user');
+      const director = store.activities.get(session, activityId)?.ownerId === 'logox';
+      if (director) actorServices.stopDirector(activityId); else actorServices.stopActor(activityId);
+      // Stopping Logox leaves its companions running; the interrupt marker names them so the next message can redirect or cancel them.
+      const working = director ? workingNames(roundScope(store.getSnapshot().activities, session).actors, id => actors.list().find(item => item.id === id)?.name ?? id) : [];
+      ensemble.cancel(activityId, 'user', working.length ? working.join(', ') : undefined);
+      // Foreground commands die with the user reason; background Shell jobs of the stopped activity go with it.
+      killActivityProcesses(activityId, USER_STOP_REASON, 'user'); killBackgroundJobs(activityId);
     }},
     async close() {
       closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();

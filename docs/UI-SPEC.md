@@ -35,7 +35,7 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 - 其他 MCP 工具与未知工具：标题 `mcp · 服务 › 工具`；正文先是对齐的 `键  值` 参数行（键淡色、值正常前景，嵌套对象为单行紧凑 JSON），再是渲染后的结果（像 Markdown 时按 Markdown 渲染），同样受 12 行上限约束，空结果为 `No output`。敏感字段遮蔽只作用于显示，原始账本不变。
 - SendMessage：`SendMessage to <符号 名字>`（名字用目标角色色）加摘要 `ask · awaiting reply` / `ask · answered` / `inform` / `reply`；展开为 `Q  问题`、`A  回答`（标签淡色）。对方回复后，提问方的卡片更新为 `answered` 并显示 Q 与 A；回复方的卡片总是先显示原问题 Q 再显示自己的 A，不会只剩一个孤立的回答。角色之间的对话不出现在 Logox 主时间线，除非发送方或接收方是 Logox；各角色自己的窗口仍显示自己发出的消息。
 - AskUserQuestion：回答之后是一份记录：摘要 `answered`（或 `cancelled`），每个问题一行 `Q  问题`，所选答案 `A  答案` 以用户色加粗，备注用次要色。交互选择面板本身不变。
-- 隐藏工具（Actor、ListActors、ReadActor、LoadTools、UpdateTaskProgress、_FinishRound、_GitStatus）成功时什么都不画，也不会出现在工具组摘要里；失败时只有一行：红色 `▮`、次要色标题（如 `Actor(kalon)`）、` · `、红色原因，耗时紧随其后。浏览器与 MCP 的失败也走同一个失败视图：原因是一行干净文字（不显示 `### Error` 之类的 Markdown 标题）。角色卡本身不受影响。CancelActor 是不可展开的一行 `■ Stopped <符号 名字>`，用该角色的颜色。
+- 隐藏工具（Actor、ListActors、ReadActor、LoadTools、_FinishRound、_GitStatus）成功时什么都不画，也不会出现在工具组摘要里；失败时只有一行：红色 `▮`、次要色标题（如 `Actor(kalon)`）、` · `、红色原因，耗时紧随其后。浏览器与 MCP 的失败也走同一个失败视图：原因是一行干净文字（不显示 `### Error` 之类的 Markdown 标题）。角色卡本身不受影响。CancelActor 是不可展开的一行 `■ Stopped <符号 名字>`，用该角色的颜色。
 - Automa 的任务行使用同样的正文结构：12 行上限、同一个 `… N more lines` 展开行、同一种空状态。
 
 点击卡片折叠或展开，双击角色卡进入其窗口。拖选优先于点击，选择文字不会停止任务。停止按钮只作用于对应任务，停止 Logox 不会连带取消所有角色。
@@ -114,14 +114,16 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 
 | 操作 | 按键 |
 |---|---|
-| 停止主窗口里 Logox 的当前循环 | Esc（先关闭菜单、清除选区、回到主窗口，之后才停止） |
+| 停止主窗口里 Logox 的当前循环 | Esc（先关闭菜单、清除选区、回到主窗口，之后才停止）；再按一次 Esc（约 2 秒内）停止 Logox 派出的全部角色 |
 | 复制选区 | Ctrl+C |
 | 无选区时退出 | 1.5 秒内连续按两次 Ctrl+C |
 | 立即退出 | Ctrl+D |
 
 复制不计入退出次数。Ctrl+C 不会停止任务；停止用 Esc 或卡片上的停止按钮。
 
-主窗口 Esc 停止 Logox 后，若输入框为空，将被停止任务对应的最近一次人类输入放回输入框，供修改后重发；已有新草稿时不覆盖，可用 ↑ 找回先前输入。不会自动重发、撤销已完成的工具或停止其他角色，也不会把内部报告当成用户请求恢复。菜单、输入选区、问题焦点、角色窗口和全屏编辑仍优先处理自己的 Esc。
+主窗口 Esc 停止 Logox 后，若输入框为空，将被停止任务对应的最近一次人类输入放回输入框，供修改后重发；已有新草稿时不覆盖，可用 ↑ 找回先前输入。不会自动重发、撤销已完成的工具，第一次 Esc 也不会停止其他角色（见下），也不会把内部报告当成用户请求恢复。菜单、输入选区、问题焦点、角色窗口和全屏编辑仍优先处理自己的 Esc。
+
+主窗口 Esc 分两级（常量 `ESC_STOP_WINDOW_MS`，约 2 秒，`src/runtime/round-scope.ts`）。第一次：Logox 正在运行时只停止 Logox 的当前回合；若它派出的角色仍在运行或排队，通知行保持警告 `■ Logox stopped · Kalon, Techne still working · press Esc again to stop them`，否则只显示 `■ Logox stopped`。Logox 空闲而派出的角色仍在工作时，第一次 Esc 什么都不停，只提示 `Kalon, Techne are working · press Esc again to stop them`。第二次（窗口内）：停止 Logox 工作产生的所有运行中或排队中的活动——被派出的角色（含 `after` 排队任务）、它们的 Automa 工人、由它们产生的唤醒与协作活动，以及这些活动的后台 Shell 任务——全部按用户停止处理（账本写入 `[Interrupted by user]`，而不是 “Stopped by Director”），通知 `■ Stopped Kalon and Techne`，药丸、卡片与角色窗口同步显示已停止。超过窗口或期间按了其他键，下一次 Esc 视为新的第一次。用户在角色窗口里亲自发起的任务（及其后代）、角色窗口里的 Esc、卡片上的 Stop 按钮、双击 Ctrl+C 退出语义都不受影响。Logox 被停止而角色继续工作时，Logox 收到的中断提示会列出仍在工作的角色，下一条用户消息即可通过 Logox 改派或取消它们。
 
 用户主动停止会明确告诉模型，避免它盲目重试。卡片上的 `■ Stop` 只终止那一次 Shell：卡片以柔和（非错误红）颜色显示 `Stopped by user`，并保留已输出的尾部内容；模型收到 `Stopped by user.` 开头的结果，附带部分输出，并被告知不要自行重跑。Esc 停止整个回合时，被打断的工具结果写明“用户在工具完成前中断”，账本末尾追加一条隐藏的 `[Interrupted by user]` 提示（不进入时间线，回合卡片已经显示 Interrupted），模型下一轮先读用户的新消息：有新指示就照做，否则先核对当前状态并询问再恢复；回合记忆标记为 `Interrupted by user`。Director 通过 CancelActor 停止角色时，该角色的账本写入 `Stopped by Director` 及 Director 给出的理由，与用户中断区分开；崩溃恢复、关闭退出的措辞不变。
 
