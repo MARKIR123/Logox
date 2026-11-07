@@ -69,7 +69,7 @@ import {clipLine} from './terminal/text.js';
 import {extractSelection, timelineRows, viewport, normalizeSelection, type Anchor, type Row} from './timeline/viewport.js';
 import {osc52Clipboard} from './terminal/clipboard.js';
 import {parseSgrMouse, type SgrMouseEvent} from './terminal/mouse.js';
-import {consumeFocusReports, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON} from './terminal/focus.js';
+import {FocusReportFilter, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON} from './terminal/focus.js';
 
 import {contentPoint, selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
 import {decorateRow, presentedSegments, railCell} from './timeline/row-presentation.js';
@@ -1051,10 +1051,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     stdout?.write('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2 q' + FOCUS_REPORTING_ON);
     const originalRead = stdin.read.bind(stdin);
     let carry = '';
+    const focusFilter = new FocusReportFilter();
     stdin.read = ((size?: number) => {
-      const chunk = originalRead(size);
-      if (chunk !== null && chunk !== undefined) {
-        const text = carry + (typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+      // A chunk that held only focus reports is swallowed and the next read is taken from the stream itself: answering `null` while the
+      // stream still owes its own end-of-buffer read stalls the TTY handle, and the process exits with an empty event loop.
+      for (;;) {
+        const chunk = originalRead(size);
+        if (chunk === null || chunk === undefined) return chunk;
+        const raw = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+        const text = carry + raw;
         const events = parseSgrMouse(text);
         for (let i = 0; i < events.length; i++) {
           const ev = events[i]!;
@@ -1062,15 +1067,15 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           if (ev.action === 'move' && i + 1 < events.length && events[i + 1]!.action === 'move') continue;
           mouseHandlerRef.current(ev);
         }
-        const tail = /\x1b\[<[\d;]*$/.exec(text);
+        const tail = /\[<[\d;]*$/.exec(text);
         carry = tail ? tail[0] : '';
         // Focus reports (`ESC [ I` / `ESC [ O`) update the terminal focus state and never reach the key parser.
-        if (text.includes('\x1b[I') || text.includes('\x1b[O')) {
-          const cleaned = consumeFocusReports(typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
-          return (cleaned === '' ? null : typeof chunk === 'string' ? cleaned : Buffer.from(cleaned)) as typeof chunk;
-        }
+        let cleaned = raw;
+        try {cleaned = focusFilter.push(raw);} catch {cleaned = raw;}
+        if (cleaned === raw) return chunk;
+        if (cleaned === '') continue;
+        return (typeof chunk === 'string' ? cleaned : Buffer.from(cleaned)) as typeof chunk;
       }
-      return chunk;
     }) as typeof stdin.read;
     return () => {
       if (foldTimerRef.current) clearTimeout(foldTimerRef.current);

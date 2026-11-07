@@ -97,7 +97,23 @@ async function main(): Promise<void> {
   const interrupt = () => {for (const handler of interrupts) handler();};
   process.once('SIGTERM', stop);
   process.on('SIGINT', interrupt);
+  // Leaves the alternate screen before reporting, so a fatal error or a silently drained event loop is visible instead of vanishing with the UI.
+  let finished = false;
+  const fatal = (reason: string) => () => {
+    try {instance.unmount();} catch {/* the screen is being torn down anyway */}
+    process.stderr.write(`[Logox] ${reason}
+`); process.exitCode = 1;
+  };
+  const onBeforeExit = () => {if (!finished) fatal('Terminal input ended unexpectedly; exiting.')();};
+  const onUncaught = (error: unknown) => {fatal(`Fatal error: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)(); process.exit(1);};
+  process.once('beforeExit', onBeforeExit);
+  process.on('uncaughtException', onUncaught);
+  process.on('unhandledRejection', onUncaught);
   try {await instance.waitUntilExit();}
-  finally {process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', interrupt); await runtime.close();}
+  finally {
+    finished = true;
+    for (const [name, handler] of [['beforeExit', onBeforeExit], ['uncaughtException', onUncaught], ['unhandledRejection', onUncaught]] as const) process.removeListener(name, handler as () => void);
+    process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', interrupt); await runtime.close();
+  }
 }
 await main().catch(error => {process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n'); process.exitCode = 1;});

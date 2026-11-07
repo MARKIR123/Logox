@@ -7,5 +7,19 @@ export function terminalFocus(): boolean | undefined {return focused;}
 export function setTerminalFocus(value: boolean | undefined): void {focused = value;}
 /** Applies every focus report in `chunk` and returns the chunk without them, so they never reach the key parser. */
 export function consumeFocusReports(chunk: string): string {
-  return chunk.replace(/\x1b\[([IO])/g, (_all, kind: string) => {focused = kind === 'I'; return '';});
+  return chunk.replace(/\[([IO])/g, (_all, kind: string) => {focused = kind === 'I'; return '';});
+}
+/**
+ * Stateful variant for a chunked stream: a report split across chunks (`ESC` then `[O`, or `ESC [` then `O`) still updates the focus state.
+ * The split halves are left in the stream because Ink's own parser re-joins them and drops the complete control sequence.
+ */
+export class FocusReportFilter {
+  private tail = '';
+  push(chunk: string): string {
+    const split = this.tail === '' ? /^\[([IO])/.exec(chunk) : this.tail === '[' ? /^([IO])/.exec(chunk) : null;
+    if (split) focused = split[1] === 'I';
+    const cleaned = consumeFocusReports(chunk);
+    this.tail = /\[?$/.exec(cleaned)?.[0] ?? '';
+    return cleaned;
+  }
 }
