@@ -14,6 +14,16 @@ function decodeSearchCall(item: Record<string, unknown>): ToolCall | undefined {
   catch (error) {throw new ProviderError(error instanceof Error ? error.message : 'Invalid client tool-search call.');}
 }
 
+/**
+ * Indices of the messages whose images are still sent. Older images turn into their text alone, and that edit rewrites bytes inside the
+ * cached prefix, so the window moves in steps of `maxImages`: between steps earlier messages render identically (at most 2 x maxImages stay).
+ * A pure function of the history prefix.
+ */
+export function retainedImageIndices(messages: readonly object[], maxImages: number): Set<number> {
+  const indices = messages.flatMap((message, i) => 'images' in message && Array.isArray(message.images) && message.images.length ? [i] : []);
+  const dropped = maxImages > 0 ? Math.max(0, Math.floor((indices.length - maxImages - 1) / maxImages) * maxImages) : indices.length;
+  return new Set(indices.slice(dropped));
+}
 type WireMessage = Exclude<ModelMessage, {role: 'context'}>;
 function portableMessages(messages: readonly ModelMessage[]): WireMessage[] {
   return messages.flatMap<WireMessage>(message => message.role !== 'context' ? [message] :
@@ -209,10 +219,7 @@ function hasProgress(event: StreamEvent): boolean {
 export function responsesInput(input: readonly ModelMessage[], supportsVision = false, maxImages = 2,
   discovery?: {tools: readonly ToolDefinition[]; capabilities: ProviderCapabilities}): ObjectValue[] {
   const messages = input;
-  const imageIndices = messages
-    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
-    .filter(i => i >= 0);
-  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+  const activeImageIndices = retainedImageIndices(messages, maxImages);
   const result: ObjectValue[] = [];
 
   for (let i = 0; i < messages.length; i++) {
@@ -281,10 +288,7 @@ function chatReasoningDetails(details: unknown): string {
 
 export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
   const messages = portableMessages(input);
-  const imageIndices = messages
-    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
-    .filter(i => i >= 0);
-  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+  const activeImageIndices = retainedImageIndices(messages, maxImages);
 
   return messages.map((message, i) => {
     const keepImage = activeImageIndices.has(i);
@@ -332,10 +336,7 @@ export function anthropicSystem(system: string): readonly ObjectValue[] {
 export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2, referenceNames?: ReadonlySet<string>, caching = false): ObjectValue[] {
   const messages = input.flatMap<WireMessage>(message => message.role !== 'context' ? [message] : encodeAnthropicContext(message)
     .map(block => ({role: 'user', text: String(block.text)})));
-  const imageIndices = messages
-    .map((msg, i) => ('images' in msg && msg.images?.length ? i : -1))
-    .filter(i => i >= 0);
-  const activeImageIndices = new Set(imageIndices.slice(-maxImages));
+  const activeImageIndices = retainedImageIndices(messages, maxImages);
 
   const result: {role: string; content: ObjectValue[]}[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -468,6 +469,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const plainSystem = systemText(request.system);
     const isStream = oauthResponses ? true : request.stream !== false;
     const chosenModel = settings.model;
+    // Routes requests of one session and actor to the same cache; sent only where the provider is known to accept it.
+    const cacheKey = !native && capabilities.caching === 'openai-key' && request.cacheKey ? {prompt_cache_key: request.cacheKey} : {};
     const body = native
       ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),
@@ -479,6 +482,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             store: false,
             stream: isStream,
             ...(!oauthResponses ? {max_output_tokens: maxTokens} : {}),
+            ...cacheKey,
             instructions: plainSystem,
             input: responsesInput(request.messages, supportsVision, 2,
               request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined),
@@ -486,7 +490,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort,
               ...(officialOpenAI ? {summary: 'auto'} : {})}} : {}),
           }
-        : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature,
+        : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature, ...cacheKey,
           ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
           messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision)], tools,
           ...thinking};

@@ -36,7 +36,7 @@ export interface ToolDefinition {name: string; description: string; parameters: 
 export interface ProviderCapabilities {
   toolDiscovery: ToolDiscoveryProtocol;
   runtimeInstructions: 'meta-user' | 'system' | 'developer';
-  caching: 'none' | 'anthropic' | 'automatic';
+  caching: 'none' | 'anthropic' | 'automatic' | 'openai-key';
   /** The API binds replayed thinking to the exact earlier messages, so nothing sent before may be removed. */
   appendOnlyHistory?: boolean;
 }
@@ -49,6 +49,8 @@ export interface ModelRequest {
   thinking?: false;
   supportsVision?: boolean;
   stream?: boolean;
+  /** Stable per session and actor; sent as `prompt_cache_key` where the provider's `caching` capability is `openai-key`. */
+  cacheKey?: string;
 }
 export interface ModelTurn {
   message: Extract<ModelMessage, {role: 'assistant'}>;

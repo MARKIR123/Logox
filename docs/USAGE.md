@@ -112,6 +112,8 @@ name = "local"
 
 `tool_discovery` 可取 `auto`、`none`、`anthropic`、`openai-responses`，在 `[provider]`、`[providers.<name>]` 或 `[models."provider/model"]` 下设置，范围越具体优先级越高，默认 `auto`。`auto` 只对明确登记的官方端点和模型启用原生协议；代理、别名和兼容服务一律使用普通完整工具集。显式选择原生协议表示你确认服务兼容，Logox 不会探测远端。
 
+`prompt_cache_key` 为布尔值，设置位置与优先级同 `tool_discovery`。官方 `https://api.openai.com/v1` 默认开启：每个会话与角色发送固定的不透明键（`prompt_cache_key`），帮助 OpenAI 把同一前缀的请求路由到同一缓存；其他兼容网关默认不发送该字段，确认服务接受后可设为 `true`。键只影响路由，不保证命中。
+
 ```toml
 [provider]
 tool_discovery = "none" # 保守使用普通工具集

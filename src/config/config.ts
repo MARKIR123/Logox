@@ -14,6 +14,7 @@ export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
 export const toolDiscoverySchema = z.enum(['auto', 'none', 'anthropic', 'openai-responses']);
 const capacitySchema = z.object({
   tool_discovery: toolDiscoverySchema.optional(),
+  prompt_cache_key: z.boolean().optional(),
   thinking_protocol: z.enum(['deepseek', 'anthropic-budget', 'anthropic-adaptive', 'reasoning-effort']).optional(),
   thinking_levels: z.array(effortSchema).min(1).optional(), prices: priceSchema.optional(),
   context_window: z.number().int().min(256).optional(),
@@ -71,6 +72,7 @@ const schema = z.object({
     base_url: z.string().url().optional(), api_key_env: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
     tool_discovery: toolDiscoverySchema.optional(),
+    prompt_cache_key: z.boolean().optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
     api: z.enum(['completions', 'responses']).optional(),
     temperature: z.number().min(0).max(2).default(0.2),
@@ -86,6 +88,7 @@ const schema = z.object({
   }).default({max_iterations: 0, max_retries: 3}),
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
+    prompt_cache_key: z.boolean().optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
     api: z.enum(['completions', 'responses']).optional(),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
@@ -100,6 +103,8 @@ export interface ModelSettings {
   thinkingEffort?: import('./model-preferences.js').ThinkingEffort;
   thinkingProtocol?: 'deepseek' | 'anthropic-budget' | 'anthropic-adaptive' | 'reasoning-effort';
   toolDiscovery?: z.infer<typeof toolDiscoverySchema>;
+  /** Explicit opt in or out of `prompt_cache_key`; unset means on for the official OpenAI endpoint only. */
+  promptCacheKey?: boolean | undefined;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
@@ -217,7 +222,8 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
-  return {kind, baseUrl, toolDiscovery, api: provider.api ?? config.providers[provider.name]?.api,
+  const promptCacheKey = declared?.prompt_cache_key ?? provider.prompt_cache_key ?? config.providers[provider.name]?.prompt_cache_key;
+  return {kind, baseUrl, toolDiscovery, promptCacheKey, api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

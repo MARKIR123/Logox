@@ -16,5 +16,9 @@ export function resolveProviderCapabilities(settings: ModelSettings): ProviderCa
     (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-')) && settings.model === 'gpt-5.4';
   const toolDiscovery = declared === 'auto' ? official && settings.kind === 'anthropic' && anthropicModels.has(settings.model) ? 'anthropic'
     : responses && settings.kind === 'openai_compat' ? 'openai-responses' : 'none' : declared;
-  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching: settings.kind === 'anthropic' && (official || declared === 'anthropic') ? 'anthropic' : 'none'};
+  // Chat and Responses both accept `prompt_cache_key` on the official endpoint; other gateways opt in with `prompt_cache_key = true`.
+  // https://developers.openai.com/api/docs/guides/prompt-caching (checked 2026-11-08): keys influence routing, they never pin a machine.
+  const caching = settings.kind === 'anthropic' ? official || declared === 'anthropic' ? 'anthropic' : 'none'
+    : (settings.promptCacheKey ?? settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1') ? 'openai-key' : 'none';
+  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching};
 }
