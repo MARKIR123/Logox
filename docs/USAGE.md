@@ -104,6 +104,8 @@ name = "local"
 
 模型默认直接可用 `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Shell`、`ShellJob`、`AskUserQuestion`、`WebFetch`，其余工具在需要时通过 `LoadTools` 加载。加载只是让模型看到工具契约，不会执行工具，也不授予权限。
 
+`Write` 拒绝整体改写已有的大文件（超过 20 KB 或 400 行）：被拒绝的内容会先保存到调用者自己的 scratchpad（`rejected-writes/` 目录），拒绝信息里给出保存路径，并建议改用 `Edit`；确实需要整体替换时再传 `overwrite: true`。
+
 ### 后台命令
 
 服务器、监视器这类不会退出的命令用 `Shell` 的 `run_in_background: true` 启动：命令脱离本次调用，立即返回任务 id（如 `job-1`）、pid 和启动阶段的初始输出，不会占满前台超时。之后用 `ShellJob({id})` 读取自上次读取以来的新输出（超过 32 KB 的旧输出会丢弃），`ShellJob({id, stop: true})` 结束整个进程树。后台任务随启动它的任务一起结束（完成、失败或被取消），应用退出时全部结束；因此要在需要它的那个任务里启动。Automa 工作者不能使用后台模式。

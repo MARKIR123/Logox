@@ -11,14 +11,14 @@ Use the local `playwright` MCP server for HTML, SVG, canvas, and browser UI veri
 ## 2. Boundaries
 - Keep navigation, interaction, assertions, and screenshots in the same page session.
 - Every actor has its own isolated browser instance. Never wait for another actor to release a browser, and never send "browser free" handoffs.
-- Local files open directly with `file:///` URLs (for example `file:///G:/project/index.html`, forward slashes, three slashes); the server runs with unrestricted file access, so workspace and scratchpad paths both work. Prefer this over starting an HTTP server. Use HTTP only when the page needs a real origin (fetch, ES modules, service workers).
+- Local files open directly with `file:///` URLs (for example `file:///G:/project/index.html`, forward slashes, three slashes); the server runs with unrestricted file access, so workspace and scratchpad paths both work. Open static pages with `file://`. Start a local HTTP server only when the page needs a real origin (fetch, ES modules, service workers); start your own inside your own task and never share one across actors.
 - Save temporary screenshots and other artifacts in scratchpad. Omit a screenshot filename to use the server's isolated scratchpad output directory.
 - `browser_run_code` runs in a sandbox without `require` or dynamic `import`: use only the Playwright `page` object it provides, and run Node-side work (file reads, scripts) with `Shell` instead.
 - Never replace real clicks with synthetic DOM events to claim an interaction passed.
 - Ordinary screenshots capture the current state; they do not promise deterministic animation time or byte-identical images.
 
 ## 3. Procedure
-1. Start the HTTP preview for local files and verify its port is listening.
+1. Open static pages with a `file:///` URL; only when the page needs a real origin, start your own HTTP server and verify its port is listening.
 2. Call `mcp` with `server: "playwright", action: "list"` to discover available tools and parameters.
 3. Navigate to the page, then call `browser_snapshot` without a filename for inline accessibility content and current element references. Navigation and click responses may link to saved snapshots instead.
 4. Click, type, or press keys using the listed parameter schema and current element references. Call `browser_snapshot` again to observe the resulting state.

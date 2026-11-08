@@ -15,6 +15,8 @@ import {loadConfig} from '../src/config/config.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {Tools} from '../src/tools/tools.js';
+import {finalReportsFor} from '../src/runtime/final-reports.js';
+import {DIRECTOR_LATE_REPORT, DIRECTOR_RESULTS_READY} from '../src/prompts/runtime/director.js';
 
 function gate() {let resolve!: () => void; const promise = new Promise<void>(done => {resolve = done;}); return {promise, resolve};}
 const dispatch = (owners: string[]) => ({id: 'assign', name: 'Actor', arguments: JSON.stringify({tasks: owners.map(ownerId => ({ownerId, prompt: 'child work'}))})});
@@ -31,7 +33,7 @@ async function fixture(execute: (prompt: string, context: ActorContext, services
   services = new ActorServices({sessionId: 's', catalog, config, journal, deliveries, registry: new ProviderRegistry(config, {}),
     resources: new Resources(directory, {home: directory, boundary: directory}), getSnapshot: () => store.getSnapshot(),
     getActiveTask: owner => ensemble.getActiveTask(owner), canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
-    requireIdle() {}, approve: async () => false, enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
+    finalReports: finalReportsFor(store), requireIdle() {}, approve: async () => false, enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     pauseBatch: id => ensemble.pauseBatch(id), resumeBatch: id => ensemble.resumeBatch(id), coordinationPath: join(directory, 'coordination.json')});
   await services.recover();
   return {ensemble, services, deliveries, journal, store, async close() {await ensemble.close(); await services.flush(); await rm(directory, {recursive: true, force: true});}};
@@ -286,4 +288,19 @@ test('explicit assistance reaches a busy Director as a priority event without pr
     assert.equal(director.signal.aborted, false);
     release.resolve(); await parent.done;
   } finally {release.resolve(); await f.close();}
+});
+
+test('a report for a root whose final report was already delivered wakes the Director with the late-report text', async () => {
+  const f = await fixture(async () => {});
+  try {
+    const result = (id: string, root: string) => ({sessionId: 's', ownerId: 'techne', activityId: id, source: 'logox', rootActivityId: root, inputKind: 'director',
+      status: 'completed', summary: {title: 'Done.', report: 'Report body.', source: 'local'}}) as TaskResult;
+    await f.services.handoff(result('child-a', 'root-a'));
+    finalReportsFor(f.store).mark('root-b');
+    await f.services.handoff(result('child-b', 'root-b'));
+    const text = (root: string) => f.deliveries.snapshot().find(item => item.rootActivityId === root)!.text;
+    assert.ok(text('root-a').startsWith(DIRECTOR_RESULTS_READY));
+    assert.ok(text('root-b').startsWith(DIRECTOR_LATE_REPORT));
+    assert.ok(DIRECTOR_LATE_REPORT.includes('only what changed (1-3 sentences)'));
+  } finally {await f.close();}
 });

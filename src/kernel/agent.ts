@@ -26,7 +26,7 @@ import {ToolPacing} from './tool-pacing.js';
 import {PeerWait} from './peer-wait.js';
 import {asksFor} from '../runtime/asks.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
-import {EMPTY_REPLY_REMINDER, ASK_SENT_NOTE, ASK_SENT_NOTE_DIRECTOR, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
+import {EMPTY_REPLY_REMINDER, ASK_SENT_NOTE, ASK_SENT_NOTE_DIRECTOR, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking, openWorkNote} from '../prompts/runtime/recovery.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
@@ -36,7 +36,8 @@ import {DIRECTOR_INTERRUPTED_TOOL_TEXT, TOOL_CANCELLED_TEXT, USER_INTERRUPTED_TO
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {clampText} from '../context/contracts.js';
 import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
-import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT, FINISH_ROUND_DELIVERED, FINISH_ROUND_LATE_REPORT} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {finalReportsFor} from '../runtime/final-reports.js';
 import {extractNarration, stripNarration, withStageLines} from '../runtime/narration.js';
 
 /** The tool result for a call cut off by a stop: names the user or the Director, else the generic fallback. */
@@ -143,6 +144,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
     const taskModel = await options.taskModels?.begin(context);
     let outcome: 'completed' | 'failed' | 'cancelled' = 'failed';
     const asks = asksFor(options.store);
+    const finalReports = finalReportsFor(options.store);
+    let recordFinalReport = (): void => {};
+    // A wake for a root whose final report was already delivered asks only for what changed.
+    const lateWake = context.ownerId === 'logox' && context.coordinationWake === true && finalReports.has(root);
     let lastDrain = 0;
     try {
       // Round-closing pairs stay in the working history; each request decides whether to send them.
@@ -171,6 +176,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       };
       let memoryRepair = false;
       let finalText = '';
+      /** True when the delivery text arrived during round-memory repair, so only `_FinishRound` is still owed. */
+      let deliveredInRepair = false;
+      /** Actors this Director dispatched under its root that have not finished (queued includes tasks held by `after`). */
+      const openDispatched = (): string[] => context.ownerId !== 'logox' ? [] : options.store.getSnapshot().activities
+        .filter(activity => activity.sessionId === context.sessionId && activity.kind === 'actor' && activity.inputKind === 'director' &&
+          activity.rootActivityId === root && ['queued', 'running'].includes(activity.status))
+        .map(activity => activity.ownerId.charAt(0).toUpperCase() + activity.ownerId.slice(1) + ' (' + activity.status + ')');
+      // A Director round that ends with delivered text and nothing it dispatched still open has delivered the final report for its root.
+      recordFinalReport = () => {if (context.ownerId === 'logox' && finalText.trim() && openDispatched().length === 0) finalReports.mark(root);};
       const correctionCalls = new Set<string>();
       const pacing = new ToolPacing();
       const directorWaiting = () => context.ownerId === 'logox' && options.store.getSnapshot().activities.some(activity =>
@@ -188,7 +202,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (owesReply()) {
           closeReminders++;
           recovery = askOwedAtClose(asks.owed(context.sessionId, context.ownerId));
-          recoveringKind = undefined; memoryRepair = false; finalText = '';
+          recoveringKind = undefined; memoryRepair = false; finalText = ''; deliveredInRepair = false;
           correctionCalls.clear();
           context.acceptRoundMemory?.(null);
           return true;
@@ -211,7 +225,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const inboundRecovery = context.inboundRecovery?.();
         if (inboundRecovery) context = {...context, recovery: inboundRecovery};
         context.acceptRoundMemory?.(null);
-        memoryRepair = false; finalText = ''; correctionCalls.clear();
+        memoryRepair = false; finalText = ''; deliveredInRepair = false; correctionCalls.clear();
         return true;
       };
       const recoverOutput = async (kind: ExecutionRecoveryKind, thinkingId: string): Promise<void> => {
@@ -235,7 +249,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (waitNotices.length) {
           pacing.reset();
           closeReminders = 0;
-          memoryRepair = false; finalText = ''; recovery = ''; recoveringKind = undefined;
+          memoryRepair = false; finalText = ''; deliveredInRepair = false; recovery = ''; recoveringKind = undefined;
           correctionCalls.clear();
           context.acceptRoundMemory?.(null);
         }
@@ -283,7 +297,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           if (seen === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('task-state', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
         }
         if (recovery) await appendUpdate(createRuntimeContextMessage('recovery', recovery));
-        if (memoryRepair) await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
+        if (memoryRepair) {
+          const open = openDispatched();
+          await appendUpdate(createRuntimeContextMessage('finalizer', (finalText ? deliveredInRepair ? FINISH_ROUND_DELIVERED : FINISH_ROUND_REPAIR : lateWake ? FINISH_ROUND_LATE_REPORT : FINISH_ROUND_MISSING_TEXT) +
+            (open.length ? '\n\n' + openWorkNote(open) : '')));
+        }
         const base = {system: instruction.system,
           ...(!closingOnly && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
           // Tool fields and validation are unchanged; omits the draft-version URL repeated in every schema.
@@ -464,7 +482,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           const check = onlyFinalizer && !truncated ? validateToolCall(calls[0]!) : undefined;
           if (!metadataOnly && turn.message.text.trim()) finalText = turn.message.text;
           const allowed = base.tools.some(tool => isFinishRound(tool.name));
-          const valid = allowed && onlyFinalizer && !truncated && check?.valid && !!finalText.trim();
+          const valid = allowed && onlyFinalizer && !truncated && check?.valid && (!!finalText.trim() || lateWake);
           const error = !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
             : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
             : !allowed ? 'Terminal metadata is not available in this request.'
@@ -683,11 +701,15 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         }
         if (prepared && !context.signal.aborted) options.context?.observe(context, request, turn, prepared.model);
         if (memoryRepair) {
+          // Text without `_FinishRound` during repair is the delivery: record it once and ask only for the closure.
+          const delivered = !finalText && turn.message.text.trim() !== '';
+          if (delivered) {finalText = turn.message.text; deliveredInRepair = true;}
           await persist(turn.message, thinkingStep);
           context.signal.throwIfAborted();
           if (await holdClose()) continue requestLoop;
           if (await drainInbox(true)) continue;
           context.signal.throwIfAborted();
+          if (delivered) continue requestLoop;
           if (!finalText && !directorWaiting()) {
             if (remindEmptyReply()) continue requestLoop;
             throw new ExecutionRecoveryError('no_delivery', 'stop');
@@ -729,6 +751,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       }
     } finally {
       // Natural end or not, the actors waiting on this one are told to stop waiting, and its own questions lapse.
+      if (outcome === 'completed') recordFinalReport();
       asks.endRecipient(context.sessionId, context.ownerId, lastDrain);
       if (context.ownerId !== 'logox') asks.dropAsker(context.activityId);
       steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}

@@ -11,6 +11,7 @@ import {builtinActors} from './builtins.js';
 import {Collaboration} from './collaboration.js';
 import type {Resources} from '../resources/manager.js';
 import type {Journal} from '../store/journal.js';
+import type {FinalReports} from '../runtime/final-reports.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
@@ -40,7 +41,7 @@ import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActo
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts} from './facts.js';
-import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READY, DIRECTOR_FAILURE,
+import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READY, DIRECTOR_LATE_REPORT, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice} from '../prompts/runtime/director.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -85,6 +86,8 @@ export interface ActorServicesOptions {
   modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
   modelPool?: ModelPool;
   notice?(text: string): void;
+  /** Roots whose final report was already delivered; a later report for such a root is a late arrival. */
+  finalReports?: FinalReports;
 }
 /** Actor configuration, one-off skill borrowing, and summary handoff; the execution queue is still owned by the Ensemble. */
 export class ActorServices {
@@ -273,6 +276,7 @@ export class ActorServices {
           if (group) {this.resumableBatches.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);}
           if (!tasks.length) return {text: 'Resumed original batch: ' + resumeBatch, isError: false};
         }
+        this.options.finalReports?.clear(rootActivityId);
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
           ...(recovery ? {recovery} : {})};
@@ -474,7 +478,7 @@ export class ActorServices {
       : executionError ? executionError.kind === 'no_delivery' ? DIRECTOR_EXECUTION_REVIEW : DIRECTOR_STREAM_REVIEW
       : recovery?.exhausted ? DIRECTOR_RECOVERY_EXHAUSTED
       : failed && recovery?.actorTask ? directorResumeAdvice(recovery.actorTask)
-      : failed ? DIRECTOR_FAILURE : DIRECTOR_RESULTS_READY;
+      : failed ? DIRECTOR_FAILURE : this.options.finalReports?.has(rootActivityId) ? DIRECTOR_LATE_REPORT : DIRECTOR_RESULTS_READY;
     const batches = group?.paused && [...group.remaining].some(id => id !== result.activityId) ? '\n' + DIRECTOR_PAUSED_BATCH + group.batchId + DIRECTOR_PAUSED_BATCH_RULE : '';
     await this.admitHandoff(deliverySchema.parse({id: eventId, sessionId: this.options.sessionId, status: 'pending', time: Date.now(),
       ownerId: 'logox', source: result.ownerId, sourceActivityId: result.activityId,

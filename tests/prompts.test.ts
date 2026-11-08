@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   composeBaseSystemPrompt,
   SHARED_EXECUTION_RULES,
+  ROUND_SUMMARY_CONTRACT,
   collaborationFor,
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
@@ -106,7 +107,7 @@ test('stage rule: short, stated once, rare by design, no priming examples', () =
   assert.match(rule, /When you start a task, and again only when the deliverable you are working on changes/);
   assert.match(rule, /Most turns have none: a task has two to four in all/);
   assert.match(rule, /do not deliberate over it/);
-  assert.match(rule, /your history shows your current stage as `Stage: …` until you write a new one/);
+  assert.match(rule, /your history shows your stages as headings, and you declare a new one only by writing this status line/);
   assert.doesNotMatch(rule, /UpdateTaskProgress|will not see it/);
   assert.ok(rule.length < 700, 'the rule stays short: ' + rule.length);
   assert.equal(rule.split('⏵').length - 1, 2, 'one format mention plus one example');
@@ -124,4 +125,22 @@ test('final reports separate unverified checks and known risks; verification is 
 
 test('the empty-reply reminder is one static constant', () => {
   assert.equal(EMPTY_REPLY_REMINDER, 'Your previous reply was empty. Continue the task: call a tool or give your answer.');
+});
+
+test('Director waits for the last report, spot-checks reported evidence and later wakes add only what changed', () => {
+  const director = profile('logox', 'collaboration.md');
+  assert.ok(director.includes('While dispatched work your conclusion depends on is still running or queued, reply with one short status line saying what you are waiting for and end the round; deliver the final report only when the last needed report has arrived. After a final report, later wakes add only what changed.'));
+  assert.ok(director.includes('spot-check once (open the page, try one interaction) instead of re-running them'));
+});
+
+test('peer replies use type reply, help is for decisions, and the answer and _FinishRound share one reply', () => {
+  assert.match(collaborationFor('logox'), /Answer an ask with type "reply", never "inform"/);
+  assert.match(collaborationFor('techne'), /send one only when you need a decision from Logox, never for status/);
+  assert.match(ROUND_SUMMARY_CONTRACT, /write that answer text and call _FinishRound in the same reply/);
+});
+
+test('browser guidance opens static pages with file:// and keeps any HTTP server private to the task', () => {
+  const skill = readFileSync(new URL('../src/resources/builtin-skills/public/browser-screenshot.md', import.meta.url), 'utf8');
+  assert.ok(skill.includes('Open static pages with `file://`. Start a local HTTP server only when the page needs a real origin (fetch, ES modules, service workers); start your own inside your own task and never share one across actors.'));
+  assert.doesNotMatch(skill, /Start the HTTP preview for local files/);
 });

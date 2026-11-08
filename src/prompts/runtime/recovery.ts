@@ -42,6 +42,11 @@ export function askOwedAtClose(asks: readonly {readonly from: string; readonly l
 /** Sent once per run when the model returns only thinking or an empty reply, before the runtime counts it as a failure. */
 export const EMPTY_REPLY_REMINDER = 'Your previous reply was empty. Continue the task: call a tool or give your answer.';
 
+/** Round-close note naming dispatched work that is still open, so the model treats its text as status. */
+export const OPEN_WORK_PREFIX = '[Runtime] Still open: ';
+export const OPEN_WORK_SUFFIX = '. Your text is a status update, not the final report.';
+export function openWorkNote(open: readonly string[]): string {return OPEN_WORK_PREFIX + open.join(', ') + OPEN_WORK_SUFFIX;}
+
 /** Appended once per run to a long streak of read-only results. */
 export const AUTOMA_STREAK_NOTE = '[Runtime] That is several read-only calls in a row. If more are coming and you only need the conclusion, hand the rest to `Automa` so the raw output stays out of your context. If you must understand this material yourself, carry on.';
 

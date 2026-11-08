@@ -46,6 +46,7 @@ import {
 import {ModelPool} from './providers/model-pool.js';
 import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
+import {finalReportsFor} from './runtime/final-reports.js';
 import {settleStep} from './runtime/contracts.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
@@ -190,7 +191,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
   });
   void ensureProjectBulletin(cwd);
-  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
+  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry, finalReports: finalReportsFor(store),
     notice: text => notice(text, 'task_notice', 'logox'),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),

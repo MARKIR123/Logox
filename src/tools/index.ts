@@ -588,7 +588,7 @@ export class Tools {
         return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId);
       }
       if (name === 'Write') {
-        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId));
+        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId, getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId)));
       }
       if (name === 'Edit') {
         return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId));

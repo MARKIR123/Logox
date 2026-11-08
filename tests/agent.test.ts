@@ -467,7 +467,7 @@ test('repeated empty replies still end in a failed task after the reminder and t
   } finally {await f.cleanup();}
 });
 
-test('the model sees its own stage as a plain "Stage:" first line, once per change and never with the glyph', async () => {
+test('the model sees its own stage as a plain "### " heading first line, once per change and never with the glyph', async () => {
   const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
@@ -481,7 +481,7 @@ test('the model sees its own stage as a plain "Stage:" first line, once per chan
     await f.app.ensemble.dispatch('techne', 'build').done;
     const last = seen.at(-1)!;
     const texts = last.messages.filter(message => message.role === 'assistant').map(message => message.text);
-    assert.deepEqual(texts, ['Stage: Understanding the brief\nLooking around.', 'Still looking.', 'Stage: Building the page']);
+    assert.deepEqual(texts, ['### Understanding the brief\nLooking around.', 'Still looking.', '### Building the page']);
     assert.ok(!JSON.stringify(last.messages).includes('⏵'), 'the glyph never reaches the model');
     // The same history renders identically on the next request: earlier messages never change.
     const earlier = seen.at(-2)!.messages.filter(message => message.role === 'assistant').map(message => message.text);

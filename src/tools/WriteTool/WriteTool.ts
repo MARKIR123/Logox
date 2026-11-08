@@ -1,10 +1,11 @@
-import {stat} from 'node:fs/promises';
+import {mkdir, stat, writeFile} from 'node:fs/promises';
+import {basename, join} from 'node:path';
 import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
 import {normalizeAliases} from '../aliases.js';
 import {recordWrite} from './record.js';
-import {WRITE_OVERWRITE_DESCRIPTION, WRITE_LARGE_FILE_NOTICE, WRITE_LARGE_FILE_BYTES, WRITE_LARGE_FILE_LINES} from './prompt.js';
+import {WRITE_OVERWRITE_DESCRIPTION, WRITE_LARGE_FILE_NOTICE, WRITE_LARGE_FILE_SAVED, WRITE_LARGE_FILE_BYTES, WRITE_LARGE_FILE_LINES} from './prompt.js';
 
 const writeArgs = z.strictObject({
   file_path: pathArg.describe('The absolute path to the file to write'),
@@ -23,6 +24,18 @@ function lineCount(bytes: Buffer): number {
   return lines;
 }
 
+/** Keeps the refused content so the caller can re-apply it with Edit instead of regenerating it. Returns the suffix for the refusal text. */
+async function saveRefused(scratchDir: string | undefined, target: string, content: string): Promise<string> {
+  if (!scratchDir) return '';
+  try {
+    const directory = join(scratchDir, 'rejected-writes');
+    await mkdir(directory, {recursive: true});
+    const file = join(directory, Date.now() + '-' + basename(target));
+    await writeFile(file, content, 'utf8');
+    return WRITE_LARGE_FILE_SAVED + file;
+  } catch {return '';}
+}
+
 export async function executeWrite(
   args: WriteArgs,
   canonicalPath: string,
@@ -30,6 +43,8 @@ export async function executeWrite(
   activityId = 'task',
   signal: AbortSignal = new AbortController().signal,
   ownerId?: string,
+  /** The caller's scratchpad directory: a refused large-file write saves the attempted content here. */
+  scratchDir?: string,
 ): Promise<ToolResult> {
   return snapshots.withLock(canonicalPath, async () => {
     const size = await stat(canonicalPath).then(info => info.size).catch(error => {
@@ -46,7 +61,7 @@ export async function executeWrite(
     }
 
     if (before && !args.overwrite && (before.length > WRITE_LARGE_FILE_BYTES || lineCount(before) > WRITE_LARGE_FILE_LINES)) {
-      throw new Error(WRITE_LARGE_FILE_NOTICE);
+      throw new Error(WRITE_LARGE_FILE_NOTICE + await saveRefused(scratchDir, canonicalPath, args.content));
     }
 
     const after = Buffer.from(args.content);

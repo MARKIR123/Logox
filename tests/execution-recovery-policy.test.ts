@@ -165,7 +165,7 @@ test('application continuation retains Actor labels and root identity without to
       if (requests.length === 1) return {stop: 'tools', message: {role: 'assistant', text: '⏵ Building the runnable baseline', toolCalls: [{id: 'plan',
         name: 'glob', arguments: JSON.stringify({pattern: '*.logox-none'})}]}};
       if (allowedContinue) {
-        assert.ok(request.messages.some(message => message.role === 'assistant' && message.text === 'Stage: Building the runnable baseline'));
+        assert.ok(request.messages.some(message => message.role === 'assistant' && message.text === '### Building the runnable baseline'));
         assert.ok(request.messages.every(message => message.role !== 'assistant' || !!message.text || !!message.toolCalls?.length));
         return {stop: 'complete', message: {role: 'assistant', text: '已有阶段和工具结果已核对，当前步骤可以继续。'}};
       }

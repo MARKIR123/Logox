@@ -2,10 +2,11 @@ import test, {type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
+import {readFileSync} from 'node:fs';
 import {executeWrite, writeSchema} from '../src/tools/WriteTool/WriteTool.js';
 import {Snapshots} from '../src/tools/snapshots.js';
-import {WRITE_LARGE_FILE_NOTICE} from '../src/tools/WriteTool/prompt.js';
+import {WRITE_LARGE_FILE_NOTICE, WRITE_LARGE_FILE_SAVED, WRITE_DESCRIPTION} from '../src/tools/WriteTool/prompt.js';
 
 async function fixture(t: TestContext, existing?: string) {
   const directory = await mkdtemp(join(tmpdir(), 'logox-write-guard-'));
@@ -54,4 +55,25 @@ test('overwrite: true permits a deliberate wholesale replacement', async t => {
   const f = await fixture(t, 'x'.repeat(30 * 1024));
   await f.write('replacement', true);
   assert.equal(await readFile(f.file, 'utf8'), 'replacement');
+});
+
+test('a refused large-file Write saves the attempted content to the scratchpad and says where', async t => {
+  const f = await fixture(t, 'x'.repeat(21 * 1024));
+  const scratch = join(dirname(f.file), 'scratch');
+  const attempt = 'attempted content\n'.repeat(5);
+  await assert.rejects(executeWrite(writeSchema.parse({file_path: f.file, content: attempt}), f.file, new Snapshots(join(dirname(f.file), 'snapshots')),
+    'round', new AbortController().signal, 'techne', scratch), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.ok(error.message.startsWith(WRITE_LARGE_FILE_NOTICE + WRITE_LARGE_FILE_SAVED));
+    const saved = error.message.slice((WRITE_LARGE_FILE_NOTICE + WRITE_LARGE_FILE_SAVED).length);
+    assert.ok(saved.startsWith(scratch));
+    assert.equal(readFileSync(saved, 'utf8'), attempt);
+    return true;
+  });
+  assert.equal((await readFile(f.file, 'utf8')).length, 21 * 1024);
+});
+
+test('the Write description states the large-file rule before anything else', () => {
+  assert.match(WRITE_DESCRIPTION, /^Rule first: an existing file larger than 20 KB or 400 lines/);
+  assert.match(WRITE_DESCRIPTION, /overwrite: true/);
 });
