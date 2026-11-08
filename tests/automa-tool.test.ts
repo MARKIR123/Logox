@@ -798,6 +798,7 @@ test('The journal records the whole process under the principal; usage is charge
     const charged: [string, string, number][] = [], frames: AutomaSwarm[] = [];
     tools.setAutomaEnvironment(environment(workers({Scan: [['Read', {file_path: 'plain.txt'}], 'Verdict: found\nevidence: plain.txt:1']}), {
       journalPath: () => journalPath, charge: (context, usage, model) => {charged.push([context.ownerId, model, usage?.input ?? 0]);},
+      priceUsage: (usage, model) => ({input: usage.input, output: usage.output, cacheRead: 0, cacheWrite: 0, provider: model.split('/')[0]!, model: model.split('/')[1]!, cost: 0.5, currency: 'USD'}),
     }));
     const result = await tools.execute(dispatch({jobs: [job('Scan')]}), principal(undefined, {reportSwarm: swarm => frames.push(swarm)}));
     assert.equal(result.isError, false);
@@ -805,6 +806,8 @@ test('The journal records the whole process under the principal; usage is charge
     assert.deepEqual(entries.map(entry => entry.event), ['start', 'message', 'tool', 'message', 'end']);
     assert.ok(entries.every(entry => entry.principal === 'techne' && entry.parentActivityId === 'act' && entry.jobIndex === 0));
     assert.deepEqual(charged, [['techne', 'mock/worker', 10], ['techne', 'mock/worker', 10]]);
+    assert.deepEqual(entries.filter(entry => entry.event === 'message').map(entry => entry.usage),
+      [10, 10].map(input => ({input, output: 5, cacheRead: 0, cacheWrite: 0, provider: 'mock', model: 'worker', cost: 0.5, currency: 'USD'})));
     assert.equal(frames[0]!.name, 'work crew');
     assert.equal(frames[0]!.jobs[0]!.state, 'queued');
     assert.ok(frames.some(frame => frame.jobs[0]!.state === 'running' && frame.jobs[0]!.tool?.includes('plain.txt')));

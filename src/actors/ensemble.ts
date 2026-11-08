@@ -4,7 +4,7 @@ import type {AutomaSwarm} from '../runtime/contracts.js';
 import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
 import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot, type TaskOriginData} from '../runtime/contracts.js';
-import {repairToolResults, type ModelMessage} from '../runtime/messages.js';
+import {repairToolResults, type ModelMessage, type TurnUsage} from '../runtime/messages.js';
 import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
 import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
 import {storedMessage, type HistoryEntry, type HistoryStore, type TaskCheckpoint} from '../store/journal.js';
@@ -74,7 +74,7 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly stopReason?: () => StopReason | undefined;
   report(stage: string, detail: string): void;
   say(text: string): void;
-  record(message: ModelMessage, step?: Step): Promise<void>;
+  record(message: ModelMessage, step?: Step, usage?: TurnUsage): Promise<void>;
   ask(input: Omit<Extract<InteractionInput, {kind: 'question'}>, 'sessionId' | 'activityId' | 'ownerId'>): Promise<InteractionOutcome>;
   permission(input: Omit<Extract<InteractionInput, {kind: 'permission'}>, 'sessionId' | 'activityId' | 'ownerId'>): Promise<boolean>;
   /** Like `permission`, but returns the user's full answer (grant scope, denial note). Absent in minimal contexts; callers fall back to `permission`. */
@@ -505,8 +505,8 @@ export class EnsembleRuntime<Id extends string> {
           signal.throwIfAborted();
         },
         authorization,
-        record: async (message, step) => {
-          await this.history.append({version: 1, ...identity, role: message.role, text: message.text, message, ...(step ? {step} : {})});
+        record: async (message, step, usage) => {
+          await this.history.append({version: 1, ...identity, role: message.role, text: message.text, message, ...(step ? {step} : {}), ...(usage ? {usage} : {})});
           recorded = true;
         },
         report: (stage, detail) => { signal.throwIfAborted(); update('running', stage, detail); },

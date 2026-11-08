@@ -1,5 +1,5 @@
 import type {ContextPolicy} from '../config/config.js';
-import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall} from '../runtime/messages.js';
+import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall, TurnUsage} from '../runtime/messages.js';
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeMessages} from '../runtime/messages.js';
 import {inputMessage} from '../runtime/provenance.js';
@@ -12,6 +12,7 @@ import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool
 import {canonicalToolName} from '../tools/types.js';
 import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discovery.js';
 import {contextSnapshot, retainRuntimeContext} from './continuity.js';
+import {turnUsageOf, type costOf} from './cost.js';
 import {allocateContext, categoryWeights, type ContextBreakdown} from './breakdown.js';
 
 type Identity = {sessionId: string; ownerId: string; activityId?: string};
@@ -29,6 +30,8 @@ export interface ContextOptions {
   beforeCompact?(identity: Identity, tokens: number): void;
   /** Brackets a running compaction so the UI can show `Compacting context` for that owner. */
   compacting?(identity: Identity, active: boolean): void;
+  /** Source of list prices for the cost stored with each turn's usage (see `cost.ts:costOf`). */
+  pricing?: Parameters<typeof costOf>[1];
 }
 export class ContextBudgetError extends Error {}
 /** Upper bound for a model-written overview or progress summary. */
@@ -101,6 +104,10 @@ export class ContextManager {
   invalidatePrefix(): void {
     for (const meter of this.meters.values()) meter.invalidate();
     for (const [key, reading] of this.statistics) this.statistics.set(key, {...reading, estimated: true});
+  }
+  /** The ledger form of one turn's provider-reported usage, priced when a price is known. */
+  turnUsage(turn: ModelTurn, model: ModelCapacity): TurnUsage | undefined {
+    return turn.usage ? turnUsageOf(turn.usage, model.identity, this.options.pricing) : undefined;
   }
   observe(identity: Identity, request: ModelRequest, turn: ModelTurn, model: ModelCapacity): void {
     this.meter(identity).observe(request, turn, model);

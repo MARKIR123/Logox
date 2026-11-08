@@ -3,7 +3,7 @@ import {stripNarration} from '../runtime/narration.js';
 import {createHash, randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {z} from 'zod';
-import {modelMessageSchema, type ModelMessage} from '../runtime/messages.js';
+import {modelMessageSchema, turnUsageSchema, type ModelMessage} from '../runtime/messages.js';
 import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnapshot} from '../runtime/contracts.js';
 import {inputKindSchema} from '../runtime/provenance.js';
 import {deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -20,6 +20,7 @@ const entrySchema = z.strictObject({
   role: z.enum(['user', 'assistant', 'tool', 'context']), text: z.string(),
   time: z.number().optional(), message: modelMessageSchema.optional(), activityId: z.string().optional(), source: z.string().optional(),
   inputKind: inputKindSchema.optional(), step: stepSchema.optional(), deliveryIds: z.array(z.string()).optional(),
+  usage: turnUsageSchema.optional(),
 }).refine(entry => (entry.role !== 'context' || entry.message?.role === 'context') &&
   (!entry.message || entry.message.role === entry.role && entry.message.text === entry.text), 'History message or role does not match.');
 export type HistoryEntry = z.infer<typeof entrySchema>;

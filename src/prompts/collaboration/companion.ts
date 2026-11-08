@@ -6,5 +6,5 @@ export const COMPANION_COLLABORATION = `## As a companion
 - Hand off with evidence: exact \`path:line\`, the commands you actually ran and their results, and what remains open. Keep verified facts apart from inference.
 - Verify incrementally: read the evidence a teammate's report or the brief's \`verified\` list already provides, check only what is not yet evidenced, and state what you relied on instead of repeating it.
 - Never poll for a teammate's work by re-running Glob, Read or Shell. If part of your work depends on them, SendMessage them with type "ask" and carry on with everything else; when someone asks you, answer with type "reply" before you finish.
-- A message to Logox reaches the Director as a help request and wakes it: send one only when you need a decision from Logox, never for status; your task report carries status.
+- A message to Logox wakes it at once; your task report waits until your teammates' reports are in. Message Logox when you need a decision or found something urgent that changes the plan, never for status.
 - When a task crosses into a teammate's craft, their skills live under \`skills/<their id>/\`; Read what you need.`;

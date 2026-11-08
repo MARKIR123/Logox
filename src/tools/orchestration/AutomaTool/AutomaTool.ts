@@ -5,7 +5,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {diffLines} from 'diff';
 import {z} from 'zod';
 import type {AutomaSwarm, AutomaJobState} from '../../../runtime/contracts.js';
-import type {ModelMessage, ModelTurn, Provider, ToolCall, ToolDefinition} from '../../../runtime/messages.js';
+import type {ModelMessage, ModelTurn, Provider, ToolCall, ToolDefinition, TurnUsage} from '../../../runtime/messages.js';
 import {ensureActorScratchpadDir, getActorScratchpadDir, maybePersistLargeOutput} from '../../../kernel/scratchpad.js';
 import type {ToolResult} from '../../types.js';
 import {readSchema} from '../../ReadTool/ReadTool.js';
@@ -181,6 +181,8 @@ export interface DispatchOptions {
   journalPath?: string | undefined;
   onProgress?(swarm: AutomaSwarm): void;
   charge?(usage: ModelTurn['usage'], model: string): void;
+  /** Ledger form of a worker turn's usage (tokens, model, provider, priced cost); stored on the turn's `message` event. */
+  priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
 }
 
 interface Report {verdict: string; evidence: string; notVerified: string}
@@ -343,7 +345,8 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
         signal.throwIfAborted();
         lastInput = turn.usage?.input ?? lastInput;
         messages.push(turn.message);
-        await journal(index, 'message', {message: turn.message});
+        const priced = turn.usage ? options.priceUsage?.(turn.usage, resolved.model) : undefined;
+        await journal(index, 'message', {message: turn.message, ...(priced ? {usage: priced} : {})});
         const calls = turn.message.toolCalls ?? [];
         if (!calls.length) {finalText = turn.message.text.trim(); truncated = turn.stop === 'length'; break;}
         for (const call of calls) {

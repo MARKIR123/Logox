@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, rm, utimes, writeFile} from 'node:fs/promises';
+import {appendFile, mkdir, mkdtemp, rm, utimes, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 interface Score {
   session: {label: string; others: {id: string}[]; wallMs: number | null};
-  roots: {finalReports: number; wakes: number; lateWakes: number; lateWakeReports: number; wallMs: number | null}[];
+  roots: {finalReports: number; wakes: number; lateWakes: number; lateWakeReports: number; wallMs: number | null; usage: {input: number} | null}[];
   stages: Record<string, {turns: number; withStage: number; share: number | null; distinct: number | null}>;
   roundClosing: Record<string, {rounds: number; same: number; separate: number; silent: number; never: number}>;
   failures: {failedTasks: number; emptyReplyFailures: number; modelErrorEvents: number};
@@ -14,7 +14,8 @@ interface Score {
   preview: {serverStarts: number; backgroundStarts: number; portConflicts: number; navigations: {file: number; localHttp: number}};
   messaging: {bySender: Record<string, {reply: number; inform: number; ask: number; other: number}>; toLogox: number; total: number};
   automa: {dispatches: number; jobs: number; jobFailures: number; keep: number; continue: number; release: number};
-  usage: {recorded: boolean; total: {input: number; output: number}};
+  usage: {recorded: boolean; costRecorded: boolean; total: {turns: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost: number};
+    byActor: Record<string, {turns: number; input: number; cost: number}>};
   interruptions: {userInterrupts: number; directorStops: number; cancelActorCalls: number};
   missing: string[];
 }
@@ -22,6 +23,8 @@ const scorer = await import(new URL('../../scripts/score-session.mjs', import.me
   scoreSession(dir: string, options?: {others?: unknown[]}): Score;
   resolveSession(path: string): {dir: string; others: {id: string}[]};
   renderTable(scores: Score[]): string;
+  projectUsage(path: string): {sessions: {id: string; usage: Score['usage']}[]; recorded: number; total: Score['usage']['total']} | null;
+  main(argv: string[]): number;
 };
 
 const SESSION = 's1';
@@ -38,9 +41,12 @@ const jsonl = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join('\n
 const REPORT = 'Done. **Open [index.html](./index.html)** to watch the animation; everything is inline and works offline.';
 
 /** Writes the smallest session the scorer reads: one root, one Director dispatch, two wakes (the second one late), one failed Kalon task. */
-async function writeSession(dir: string): Promise<void> {
+async function writeSession(dir: string, withUsage = false): Promise<void> {
   clock = 1_000_000;
   await mkdir(join(dir, 'subagents'), {recursive: true});
+  // Turn usage as the runtime persists it: one record per assistant turn, tokens as the provider reports them.
+  const priced = (rows: Record<string, unknown>[]) => withUsage ? rows.map(row => row['role'] === 'assistant'
+    ? {...row, usage: {input: 100, output: 10, cacheRead: 40, cacheWrite: 0, provider: 'p', model: 'm', cost: 0.5, currency: 'USD'}} : row) : rows;
   const director = [
     human('Build a page'),
     assistant('logox', ROOT, 'On it.', [call('Actor', {tasks: []})], 'Plan the page'),
@@ -63,9 +69,9 @@ async function writeSession(dir: string): Promise<void> {
   const kalon = [assistant('kalon', 'kal', 'Drawing.', [call('_FinishRound', {title: 'x'})], 'Draw the scene')];
   const wake1 = [assistant('logox', 'wake1', REPORT), assistant('logox', 'wake1', '', [call('_FinishRound', {title: 'final'})])];
   const wake2 = [assistant('logox', 'wake2', REPORT)];
-  await writeFile(join(dir, 'director.jsonl'), jsonl([...director, ...wake1, ...wake2]));
-  await writeFile(join(dir, 'subagents', 'techne.jsonl'), jsonl(techne));
-  await writeFile(join(dir, 'subagents', 'kalon.jsonl'), jsonl(kalon));
+  await writeFile(join(dir, 'director.jsonl'), jsonl(priced([...director, ...wake1, ...wake2])));
+  await writeFile(join(dir, 'subagents', 'techne.jsonl'), jsonl(priced(techne)));
+  await writeFile(join(dir, 'subagents', 'kalon.jsonl'), jsonl(priced(kalon)));
   await writeFile(join(dir, 'subagents', 'automa.jsonl'), jsonl([{time: tick(), parentActivityId: ROOT, event: 'start', jobIndex: 0}, {time: tick(), parentActivityId: ROOT, event: 'end', state: 'done'},
     {time: tick(), parentActivityId: ROOT, event: 'start', jobIndex: 1}, {time: tick(), parentActivityId: ROOT, event: 'end', state: 'failed'}]));
   const task = (activityId: string, ownerId: string, extra: Record<string, unknown>) => ({activityId, ownerId, prompt: 'p', source: 'x', status: 'completed', time: 1, rootActivityId: ROOT, ...extra});
@@ -103,6 +109,7 @@ test('scoreSession computes the workflow metrics of a synthetic session', async 
     assert.equal(score.messaging.toLogox, 1);
     assert.deepEqual(score.automa, {...score.automa, dispatches: 1, jobs: 2, jobFailures: 1, keep: 1, continue: 0, release: 0});
     assert.equal(score.usage.recorded, false, 'usage is not in the fixture, so tokens are n/a');
+    assert.equal(score.roots[0]?.usage, null);
     assert.ok(score.missing.some(note => note.startsWith('tokens and cost')));
     assert.deepEqual([score.interruptions.userInterrupts, score.interruptions.directorStops, score.interruptions.cancelActorCalls], [0, 0, 0]);
   } finally {
@@ -128,6 +135,77 @@ test('resolveSession picks the newest session of a .logox directory and renderTa
     assert.match(table, /final reports \(total\)\s+2\s+2/);
     assert.match(table, /tokens in \/ out\s+n\/a\s+n\/a/);
     assert.throws(() => scorer.resolveSession(join(root, 'missing')), /No LOGOX session/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('Cost reports tokens and cost per actor, per root task and in total when ledgers carry usage', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const dir = join(root, 'proj', '.logox', 'state', 'sessions', SESSION);
+    await writeSession(dir, true);
+    const score = scorer.scoreSession(dir);
+    assert.deepEqual(score.usage.total, {turns: 12, input: 1200, output: 120, cacheRead: 480, cacheWrite: 0, cost: 6, costTurns: 12});
+    assert.deepEqual([score.usage.byActor['logox']?.turns, score.usage.byActor['techne']?.turns, score.usage.byActor['kalon']?.turns], [6, 5, 1]);
+    assert.equal(score.usage.byActor['techne']?.cost, 2.5);
+    assert.equal(score.roots[0]?.usage?.input, 1200, 'wake activities attribute to their root task');
+    assert.ok(!score.missing.some(note => note.startsWith('cost') || note.startsWith('tokens')));
+    const table = scorer.renderTable([score]);
+    assert.match(table, /tokens in [/] out +1200 [/] 120/);
+    assert.match(table, /techne cost +2[.]5000 USD/);
+    assert.match(table, /root #1 cost +6[.]0000 USD/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('projectUsage sums every session of a .logox directory and keeps n/a sessions out of the total', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const sessions = join(root, 'proj', '.logox', 'state', 'sessions');
+    await writeSession(join(sessions, 'a'), true);
+    await writeSession(join(sessions, 'b'), true);
+    await writeSession(join(sessions, 'legacy'));
+    const project = scorer.projectUsage(join(root, 'proj', '.logox'));
+    assert.ok(project);
+    assert.deepEqual(project.sessions.map(item => item.id), ['a', 'b', 'legacy']);
+    assert.equal(project.recorded, 2);
+    assert.equal(project.total.input, 2400);
+    assert.equal(project.total.cost, 12);
+    assert.equal(project.sessions[2]?.usage.recorded, false);
+    assert.equal(scorer.projectUsage(join(sessions, 'a')), null, 'a session directory is not a project');
+    const logged: string[] = [], log = console.log;
+    console.log = (text: string) => {logged.push(text);};
+    try {scorer.main([join(root, 'proj', '.logox')]);} finally {console.log = log;}
+    const printed = logged.join(String.fromCharCode(10));
+    assert.ok(printed.includes("[Project total] 3 sessions, 2 with usage data"));
+    assert.match(printed, /legacy +n[/]a/);
+    assert.ok(printed.includes("1 sessions predate"));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('Automa worker turns and summary calls count toward actor, root and project totals with their own rows', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const dir = join(root, 'proj', '.logox', 'state', 'sessions', SESSION);
+    await writeSession(dir, true);
+    const usage = (input: number, output: number, cost: number) => ({input, output, cacheRead: 0, cacheWrite: 0, provider: 'p', model: 'm', cost, currency: 'USD'});
+    await appendFile(join(dir, 'subagents', 'automa.jsonl'), jsonl([{time: tick(), parentActivityId: ROOT, principal: 'logox', event: 'message', usage: usage(60, 6, 0.25)}]));
+    await writeFile(join(dir, 'usage.jsonl'), jsonl([{version: 1, time: tick(), ownerId: 'techne', category: 'summary', usage: usage(50, 5, 0.1)}]));
+    const score = scorer.scoreSession(dir);
+    assert.equal(score.usage.total.input, 1310);
+    assert.ok(Math.abs(score.usage.total.cost - 6.35) < 1e-9);
+    assert.equal(score.roots[0]?.usage?.input, 1310, 'Automa follows its dispatching activity and the summary the owner\'s latest activity');
+    assert.equal(score.usage.byActor['logox']?.turns, 7);
+    assert.equal(score.usage.byActor['techne']?.turns, 6);
+    const table = scorer.renderTable([score]);
+    assert.match(table, /logox automa in [/] out [/] cache +60 [/] 6 [/] 0[+]0/);
+    assert.match(table, /techne compaction cost +0[.]1000 USD/);
+    assert.match(table, /logox automa cost +0[.]2500 USD/);
+    assert.equal(scorer.projectUsage(join(root, 'proj', '.logox'))?.total.input, 1310);
   } finally {
     await rm(root, {recursive: true, force: true});
   }

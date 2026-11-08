@@ -11,7 +11,7 @@ import {PermissionGuard, type GuardOptions} from '../permissions/guard.js';
 import {shellImpact} from '../permissions/shell.js';
 import {pathDanger, riskyPath} from '../permissions/paths.js';
 import type {ActorContext} from '../actors/ensemble.js';
-import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
+import type {ToolCall, ToolDefinition, TurnUsage} from '../runtime/messages.js';
 import {Snapshots, bytesOrMissing} from './snapshots.js';
 
 import type {ToolRegistry} from './registry.js';
@@ -243,6 +243,7 @@ export interface AutomaEnvironment {
   maxParallel?(): number;
   journalPath?(sessionId: string): string;
   charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
+  priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
 }
 
 interface OwnedInstance extends RetainedInstance {readonly sessionId: string; readonly ownerId: string; readonly activityId: string}
@@ -379,6 +380,7 @@ export class Tools {
         trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
         journalPath: environment.journalPath?.(sessionId),
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
+        ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
         ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
       });
       return note ? {...result, text: result.text + '\n\n' + note} : result;

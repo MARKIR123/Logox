@@ -127,15 +127,16 @@ test('the empty-reply reminder is one static constant', () => {
   assert.equal(EMPTY_REPLY_REMINDER, 'Your previous reply was empty. Continue the task: call a tool or give your answer.');
 });
 
-test('Director waits for the last report, spot-checks reported evidence and later wakes add only what changed', () => {
+test('Director declares dependent work with after, spot-checks reported evidence and gets reports together', () => {
   const director = profile('logox', 'collaboration.md');
-  assert.ok(director.includes('While dispatched work your conclusion depends on is still running or queued, reply with one short status line saying what you are waiting for and end the round; deliver the final report only when the last needed report has arrived. After a final report, later wakes add only what changed.'));
+  assert.ok(director.includes("Reports from dispatched work arrive together once all of it has ended, or earlier with any urgent message; declare work that depends on another actor's result with `after` at dispatch instead of waiting to relay it."));
   assert.ok(director.includes('spot-check once (open the page, try one interaction) instead of re-running them'));
 });
 
 test('peer replies use type reply, help is for decisions, and the answer and _FinishRound share one reply', () => {
   assert.match(collaborationFor('logox'), /Answer an ask with type "reply", never "inform"/);
-  assert.match(collaborationFor('techne'), /send one only when you need a decision from Logox, never for status/);
+  assert.match(collaborationFor('techne'), /wakes it at once; your task report waits until your teammates' reports are in/);
+  assert.match(collaborationFor('techne'), /found something urgent that changes the plan, never for status/);
   assert.match(ROUND_SUMMARY_CONTRACT, /write that answer text and call _FinishRound in the same reply/);
 });
 

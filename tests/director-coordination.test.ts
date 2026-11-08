@@ -13,10 +13,10 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {Journal} from '../src/store/journal.js';
 import {loadConfig} from '../src/config/config.js';
 import {waitForSnapshot} from './runtime-fixture.js';
+import {waitFor} from './wait-for.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {Tools} from '../src/tools/tools.js';
-import {finalReportsFor} from '../src/runtime/final-reports.js';
-import {DIRECTOR_LATE_REPORT, DIRECTOR_RESULTS_READY} from '../src/prompts/runtime/director.js';
+import {DIRECTOR_RESULTS_READY} from '../src/prompts/runtime/director.js';
 
 function gate() {let resolve!: () => void; const promise = new Promise<void>(done => {resolve = done;}); return {promise, resolve};}
 const dispatch = (owners: string[]) => ({id: 'assign', name: 'Actor', arguments: JSON.stringify({tasks: owners.map(ownerId => ({ownerId, prompt: 'child work'}))})});
@@ -33,7 +33,7 @@ async function fixture(execute: (prompt: string, context: ActorContext, services
   services = new ActorServices({sessionId: 's', catalog, config, journal, deliveries, registry: new ProviderRegistry(config, {}),
     resources: new Resources(directory, {home: directory, boundary: directory}), getSnapshot: () => store.getSnapshot(),
     getActiveTask: owner => ensemble.getActiveTask(owner), canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
-    finalReports: finalReportsFor(store), requireIdle() {}, approve: async () => false, enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
+    requireIdle() {}, approve: async () => false, enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     pauseBatch: id => ensemble.pauseBatch(id), resumeBatch: id => ensemble.resumeBatch(id), coordinationPath: join(directory, 'coordination.json')});
   await services.recover();
   return {ensemble, services, deliveries, journal, store, async close() {await ensemble.close(); await services.flush(); await rm(directory, {recursive: true, force: true});}};
@@ -65,27 +65,220 @@ test('formal child delivery reaches a busy Director boundary without a redundant
   } finally {childRelease.resolve(); parentRelease.resolve(); await f.close();}
 });
 
-test('a completed batch member reports promptly without waiting for its unfinished sibling', {timeout: 8000}, async () => {
-  const assigned = gate(), firstRelease = gate(), secondRelease = gate(), parentRelease = gate(); let director!: ActorContext;
+const OWNERS = ['techne', 'kalon', 'aletheia'] as const;
+const done = (f: Awaited<ReturnType<typeof fixture>>, owner: string) => waitForSnapshot(f.store, snapshot => snapshot.activities.some(activity => activity.ownerId === owner && ['completed', 'failed', 'cancelled'].includes(activity.status)));
+const count = (text: string, needle: string) => text.split(needle).length - 1;
+/** Three companions dispatched in one call; each runs until its gate opens and then reports (or throws). A Director that stays busy collects through `drain`, an idle one is woken. */
+async function ensembleOf(options: {busy: boolean; failing?: string[]; tasks?: object[]}) {
+  const release = Object.fromEntries(OWNERS.map(owner => [owner, gate()])) as Record<typeof OWNERS[number], ReturnType<typeof gate>>;
+  const parentRelease = gate(), assigned = gate(), rework = gate(); const runs = new Map<string, number>(); const wakes: string[] = []; let director!: ActorContext; let wakeRuns = 0;
   const f = await fixture(async (prompt, context, services) => {
-    if (prompt === 'start') {director = context; await services.execute(dispatch(['techne', 'kalon']), context); assigned.resolve(); await parentRelease.promise; context.say('Done.');}
-    else if (context.ownerId === 'techne') {await firstRelease.promise; context.say('First child full report.');}
-    else if (context.ownerId === 'kalon') {await secondRelease.promise; context.say('Second child full report.');}
-    else {await context.drainInbox?.(); context.say('Coordinated.');}
+    if (context.ownerId !== 'logox') {
+      runs.set(context.ownerId, (runs.get(context.ownerId) ?? 0) + 1);
+      if (runs.get(context.ownerId)! > 1) {await rework.promise; context.say('Reworked.'); return;}
+      await Promise.race([release[context.ownerId as typeof OWNERS[number]].promise, new Promise<never>((_, reject) => context.signal.addEventListener('abort', () => reject(context.signal.reason), {once: true}))]);
+      if (options.failing?.includes(context.ownerId)) throw new Error('boom');
+      context.say(context.ownerId + ' full report.'); return;
+    }
+    if (prompt === 'start') {
+      director = context;
+      await services.execute({id: 'assign', name: 'Actor', arguments: JSON.stringify({tasks: options.tasks ?? OWNERS.map(ownerId => ({ownerId, prompt: 'child work'}))})}, context);
+      assigned.resolve();
+      if (options.busy) await parentRelease.promise;
+      context.say('Dispatched.'); return;
+    }
+    wakeRuns++; if (prompt === 'continue') {services.resumeDirector(context.activityId); await services.flush();}
+    wakes.push(...(await context.drainInbox?.() ?? []).map(message => message.text)); context.say('Handled.');
   });
+  const id = (owner: string) => f.store.activities.list().find(activity => activity.ownerId === owner)!.activityId;
+  const logoxRuns = () => f.store.activities.list().filter(activity => activity.ownerId === 'logox').length;
+  const finish = async () => {for (const owner of OWNERS) release[owner].resolve(); parentRelease.resolve(); rework.resolve(); await f.close();};
+  return {f, release, parentRelease, assigned, rework, wakes, id, logoxRuns, finish, director: () => director, wakeRuns: () => wakeRuns};
+}
+
+test('reports of a root stay held until all its work ended, then arrive as one batch', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: true});
   try {
-    const parent = f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'});
-    await assigned.promise; firstRelease.resolve();
-    await waitForSnapshot(f.store, snapshot => snapshot.activities.some(activity => activity.ownerId === 'techne' && activity.status === 'completed'));
-    const first = await director.drainInbox?.(); assert.ok(first?.[0]?.text.includes('First child full report.'));
-    assert.equal(f.store.activities.list().find(activity => activity.ownerId === 'kalon')?.status, 'running');
-    secondRelease.resolve();
-    await waitForSnapshot(f.store, snapshot => snapshot.activities.some(activity => activity.ownerId === 'kalon' && activity.status === 'completed'));
-    const second = await director.drainInbox?.();
-    assert.ok(second?.[0]?.text.includes('Second child full report.'));
-    assert.ok(second?.every(message => !message.text.includes('First child full report.')));
-    parentRelease.resolve(); await parent.done; await allIdle(f.ensemble);
-  } finally {firstRelease.resolve(); secondRelease.resolve(); parentRelease.resolve(); await f.close();}
+    const parent = e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}); await e.assigned.promise;
+    e.release.techne.resolve(); e.release.kalon.resolve(); await done(e.f, 'techne'); await done(e.f, 'kalon');
+    assert.deepEqual(await e.director().drainInbox?.(), [], 'two of three reports do not reach the Director');
+    assert.equal(e.f.deliveries.held('logox').length, 2);
+    const early = await e.f.services.execute({id: 'read', name: 'ReadActor', arguments: JSON.stringify({ownerId: 'techne', activityId: e.id('techne')})}, e.director());
+    assert.match(early.text, /techne full report\./); assert.match(early.text, /held/);
+    assert.match(e.f.services.facts(e.director()), /Reported 2\/3; still running: Aletheia/);
+    e.release.aletheia.resolve(); await done(e.f, 'aletheia');
+    const incoming = await e.director().drainInbox?.();
+    assert.equal(incoming?.length, 1);
+    const text = incoming![0]!.text;
+    for (const owner of OWNERS) assert.ok(text.includes(owner + ' full report.'), owner);
+    assert.equal(count(text, DIRECTOR_RESULTS_READY), 1); assert.equal(count(text, '[Event '), 3);
+    assert.ok(text.indexOf(DIRECTOR_RESULTS_READY) < text.indexOf('[Event '), 'the results line comes first');
+    e.parentRelease.resolve(); await parent.done; await allIdle(e.f.ensemble);
+    assert.equal(e.logoxRuns(), 1);
+  } finally {await e.finish();}
+});
+
+test('an idle Director is woken once for three held reports', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: false});
+  try {
+    await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    for (const owner of OWNERS.slice(0, 2)) {e.release[owner].resolve(); await done(e.f, owner);}
+    assert.equal(e.logoxRuns(), 1, 'no wake while a sibling is still working');
+    e.release.aletheia.resolve(); await done(e.f, 'aletheia'); await allIdle(e.f.ensemble);
+    assert.equal(e.logoxRuns(), 2); assert.equal(e.wakes.length, 1);
+    for (const owner of OWNERS) assert.ok(e.wakes[0]!.includes(owner + ' full report.'));
+    assert.equal(count(e.wakes[0]!, DIRECTOR_RESULTS_READY), 1);
+  } finally {await e.finish();}
+});
+
+test('a non-deferred failure wakes an idle Director at once with the held sibling reports attached', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: false, failing: ['kalon']});
+  try {
+    await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    assert.equal(e.f.deliveries.held('logox').length, 1);
+    e.release.kalon.resolve(); await done(e.f, 'kalon');
+    await waitFor(() => e.wakes.length, count => count > 0, {timeoutMs: 5000, label: 'wake'});
+    assert.equal(e.f.store.activities.list().find(activity => activity.ownerId === 'aletheia')?.status === 'running', true, 'a sibling is still working');
+    assert.equal(e.wakes.length, 1);
+    assert.ok(e.wakes[0]!.includes('techne full report.')); assert.match(e.wakes[0]!, /Actor kalon activity \S+ \(failed\)/);
+    assert.equal(e.f.deliveries.held('logox').length, 0);
+  } finally {await e.finish();}
+});
+
+test('a help request reaches a busy Director with the held reports', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: true});
+  try {
+    const parent = e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}); await e.assigned.promise;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    assert.deepEqual(await e.director().drainInbox?.(), []);
+    const kalon = e.f.store.activities.list().find(activity => activity.ownerId === 'kalon')!;
+    await e.f.services.execute({id: 'help', name: 'SendMessage', arguments: JSON.stringify({to: 'logox', message: 'Urgent: the API shape changed.'})}, {...e.director(), ownerId: 'kalon', activityId: kalon.activityId, rootActivityId: kalon.rootActivityId});
+    const incoming = await e.director().drainInbox?.();
+    assert.equal(incoming?.length, 1);
+    assert.ok(incoming![0]!.text.includes('Urgent: the API shape changed.')); assert.ok(incoming![0]!.text.includes('techne full report.'));
+    assert.ok(incoming![0]!.text.indexOf('Urgent') < incoming![0]!.text.indexOf('techne full report.'), 'help sorts before reports');
+    e.parentRelease.resolve(); await parent.done;
+  } finally {await e.finish();}
+});
+
+test('stopping one of three companions keeps the Director asleep; the next human message delivers all three items together', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: false});
+  try {
+    await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    const stopped = e.id('aletheia');
+    e.f.services.stopActor(stopped); e.f.ensemble.cancel(stopped, 'user');
+    await done(e.f, 'aletheia');
+    e.release.techne.resolve(); e.release.kalon.resolve(); await done(e.f, 'techne'); await done(e.f, 'kalon'); await allIdle(e.f.ensemble);
+    assert.equal(e.logoxRuns(), 1, 'the Director is not woken behind the human back');
+    assert.equal(e.f.deliveries.pending('logox').filter(item => !item.deferredUntilHuman).length, 0);
+    assert.equal(e.f.deliveries.held('logox').length, 2);
+    assert.equal(e.f.deliveries.snapshot().filter(item => item.deferredUntilHuman && item.status === 'pending').length, 1);
+    assert.match(e.f.services.facts({ownerId: 'logox', activityId: 'x', rootActivityId: e.f.store.activities.list().find(activity => activity.ownerId === 'techne')!.rootActivityId}), /held until the human speaks again/);
+    await e.f.ensemble.dispatch('logox', 'continue', 'logox', {inputKind: 'human'}).done; await allIdle(e.f.ensemble);
+    assert.equal(e.wakes.length, 1);
+    const text = e.wakes[0]!;
+    assert.equal(count(text, '[Event '), 3); assert.ok(text.includes('techne full report.')); assert.ok(text.includes('kalon full report.')); assert.match(text, /Actor aletheia/);
+    assert.equal(e.f.deliveries.held('logox').length, 0);
+  } finally {await e.finish();}
+});
+
+test('Logox cancelling a companion wakes it at once with the held reports', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: false});
+  try {
+    await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    assert.equal(e.f.ensemble.cancelActor('kalon', 'activity').success, true); await done(e.f, 'kalon');
+    await waitFor(() => e.wakes.length, count => count > 0, {timeoutMs: 5000, label: 'wake'});
+    assert.ok(e.wakes[0]!.includes('techne full report.')); assert.match(e.wakes[0]!, /Actor kalon/);
+  } finally {await e.finish();}
+});
+
+test('an after pipeline reports once, in one batch, when its last task ends', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: false, tasks: [{ownerId: 'aletheia', prompt: 'review'}, {ownerId: 'kalon', prompt: 'fix', after: ['aletheia']}]});
+  try {
+    await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    e.release.aletheia.resolve(); await done(e.f, 'aletheia');
+    e.release.kalon.resolve(); await done(e.f, 'kalon'); await allIdle(e.f.ensemble);
+    assert.equal(e.logoxRuns(), 2); assert.equal(e.wakes.length, 1);
+    assert.ok(e.wakes[0]!.includes('aletheia full report.')); assert.ok(e.wakes[0]!.includes('kalon full report.'));
+  } finally {await e.finish();}
+});
+
+test('work dispatched by the Director before the release joins the same batch', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: true, tasks: [{ownerId: 'techne', prompt: 'a'}, {ownerId: 'kalon', prompt: 'b'}]});
+  try {
+    const parent = e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}); await e.assigned.promise;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    await e.f.services.execute({id: 'more', name: 'Actor', arguments: JSON.stringify({tasks: [{ownerId: 'aletheia', prompt: 'c'}]})}, e.director());
+    e.release.kalon.resolve(); await done(e.f, 'kalon');
+    assert.deepEqual(await e.director().drainInbox?.(), [], 'the new task keeps the batch open');
+    e.release.aletheia.resolve(); await done(e.f, 'aletheia');
+    const incoming = await e.director().drainInbox?.();
+    assert.equal(incoming?.length, 1); assert.equal(count(incoming![0]!.text, '[Event '), 3);
+    e.parentRelease.resolve(); await parent.done;
+  } finally {await e.finish();}
+});
+
+test('a teammate message that wakes a reported companion keeps the batch open until the rework ends', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: true, tasks: [{ownerId: 'techne', prompt: 'a'}, {ownerId: 'kalon', prompt: 'b'}]});
+  try {
+    const parent = e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}); await e.assigned.promise;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    const kalon = e.f.store.activities.list().find(activity => activity.ownerId === 'kalon')!;
+    const sent = await e.f.services.execute({id: 'w', name: 'SendMessage', arguments: JSON.stringify({to: 'techne', message: 'Please adjust.', wake: true})},
+      {...e.director(), ownerId: 'kalon', activityId: kalon.activityId, rootActivityId: kalon.rootActivityId, inputKind: 'director' as const});
+    assert.equal(sent.isError, false);
+    assert.equal(e.f.store.activities.list().filter(activity => activity.ownerId === 'techne').length, 2, 'the wake opens a rework activity');
+    e.release.kalon.resolve(); await done(e.f, 'kalon');
+    assert.deepEqual(await e.director().drainInbox?.(), [], 'the rework keeps the batch open');
+    e.rework.resolve(); await waitForSnapshot(e.f.store, snapshot => snapshot.activities.filter(activity => activity.ownerId === 'techne').every(activity => activity.status === 'completed'));
+    const batch = await e.director().drainInbox?.();
+    assert.equal(batch?.length, 1); assert.equal(count(batch![0]!.text, '[Event '), 2);
+    e.parentRelease.resolve(); await parent.done;
+  } finally {await e.finish();}
+});
+
+test('a passive delivery to a reported companion does not block the batch', {timeout: 10000}, async () => {
+  const e = await ensembleOf({busy: true, tasks: [{ownerId: 'techne', prompt: 'a'}, {ownerId: 'kalon', prompt: 'b'}]});
+  try {
+    const parent = e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}); await e.assigned.promise;
+    e.release.techne.resolve(); await done(e.f, 'techne');
+    const kalon = e.f.store.activities.list().find(activity => activity.ownerId === 'kalon')!;
+    const kalonContext = {...e.director(), ownerId: 'kalon', activityId: kalon.activityId, rootActivityId: kalon.rootActivityId, inputKind: 'director' as const};
+    const passive = await e.f.services.execute({id: 'p', name: 'SendMessage', arguments: JSON.stringify({to: 'techne', message: 'FYI only.'})}, kalonContext);
+    assert.equal(passive.isError, false);
+    assert.equal(e.f.store.activities.list().filter(activity => activity.ownerId === 'techne').length, 1, 'no activity for a passive delivery');
+    e.release.kalon.resolve(); await done(e.f, 'kalon');
+    const batch = await e.director().drainInbox?.();
+    assert.equal(batch?.length, 1);
+    assert.equal(count(batch![0]!.text, '[Event '), 2);
+    e.parentRelease.resolve(); await parent.done;
+  } finally {await e.finish();}
+});
+
+test('the batch release does not depend on whether the reporting activity already reads as terminal', async () => {
+  for (const status of ['running', 'completed'] as const) {
+    const f = await fixture(async () => {});
+    try {
+      f.store.activities.create({sessionId: 's', activityId: 'child-' + status, ownerId: 'techne', kind: 'actor', title: 'child', status, stage: '', detail: '', rootActivityId: 'root-' + status, inputKind: 'director'});
+      await f.services.handoff({sessionId: 's', ownerId: 'techne', activityId: 'child-' + status, source: 'logox', rootActivityId: 'root-' + status,
+        inputKind: 'director', status: 'completed', summary: {title: 'Done.', report: 'Report body.', source: 'local'}} as TaskResult);
+      assert.equal(f.deliveries.held('logox').length, 0, status);
+      assert.equal(f.deliveries.pending('logox').length, 1, status);
+    } finally {await f.close();}
+  }
+});
+
+test('restart: held reports of an ended root are released, those of a root with live work stay held', async () => {
+  const f = await fixture(async () => {});
+  try {
+    f.store.activities.create({sessionId: 's', activityId: 'live-child', ownerId: 'kalon', kind: 'actor', title: 'live', status: 'queued', stage: '', detail: '', rootActivityId: 'live-root', inputKind: 'director'});
+    for (const root of ['old-root', 'live-root']) await f.deliveries.enqueue({id: 'report-' + root, ownerId: 'logox', source: 'techne', rootActivityId: root, kind: 'report', inputKind: 'actor', text: 'Report ' + root, hold: 'root'});
+    await f.services.recover();
+    assert.deepEqual(f.deliveries.pending('logox').map(item => item.id), ['report-old-root']);
+    assert.deepEqual(f.deliveries.held('logox').map(item => item.id), ['report-live-root']);
+  } finally {await f.close();}
 });
 
 test('idle Director wakes once for available reports and a repeated terminal handoff is deduplicated', {timeout: 8000}, async () => {
@@ -288,19 +481,4 @@ test('explicit assistance reaches a busy Director as a priority event without pr
     assert.equal(director.signal.aborted, false);
     release.resolve(); await parent.done;
   } finally {release.resolve(); await f.close();}
-});
-
-test('a report for a root whose final report was already delivered wakes the Director with the late-report text', async () => {
-  const f = await fixture(async () => {});
-  try {
-    const result = (id: string, root: string) => ({sessionId: 's', ownerId: 'techne', activityId: id, source: 'logox', rootActivityId: root, inputKind: 'director',
-      status: 'completed', summary: {title: 'Done.', report: 'Report body.', source: 'local'}}) as TaskResult;
-    await f.services.handoff(result('child-a', 'root-a'));
-    finalReportsFor(f.store).mark('root-b');
-    await f.services.handoff(result('child-b', 'root-b'));
-    const text = (root: string) => f.deliveries.snapshot().find(item => item.rootActivityId === root)!.text;
-    assert.ok(text('root-a').startsWith(DIRECTOR_RESULTS_READY));
-    assert.ok(text('root-b').startsWith(DIRECTOR_LATE_REPORT));
-    assert.ok(DIRECTOR_LATE_REPORT.includes('only what changed (1-3 sentences)'));
-  } finally {await f.close();}
 });

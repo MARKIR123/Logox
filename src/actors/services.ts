@@ -11,7 +11,6 @@ import {builtinActors} from './builtins.js';
 import {Collaboration} from './collaboration.js';
 import type {Resources} from '../resources/manager.js';
 import type {Journal} from '../store/journal.js';
-import type {FinalReports} from '../runtime/final-reports.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
@@ -40,8 +39,8 @@ import {renderBrief} from '../tools/orchestration/ActorTool/brief.js';
 import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
-import {activeEnsembleRoster, directorFacts} from './facts.js';
-import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_RESULTS_READY, DIRECTOR_LATE_REPORT, DIRECTOR_FAILURE,
+import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
+import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice} from '../prompts/runtime/director.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -86,8 +85,6 @@ export interface ActorServicesOptions {
   modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
   modelPool?: ModelPool;
   notice?(text: string): void;
-  /** Roots whose final report was already delivered; a later report for such a root is a late arrival. */
-  finalReports?: FinalReports;
 }
 /** Actor configuration, one-off skill borrowing, and summary handoff; the execution queue is still owned by the Ensemble. */
 export class ActorServices {
@@ -100,6 +97,9 @@ export class ActorServices {
   private readonly depths = new Map<string, number>();
   private readonly origins = new Map<string, TaskOrigin>();
   private readonly stoppedActors = new Set<string>();
+  /** Activities that called `settled`; their status may still read non-terminal for a moment. */
+  private readonly ended = new Set<string>();
+  private releasing: Promise<void> = Promise.resolve();
   private readonly pendingHandoffs = new Map<string, Delivery>();
   /** Per-caller ListActors fingerprints, owned by this ensemble so no-change replies never depend on function identity. */
   private readonly listActorsMemo: ListActorsMemo = {fingerprints: new Map()};
@@ -276,7 +276,6 @@ export class ActorServices {
           if (group) {this.resumableBatches.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);}
           if (!tasks.length) return {text: 'Resumed original batch: ' + resumeBatch, isError: false};
         }
-        this.options.finalReports?.clear(rootActivityId);
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
           ...(recovery ? {recovery} : {})};
@@ -310,6 +309,8 @@ export class ActorServices {
       }
       if (canonical === 'ReadActor') {
         const {ownerId, activityId} = readActorSchema.parse(input);
+        const reported = activityId ? this.deliveries.snapshot().find(item => item.ownerId === 'logox' && item.kind === 'report' && item.sourceActivityId === activityId && item.source === ownerId) : undefined;
+        if (reported) return {text: '# Task report: ' + ownerId + ' (' + activityId + ')' + (reported.hold && reported.status === 'pending' ? ' (held, not yet delivered)' : '') + '\n\n' + reported.text, isError: false};
         const entries = await this.options.journal.load(context.sessionId, ownerId);
         const rounds = await this.options.journal.rounds(context.sessionId, ownerId, entries);
         const relevantRounds = rounds.filter(round => !activityId || round.activityId === activityId).slice(-4);
@@ -391,7 +392,8 @@ export class ActorServices {
     if (batchId) this.options.pauseBatch?.(batchId);
   }
   resumeDirector(activityId?: string): string {
-    if (activityId) this.releaseTask = this.deliveries.releaseDeferred();
+    // New human input releases deferred items and held reports together.
+    if (activityId) this.releaseTask = this.deliveries.releaseDeferred().then(() => this.deliveries.release('logox')).then(() => {});
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
     if (activityId) for (const batch of batches) this.resumableBatches.add(batch);
@@ -401,6 +403,7 @@ export class ActorServices {
     await this.recovery.recover(validActivities);
     const tasks = await this.options.journal.activeTasks(this.options.sessionId);
     await this.deliveries.recover(tasks);
+    await this.releaseEndedRoots();
     for (const task of tasks) {
       if (task.handoff && (!validActivities || !task.handoff.rootActivityId || validActivities.has(task.handoff.rootActivityId)) &&
         !this.deliveries.snapshot().some(item => item.id === task.handoff!.id)) await this.deliveries.enqueue(task.handoff);
@@ -428,6 +431,24 @@ export class ActorServices {
       }
     });
   }
+  /**
+   * Releases the held reports of every root that has no open work left (see `facts.ts:openWork`); true when any were released.
+   * `reporting` is the activity whose report is being admitted (its status may not be terminal yet); activities that already called `settled` are ended too.
+   */
+  private releaseEndedRoots(reporting?: string): Promise<boolean> {
+    const run = this.releasing.then(async () => {
+      const held = this.deliveries.held('logox');
+      if (!held.length) return false;
+      const snapshot = this.options.getSnapshot?.();
+      const ended = new Set(this.ended); if (reporting) ended.add(reporting);
+      const open = (root: string) => !!snapshot && hasOpenWork(openWork(snapshot, root, this.deliveries.snapshot(), ended));
+      const roots = new Set(held.map(item => item.rootActivityId ?? '')); let released = false;
+      for (const root of roots) if (!open(root) && await this.deliveries.release('logox', item => (item.rootActivityId ?? '') === root)) released = true;
+      return released;
+    });
+    this.releasing = run.then(() => {}, () => {});
+    return run;
+  }
   private closeHandoff(activityId: string): void {
     this.groups.get(activityId)?.remaining.delete(activityId);
     this.groups.delete(activityId); this.pendingHandoffs.delete(activityId);
@@ -438,6 +459,7 @@ export class ActorServices {
     await this.options.journal.stageHandoff?.(this.options.sessionId, activityId, event);
     await this.deliveries.enqueue(event);
     this.closeHandoff(activityId);
+    await this.releaseEndedRoots(activityId);
     if (!event.deferredUntilHuman) this.wakeDirector();
   }
   async handoff(result: Omit<TaskResult, 'sessionId'> & {sessionId?: string}) {
@@ -478,16 +500,17 @@ export class ActorServices {
       : executionError ? executionError.kind === 'no_delivery' ? DIRECTOR_EXECUTION_REVIEW : DIRECTOR_STREAM_REVIEW
       : recovery?.exhausted ? DIRECTOR_RECOVERY_EXHAUSTED
       : failed && recovery?.actorTask ? directorResumeAdvice(recovery.actorTask)
-      : failed ? DIRECTOR_FAILURE : this.options.finalReports?.has(rootActivityId) ? DIRECTOR_LATE_REPORT : DIRECTOR_RESULTS_READY;
+      : failed ? DIRECTOR_FAILURE : '';
     const batches = group?.paused && [...group.remaining].some(id => id !== result.activityId) ? '\n' + DIRECTOR_PAUSED_BATCH + group.batchId + DIRECTOR_PAUSED_BATCH_RULE : '';
     await this.admitHandoff(deliverySchema.parse({id: eventId, sessionId: this.options.sessionId, status: 'pending', time: Date.now(),
       ownerId: 'logox', source: result.ownerId, sourceActivityId: result.activityId,
-      rootActivityId, kind: failed ? 'failure' : 'report', inputKind: 'actor', text: instruction + batches + '\n' + report,
-      deferredUntilHuman: !!(deferred || noClaim), origin: {parentActivityId: result.activityId, rootActivityId,
+      rootActivityId, kind: failed ? 'failure' : 'report', inputKind: 'actor', text: (instruction + batches ? instruction + batches + '\n' : '') + report,
+      deferredUntilHuman: !!(deferred || noClaim), ...(!failed && !userStopped && !deferred && result.ownerId !== 'logox' ? {hold: 'root' as const} : {}), origin: {parentActivityId: result.activityId, rootActivityId,
         dispatchDepth: group?.depth ?? this.depths.get(result.activityId) ?? origin.dispatchDepth ?? 0,
         authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}));
   }
   async settled(activityId: string, status: RoundStatus) {
+    this.ended.add(activityId);
     await this.recovery.settled(activityId, status);
     await this.collaboration.settle(activityId, status);
     const pending = this.pendingHandoffs.get(activityId);
@@ -495,6 +518,7 @@ export class ActorServices {
     else if (this.groups.has(activityId)) await this.handoff({ownerId: this.definitions.get(activityId)?.id ?? 'actor', activityId,
       source: 'logox', status, summary: {title: 'Task not handed off normally', report: 'The task ended during queueing or recording; please verify its state.', source: 'local'},
       ...(status === 'cancelled' ? {stopReason: 'shutdown'} : {})});
+    if (await this.releaseEndedRoots()) this.wakeDirector();
     const definition = this.definitions.get(activityId);
     if (definition && this.active.get(definition.id) === definition) this.active.delete(definition.id);
     this.definitions.delete(activityId); this.depths.delete(activityId); this.origins.delete(activityId); this.stoppedActors.delete(activityId);

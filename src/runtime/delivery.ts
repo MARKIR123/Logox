@@ -18,6 +18,8 @@ export const deliverySchema = z.strictObject({
   targetActivityId: z.string().optional(), kind: deliveryKindSchema, inputKind: inputKindSchema,
   text: z.string().min(1), time: z.number(), origin: taskOriginSchema.optional(),
   status: z.enum(['pending', 'delivered', 'cancelled']), recipientActivityId: z.string().optional(), deferredUntilHuman: z.boolean().optional(),
+  /** A finished task's report waits here, hidden from every reader, until its root has no open work or something urgent reaches the same owner. */
+  hold: z.literal('root').optional(),
   successorId: z.string().optional(), recoveryGrantActivityId: z.string().optional(),
 });
 export type Delivery = z.infer<typeof deliverySchema>;

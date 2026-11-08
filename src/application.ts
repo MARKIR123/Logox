@@ -7,7 +7,9 @@ import {homedir} from 'node:os';
 import {CommandSurfaces, type PageActions} from './commands/surfaces.js';
 import type {CommandTab, PickerItem, SettingsItem} from './runtime/command-surface.js';
 import {commandHelp, type CommandContext} from './commands.js';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
+import {appendFile, mkdir} from 'node:fs/promises';
+import {turnUsageOf} from './context/cost.js';
 import {z} from 'zod';
 import {DynamicEnsemble} from './actors/ensemble.js';
 import {ActorCatalog} from './actors/catalog.js';
@@ -46,7 +48,6 @@ import {
 import {ModelPool} from './providers/model-pool.js';
 import {ensureProjectBulletin} from './actors/bulletin.js';
 import {RuntimeStore} from './runtime/store.js';
-import {finalReportsFor} from './runtime/final-reports.js';
 import {settleStep} from './runtime/contracts.js';
 import {Journal} from './store/journal.js';
 import {inputKind} from './runtime/provenance.js';
@@ -191,7 +192,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
   });
   void ensureProjectBulletin(cwd);
-  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry, finalReports: finalReportsFor(store),
+  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
     notice: text => notice(text, 'task_notice', 'logox'),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
@@ -227,7 +228,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     modelPool,
   });
-  const contexts = new ContextManager({journal, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
+  const contexts = new ContextManager({journal, pricing: config, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
     contract: identity => actorServices.contract(identity.ownerId),
     anchors: async identity => identity.ownerId === 'logox'
@@ -391,7 +392,17 @@ export async function createSessionApplication(options: SessionApplicationOption
       ready = (async () => {
         const meter = contexts.meter({sessionId: session, ownerId});
         meter.configureUsage(() => taskModels.summarizer({sessionId: session, ownerId}).model.identity,
-          record => {usage.record(session, ownerId, record); bumpStatus();}, await usage.read(session, ownerId));
+          record => {
+            usage.record(session, ownerId, record); bumpStatus();
+            // Automa turns are stored on their automa.jsonl events; summary and approval calls get an append-only session-level line.
+            if (record.category === 'summary' || record.category === 'approval') {
+              const turn = turnUsageOf(record, record.model, config);
+              if (turn) {
+                const file = join(state, 'sessions', session, 'usage.jsonl');
+                void mkdir(dirname(file), {recursive: true}).then(() => appendFile(file, JSON.stringify({version: 1, time: Date.now(), ownerId, category: record.category, usage: turn}) + String.fromCharCode(10))).catch(() => {});
+              }
+            }
+          }, await usage.read(session, ownerId));
         bumpStatus();
       })();
       meterReady.set(ownerId, ready);
@@ -417,6 +428,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     maxParallel: () => config.automa.max_parallel,
     journalPath: automaJournal,
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
+    priceUsage: (amount, model) => turnUsageOf(amount, model, config),
   });
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
     assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}) => {

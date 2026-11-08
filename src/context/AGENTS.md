@@ -17,6 +17,7 @@
 | Keep discovery or environment across compaction | `continuity.ts:retainRuntimeContext()` | `contracts.ts:contextStateSchema`, `../tools/discovery.ts` |
 | Change conversation-language detection or its environment line | `language.ts:detectConversationLanguage()` | `environment.ts:formatEnvironment()`, `../application.ts` (`requestBase`), `../prompts/runtime/environment.ts:conversationLanguage()` |
 | Token estimates and usage anchors | `budget.ts:estimateRequest()` | `usage.ts:UsageLedger` |
+| Per-turn usage and cost stored in the session ledger | `manager.ts:ContextManager.turnUsage()` | `src/runtime/messages.ts:turnUsageSchema`, `cost.ts:turnUsageOf()` (also priced onto Automa `message` events and the session-level `usage.jsonl` lines for summary and approval calls, written in `src/application.ts`), `src/kernel/agent.ts` (`turnUsage`), `scripts/score-session.mjs` |
 | Restart, rollback or physical line references | `../store/journal.ts:Journal.sourceLines()` | `contracts.ts:RoundRecord` source hashes |
 
 ## 3. Common Changes

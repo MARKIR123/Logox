@@ -1,5 +1,6 @@
 import {currentTaskProgress, type Activity, type RuntimeSnapshot} from '../runtime/contracts.js';
 import type {Delivery} from '../runtime/delivery.js';
+import {reportProgress} from '../prompts/runtime/director.js';
 
 function extractRecentFiles(snapshot: RuntimeSnapshot, activityId: string): string[] {
   const tools = snapshot.messages.filter(message => message.activityId === activityId && message.step?.call);
@@ -88,5 +89,34 @@ export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: stri
   if (!tasks.length && !deliveries.some(item => item.ownerId === 'logox' && item.status === 'pending' && !item.targetActivityId)) return undefined;
   const rank = (activity: Activity) => ['running', 'waiting_input'].includes(activity.status) ? 0 : ['queued', 'paused'].includes(activity.status) ? 1 : 2;
   tasks.sort((a, b) => rank(a) - rank(b));
-  return {tasks: tasks.slice(0, 8).map(task => activityFacts(task)), additionalTasks: Math.max(0, tasks.length - 8)};
+  const progress = heldProgress(snapshot, deliveries);
+  return {tasks: tasks.slice(0, 8).map(task => activityFacts(task)), additionalTasks: Math.max(0, tasks.length - 8), ...(progress ? {progress} : {})};
 }
+const titleCase = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
+/** One line per root whose reports are held back: who has reported and who is still working. Absent when nothing is held. */
+function heldProgress(snapshot: RuntimeSnapshot, deliveries: readonly Delivery[]): string | undefined {
+  const held = deliveries.filter(item => item.ownerId === 'logox' && item.status === 'pending' && item.hold);
+  const lines = [...new Set(held.map(item => item.rootActivityId ?? ''))].map(root => {
+    const work = openWork(snapshot, root, deliveries);
+    const reported = held.filter(item => (item.rootActivityId ?? '') === root);
+    const waiting = new Set(work.deferred.map(item => item.sourceActivityId ?? item.id));
+    const total = reported.length + work.activities.length + waiting.size;
+    return reportProgress([...new Set(reported.map(item => titleCase(item.source)))], [...new Set(work.activities.map(activity => titleCase(activity.ownerId)))], total, waiting.size > 0);
+  });
+  return lines.length ? lines.join(' | ') : undefined;
+}
+
+/**
+ * What still keeps the reports of a root from being delivered: companion activities of that root that are queued, running or waiting for input
+ * (`paused` ones are not open: a pause follows a failure or stop), and pending Logox deliveries of the root that wait for the next human input
+ * (the user stopped something and has not spoken yet). Logox's own activities never count, and `exclude` leaves out the activities that are
+ * reporting or settling now, so the result does not depend on whether its status is already terminal.
+ */
+export function openWork(snapshot: RuntimeSnapshot, root: string, deliveries: readonly Delivery[] = [], exclude: string | ReadonlySet<string> = ''): {activities: Activity[]; deferred: Delivery[]} {
+  return {
+    activities: snapshot.activities.filter(activity => activity.ownerId !== 'logox' && activity.activityId !== root && !(typeof exclude === 'string' ? exclude === activity.activityId : exclude.has(activity.activityId)) &&
+      (activity.rootActivityId ?? activity.activityId) === root && ['queued', 'running', 'waiting_input'].includes(activity.status)),
+    deferred: deliveries.filter(item => item.ownerId === 'logox' && item.status === 'pending' && item.deferredUntilHuman && item.rootActivityId === root),
+  };
+}
+export const hasOpenWork = (work: ReturnType<typeof openWork>): boolean => work.activities.length > 0 || work.deferred.length > 0;

@@ -1,10 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import {deliverySchema, deliveryPriority, type Delivery, type DeliveryInput} from '../runtime/delivery.js';
 import {immutable, type TaskOriginData} from '../runtime/contracts.js';
+import {DIRECTOR_RESULTS_READY} from '../prompts/runtime/director.js';
 import {steeredModelText} from '../prompts/runtime/interruption.js';
 import {inputMessage} from '../runtime/provenance.js';
 import type {ModelMessage} from '../runtime/messages.js';
 import type {HistoryStore, TaskCheckpoint} from '../store/journal.js';
+
+function withoutHold(item: Delivery): Delivery {const {hold: _, ...rest} = item; return rest;}
 
 /** Durable admission and boundary receipts, not task acceptance or exactly-once execution. */
 export class DeliveryQueue {
@@ -14,8 +17,21 @@ export class DeliveryQueue {
   constructor(readonly sessionId: string, private readonly history: HistoryStore) {}
   snapshot(): readonly Delivery[] {return this.records;}
   pending(ownerId: string, activityId?: string): readonly Delivery[] {
-    return this.records.filter(item => item.status === 'pending' && item.ownerId === ownerId &&
+    return this.records.filter(item => item.status === 'pending' && !item.hold && item.ownerId === ownerId &&
       (!item.targetActivityId || item.targetActivityId === activityId));
+  }
+  /** Pending deliveries kept back until their root has no open work (see `Delivery.hold`). */
+  held(ownerId: string): readonly Delivery[] {
+    return this.records.filter(item => item.status === 'pending' && item.hold && item.ownerId === ownerId);
+  }
+  /** Clears the hold of matching deliveries; true when anything changed. */
+  release(ownerId: string, match: (item: Delivery) => boolean = () => true): Promise<boolean> {
+    return this.run(async () => {
+      const next = this.records.map(item => item.status === 'pending' && item.hold && item.ownerId === ownerId && match(item) ? withoutHold(item) : item);
+      if (!next.some((item, index) => item !== this.records[index])) return false;
+      await this.save(next);
+      return true;
+    });
   }
   recoveryFor(activityId: string, rootActivityId: string, inherited?: TaskOriginData['recovery']): TaskOriginData['recovery'] {
     return this.records.filter(item => item.status === 'delivered' && item.recipientActivityId === activityId &&
@@ -55,7 +71,10 @@ export class DeliveryQueue {
       if (previous) return previous;
       const prior = item.kind === 'failure' && item.source === 'logox' ? this.records.map(record =>
         record.status === 'delivered' && record.recipientActivityId === item.sourceActivityId ? {...record, successorId: item.id} : record) : this.records;
-      await this.save([...prior, item]);
+      // Urgent news for an owner that will act on it carries that owner's held reports along in the same write.
+      const urgent = !item.deferredUntilHuman && !item.hold && ['failure', 'help', 'human_steer'].includes(item.kind);
+      const released = urgent ? prior.map(record => record.status === 'pending' && record.hold && record.ownerId === item.ownerId ? withoutHold(record) : record) : prior;
+      await this.save([...released, item]);
       return item;
     });
   }
@@ -76,7 +95,7 @@ export class DeliveryQueue {
         const human = first.kind === 'human_steer';
         const source = group.length === 1 ? first.source : 'coordination';
         const kind = human ? 'human' : group.every(item => item.inputKind === first.inputKind) ? first.inputKind : 'actor';
-        const text = human ? first.text : group.map(item => `[Event ${item.id}; ${item.kind}; source ${item.source}; activity ${item.sourceActivityId ?? 'unspecified'}; root ${item.rootActivityId ?? 'unspecified'}]\n${item.text}`).join('\n\n');
+        const text = human ? first.text : (group.some(item => item.kind === 'report') ? DIRECTOR_RESULTS_READY + '\n\n' : '') + group.map(item => `[Event ${item.id}; ${item.kind}; source ${item.source}; activity ${item.sourceActivityId ?? 'unspecified'}; root ${item.rootActivityId ?? 'unspecified'}]\n${item.text}`).join('\n\n');
         // The ledger stores exactly what the model saw (notice included) so resume reproduces it; the timeline strips the notice with `steeredText()`.
         const modelText = human ? steeredModelText(text) : text;
         await this.history.append({version: 1, sessionId: this.sessionId, ownerId, activityId, source, inputKind: kind,

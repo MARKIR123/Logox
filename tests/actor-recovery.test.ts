@@ -212,7 +212,7 @@ test('stream resets preserve the original Actor continuation target and shared D
       assert.ok(context.history.some(entry => entry.message?.role === 'tool' && entry.message.callId === 'read-before-reset'));
       context.say('使用已有读取结果完成打磨'); return;
     }
-    if (prompt.includes('Actor results are available.')) {context.say('打磨已完成'); return;}
+    if (prompt.includes('Actor results are available')) {context.say('打磨已完成'); return;}
     targets.push(context.recovery?.actorTask?.activityId); reports.push(prompt);
     if (++directorRuns === 1) throw disconnected();
     assert.equal(context.recovery?.attempt, 2);

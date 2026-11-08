@@ -1,7 +1,11 @@
 export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
 export const DIRECTOR_COORDINATION_WAKE = 'Process pending coordination events for Director-owned work. Human instructions take precedence. Inspect delivered evidence, preserve existing effects and report only supported conclusions; receipt is not acceptance.';
-export const DIRECTOR_RESULTS_READY = 'Actor results are available. Check the evidence and continue the original task; execution completion is not acceptance.';
-export const DIRECTOR_LATE_REPORT = 'A late actor report arrived after your final report was already delivered. Check the evidence and answer with only what changed (1-3 sentences), or one line saying nothing changed. Do not repeat the final report.';
+export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below). Check the evidence and continue the original task; execution completion is not acceptance.';
+/** One line of the facts snapshot while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */
+export function reportProgress(reported: readonly string[], running: readonly string[], total: number, waitsForHuman: boolean): string {
+  return 'Reported ' + reported.length + '/' + total + (running.length ? '; still running: ' + running.join(', ') : '') +
+    (waitsForHuman ? '; held until the human speaks again' : '');
+}
 export const DIRECTOR_FAILURE = 'An Actor task ended abnormally. Inspect preserved results before deciding to repair, resume, reassign or take over. Do not replay completed effects or bypass denied permissions.';
 export const DIRECTOR_RECOVERY_EXHAUSTED = 'The same failure has exhausted its recovery budget. Briefly report the cause, preserved work and the decision needed from the human. Do not run tools or dispatch more work for this exhausted recovery.';
 export const DIRECTOR_EXECUTION_REVIEW = 'Automatic output recovery ended without sufficient delivery. Inspect the recorded work, narrow the remaining step or adjust ownership. Use resumeTask for the original failed activity when continuing; do not create a duplicate goal or replay successful tools.';

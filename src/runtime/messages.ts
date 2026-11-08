@@ -19,6 +19,18 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional()}),
 ]);
 export type ModelMessage = z.infer<typeof modelMessageSchema>;
+/**
+ * Provider-reported usage of one model turn, stored on the ledger entry of that turn's assistant message (never on the message
+ * itself, so request digests stay unchanged). `input` includes cache tokens, as providers report it. `cost` is in `currency`
+ * and present only when a price was known when the turn was recorded.
+ */
+export const turnUsageSchema = z.strictObject({
+  input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
+  cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative(),
+  provider: z.string(), model: z.string(),
+  cost: z.number().finite().nonnegative().optional(), currency: z.string().optional(),
+});
+export type TurnUsage = z.infer<typeof turnUsageSchema>;
 export type ToolDiscoveryProtocol = 'none' | 'anthropic' | 'openai-responses';
 export interface ToolDefinition {name: string; description: string; parameters: Record<string, unknown>; deferLoading?: true}
 export interface ProviderCapabilities {

@@ -35,7 +35,11 @@
 //   Messaging      SendMessage calls per sender and `type` (reply / inform / ask / other); to-Logox counts `to` = logox.
 //   Automa         Dispatches = Automa tool calls; jobs = `start` events in automa.jsonl; job failures = `end` events whose state is
 //                  not `done`; keep / continue / release = jobs or calls that pass a real (non-placeholder) value for that argument.
-//   Usage          Sum of `usage` on assistant records when the ledger carries it (input, output, cacheRead, cacheWrite, cost).
+//   Usage          Sum of the ledger `usage` field (input incl. cache, output, cacheRead, cacheWrite, cost, currency, provider, model) of assistant
+//                  records, per actor, per root task (by the record's activity) and in total. Sessions without it print n/a.
+//                  Also counted: Automa worker turns (`usage` on automa.jsonl `message` events, attributed to the dispatching actor and its
+//                  activity) and summary/compaction/approval calls (session-level usage.jsonl, attributed to the owner's latest activity).
+//                  Per actor they also get their own rows (automa, compaction, approval). A project total (a `.logox` directory or project directory) sums every session in it and lists them.
 //   Wall time      Root task: first ledger record under the root to the last record (any actor or Automa worker) under that root.
 //   Interruptions  User interrupts = activities with stopReason `user` or `interrupted`; Director stops = activities stopped with
 //                  `director_cancel` plus CancelActor calls (reported side by side); interventions = inputs of kind `collaboration_interrupt`.
@@ -99,7 +103,7 @@ function loadLedgers(dir) {
       records.push({actor: raw.ownerId ?? name, role: raw.role ?? message.role, activityId: raw.activityId, time: raw.time,
         text: typeof text === 'string' ? text : '', toolCalls: Array.isArray(message.toolCalls) ? message.toolCalls : [],
         stage: typeof message.stage === 'string' ? message.stage : undefined, name: message.name, isError: message.isError === true,
-        usage: message.usage ?? raw.usage, inputKind: raw.inputKind});
+        usage: raw.usage ?? message.usage, inputKind: raw.inputKind});
     }
   }
   return records;
@@ -256,18 +260,41 @@ export function scoreSession(dir, {others = []} = {}) {
   }
 
   // 9. Usage and session wall time.
-  const zero = () => ({input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0});
-  const usage = {recorded: false, costRecorded: false, total: zero(), byActor: {}};
-  for (const message of assistant) if (message.usage && typeof message.usage === 'object') {
+  const zero = () => ({turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costTurns: 0});
+  const usage = {recorded: false, costRecorded: false, currencies: [], total: zero(), byActor: {}, byRoot: {}, byActorCategory: {}};
+  // Billed turns: assistant ledger turns (category task), Automa worker `message` events, and summary/approval lines in usage.jsonl.
+  // Summary and approval lines carry no activity, so they belong to the owner's latest activity started at or before them.
+  const ownerActivities = tasks.map(task => ({id: task.activityId, owner: task.ownerId, start: starts.get(task.activityId) ?? task.time}));
+  const latestActivity = (owner, time) => ownerActivities.filter(item => item.owner === owner && item.start <= time).sort((x, y) => y.start - x.start)[0]?.id;
+  const billed = assistant.filter(message => message.usage && typeof message.usage === 'object')
+    .map(message => ({actor: message.actor, category: 'task', activityId: message.activityId, usage: message.usage}));
+  for (const event of automa) if (event.event === 'message' && event.usage && typeof event.usage === 'object') {
+    billed.push({actor: event.principal ?? taskById.get(event.parentActivityId)?.ownerId ?? 'automa', category: 'automa', activityId: event.parentActivityId, usage: event.usage});
+  }
+  for (const line of readJsonl(join(dir, 'usage.jsonl'))) if (line.usage && typeof line.usage === 'object' && typeof line.ownerId === 'string') {
+    billed.push({actor: line.ownerId, category: line.category === 'summary' ? 'compaction' : String(line.category), activityId: latestActivity(line.ownerId, line.time ?? Infinity), usage: line.usage});
+  }
+  for (const item of billed) {
     usage.recorded = true;
-    const entry = usage.byActor[message.actor] ??= zero();
-    for (const key of Object.keys(usage.total)) if (typeof message.usage[key] === 'number') {
-      entry[key] += message.usage[key]; usage.total[key] += message.usage[key];
-      if (key === 'cost') usage.costRecorded = true;
+    const root = item.activityId ? rootOf(item.activityId) : undefined;
+    const categories = usage.byActorCategory[item.actor] ??= {};
+    const targets = [usage.total, usage.byActor[item.actor] ??= zero(), ...(root ? [usage.byRoot[root] ??= zero()] : [])];
+    if (item.category !== 'task') targets.push(categories[item.category] ??= zero());
+    for (const entry of targets) {
+      entry.turns++;
+      for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) if (typeof item.usage[key] === 'number') entry[key] += item.usage[key];
+      if (typeof item.usage.cost === 'number') {entry.cost += item.usage.cost; entry.costTurns++;}
+    }
+    if (typeof item.usage.cost === 'number') {
+      usage.costRecorded = true;
+      const currency = typeof item.usage.currency === 'string' ? item.usage.currency : '';
+      if (!usage.currencies.includes(currency)) usage.currencies.push(currency);
     }
   }
-  if (!usage.recorded) missing.push('tokens and cost: no ledger record carries `usage` (provider turn usage is not persisted)');
-  else if (!usage.costRecorded) missing.push('cost: usage has tokens but no cost field');
+  if (!usage.recorded) missing.push('tokens and cost: no ledger record carries `usage` (sessions recorded before turn usage was persisted)');
+  else if (!usage.costRecorded) missing.push('cost: usage has tokens but no priced turn');
+  else if (usage.total.costTurns < usage.total.turns) missing.push('cost: ' + (usage.total.turns - usage.total.costTurns) + ' of ' + usage.total.turns + ' turns had no price, so cost is partial');
+  for (const root of roots) root.usage = usage.byRoot[root.activityId] ?? null;
   const ranges = [...times.values()];
   const wallMs = ranges.length ? Math.max(...ranges.map(range => range[1])) - Math.min(...ranges.map(range => range[0])) : null;
 
@@ -286,6 +313,7 @@ export function scoreSession(dir, {others = []} = {}) {
 }
 
 const na = 'n/a';
+const costText = (entry, usage) => !usage.costRecorded || !entry.costTurns ? na : entry.cost.toFixed(4) + (usage.currencies.length === 1 && usage.currencies[0] ? ' ' + usage.currencies[0] : usage.currencies.length > 1 ? ' (mixed currencies)' : '') + (entry.costTurns < entry.turns ? ' (partial)' : '');
 const pct = value => value === null ? na : Math.round(value * 100) + '%';
 const num = value => value === null || value === undefined ? na : String(value);
 const duration = ms => {
@@ -336,9 +364,20 @@ export function flatten(score) {
   add('Automa', 'dispatch errors (rejected calls)', score.automa.dispatchErrors);
   add('Automa', 'keep / continue / release', [score.automa.keep, score.automa.continue, score.automa.release].join(' / '));
   const usage = score.usage;
-  add('Cost', 'tokens in / out', usage.recorded ? usage.total.input + ' / ' + usage.total.output : na);
-  add('Cost', 'cache read / write', usage.recorded ? usage.total.cacheRead + ' / ' + usage.total.cacheWrite : na);
-  add('Cost', 'cost', usage.costRecorded ? usage.total.cost.toFixed(4) : na);
+  for (const [label, entry] of [['', usage.total], ...Object.entries(usage.byActor).map(([actor, value]) => [actor + ' ', value])]) {
+    add('Cost', label + 'tokens in / out', usage.recorded ? entry.input + ' / ' + entry.output : na);
+    add('Cost', label + 'cache read / write', usage.recorded ? entry.cacheRead + ' / ' + entry.cacheWrite : na);
+    add('Cost', label + 'cost', costText(entry, usage));
+  }
+  for (const [actor, categories] of Object.entries(usage.byActorCategory)) for (const [category, entry] of Object.entries(categories)) {
+    add('Cost', actor + ' ' + category + ' in / out / cache', entry.input + ' / ' + entry.output + ' / ' + entry.cacheRead + '+' + entry.cacheWrite);
+    add('Cost', actor + ' ' + category + ' cost', costText(entry, usage));
+  }
+  for (const root of score.roots) {
+    const tag = 'root #' + root.index;
+    add('Cost', tag + ' tokens in / out / cache', root.usage ? [root.usage.input, root.usage.output, root.usage.cacheRead + '+' + root.usage.cacheWrite].join(' / ') : na);
+    add('Cost', tag + ' cost', root.usage ? costText(root.usage, usage) : na);
+  }
   add('Interruptions', 'user interrupts', score.interruptions.userInterrupts);
   add('Interruptions', 'director stops (cancelled / CancelActor)', score.interruptions.directorStops + ' / ' + score.interruptions.cancelActorCalls);
   add('Interruptions', 'director interventions', score.interruptions.interventions);
@@ -376,6 +415,41 @@ export function renderTable(scores) {
   return out.join('\n');
 }
 
+/** Lists the session directories of a project: `null` when the path is itself a session directory. */
+function projectSessions(path) {
+  const root = resolve(path);
+  if (existsSync(join(root, 'director.jsonl')) || existsSync(join(root, 'tasks.json'))) return null;
+  const base = [join(root, 'state', 'sessions'), join(root, '.logox', 'state', 'sessions')].find(existsSync);
+  if (!base) return null;
+  return readdirSync(base, {withFileTypes: true}).filter(entry => entry.isDirectory()).map(entry => join(base, entry.name))
+    .filter(dir => existsSync(join(dir, 'director.jsonl')) || existsSync(join(dir, 'tasks.json'))).sort();
+}
+
+/** Sums the usage of every session under a project `.logox` directory (or the project directory); null for a session directory. */
+export function projectUsage(path) {
+  const dirs = projectSessions(path);
+  if (!dirs) return null;
+  const sessions = dirs.map(dir => ({id: basename(dir), usage: scoreSession(dir).usage}));
+  const total = {turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costTurns: 0};
+  const currencies = [];
+  for (const {usage} of sessions) {
+    for (const key of Object.keys(total)) total[key] += usage.total[key];
+    for (const currency of usage.currencies) if (!currencies.includes(currency)) currencies.push(currency);
+  }
+  const recorded = sessions.filter(item => item.usage.recorded).length;
+  return {sessions, recorded, total, currencies, costRecorded: sessions.some(item => item.usage.costRecorded)};
+}
+
+function renderProject(project) {
+  const lines = ['', '[Project total] ' + project.sessions.length + ' sessions, ' + project.recorded + ' with usage data'];
+  const shape = {costRecorded: project.costRecorded, currencies: project.currencies};
+  const text = (entry, recorded) => recorded ? 'in ' + entry.input + ' / out ' + entry.output + ' / cache ' + entry.cacheRead + '+' + entry.cacheWrite + ' / cost ' + costText(entry, shape) : na;
+  lines.push('  total  ' + text(project.total, project.recorded > 0));
+  for (const item of project.sessions) lines.push('  ' + item.id + '  ' + text(item.usage.total, item.usage.recorded));
+  if (project.recorded < project.sessions.length) lines.push('  n/a: ' + (project.sessions.length - project.recorded) + ' sessions predate turn usage persistence; totals cover the others only');
+  return lines.join('\n');
+}
+
 export function main(argv) {
   const paths = argv.filter(arg => !arg.startsWith('--'));
   if (!paths.length || argv.includes('--help')) {
@@ -383,7 +457,13 @@ export function main(argv) {
     return paths.length ? 0 : 2;
   }
   const scores = paths.map(path => {const {dir, others} = resolveSession(path); return scoreSession(dir, {others});});
-  console.log(argv.includes('--json') ? JSON.stringify(scores.length === 1 ? scores[0] : scores, null, 2) : renderTable(scores));
+  const projects = paths.map(projectUsage);
+  if (argv.includes('--json')) {
+    const out = scores.map((score, index) => projects[index] ? {...score, project: projects[index]} : score);
+    console.log(JSON.stringify(out.length === 1 ? out[0] : out, null, 2));
+  } else {
+    console.log(renderTable(scores) + projects.map(project => project ? renderProject(project) : '').join(''));
+  }
   return 0;
 }
 
