@@ -91,6 +91,9 @@ name = "local"
 - `provider.timeout` 默认 600 秒，表示连续没有有效模型进展的期限，不是整个任务的最长时间。正文、思考和工具参数都会刷新期限，空心跳不会。
 - `kernel.max_iterations = 0`（默认）不限制模型往返次数；设为正数时，达到额度会询问是否继续。取消随时可用。
 - 模型窗口来自配置、目录或能力推断，未知能力需显式配置。以服务实际窗口为准。
+- 图片：每张进入历史的图片都有磁盘文件（`Read` 用源文件路径，浏览器截图等写入调用者草稿区的 `images/`），路径写在工具结果文本里，之后不再改变。请求里图片原样内联，没有滑动窗口。整理上下文时，被归档部分的图片变成 `[image: 路径]` 文字，只有保留的近期部分仍内联。
+- `max_images`（可写在 `[provider]` 或 `[models."p/m"]`，可选）是单次请求的图片上限；Anthropic 协议默认 100（官方上限），其他协议默认不设，只在服务拒绝“图片过多”时处理。超限时一次性把最旧的图片换成 `[image: 路径]`，直到约剩上限的一半，并保存这个决定，之后的请求保持字节一致；服务拒绝时同样降一半后重试一次。旧配置没有这个键，行为不变。
+- 工具结果超过 32768 字符落盘到 `tool-results/` 并只留预览；同一轮并行工具结果合计超过 200000 字符时，按从大到小继续落盘，直到总量不超过上限。两项都在结果产生时决定一次，不会事后改写。
 - `/effort`（别名 `/thinking`、`/think`）选择当前模型支持的思考档位；不支持的档位不会因此可用。
 - `/usage` 的费用按每百万 token 的静态价格估算（先看 `[models."p/m".prices]`，再查[内置模型表](modules/model-table.md)；自建网关用 `[catalogs.<name>]` 指定对应目录），不是提供商账单；服务未返回的 usage 不会被补造。
 
@@ -113,6 +116,30 @@ name = "local"
 `tool_discovery` 可取 `auto`、`none`、`anthropic`、`openai-responses`，在 `[provider]`、`[providers.<name>]` 或 `[models."provider/model"]` 下设置，范围越具体优先级越高，默认 `auto`。`auto` 只对明确登记的官方端点和模型启用原生协议；代理、别名和兼容服务一律使用普通完整工具集。显式选择原生协议表示你确认服务兼容，Logox 不会探测远端。
 
 `prompt_cache_key` 为布尔值，设置位置与优先级同 `tool_discovery`。官方 `https://api.openai.com/v1` 默认开启：每个会话与角色发送固定的不透明键（`prompt_cache_key`），帮助 OpenAI 把同一前缀的请求路由到同一缓存；其他兼容网关默认不发送该字段，确认服务接受后可设为 `true`。键只影响路由，不保证命中。
+
+### 提示缓存保留与保活
+
+`cache_retention` 取 `short` 或 `long`，在 `[provider]`、`[providers.<name>]` 或 `[models."provider/model"]` 下设置，范围越具体优先级越高，默认不设置。它决定 Anthropic 提示缓存的生命周期：`long` 在每个断点写入 `cache_control: {type: "ephemeral", ttl: "1h"}`（一次请求只用一种生命周期，写入价 2 倍），`short` 保持默认 5 分钟（写入价 1.25 倍）。未设置时按角色取默认值：Director（logox）为 `long`，因为它要长时间等待派出的任务；其他角色为 `short`，因为它们在紧凑的工具循环里，更长的生命周期只增加写入成本。单个角色可在自己的 `config.yaml` 里写 `cache_retention: long`（或 `short`），优先于模型设置和角色默认值，优先级为：角色 > 模型 > 提供商 > 角色默认。
+
+OpenAI 不受角色默认值影响：只有在提供商或模型上显式写 `cache_retention = "long"` 才会发送保留字段，Director 默认的 `long` 不会自动开启 OpenAI 的 2.5 倍写入选项。GPT-5.5 及更早的 `gpt-*` 模型发送 `prompt_cache_retention: "24h"`；GPT-5.6 及以后在 Responses 请求里发送 `prompt_cache_options: {"ttl": "12h"}`（写入价 2.5 倍）。其他提供商不受影响。
+
+```toml
+[models."anthropic/claude-sonnet-5-5"]
+cache_retention = "long"   # 该模型的所有角色都用 1 小时缓存，除非角色自己覆盖
+
+[kernel]
+cache_keepalive = true     # 默认开启
+```
+
+`cache_keepalive`（`[kernel]`，默认 `true`）在角色空闲、但必然会被再次唤醒时保活短缓存。必然唤醒只有两种情形：Director 的某个根任务下还有排队或运行中的派发工作（没有等待人类的交付），或某个角色在等待 `ask` 的回复且对方正在运行。等待人类时从不保活。保活重放该角色上一次请求（同样的工具、系统提示、消息和思考配置），只把 `max_tokens` 设为 1，不重试，在缓存生命周期的 90%（或剩余 10 秒，取较早者）时发出，直到角色被唤醒、工作结束或满 1 小时。只有 `missCost - warmCost >= $0.05` 才发送，价格未知则不保活；Anthropic `long`（1 小时缓存已覆盖等待）、预算式思考（`budget_tokens` 随 `max_tokens` 变化，无法重放）以及 OpenAI 默认保留都会跳过。保活请求不进入历史和时间线，用量以 `keepalive` 类别记入 `usage.jsonl`，`scripts/score-session.mjs` 为每个角色单列一行。
+
+价格表里 `cache_write` 是 5 分钟写入价，1 小时写入价默认取输入价的 2 倍，可用 `cache_write_1h` 覆盖；用量中 `cache_creation.ephemeral_1h_input_tokens` 按 1 小时价计费，其余写入按 5 分钟价。
+
+### 请求转储（调试）
+
+设置环境变量 `LOGOX_DUMP_REQUESTS=1` 后，每个发给模型的请求体（经最终序列化器，与实际发送的字节一致）会写入 `.logox/state/sessions/<会话>/requests/<角色>/<序号>-<时间>.json`；缓存保活请求带 `-keepalive` 后缀。只写请求体，不含请求头、密钥或认证信息，但请求体本身包含对话内容，分享前请检查。
+
+`node scripts/diff-requests.mjs <requests 目录或单个角色目录> [--context N] [--keepalive]` 对同一角色的相邻请求打印首个不同字节的偏移，以及两侧各约 200 个字符的上下文（默认跳过保活请求）。用它定位为什么前缀缓存没有命中：前缀应当逐字节不变，差异出现得越靠前，缓存损失越大。
 
 ```toml
 [provider]

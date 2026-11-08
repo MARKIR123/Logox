@@ -10,15 +10,21 @@ import {modelTable, thinkingHint} from '../providers/model-table.js';
 
 export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
   input: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative().optional(),
-  cache_read: z.number().finite().nonnegative().optional(), cache_write: z.number().finite().nonnegative().optional()});
+  cache_read: z.number().finite().nonnegative().optional(), cache_write: z.number().finite().nonnegative().optional(),
+  /** Rate for 1-hour cache writes (Anthropic); unset means twice `input`. `cache_write` is the 5-minute rate. */
+  cache_write_1h: z.number().finite().nonnegative().optional()});
+export const cacheRetentionSchema = z.enum(['short', 'long']);
 export const toolDiscoverySchema = z.enum(['auto', 'none', 'anthropic', 'openai-responses']);
 const capacitySchema = z.object({
   tool_discovery: toolDiscoverySchema.optional(),
   prompt_cache_key: z.boolean().optional(),
+  cache_retention: cacheRetentionSchema.optional(),
   thinking_protocol: z.enum(['deepseek', 'anthropic-budget', 'anthropic-adaptive', 'reasoning-effort']).optional(),
   thinking_levels: z.array(effortSchema).min(1).optional(), prices: priceSchema.optional(),
   context_window: z.number().int().min(256).optional(),
   max_output_tokens: z.number().int().positive().optional(),
+  /** Most images one request may carry; Anthropic Messages defaults to 100, other protocols have no default. */
+  max_images: z.number().int().positive().optional(),
 });
 /** Declares which built-in model catalog (see `src/providers/model-table.ts`) a custom gateway mirrors, plus id aliases for names the catalog does not list. */
 export const catalogSchema = z.object({
@@ -66,13 +72,14 @@ const schema = z.object({
   models: z.record(z.string(), capacitySchema).default({}),
   catalogs: z.record(z.string().min(1), catalogSchema).default({}),
   provider: z.object({
-    context_window: capacitySchema.shape.context_window, max_output_tokens: capacitySchema.shape.max_output_tokens,
+    context_window: capacitySchema.shape.context_window, max_output_tokens: capacitySchema.shape.max_output_tokens, max_images: capacitySchema.shape.max_images,
     thinking_effort: effortSchema.default('auto'),
     name: z.string().default('openai-compatible'), model: z.string().default(''),
     base_url: z.string().url().optional(), api_key_env: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
+    cache_retention: cacheRetentionSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
     api: z.enum(['completions', 'responses']).optional(),
     temperature: z.number().min(0).max(2).default(0.2),
@@ -85,10 +92,13 @@ const schema = z.object({
   kernel: z.object({
     max_iterations: z.number().int().nonnegative().default(0),
     max_retries: z.number().int().nonnegative().max(10).default(3),
-  }).default({max_iterations: 0, max_retries: 3}),
+    /** Replay an idle actor's last request shortly before its short prompt cache expires, only while it is certain to wake again. */
+    cache_keepalive: z.boolean().default(true),
+  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true}),
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
+    cache_retention: cacheRetentionSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
     api: z.enum(['completions', 'responses']).optional(),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
@@ -105,6 +115,8 @@ export interface ModelSettings {
   toolDiscovery?: z.infer<typeof toolDiscoverySchema>;
   /** Explicit opt in or out of `prompt_cache_key`; unset means on for the official OpenAI endpoint only. */
   promptCacheKey?: boolean | undefined;
+  /** Explicit `cache_retention` of the model or provider. Unset leaves the per-actor and role default (Anthropic TTL) and sends nothing to OpenAI. */
+  cacheRetention?: z.infer<typeof cacheRetentionSchema> | undefined;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
@@ -126,7 +138,7 @@ function merge(left: Record<string, unknown>, right: Record<string, unknown>): R
       if (key === 'provider' && typeof update.name === 'string' && typeof previous.name === 'string' && update.name !== previous.name) {
         previous = Object.fromEntries(Object.entries(previous).filter(([field]) => ['temperature', 'max_tokens', 'timeout', 'thinking_effort'].includes(field)));
       } else if (key === 'provider' && typeof update.model === 'string' && typeof previous.model === 'string' && update.model !== previous.model) {
-        previous = Object.fromEntries(Object.entries(previous).filter(([field]) => !['context_window', 'max_output_tokens'].includes(field)));
+        previous = Object.fromEntries(Object.entries(previous).filter(([field]) => !['context_window', 'max_output_tokens', 'max_images'].includes(field)));
       }
       result[key] = merge(previous, update);
     } else result[key] = value;
@@ -223,7 +235,8 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
   const promptCacheKey = declared?.prompt_cache_key ?? provider.prompt_cache_key ?? config.providers[provider.name]?.prompt_cache_key;
-  return {kind, baseUrl, toolDiscovery, promptCacheKey, api: provider.api ?? config.providers[provider.name]?.api,
+  const cacheRetention = declared?.cache_retention ?? provider.cache_retention ?? config.providers[provider.name]?.cache_retention;
+  return {kind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

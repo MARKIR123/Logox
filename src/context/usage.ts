@@ -32,18 +32,19 @@ export function usageRows(records: readonly UsageRecord[], config: Config): TabR
   const totalInput = records.reduce((sum, record) => sum + record.input, 0), totalOutput = records.reduce((sum, record) => sum + record.output, 0);
   const rows: TabRow[] = [row.muted('Actual response usage; input includes cache. Cost uses configured or built-in list prices.'),
     row.field('Total input / output', totalInput + ' / ' + totalOutput + ' token')];
-  const groups = new Map<string, {input: number; output: number; cacheRead: number; cacheWrite: number}>();
+  const groups = new Map<string, {input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number}>();
   for (const record of records) {
     const key = JSON.stringify([modelKey(record.model), record.category]);
-    const total = groups.get(key) ?? {input: 0, output: 0, cacheRead: 0, cacheWrite: 0};
+    const total = groups.get(key) ?? {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0};
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) total[field] += record[field];
+    total.cacheWrite1h += record.cacheWrite1h ?? 0;
     groups.set(key, total);
   }
   if (!groups.size) return [...rows, row.text('No response usage recorded yet.')];
   for (const [key, total] of groups) {
     const [model, category] = z.tuple([z.string(), z.string()]).parse(JSON.parse(key));
     const cost = costOf([{id: 'group', model, category: 'task', ...total}], config);
-    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa'].includes(category) ? category : 'summary')),
+    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa', 'keepalive'].includes(category) ? category : 'summary')),
       row.field('Input / output', total.input + ' / ' + total.output + ' token'),
       row.field('Cache read / write', total.cacheRead + ' / ' + total.cacheWrite + ' token'),
       row.field('Estimated cost', cost === undefined ? 'unknown (no price)' : (cost.partial ? '~' : '') + cost.amount.toFixed(6) + ' ' + cost.currency + (cost.partial ? ' (partial: cache rate billed as input)' : '')));

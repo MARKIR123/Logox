@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {parseDocument, stringify} from 'yaml';
-import {contextPolicySchema} from '../config/config.js';
+import {cacheRetentionSchema, contextPolicySchema} from '../config/config.js';
 import {immutable} from '../runtime/contracts.js';
 import {automaProfileSchema} from '../tools/orchestration/AutomaTool/preset.js';
 
@@ -34,6 +34,8 @@ export const actorDefinitionSchema = z.strictObject({
   thinkingAnimation: z.array(z.string().min(1)).min(1).max(32).optional(),
   activityVerbs: activityVerbsSchema.optional(),
   automa: automaProfileSchema.optional(),
+  /** Overrides the model's `cache_retention` and the role default (Director long, others short) for this actor's Anthropic prompt cache. */
+  cacheRetention: cacheRetentionSchema.optional(),
 });
 export type ActorDefinition = Readonly<z.infer<typeof actorDefinitionSchema>>;
 export type ActorModel = z.infer<typeof actorModelSchema>;
@@ -89,6 +91,10 @@ export function parseActor(text: string): ActorDefinition {
     if (!Object.hasOwn(raw, 'activityVerbs')) raw.activityVerbs = raw.activity_verbs;
     delete raw.activity_verbs;
   }
+  if (Object.hasOwn(raw, 'cache_retention')) {
+    if (!Object.hasOwn(raw, 'cacheRetention')) raw.cacheRetention = raw.cache_retention;
+    delete raw.cache_retention;
+  }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in the Markdown body');
   if (raw.context && typeof raw.context === 'object') {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
@@ -138,6 +144,10 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
   if (Object.hasOwn(raw, 'activity_verbs')) {
     if (!Object.hasOwn(raw, 'activityVerbs')) raw.activityVerbs = raw.activity_verbs;
     delete raw.activity_verbs;
+  }
+  if (Object.hasOwn(raw, 'cache_retention')) {
+    if (!Object.hasOwn(raw, 'cacheRetention')) raw.cacheRetention = raw.cache_retention;
+    delete raw.cache_retention;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in persona.md');
   if (raw.context && typeof raw.context === 'object') {

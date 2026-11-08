@@ -53,6 +53,7 @@
 - Tests: `tests/state-file-lock.test.ts`, `tests/fresh-directory-models.test.ts`.
 
 ## 4. Hard Boundaries
+- **`cache_retention` resolves model > provider > named provider** like `prompt_cache_key` (`config.ts:modelSettings()` -> `ModelSettings.cacheRetention`); unset stays unset so providers can tell an explicit choice from a default. `[kernel] cache_keepalive` (default true) switches cache keep-alive. Enforced by `tests/provider-cache-retention.test.ts`.
 - **Cascade order** is `~/.logox/config.toml`, then ancestor `.logox/config.toml` files (far to near, home excluded, each physical file loaded once), then the saved model preference, then `LOGOX__*`, then CLI overrides. Enforced by `tests/config.test.ts`.
 - **Switching provider drops the old endpoint, model and credentials** and keeps only `temperature`, `max_tokens`, `timeout`, `thinking_effort`. Enforced by `tests/config.test.ts`.
 - **Config never stores keys**: `api_key`, prototype keys and credentialed URLs are rejected. Enforced by `tests/config.test.ts`.

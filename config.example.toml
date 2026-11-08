@@ -7,6 +7,7 @@ temperature = 0.2
 thinking_effort = "auto"
 max_tokens = 16384
 timeout = 600 # Seconds without meaningful model progress.
+# cache_retention = "long" # short or long; also under [providers.<name>] and [models."provider/model"]. Anthropic: 1h cache. OpenAI: only sent when set here.
 
 [context]
 keep_recent_rounds = 2
@@ -28,6 +29,7 @@ max_parallel = 4 # Jobs run at once per dispatch (1-8); a dispatch may ask for m
 [kernel]
 max_iterations = 0 # Unlimited round trips; cancellation still applies.
 max_retries = 3
+cache_keepalive = true # Keep an idle actor's short prompt cache warm while it is certain to wake again.
 
 [permissions]
 mode = "auto" # auto (default), default, or creative; not an OS sandbox.

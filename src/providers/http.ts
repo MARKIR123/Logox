@@ -6,6 +6,8 @@ import type {Delta, ModelMessage, ModelRequest, ModelTurn, Provider, ProviderCap
 import {runtimeContextText} from '../runtime/context-updates.js';
 import {resolveProviderCapabilities} from './capabilities.js';
 import {encodeAnthropicTools, encodeAnthropicContext} from './disclosure/anthropic.js';
+import {anthropicRetention, cacheControl, LONG_CACHE_MS, openAiRetentionFields, SHORT_CACHE_MS, type CacheRetention} from './cache.js';
+import {dumpRequestBody} from './dump.js';
 import {decodeOpenAIToolSearchCall, encodeOpenAIToolSearch, encodeOpenAIFunction, encodeOpenAIToolSearchResult, encodeRuntimeContext} from './disclosure/openai.js';
 import {FALLBACK_CAPABILITIES} from './capabilities.js';
 
@@ -14,16 +16,6 @@ function decodeSearchCall(item: Record<string, unknown>): ToolCall | undefined {
   catch (error) {throw new ProviderError(error instanceof Error ? error.message : 'Invalid client tool-search call.');}
 }
 
-/**
- * Indices of the messages whose images are still sent. Older images turn into their text alone, and that edit rewrites bytes inside the
- * cached prefix, so the window moves in steps of `maxImages`: between steps earlier messages render identically (at most 2 x maxImages stay).
- * A pure function of the history prefix.
- */
-export function retainedImageIndices(messages: readonly object[], maxImages: number): Set<number> {
-  const indices = messages.flatMap((message, i) => 'images' in message && Array.isArray(message.images) && message.images.length ? [i] : []);
-  const dropped = maxImages > 0 ? Math.max(0, Math.floor((indices.length - maxImages - 1) / maxImages) * maxImages) : indices.length;
-  return new Set(indices.slice(dropped));
-}
 type WireMessage = Exclude<ModelMessage, {role: 'context'}>;
 function portableMessages(messages: readonly ModelMessage[]): WireMessage[] {
   return messages.flatMap<WireMessage>(message => message.role !== 'context' ? [message] :
@@ -31,7 +23,7 @@ function portableMessages(messages: readonly ModelMessage[]): WireMessage[] {
 }
 
 export type ProviderErrorCategory = 'model_missing' | 'authentication' | 'quota' | 'temporary' | 'capacity' | 'protocol';
-type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field';
+type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field' | 'too_many_images';
 export interface ProviderDiagnostic {
   status?: number; code?: string; phase?: 'connection' | 'stream'; parameter?: string; issue?: ProtocolIssue;
   retryAfterMs?: number; elapsedMs?: number; progressIdleMs?: number; transportIdleMs?: number; receivedBytes?: number;
@@ -130,12 +122,14 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
   const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
+    : /too many (?:images|media)|(?:images?|media).{0,60}(?:exceed|too many|maximum|at most|limit)|(?:exceed|maximum|more than|at most).{0,60}images?/i.test(text) ? 'too_many_images'
     : /tool_call_id|tool_use_id|tool_calls.*(?:follow|response|match)|tool.*(?:preceding|correspond)/i.test(text) ? 'tool_pairing'
     : /assistant.*(?:content|empty)|content.*tool_calls/i.test(text) ? 'empty_assistant'
     : ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? 'invalid_field' : undefined;
   const descriptions: Record<ProtocolIssue, string> = {
     reasoning: 'Thinking field does not meet API requirements', tool_pairing: 'Tool calls and results are not paired correctly',
     empty_assistant: 'Assistant message is empty or malformed', invalid_field: 'Request field or message format is invalid',
+    too_many_images: 'Request carries more images than the model accepts',
   };
   const parameter = error?.param && /^(?:messages|tools)(?:\[\d{1,6}\]|\.\d{1,6})?(?:\.(?:content|role|reasoning_content|tool_calls|tool_call_id|function|arguments|parameters|name))*$/.test(error.param) ? error.param : undefined;
   const safeCode = ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? code : undefined;
@@ -165,6 +159,7 @@ const usageSchema = z.object({
   prompt_tokens: z.number().optional(), completion_tokens: z.number().optional(),
   prompt_cache_hit_tokens: z.number().optional(), cached_tokens: z.number().optional(),
   cache_read_input_tokens: z.number().optional(), cache_creation_input_tokens: z.number().optional(),
+  cache_creation: z.object({ephemeral_1h_input_tokens: z.number().optional()}).passthrough().optional(),
   input_tokens_details: z.object({cached_tokens: z.number().optional()}).optional(),
   prompt_tokens_details: z.object({cached_tokens: z.number().optional()}).optional(),
 });
@@ -216,20 +211,18 @@ function hasProgress(event: StreamEvent): boolean {
     (!!choice.delta.content || !!choice.delta.reasoning_content || !!choice.delta.reasoning || !!choice.delta.thinking || !!choice.delta.reasoning_details?.length ||
       !!choice.delta.tool_calls?.some(call => !!call.id || !!call.function?.name || !!call.function?.arguments))) ?? false;
 }
-export function responsesInput(input: readonly ModelMessage[], supportsVision = false, maxImages = 2,
+export function responsesInput(input: readonly ModelMessage[], supportsVision = false,
   discovery?: {tools: readonly ToolDefinition[]; capabilities: ProviderCapabilities}): ObjectValue[] {
   const messages = input;
-  const activeImageIndices = retainedImageIndices(messages, maxImages);
   const result: ObjectValue[] = [];
 
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]!;
-    const keepImage = activeImageIndices.has(i);
 
     if (message.role === 'context') {
       result.push(...encodeRuntimeContext(message, discovery?.capabilities ?? FALLBACK_CAPABILITIES));
     } else if (message.role === 'user') {
-      if (supportsVision && message.images?.length && keepImage) {
+      if (supportsVision && message.images?.length) {
         result.push({
           role: 'user',
           content: [
@@ -286,14 +279,12 @@ function chatReasoningDetails(details: unknown): string {
     .filter((value): value is string => typeof value === 'string' && !!value).join('');
 }
 
-export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, maxImages = 2): ObjectValue[] {
+export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false): ObjectValue[] {
   const messages = portableMessages(input);
-  const activeImageIndices = retainedImageIndices(messages, maxImages);
 
-  return messages.map((message, i) => {
-    const keepImage = activeImageIndices.has(i);
+  return messages.map(message => {
     if (message.role === 'tool') {
-      if (supportsVision && message.images?.length && keepImage) {
+      if (supportsVision && message.images?.length) {
         return {
           role: 'tool',
           tool_call_id: message.callId,
@@ -306,7 +297,7 @@ export function openaiMessages(input: readonly ModelMessage[], requiresReasoning
       return {role: 'tool', tool_call_id: message.callId, content: message.text};
     }
     if (message.role === 'user') {
-      if (supportsVision && message.images?.length && keepImage) {
+      if (supportsVision && message.images?.length) {
         return {
           role: 'user',
           content: [
@@ -329,19 +320,17 @@ export function systemText(system: string): string {
   return system.replace('\n\n' + PROMPT_CACHE_BOUNDARY + '\n\n', '\n\n').replace(PROMPT_CACHE_BOUNDARY, '');
 }
 /** One cache marker on each part: a change below the boundary keeps the fixed part cached. With tools and the message marker this uses all four allowed. */
-export function anthropicSystem(system: string): readonly ObjectValue[] {
+export function anthropicSystem(system: string, retention: CacheRetention = 'short'): readonly ObjectValue[] {
   return system.split('\n\n' + PROMPT_CACHE_BOUNDARY + '\n\n').filter(text => text.trim())
-    .map(text => ({type: 'text', text, cache_control: {type: 'ephemeral'}}));
+    .map(text => ({type: 'text', text, cache_control: cacheControl(retention)}));
 }
-export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2, referenceNames?: ReadonlySet<string>, caching = false): ObjectValue[] {
+export function anthropicMessages(input: readonly ModelMessage[], referenceNames?: ReadonlySet<string>, caching = false, retention: CacheRetention = 'short'): ObjectValue[] {
   const messages = input.flatMap<WireMessage>(message => message.role !== 'context' ? [message] : encodeAnthropicContext(message)
     .map(block => ({role: 'user', text: String(block.text)})));
-  const activeImageIndices = retainedImageIndices(messages, maxImages);
 
   const result: {role: string; content: ObjectValue[]}[] = [];
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]!;
-    const keepImage = activeImageIndices.has(i);
     const role = message.role === 'tool' ? 'user' : message.role;
     const content: ObjectValue[] = [];
     if (message.role === 'tool') {
@@ -350,7 +339,7 @@ export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2,
         content.push({type: 'tool_result', tool_use_id: message.callId, content: [
           {type: 'text', text: message.text}, ...references.map(name => ({type: 'tool_reference', tool_name: name})),
         ], is_error: false});
-      } else if (message.images?.length && keepImage) {
+      } else if (message.images?.length) {
         const blocks: ObjectValue[] = [{type: 'text', text: message.text}];
         for (const img of message.images) {
           blocks.push({type: 'image', source: {type: 'base64', media_type: img.mimeType, data: img.data}});
@@ -368,7 +357,7 @@ export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2,
         content.push({type: 'tool_use', id: call.id, name: call.name, input});
       }
     } else {
-      if (message.images?.length && keepImage) {
+      if (message.images?.length) {
         content.push({type: 'text', text: message.text});
         for (const img of message.images) {
           content.push({type: 'image', source: {type: 'base64', media_type: img.mimeType, data: img.data}});
@@ -384,9 +373,15 @@ export function anthropicMessages(input: readonly ModelMessage[], maxImages = 2,
   }
   if (caching) {
     const boundary = result.at(-1)?.content.findLast(block => block.type !== 'thinking');
-    if (boundary) boundary.cache_control = {type: 'ephemeral'};
+    if (boundary) boundary.cache_control = cacheControl(retention);
   }
   return result;
+}
+/** Part of the cache writes stored with the 1-hour lifetime: `usage.cache_creation.ephemeral_1h_input_tokens`. */
+function oneHourWrites(usage: unknown): {cacheWrite1h?: number} {
+  const creation = usage && typeof usage === 'object' ? (usage as {cache_creation?: unknown}).cache_creation : undefined;
+  const value = creation && typeof creation === 'object' ? (creation as {ephemeral_1h_input_tokens?: unknown}).ephemeral_1h_input_tokens : undefined;
+  return typeof value === 'number' && value > 0 ? {cacheWrite1h: value} : {};
 }
 async function* events(response: Response, received: (length: number) => void): AsyncGenerator<StreamEvent> {
   if (!response.body) throw new ProviderError('Model returned no response body');
@@ -419,7 +414,12 @@ async function* events(response: Response, received: (length: number) => void): 
 }
 export function createProvider(settings: ModelSettings, fetcher: typeof fetch = fetch): Provider {
   const capabilities = resolveProviderCapabilities(settings);
-  return {capabilities, async respond(request, onDelta, signal) {
+  return {capabilities, async cacheProfile(request) {
+    if (settings.kind !== 'anthropic' || capabilities.caching !== 'anthropic') return undefined;
+    // Budget thinking derives `budget_tokens` from `max_tokens`, so a `maxTokens: 1` replay would change the thinking configuration and the cache key.
+    const effort = request.thinking === false ? 'off' : settings.thinkingEffort ?? 'auto';
+    return {ttlMs: anthropicRetention(settings, request) === 'long' ? LONG_CACHE_MS : SHORT_CACHE_MS, replayable: !(settings.thinkingProtocol === 'anthropic-budget' && effort !== 'off')};
+  }, async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('No model configured; use /model <name> or --model <name>');
     const native = settings.kind === 'anthropic';
     const oauthResponses = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' &&
@@ -438,7 +438,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     if (request.toolDiscovery && request.toolDiscovery !== capabilities.toolDiscovery) throw new ProviderError('Tool discovery does not match the active provider protocol.');
     if (native && request.toolDiscovery === 'anthropic') headers['anthropic-beta'] = 'advanced-tool-use-2025-11-20';
     const caching = capabilities.caching === 'anthropic';
-    const tools = native ? encodeAnthropicTools(request.tools, caching) : request.tools.map(tool => isResponsesApi
+    const retention = anthropicRetention(settings, request);
+    const tools = native ? encodeAnthropicTools(request.tools, caching, retention) : request.tools.map(tool => isResponsesApi
         ? request.toolDiscovery === 'openai-responses' && tool.name === 'LoadTools' ? encodeOpenAIToolSearch(tool.parameters) : encodeOpenAIFunction(tool)
         : {type: 'function', function: {name: tool.name, description: tool.description, parameters: tool.parameters}});
     const maxTokens = Math.min(settings.maxTokens, request.maxTokens ?? Infinity);
@@ -474,23 +475,23 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const body = native
       ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),
-        system: caching ? anthropicSystem(request.system) : plainSystem,
-        messages: anthropicMessages(request.messages, 2, new Set(request.tools.filter(tool => tool.deferLoading).map(tool => tool.name)), caching), tools, ...thinking}
+        system: caching ? anthropicSystem(request.system, retention) : plainSystem,
+        messages: anthropicMessages(request.messages, new Set(request.tools.filter(tool => tool.deferLoading).map(tool => tool.name)), caching, retention), tools, ...thinking}
       : isResponsesApi
         ? {
             model: chosenModel,
             store: false,
             stream: isStream,
             ...(!oauthResponses ? {max_output_tokens: maxTokens} : {}),
-            ...cacheKey,
+            ...cacheKey, ...openAiRetentionFields(settings, true),
             instructions: plainSystem,
-            input: responsesInput(request.messages, supportsVision, 2,
+            input: responsesInput(request.messages, supportsVision,
               request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined),
             ...(tools.length ? {tools} : {}),
             ...(effort !== 'off' ? {reasoning: {effort: effort === 'auto' ? 'medium' : effort === 'max' ? 'high' : effort,
               ...(officialOpenAI ? {summary: 'auto'} : {})}} : {}),
           }
-        : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature, ...cacheKey,
+        : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature, ...cacheKey, ...openAiRetentionFields(settings, false),
           ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
           messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision)], tools,
           ...thinking};
@@ -498,7 +499,11 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const deadline = idleDeadline(signal, settings.timeoutMs), timed = deadline.signal;
     try {
       let response: Response;
-      try {response = await fetcher(url, {method: 'POST', headers, body: JSON.stringify(body), signal: timed, redirect: 'error'});}
+      try {
+        const payload = JSON.stringify(body);
+        if (request.dumpDir) dumpRequestBody(request.dumpDir, payload, request.purpose);
+        response = await fetcher(url, {method: 'POST', headers, body: payload, signal: timed, redirect: 'error'});
+      }
       catch (error) {
         if (signal.aborted) signal.throwIfAborted();
         throw timed.aborted ? providerTimeout() : transportFailure(error, 'connection');
@@ -555,7 +560,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             const u = parsed.usage as Record<string, number>;
             usage = {input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: u.output_tokens ?? 0,
               ...(u.cache_read_input_tokens !== undefined ? {cacheRead: u.cache_read_input_tokens} : {}),
-              ...(u.cache_creation_input_tokens !== undefined ? {cacheWrite: u.cache_creation_input_tokens} : {})};
+              ...(u.cache_creation_input_tokens !== undefined ? {cacheWrite: u.cache_creation_input_tokens} : {}), ...oneHourWrites(parsed.usage)};
           }
         } else if (isResponsesApi) {
           const output = Array.isArray(parsed.output) ? parsed.output : [];
@@ -681,7 +686,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               const value = event.message?.usage;
               usage = {input: (value?.input_tokens ?? 0) + (value?.cache_read_input_tokens ?? 0) + (value?.cache_creation_input_tokens ?? 0),
                 output: 0, ...(value?.cache_read_input_tokens !== undefined ? {cacheRead: value.cache_read_input_tokens} : {}),
-                ...(value?.cache_creation_input_tokens !== undefined ? {cacheWrite: value.cache_creation_input_tokens} : {})};
+                ...(value?.cache_creation_input_tokens !== undefined ? {cacheWrite: value.cache_creation_input_tokens} : {}), ...oneHourWrites(value)};
             }
             if (event.type === 'content_block_start') {
               const block = event.content_block;

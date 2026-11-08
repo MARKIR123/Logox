@@ -14,6 +14,7 @@ import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discove
 import {contextSnapshot, retainRuntimeContext} from './continuity.js';
 import {turnUsageOf, type costOf} from './cost.js';
 import {allocateContext, categoryWeights, type ContextBreakdown} from './breakdown.js';
+import {imageCount, imageReference, imagesAsText} from './images.js';
 
 type Identity = {sessionId: string; ownerId: string; activityId?: string};
 interface Round {start: number; end: number; closed: boolean; record?: RoundRecord}
@@ -82,6 +83,7 @@ export interface ContextReading {input: number; high: number; low: number; windo
 export class ContextManager {
   private readonly meters = new Map<string, TokenMeter>();
   private readonly statistics = new Map<string, ContextReading>();
+  private readonly imageForced = new Set<string>();
   constructor(private readonly options: ContextOptions) {}
   private key(identity: Identity): string {return JSON.stringify([identity.sessionId, identity.ownerId]);}
   meter(identity: Identity): TokenMeter {
@@ -100,6 +102,8 @@ export class ContextManager {
     }
     return result;
   }
+  /** After a provider rejected a request for too many images: the next `prepare` turns the older half of the images into text. */
+  downgradeImages(identity: Identity): void {this.imageForced.add(this.key(identity));}
   /** Drops provider anchors; existing readings stay visible but are marked as estimates until the next response. */
   invalidatePrefix(): void {
     for (const meter of this.meters.values()) meter.invalidate();
@@ -168,17 +172,23 @@ export class ContextManager {
     const empty: ContextState = {version: 1, sessionId: identity.sessionId, ownerId: identity.ownerId, sourceLength: entries.length, sourceHash: digest(entries), folded: [], archives: []};
     state ??= empty;
     if (rounds.some(round => !round.closed && (state!.folded.includes(round.start) || state!.memo && round.start < state!.memo.end))) state = empty;
-    const original = state, closed = rounds.filter(round => round.closed);
+    let original = state;
+    const closed = rounds.filter(round => round.closed);
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
     const projected = (candidate: ContextState, end = entries.length): ModelMessage[] => {
       // After a compaction, earlier thinking is never sent again: its signature bound the history that was replaced.
-      const raw = entries.map((entry, index) => candidate.thinkingCut !== undefined && index < candidate.thinkingCut ? withoutThinking(message(entry)) : message(entry));
+      const raw = entries.map((entry, index) => {
+        const value = candidate.thinkingCut !== undefined && index < candidate.thinkingCut ? withoutThinking(message(entry)) : message(entry);
+        return candidate.imageCut !== undefined && index < candidate.imageCut ? imagesAsText(value) : value;
+      });
       for (const archive of candidate.archives) {
         const result = raw[archive.resultIndex], assistant = raw[archive.callIndex];
         if (result?.role !== 'tool' || assistant?.role !== 'assistant') throw new Error('Archive boundaries do not match messages');
         if (canonicalToolName(result.name) === 'LoadTools') continue;
         const path = journal.archivePath(identity.sessionId, identity.ownerId, archive.hash);
-        raw[archive.resultIndex] = {...result, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.')};
+        const {images, ...archived} = result;
+        raw[archive.resultIndex] = {...archived, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.') +
+          (images?.length ? '\n' + images.map(imageReference).join('\n') : '')};
       }
       const output: ModelMessage[] = [];
       const retain = (start: number, end: number, recent = false) => {
@@ -240,6 +250,31 @@ export class ContextManager {
         ? [createRuntimeContextMessage('ledger', `Round ledger (${identity.ownerId}): ${ledger}`)] : [];
       return {...base, messages: [...projected(candidate), ...omitInternalToolPairs(anchors), ...coordinates]};
     };
+    // A request over the model's image limit gets its oldest images turned into `[image: <path>]` text in one batch, down to half the
+    // limit, and the decision is saved in the view, so later requests stay byte-identical until the limit is reached again.
+    const forcedImages = this.imageForced.delete(this.key(identity));
+    if (forcedImages || model.maxImages) {
+      const owners = new Map<string, number>();
+      entries.forEach((entry, index) => {const value = message(entry); if (value.role === 'tool') owners.set(value.callId, index);});
+      const sent = projected(state).flatMap(value => value.role === 'tool' && imageCount(value) && owners.has(value.callId) ? [{index: owners.get(value.callId)!, count: imageCount(value)}] : [])
+        .sort((a, b) => a.index - b.index);
+      const total = sent.reduce((sum, item) => sum + item.count, 0), limit = forcedImages ? total : model.maxImages!;
+      if (total > limit || forcedImages && total > 0) {
+        let remaining = total, cut = 0;
+        for (const item of sent) {
+          if (remaining <= Math.floor(limit / 2)) break;
+          remaining -= item.count; cut = item.index + 1;
+        }
+        if (cut > (state.imageCut ?? 0)) {
+          const next: ContextState = {...structuredClone(state), imageCut: cut, sourceLength: entries.length, sourceHash: digest(entries)};
+          try {
+            await journal.saveContext(next);
+            state = next; original = next;
+            this.options.report?.(identity, '[Context] Replaced the oldest images with their file paths (' + (total - remaining) + ' of ' + total + '; ' + (forcedImages ? 'rejected by the provider' : 'limit ' + limit) + ').');
+          } catch {}
+        }
+      }
+    }
     const meter = this.meter(identity);
     const before = meter.estimate(requestFor(state), model);
     let compacted = false, request = requestFor(state);
@@ -259,7 +294,7 @@ export class ContextManager {
             if (!all && protectedPairs.has(pair.resultIndex) || candidate.archives.some(item => item.resultIndex === pair.resultIndex)) continue;
             if (candidate.memo && pair.resultIndex < candidate.memo.end) continue;
             const result = message(entries[pair.resultIndex]!);
-            if (estimateText(pair.call.arguments + result.text) < 256) continue;
+            if (!imageCount(result) && estimateText(pair.call.arguments + result.text) < 256) continue;
             const hash = await journal.archive(identity.sessionId, identity.ownerId, {call: pair.call, result});
             candidate.archives.push({callIndex: pair.callIndex, resultIndex: pair.resultIndex, hash});
           }

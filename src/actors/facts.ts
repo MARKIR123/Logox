@@ -120,3 +120,9 @@ export function openWork(snapshot: RuntimeSnapshot, root: string, deliveries: re
   };
 }
 export const hasOpenWork = (work: ReturnType<typeof openWork>): boolean => work.activities.length > 0 || work.deferred.length > 0;
+/**
+ * True while the Director is certain to wake without human input: some companion activity of the root is queued or running, and no
+ * delivery of the root waits for the human. Activities waiting for input may be waiting for the human, so they never count.
+ */
+export const certainToWake = (work: ReturnType<typeof openWork>): boolean =>
+  work.deferred.length === 0 && work.activities.some(activity => activity.status !== 'waiting_input');

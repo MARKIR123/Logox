@@ -31,6 +31,9 @@ import {UsageLedger, usageRows} from './context/usage.js';
 import {row, rowText, tabContent} from './commands/tab-rows.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
+import {CacheKeeper} from './kernel/cache-keepalive.js';
+import {certainToWake, openWork} from './actors/facts.js';
+import {asksFor} from './runtime/asks.js';
 import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
 import {getScratchpadDir, ensureScratchpadDir, getActorScratchpadDir, ensureActorScratchpadDir} from './kernel/scratchpad.js';
 import {ProviderRegistry} from './providers/registry.js';
@@ -395,7 +398,7 @@ export async function createSessionApplication(options: SessionApplicationOption
           record => {
             usage.record(session, ownerId, record); bumpStatus();
             // Automa turns are stored on their automa.jsonl events; summary and approval calls get an append-only session-level line.
-            if (record.category === 'summary' || record.category === 'approval') {
+            if (record.category === 'summary' || record.category === 'approval' || record.category === 'keepalive') {
               const turn = turnUsageOf(record, record.model, config);
               if (turn) {
                 const file = join(state, 'sessions', session, 'usage.jsonl');
@@ -430,6 +433,19 @@ export async function createSessionApplication(options: SessionApplicationOption
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
   });
+  // Replays an idle actor's last request just before its short cache expires, only while a wake-up is certain (never while the human is awaited).
+  const keepAlive = new CacheKeeper({
+    enabled: () => config.kernel.cache_keepalive, pricing: config,
+    certain: who => {
+      const snapshot = store.getSnapshot();
+      if (who.ownerId === 'logox') return certainToWake(openWork(snapshot, who.rootActivityId ?? who.activityId, deliveries.snapshot()));
+      const asks = asksFor(store);
+      return asks.isParked(who.sessionId, who.ownerId) && asks.awaited(who.activityId).some(ask => !ask.ended &&
+        (ask.to === 'logox' || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status))));
+    },
+    charge: (who, amount, model) => {void configureMeter(who.ownerId).then(() => contexts.meter(who).chargeUsage(amount, model, 'keepalive'));},
+  });
+  const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
     assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}) => {
     await configureMeter(context.ownerId);
@@ -466,10 +482,11 @@ export async function createSessionApplication(options: SessionApplicationOption
         message.data?.slot === slot && message.data?.activityId === context.activityId);
       if (text || previous?.text) contextUpdates.push(createRuntimeContextMessage('task-state', text || 'No current ' + slot + '.', {slot, activityId: context.activityId}));
     }
-    return {...base, contextUpdates, ...(facts ? {snapshot: facts} : {})};
+    return {...base, contextUpdates, ...(facts ? {snapshot: facts} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
-    cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(),
+    cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,
+    ...(dumpRequests ? {requestDumpDir: (context: {sessionId: string; ownerId: string}) => join(state, 'sessions', context.sessionId, 'requests', context.ownerId)} : {}),
     iterations: config.kernel.max_iterations, retries: config.kernel.max_retries, readonlyConcurrency: config.permissions.readonly_concurrency,
     supportsVision: () => true,
     retryProvider: async (context, error) => {
@@ -1294,7 +1311,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       killActivityProcesses(activityId, USER_STOP_REASON, 'user'); killBackgroundJobs(activityId);
     }},
     async close() {
-      closed = true; commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
+      closed = true; keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone, permissions.flushStats()]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();

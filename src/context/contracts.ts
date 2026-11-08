@@ -27,12 +27,16 @@ export const contextStateSchema = z.strictObject({
   working: z.strictObject({start: z.number().int().nonnegative(), end: z.number().int().positive(), text: z.string().min(1)}).optional(),
   /** Ledger length when this view was compacted: thinking produced before it is no longer sent, because its signature bound the history that compaction replaced. */
   thinkingCut: z.number().int().nonnegative().optional(),
+  /** Ledger index below which images were replaced by `[image: <path>]` text, because a request would have exceeded the model's image limit. Only grows. */
+  imageCut: z.number().int().positive().optional(),
 });
 export type ContextState = z.infer<typeof contextStateSchema>;
 export interface ModelCapacity {
   identity: string;
   window: number;
   maxOutput?: number;
+  /** Most images one request may carry; unset when the provider documents no limit and none is configured. */
+  maxImages?: number;
 }
 import {ROUND_SUMMARY_CONTRACT as summaryInstruction} from '../prompts/charter.js';
 import {HISTORY_MEMO_INSTRUCTION} from '../prompts/compaction.js';

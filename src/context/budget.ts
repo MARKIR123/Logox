@@ -41,9 +41,13 @@ export function watermarks(model: ModelCapacity, policy: BudgetPolicy) {
   const low = Math.min(Math.floor(model.window * policy.low_watermark_ratio), policy.target_budget_tokens ?? Infinity, high - 1);
   return {high, low, safety: Math.max(16, Math.min(128, Math.floor(model.window / 32)))};
 }
-export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval', 'automa']),
+export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval', 'automa', 'keepalive']),
   input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
-  cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative()}).refine(record => record.cacheRead + record.cacheWrite <= record.input, 'Cache usage cannot exceed total input');
+  cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative(),
+  /** Part of `cacheWrite` stored with the 1-hour lifetime (billed at 2x instead of 1.25x). */
+  cacheWrite1h: z.number().finite().nonnegative().optional()})
+  .refine(record => record.cacheRead + record.cacheWrite <= record.input, 'Cache usage cannot exceed total input')
+  .refine(record => (record.cacheWrite1h ?? 0) <= record.cacheWrite, 'One-hour cache writes cannot exceed cache writes');
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 /** An anchor belongs to the exact model, rules, tool schemas and projected prefix. */
 export class TokenMeter {
@@ -81,7 +85,9 @@ export class TokenMeter {
     if (!usage || !Number.isFinite(usage.input + usage.output) || usage.input < 0 || usage.output < 0) return;
     const cacheRead = usage.cacheRead ?? 0, cacheWrite = usage.cacheWrite ?? 0;
     if (![cacheRead, cacheWrite].every(value => Number.isFinite(value) && value >= 0) || cacheRead + cacheWrite > usage.input) return;
-    const record = {id: randomUUID(), model, category, input: usage.input, output: usage.output, cacheRead, cacheWrite};
+    const oneHour = usage.cacheWrite1h ?? 0;
+    if (!Number.isFinite(oneHour) || oneHour < 0 || oneHour > cacheWrite) return;
+    const record = {id: randomUUID(), model, category, input: usage.input, output: usage.output, cacheRead, cacheWrite, ...(oneHour > 0 ? {cacheWrite1h: oneHour} : {})};
     this.records.push(record); this.add(record); this.onCharge({...record});
   }
   observe(request: ModelRequest, turn: ModelTurn, model: ModelCapacity): void {

@@ -52,7 +52,7 @@ export async function executeRead(args: ReadArgs, canonicalPath: string, snapsho
     return {
       text: `[Image file: ${args.file_path}, size: ${bytes.length} bytes, format: ${mime}. Visual content presented to model.]`,
       isError: false,
-      images: [{data: bytes.toString('base64'), mimeType: mime}],
+      images: [{data: bytes.toString('base64'), mimeType: mime, path: canonicalPath}],
     };
   }
 

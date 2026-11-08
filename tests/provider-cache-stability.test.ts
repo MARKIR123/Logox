@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
-import {createProvider, openaiMessages, retainedImageIndices} from '../src/providers/http.js';
+import {createProvider, openaiMessages} from '../src/providers/http.js';
 import type {ModelMessage} from '../src/runtime/messages.js';
 
 type Step = {reasoning?: string; text?: string; call?: {id: string; name: string; args: unknown}};
@@ -70,7 +70,7 @@ test('prompt_cache_key is stable per session and actor, and only sent where the 
   assert.ok(optedOut.every(body => !('prompt_cache_key' in body)));
 });
 
-test('the image window moves in steps, so a new screenshot does not rewrite earlier messages', () => {
+test('with images under the cap, a new screenshot never rewrites earlier messages', () => {
   const image = {mimeType: 'image/png', data: 'AAAA'};
   const history = (count: number): ModelMessage[] => Array.from({length: count}, (_, index) => [
     {role: 'assistant', text: '', toolCalls: [{id: 'c' + index, name: 'Read', arguments: '{}'}]},
@@ -80,11 +80,11 @@ test('the image window moves in steps, so a new screenshot does not rewrite earl
   let rewrites = 0;
   for (let count = 2; count <= 12; count++) {
     const next = JSON.stringify(openaiMessages(history(count), false, true));
-    // The request grows by one tool exchange; the earlier bytes must survive unless the window steps.
+    // The request grows by one tool exchange; the earlier bytes must survive.
     const stable = next.startsWith(previous.slice(0, -1));
     if (!stable) rewrites++;
     previous = next;
   }
-  assert.ok(rewrites <= 4, 'at most one rewrite per window step, not one per screenshot: ' + rewrites);
-  assert.ok(retainedImageIndices(history(12), 2).size <= 4 && retainedImageIndices(history(12), 2).size >= 2);
+  assert.equal(rewrites, 0, 'no sliding window: every earlier byte survives each new screenshot');
+  assert.equal(JSON.stringify(openaiMessages(history(12), false, true)).split('"type":"image_url"').length - 1, 12, 'all twelve images stay inline');
 });

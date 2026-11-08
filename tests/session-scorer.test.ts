@@ -210,3 +210,18 @@ test('Automa worker turns and summary calls count toward actor, root and project
     await rm(root, {recursive: true, force: true});
   }
 });
+
+test('cache keep-alive calls get their own row per actor', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const dir = join(root, 'proj', '.logox', 'state', 'sessions', SESSION);
+    await writeSession(dir, true);
+    const usage = {input: 90, output: 1, cacheRead: 90, cacheWrite: 0, provider: 'p', model: 'm', cost: 0.02, currency: 'USD'};
+    await writeFile(join(dir, 'usage.jsonl'), jsonl([{version: 1, time: tick(), ownerId: 'logox', category: 'keepalive', usage}]));
+    const table = scorer.renderTable([scorer.scoreSession(dir)]);
+    assert.match(table, /logox keepalive in [/] out [/] cache +90 [/] 1 [/] 90[+]0/);
+    assert.match(table, /logox keepalive cost +0[.]0200 USD/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});

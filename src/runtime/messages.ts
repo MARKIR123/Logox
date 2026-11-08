@@ -1,7 +1,8 @@
 import {z} from 'zod';
 import {runtimeContextMessageSchema} from './context-updates.js';
 
-export const imageBlockSchema = z.strictObject({data: z.string(), mimeType: z.string()});
+/** `path` is the file the image lives in on disk (decided when the image enters history); it is never sent to a provider. */
+export const imageBlockSchema = z.strictObject({data: z.string(), mimeType: z.string(), path: z.string().optional()});
 export type ImageBlock = z.infer<typeof imageBlockSchema>;
 export const toolCallSchema = z.object({id: z.string(), name: z.string(), arguments: z.string(), kind: z.literal('tool-search').optional()});
 export type ToolCall = z.infer<typeof toolCallSchema>;
@@ -27,6 +28,7 @@ export type ModelMessage = z.infer<typeof modelMessageSchema>;
 export const turnUsageSchema = z.strictObject({
   input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
   cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative(),
+  cacheWrite1h: z.number().finite().nonnegative().optional(),
   provider: z.string(), model: z.string(),
   cost: z.number().finite().nonnegative().optional(), currency: z.string().optional(),
 });
@@ -51,17 +53,32 @@ export interface ModelRequest {
   stream?: boolean;
   /** Stable per session and actor; sent as `prompt_cache_key` where the provider's `caching` capability is `openai-key`. */
   cacheKey?: string;
+  /** Anthropic-style cache lifetime: the actor's own `cache_retention` (`actor`) beats the model's setting, which beats the role default (`role`). */
+  cacheRetention?: {actor?: 'short' | 'long'; role: 'short' | 'long'};
+  /** Cache keep-alive replay: never stored in history; only labels the request dump. */
+  purpose?: 'keepalive';
+  /** Directory that receives the serialized request body when `LOGOX_DUMP_REQUESTS=1`. */
+  dumpDir?: string;
 }
 export interface ModelTurn {
   message: Extract<ModelMessage, {role: 'assistant'}>;
   stop: 'complete' | 'tools' | 'length' | 'other';
-  usage?: {input: number; output: number; cacheRead?: number; cacheWrite?: number};
+  /** `cacheWrite1h` is the part of `cacheWrite` stored with the 1-hour lifetime, when the provider reports it. */
+  usage?: {input: number; output: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number | undefined};
 }
 export type Delta = {kind: 'text' | 'reasoning'; text: string};
 export interface Provider {
   readonly capabilities?: ProviderCapabilities;
   resolveCapabilities?(signal: AbortSignal): Promise<ProviderCapabilities>;
   respond(request: ModelRequest, onDelta: (delta: Delta) => void, signal: AbortSignal): Promise<ModelTurn>;
+  /** What a cache keep-alive needs to know about this exact request; undefined when its cache needs none or cannot be replayed cheaply. */
+  cacheProfile?(request: ModelRequest, signal: AbortSignal): Promise<CacheProfile | undefined>;
+}
+export interface CacheProfile {
+  /** Lifetime of the entry the request wrote or read. */
+  ttlMs: number;
+  /** Same body with `maxTokens: 1` keeps the cached prefix and its thinking configuration. */
+  replayable: boolean;
 }
 /** Repairs the request view only; the raw ledger and already-executed tools are unchanged. */
 export function normalizeMessages(messages: readonly ModelMessage[]): ModelMessage[] {

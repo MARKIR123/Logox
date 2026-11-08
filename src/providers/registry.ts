@@ -17,6 +17,8 @@ import {createHttpTransport} from './transport.js';
 import {refreshOpenAIToken} from './oauth.js';
 import {RequestGate, type RequestGateOptions} from './request-gate.js';
 
+/** Anthropic's documented maximum number of images in one Messages request. */
+const ANTHROPIC_MAX_IMAGES = 100;
 const credentialSchema = z.object({type: z.literal('api_key'), key: z.string(), env: z.record(z.string(), z.string()).optional()});
 const modelsSchema = z.object({data: z.array(z.object({id: z.string().min(1),
   context_window: z.number().int().min(256).optional(), context_length: z.number().int().min(256).optional(),
@@ -141,7 +143,7 @@ export class ProviderRegistry {
       };
     }
     return {...this.config, providers, provider: name === current.name
-      ? {...current, ...(model !== undefined ? {model, ...(model !== current.model ? {context_window: undefined, max_output_tokens: undefined} : {})} : {})}
+      ? {...current, ...(model !== undefined ? {model, ...(model !== current.model ? {context_window: undefined, max_output_tokens: undefined, max_images: undefined} : {})} : {})}
       : {name, model: model ?? '', temperature: current.temperature, max_tokens: current.max_tokens, timeout: current.timeout, thinking_effort: current.thinking_effort}};
   }
   thinking(): {effort: ThinkingEffort; levels: readonly ThinkingEffort[]} {
@@ -231,8 +233,10 @@ export class ProviderRegistry {
     const window = config.provider.context_window ?? override?.context_window ?? learned?.window ?? table?.window ?? base?.window ?? defaultWindow ?? guessed?.window;
     const maxOutput = config.provider.max_output_tokens ?? override?.max_output_tokens ?? learned?.maxOutput ?? table?.maxOutput ?? base?.maxOutput ?? defaultOutput ?? guessed?.maxOutput;
     if (!window) throw new ProviderError('Context window for model ' + name + '/' + settings.model + ' is unknown; set context_window under [models."' + name + '/' + settings.model + '"] and restart (for local models, use the actual num_ctx).', false, 'capacity');
+    // Anthropic documents 100 images per request; every other protocol has no built-in limit and relies on configuration or a provider rejection.
+    const maxImages = config.provider.max_images ?? override?.max_images ?? (settings.kind === 'anthropic' ? ANTHROPIC_MAX_IMAGES : undefined);
     return {identity: JSON.stringify([name, settings.model, settings.baseUrl, settings.kind, window, maxOutput]),
-      window, ...(maxOutput ? {maxOutput} : {})};
+      window, ...(maxOutput ? {maxOutput} : {}), ...(maxImages ? {maxImages} : {})};
   }
   /** Gate key is the endpoint only (lowercase origin plus path); credentials, query and fragment are never part of it. */
   private gateFor(baseUrl: string): RequestGate {
@@ -251,6 +255,11 @@ export class ProviderRegistry {
   provider(): Provider {
     const registry = this;
     return {get capabilities() {return resolveProviderCapabilities(modelSettings(registry.config, registry.env));},
+      cacheProfile: async (request, signal) => {
+        signal.throwIfAborted();
+        const settings = await registry.settings(false);
+        return createProvider(settings, this.fetcher).cacheProfile?.(request, signal);
+      },
       resolveCapabilities: async signal => {
         signal.throwIfAborted();
         const settings = await registry.settings(false);
