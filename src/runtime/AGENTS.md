@@ -67,6 +67,8 @@
 - **`max_iterations = 0` means no iteration cap**: the loop asks to continue only when `options.iterations > 0`. *Unenforced* (tests pass explicit caps).
 - **Session tree layout** `state/sessions/<sessionId>/` with `director.jsonl`, `tasks.json`, `events.json`, `deliveries.json`, `pending.json` (held human messages), `README.md`, `subagents/<actor>.jsonl`: written by `Journal`. *Unenforced*; only the `events.json` mirror is asserted in `tests/system-history-presentation.test.ts`.
 
+- **Outage wakes carry no failure card**: `outage.ts:isOutageWake()` marks a failed Director coordination wake whose recovery key is `provider:temporary:*`; the timeline (`src/tui/timeline/stage.ts`) and the `model_error` emitter in `src/application.ts` skip it because the actors backoff owns that wait (see [`src/actors/AGENTS.md`](../actors/AGENTS.md)). Enforced by `tests/provider-outage.test.ts`.
+
 ## 5. Dependencies
 - **Depends on**: `src/tools/` (`_FinishRoundTool`, `src/tools/ui-format.ts` titles), `src/actors/` (`ActorContext` type), `src/context/` (round memory during `Journal.finish()`), `src/prompts/runtime/` (recovery and scratchpad text), `src/providers/` (`Provider` calls from the loop).
 - **Used by**: `src/actors/` (activities, deliveries, journal checkpoints), `src/tui/` (snapshots and system messages), `src/application.ts` (store, journal, sessions), `src/context/` (journal ledger ranges), `src/permissions/` (scratchpad path check).

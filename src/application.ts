@@ -1,4 +1,5 @@
 import {reloadResources} from './resources/reload.js';
+import {isOutageWake} from './runtime/outage.js';
 import type {ResourceOptions} from './resources/manager.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
 import {ProjectExtensions, observeTasks, observeExtra} from './extensions/runtime.js';
@@ -92,6 +93,8 @@ export interface ApplicationOptions {
   resume?: boolean;
   config?: Config;
   provider?: Provider;
+  /** Test hook: Director wake delays while a provider is down (default 30 s, 2 min, 5 min). */
+  outageDelaysMs?: readonly number[];
   fetcher?: typeof fetch;
   authPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -198,6 +201,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   void ensureProjectBulletin(cwd);
   const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
     notice: text => notice(text, 'task_notice', 'logox'),
+    ...(options.outageDelaysMs ? {outageDelaysMs: options.outageDelaysMs} : {}),
+    outageNotice: (text, first) => notice(text, 'task_notice', 'logox', undefined, {presentation: first ? 'timeline' : 'status'}),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     getActiveTask: (owner) => ensemble.getActiveTask(owner),
@@ -491,6 +496,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     iterations: config.kernel.max_iterations, retries: config.kernel.max_retries, readonlyConcurrency: config.permissions.readonly_concurrency,
     supportsVision: () => true,
     retryProvider: async (context, error) => {
+      // A Director wake that meets an outage waits on the outage backoff and never spends the root's recovery budget.
+      if (context.coordinationWake) {notice('[Network] Connection interrupted. Retrying...', 'task_notice', context.ownerId, context.activityId); return true;}
       const recovery = await actorServices.recovery.next(context.rootActivityId ?? context.activityId, error, context.recovery);
       context.signal.throwIfAborted();
       if (recovery.exhausted) return false;
@@ -1218,6 +1225,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     for (const activity of store.getSnapshot().activities) {
       if (!['failed', 'cancelled'].includes(activity.status) || terminal.has(activity.activityId)) continue;
       terminal.add(activity.activityId);
+      if (isOutageWake(activity)) continue;
       notice(activity.status === 'failed' ? 'Execution failed: ' + activity.detail : 'Task stopped.',
         activity.status === 'failed' ? 'model_error' : 'task_notice', activity.ownerId, activity.activityId);
     }
@@ -1334,7 +1342,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       killActivityProcesses(activityId, USER_STOP_REASON, 'user'); killBackgroundJobs(activityId);
     }},
     async close() {
-      closed = true; keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
+      closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone, permissions.flushStats()]);
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush(); await heldTail;

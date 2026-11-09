@@ -24,3 +24,5 @@ export function directorResumeAdvice(target: {ownerId: string; activityId: strin
   return DIRECTOR_FAILURE + '\n' + DIRECTOR_RESUME_ADVICE + target.activityId + '\nActor(' +
     JSON.stringify({tasks: [{ownerId: target.ownerId, resumeTask: target.activityId, prompt: 'Continue only the remaining work using preserved results.'}]}) + ')';
 }
+/** Replaces `DIRECTOR_RECOVERY_EXHAUSTED` in a deferred failure once the human has written again. */
+export const DIRECTOR_RECOVERY_LIFTED = 'This failure had exhausted its automatic recovery budget; the human has written since, so the budget is reset and the human message takes precedence. Follow it, and resume or reassign work only as it directs.';

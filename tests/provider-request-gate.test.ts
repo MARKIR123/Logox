@@ -170,7 +170,7 @@ test('rate-limit classification: 429 and 529 only, quota 429 is not rate limitin
   assert.deepEqual([providerFailure(429).retryable, providerFailure(429).category], [true, 'temporary']);
   assert.equal(providerFailure(529).diagnostic?.status, 529);
   assert.equal(providerFailure(429, {error: {code: 'insufficient_quota'}}).category, 'quota');
-  assert.equal(providerFailure(503).diagnostic, undefined);
+  assert.deepEqual(providerFailure(503).diagnostic, {status: 503});
 });
 
 test('parseRetryAfter reads seconds and HTTP dates', () => {

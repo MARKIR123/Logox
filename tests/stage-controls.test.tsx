@@ -82,7 +82,7 @@ test('失败原位置折叠、系统灰色轨道、终态卡片不在新消息�
   }
   task(store, 'actor'); store.activities.update('s', 'actor', {status: 'failed', detail: 'Actor模型故障'});
   store.message('s', 'techne', 'system', 'Actor模型故障', {activityId: 'actor'});
-  assert.equal(buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true}, null).filter(row => row.text === 'Actor模型故障').length, 1, 'Actor错误只显示一次');
+  assert.equal(buildStageRows(store.getSnapshot(), 's', 'logox', 79, {actor: true}, null).filter(row => row.text.includes('Actor模型故障')).length, 1, 'Actor错误只显示一次');
 });
 
 test('Ctrl+C 复制不计入退出，其它输入解除提示，原生中断与双击共用退出动作', {timeout: 7000}, async () => {

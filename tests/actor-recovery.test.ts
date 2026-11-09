@@ -15,6 +15,7 @@ import {loadConfig} from '../src/config/config.js';
 import {Journal} from '../src/store/journal.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {waitFor} from './wait-for.js';
 import type {ModelRequest, ModelTurn} from '../src/runtime/messages.js';
 
 // Chinese task and provider-error fixtures retain legacy diagnostics and continuation routing coverage.
@@ -31,10 +32,11 @@ async function fixture(execute: (prompt: string, context: ActorContext, services
     const incoming = await context.drainInbox?.() ?? [];
     await execute(context.coordinationWake && incoming.length ? incoming.map(message => message.text).join('\n') : prompt, context, services);
   };
+  outageWaiting = () => services.outageWaiting;
   const ensemble = new DynamicEnsemble('s', store, journal, run, {deliveries, member: owner => catalog.find(owner),
     handoff: result => services.handoff(result), settled: (activity, status) => services.settled(activity, status)});
   services = new ActorServices({sessionId: 's', catalog, config, journal, deliveries, registry: new ProviderRegistry(config, {}),
-    resources: new Resources(directory, {home: directory, boundary: directory}), requireIdle() {}, approve: async () => false,
+    resources: new Resources(directory, {home: directory, boundary: directory}), requireIdle() {}, outageDelaysMs: [5], approve: async () => false,
     getSnapshot: () => store.getSnapshot(), getActiveTask: owner => ensemble.getActiveTask(owner), canReceiveMessage: owner => ensemble.canReceiveMessage(owner),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     pauseBatch: id => ensemble.pauseBatch(id), resumeBatch: id => ensemble.resumeBatch(id), coordinationPath: join(directory, 'coordination.json')});
@@ -43,9 +45,10 @@ async function fixture(execute: (prompt: string, context: ActorContext, services
     async close() {await ensemble.close(); await services.flush(); await rm(directory, {recursive: true, force: true});}};
 }
 function barrier() {let resolve!: () => void; const promise = new Promise<void>(finish => {resolve = finish;}); return {promise, resolve};}
+let outageWaiting = () => false;
 async function idle(ensemble: DynamicEnsemble): Promise<void> {
   const deadline = Date.now() + 3000;
-  while (ensemble.isBusy()) {if (Date.now() > deadline) throw new Error('调度未收敛'); await new Promise(resolve => setTimeout(resolve, 5));}
+  while (ensemble.isBusy() || outageWaiting()) {if (Date.now() > deadline) throw new Error('调度未收敛'); await new Promise(resolve => setTimeout(resolve, 5));}
 }
 
 test('technical failures pause batch dependencies while explicit human work precedes recovery', {timeout: 5000}, async () => {
@@ -215,7 +218,7 @@ test('stream resets preserve the original Actor continuation target and shared D
     if (prompt.includes('Actor results are available')) {context.say('打磨已完成'); return;}
     targets.push(context.recovery?.actorTask?.activityId); reports.push(prompt);
     if (++directorRuns === 1) throw disconnected();
-    assert.equal(context.recovery?.attempt, 2);
+    assert.equal(context.recovery?.attempt, 1, 'A Director wake that meets an outage does not spend recovery budget');
     const result = await services.execute({id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
       {ownerId: 'kalon', resumeTask: original, prompt: '继续剩余打磨'},
     ]})}, context);
@@ -223,7 +226,7 @@ test('stream resets preserve the original Actor continuation target and shared D
     context.say('已安排原角色继续');
   });
   try {
-    await f.ensemble.dispatch('kalon', '打磨原文件', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
+    await f.ensemble.dispatch('kalon', '打磨原文件', 'logox', {inputKind: 'director'}).done; await waitFor(() => directorRuns, runs => runs >= 2, {label: 'Director retry after backoff'}); await idle(f.ensemble);
     assert.deepEqual(targets, [original, original], 'Actor and Director interruptions must retain the original continuation target');
     assert.ok(reports.every(prompt => /Prefer resuming the original Actor/.test(prompt) && /ECONNRESET/.test(prompt)));
     assert.equal(actorRuns, 2); assert.equal(directorRuns, 2);
@@ -250,7 +253,7 @@ test('timeouts preserve Actor continuation targets across Director failures', {t
       assert.equal(context.recovery.actorTask?.activityId, original);
       assert.match(prompt, /Prefer resuming the original Actor/);
       if (++directorRuns === 1) throw providerTimeout();
-      assert.equal(context.recovery.attempt, 2);
+      assert.equal(context.recovery.attempt, 1, 'A Director wake that meets an outage does not spend recovery budget');
       const resumeCall = {id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
         {ownerId: 'techne', resumeTask: original, prompt: '完成报告'},
       ]})};
@@ -261,7 +264,7 @@ test('timeouts preserve Actor continuation targets across Director failures', {t
     context.say('导演完成');
   });
   try {
-    await f.ensemble.dispatch('techne', '写文件并报告', 'logox', {inputKind: 'director'}).done; await idle(f.ensemble);
+    await f.ensemble.dispatch('techne', '写文件并报告', 'logox', {inputKind: 'director'}).done; await waitFor(() => directorRuns, runs => runs >= 2, {label: 'Director retry after backoff'}); await idle(f.ensemble);
     assert.equal(actorRuns, 2); assert.equal(directorRuns, 2);
     assert.equal((await f.journal.load('s', 'techne')).filter(entry => entry.message?.role === 'tool').length, 1);
     assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)?.status, 'completed');
@@ -344,7 +347,7 @@ test('continuation rejects unrelated roots and mismatched Actors', {timeout: 500
 test('successful continuation and distinct failures clear stale timeout targets', {timeout: 5000}, async () => {
   for (const nextFault of [undefined, new Error('另一种工具故障'),
     new ProviderError('模型服务暂时不可用', true, 'temporary', {status: 503})]) {
-    let actorRuns = 0, directorRuns = 0;
+    let actorRuns = 0, directorRuns = 0, firstTarget = '';
     const f = await fixture(async (_prompt, context, services) => {
       if (context.ownerId === 'techne') {
         if (++actorRuns === 1) throw providerTimeout();
@@ -352,12 +355,13 @@ test('successful continuation and distinct failures clear stale timeout targets'
         context.say('已完成'); return;
       }
       if (++directorRuns === 1) {
-        const target = context.recovery?.actorTask; assert.ok(target);
+        const target = context.recovery?.actorTask; assert.ok(target); firstTarget = target.activityId;
         const result = await services.execute({id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
           {ownerId: target.ownerId, resumeTask: target.activityId, prompt: '完成剩余部分'},
         ]})}, context);
         assert.equal(result.isError, false);
-      } else assert.equal(context.recovery?.actorTask, undefined, 'Do not reuse the stale timeout target');
+      } else if (nextFault instanceof ProviderError) assert.ok(context.recovery?.actorTask && context.recovery.actorTask.activityId !== firstTarget, 'A later outage points at its own activity, not the stale timeout target');
+      else assert.equal(context.recovery?.actorTask, undefined, 'Do not reuse the stale timeout target');
       context.say('核对并收束');
     });
     try {
@@ -414,7 +418,7 @@ test('application timeout continuation preserves real writes and interrupted out
   const seen: ModelRequest[] = [];
   const complete = (text: string): ModelTurn => ({message: {role: 'assistant', text}, stop: 'complete'});
   let writes = 0, resumes = 0, repeatFailure = false, limited = false;
-  const app = await createApplication({cwd, config, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd},
+  const app = await createApplication({cwd, config, outageDelaysMs: [5], sessionId: 's', resourceOptions: {home: cwd, boundary: cwd},
     env: {}, authPath: join(cwd, 'auth.json'), provider: {async respond(request, delta) {
       seen.push(request);
       const messages = request.messages.filter(message => !message.text.startsWith('[Direct conversation]'));
@@ -448,12 +452,12 @@ test('application timeout continuation preserves real writes and interrupted out
       return complete('Logox 已接收结果');
     }}});
   try {
-    await app.ensemble.dispatch('techne', '仅子角色：写文件后报告', 'logox', {inputKind: 'director', authorization: ['写文件后报告']}).done; await idle(app.ensemble);
+    await app.ensemble.dispatch('techne', '仅子角色：写文件后报告', 'logox', {inputKind: 'director', authorization: ['写文件后报告']}).done; await waitFor(() => resumes, count => count >= 1); await waitFor(() => app.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)?.status, status => status === 'completed'); await idle(app.ensemble);
     assert.equal(writes, 1); assert.equal(resumes, 1);
     assert.equal((await app.journal.load('s', 'techne')).filter(entry => entry.message?.role === 'tool' && entry.message.name === 'write').length, 1);
     assert.equal(app.store.getSnapshot().activities.filter(task => task.ownerId === 'techne').at(-1)?.status, 'completed');
     repeatFailure = true;
-    await app.ensemble.dispatch('techne', '仅子角色：重复超时', 'logox', {inputKind: 'director', authorization: ['重复超时']}).done; await idle(app.ensemble);
+    await app.ensemble.dispatch('techne', '仅子角色：重复超时', 'logox', {inputKind: 'director', authorization: ['重复超时']}).done; await waitFor(() => limited, reached => reached); await idle(app.ensemble);
     assert.equal(limited, true, JSON.stringify(app.store.getSnapshot().activities.map(task => ({owner: task.ownerId, status: task.status, detail: task.detail}))));
     assert.equal(resumes, 3, 'One successful continuation plus two recovery attempts for this task');
     const events = await app.journal.systemEvents('s');

@@ -134,10 +134,11 @@ export class DeliveryQueue {
       if (next.some((item, index) => item !== this.records[index])) await this.save(next);
     });
   }
-  releaseDeferred(): Promise<void> {
+  /** Makes deferred items deliverable again; `rewrite` may adjust each item first. */
+  releaseDeferred(rewrite: (item: Delivery) => Delivery = item => item): Promise<void> {
     return this.run(async () => {
       if (!this.records.some(item => item.status === 'pending' && item.deferredUntilHuman)) return;
-      await this.save(this.records.map(item => item.status === 'pending' && item.deferredUntilHuman ? {...item, deferredUntilHuman: false} : item));
+      await this.save(this.records.map(item => item.status === 'pending' && item.deferredUntilHuman ? {...rewrite(item), deferredUntilHuman: false} : item));
     });
   }
   async flush(): Promise<void> {await this.tail;}

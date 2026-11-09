@@ -3,7 +3,8 @@ import {stripNarration} from '../runtime/narration.js';
 import {randomUUID} from 'node:crypto';
 import type {ActorContext, TaskHandle, TaskOrigin, TaskResult} from './ensemble.js';
 import {ActorRecovery, modelUnavailable} from './recovery.js';
-import {isProviderInterruption, ProviderError} from '../providers/http.js';
+import {formatFailureDetail, isProviderOutage, ProviderError} from '../providers/http.js';
+import {OutageBackoff} from './outage.js';
 import type {ActorCatalog} from './catalog.js';
 import {ActorManagement} from './management.js';
 import type {ActorDefinition} from './definitions.js';
@@ -41,7 +42,7 @@ import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
 import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
-  DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
+  DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint} from '../prompts/runtime/director.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
@@ -87,6 +88,10 @@ export interface ActorServicesOptions {
   modelResolver?: (actorId: string) => {provider: string; model: string; effort?: string; levels?: readonly string[]} | undefined;
   modelPool?: ModelPool;
   notice?(text: string): void;
+  /** One line per outage backoff step; `first` is true for the first step of an outage (shown in the timeline, later steps only flash). */
+  outageNotice?(text: string, first: boolean): void;
+  /** Test hook: replaces the 30 s, 2 min, 5 min wake delays used while a provider is down. */
+  outageDelaysMs?: readonly number[];
 }
 /** Actor configuration, one-off skill borrowing, and summary handoff; the execution queue is still owned by the Ensemble. */
 export class ActorServices {
@@ -94,6 +99,7 @@ export class ActorServices {
   readonly collaboration: Collaboration;
   readonly recovery: ActorRecovery;
   readonly deliveries: DeliveryQueue;
+  private readonly backoff: OutageBackoff;
   private readonly definitions = new Map<string, ActorDefinition>();
   private readonly active = new Map<string, ActorDefinition>();
   private readonly depths = new Map<string, number>();
@@ -166,6 +172,11 @@ export class ActorServices {
       projectDir: options.projectDir,
     });
     this.recovery = new ActorRecovery(options.sessionId, options.coordinationPath);
+    this.backoff = new OutageBackoff(() => {
+      const wake = () => {try {this.wakeDirector();} catch {options.notice?.('Coordination wake-up failed; pending reports remain saved.');}};
+      // A wake-up that is still winding down must finish first, or its late bookkeeping would swallow this one.
+      if (this.wakeTask) void this.wakeTask.done.then(wake, wake); else wake();
+    }, (text, first) => options.outageNotice?.(text, first), options.outageDelaysMs);
   }
   definition(context: ActorContext): ActorDefinition {
     this.origins.set(context.activityId, context);
@@ -234,6 +245,7 @@ export class ActorServices {
             if (previous.status !== 'failed' && !restartStopped(previous)) throw new Error('Only failed or restart-interrupted activities can be resumed; current status: ' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
             if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) && !this.restartInterrupted.has(task.resumeTask) &&
+              !this.deliveries.snapshot().some(item => item.ownerId === 'logox' && item.kind === 'failure' && item.sourceActivityId === task.resumeTask) &&
               !this.deliveries.snapshot().some(item => item.recipientActivityId === context.activityId && item.rootActivityId === root)) {
               throw new Error('The resume target was not handed off to the current task; other root goals cannot be resumed');
             }
@@ -393,6 +405,7 @@ export class ActorServices {
   }
   stopDirector(_activityId: string): void {
     this.recovery.stop();
+    this.backoff.reset();
     this.wakeTask?.cancel();
   }
   stopActor(activityId: string): void {
@@ -404,7 +417,14 @@ export class ActorServices {
   }
   resumeDirector(activityId?: string): string {
     // New human input releases deferred items and held reports together.
-    if (activityId) this.releaseTask = this.deliveries.releaseDeferred().then(() => this.deliveries.release('logox')).then(() => {});
+    if (activityId) {
+      // A human message ends any outage wait, and it takes precedence over a recovery budget a deferred failure had exhausted.
+      this.backoff.reset();
+      const exhausted = this.deliveries.snapshot().filter(item => item.status === 'pending' && item.deferredUntilHuman &&
+        item.origin?.recovery?.exhausted && !item.origin.recovery.key.startsWith('execution:'));
+      this.releaseTask = this.deliveries.releaseDeferred(liftExhaustion).then(() => this.recovery.lift(exhausted.map(item => item.rootActivityId ?? item.origin?.rootActivityId)))
+        .then(() => this.deliveries.release('logox')).then(() => {});
+    }
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
     if (activityId) for (const batch of batches) this.resumableBatches.add(batch);
@@ -438,8 +458,18 @@ export class ActorServices {
     }
   }
   async flush(): Promise<void> {await this.releaseTask; await this.deliveries.flush(); await this.recovery.flush();}
+  /** True while a Director wake-up is held back by a provider outage. */
+  get outageWaiting(): boolean {return this.backoff.waiting;}
+  /** Drops the pending outage wake-up. */
+  close(): void {this.backoff.close();}
+  private armOutage(error: ProviderError): void {this.backoff.arm(error.context?.provider ?? 'the model provider');}
+  /** A failure on another provider does not predict the Director's own provider, so it needs no wait. */
+  private otherProvider(error: ProviderError): boolean {
+    const director = this.options.modelResolver?.('logox')?.provider, failed = error.context?.provider;
+    return !!director && !!failed && director !== failed;
+  }
   private wakeDirector(): void {
-    if (this.recovery.stopped() || this.wakeTask) return;
+    if (this.recovery.stopped() || this.wakeTask || this.backoff.waiting) return;
     if (this.options.canReceiveMessage?.('logox') ?? !!this.options.getActiveTask?.('logox')) return;
     const pending = [...this.deliveries.pending('logox')].filter(item => !item.deferredUntilHuman)
       .sort((a, b) => deliveryPriority[a.kind] - deliveryPriority[b.kind]);
@@ -453,8 +483,9 @@ export class ActorServices {
     void handle.done.then(() => {
       if (this.wakeTask?.activityId !== handle.activityId) return;
       this.wakeTask = undefined;
-      if (this.options.getSnapshot?.().activities.find(activity => activity.activityId === handle.activityId)?.status === 'completed' ||
-        this.deliveries.pending('logox').some(item => !item.deferredUntilHuman && !admitted.has(item.id))) {
+      const completed = this.options.getSnapshot?.().activities.find(activity => activity.activityId === handle.activityId)?.status === 'completed';
+      if (completed) this.backoff.reset();
+      if (completed || this.deliveries.pending('logox').some(item => !item.deferredUntilHuman && !admitted.has(item.id))) {
         try {this.wakeDirector();} catch {this.options.notice?.('Coordination wake-up failed; pending reports remain saved.');}
       }
     });
@@ -481,12 +512,14 @@ export class ActorServices {
     this.groups.get(activityId)?.remaining.delete(activityId);
     this.groups.delete(activityId); this.pendingHandoffs.delete(activityId);
   }
-  private async admitHandoff(event: Delivery): Promise<void> {
+  private async admitHandoff(event: Delivery, outage?: ProviderError): Promise<void> {
     const activityId = event.sourceActivityId!;
     this.pendingHandoffs.set(activityId, event);
     await this.options.journal.stageHandoff?.(this.options.sessionId, activityId, event);
     await this.deliveries.enqueue(event);
     this.closeHandoff(activityId);
+    // The wake-up waits only once the failure is queued, so a short delay can never fire before there is something to deliver.
+    if (outage) this.armOutage(outage);
     await this.releaseEndedRoots(activityId);
     if (!event.deferredUntilHuman) this.wakeDirector();
   }
@@ -501,12 +534,17 @@ export class ActorServices {
     const eventId = 'terminal:' + result.activityId + ':' + result.status;
     if (this.deliveries.snapshot().some(item => item.id === eventId)) {this.closeHandoff(result.activityId); return;}
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
-    const cause = executionError?.message ?? (result.error instanceof ProviderError ? result.error.message : undefined);
-    const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' : '';
+    const [cause, ...diagnostics] = (executionError?.message ?? (result.error instanceof ProviderError ? formatFailureDetail(result.error) : undefined))?.split('\n') ?? [];
+    const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' + (diagnostics.length ? '\n' + diagnostics.join('\n') : '') : '';
     const report = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
     if (result.stopReason === 'shutdown') {this.closeHandoff(result.activityId); return;}
     const userStopped = result.stopReason === 'user' || this.stoppedActors.delete(result.activityId);
     const failed = result.status !== 'completed';
+    // A Director wake that failed on a provider outage is not a new failure: its deliveries return to pending and the backoff schedules the next try, without spending recovery budget.
+    if (result.ownerId === 'logox' && failed && !userStopped && isProviderOutage(result.error) &&
+      (origin.coordinationWake || origin.recovery?.key.startsWith('provider:temporary:'))) {
+      this.armOutage(result.error); this.closeHandoff(result.activityId); return;
+    }
     if (failed || userStopped) {
       if (group) group.paused = true;
       const batchId = group?.batchId ?? origin.batchId;
@@ -520,10 +558,11 @@ export class ActorServices {
     const noClaim = !!executionError && !recovery;
     if (recovery) {
       const actorTask = !failed ? undefined : result.ownerId === 'logox' ? origin.recovery?.actorTask
-        : isProviderInterruption(result.error) ? {ownerId: result.ownerId, activityId: result.activityId} : undefined;
+        : isProviderOutage(result.error) ? {ownerId: result.ownerId, activityId: result.activityId} : undefined;
       delete recovery.actorTask;
       if (actorTask) recovery.actorTask = actorTask;
     }
+    const outage = failed && !userStopped && !deferred && result.ownerId !== 'logox' && isProviderOutage(result.error) && !this.otherProvider(result.error) ? result.error : undefined;
     const instruction = userStopped ? DIRECTOR_USER_STOP
       : executionError ? executionError.kind === 'no_delivery' ? DIRECTOR_EXECUTION_REVIEW : DIRECTOR_STREAM_REVIEW
       : recovery?.exhausted ? DIRECTOR_RECOVERY_EXHAUSTED
@@ -535,7 +574,7 @@ export class ActorServices {
       rootActivityId, kind: failed ? 'failure' : 'report', inputKind: 'actor', text: (instruction + batches ? instruction + batches + '\n' : '') + report,
       deferredUntilHuman: !!(deferred || noClaim), ...(!failed && !userStopped && !deferred && result.ownerId !== 'logox' ? {hold: 'root' as const} : {}), origin: {parentActivityId: result.activityId, rootActivityId,
         dispatchDepth: group?.depth ?? this.depths.get(result.activityId) ?? origin.dispatchDepth ?? 0,
-        authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}));
+        authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}), outage);
   }
   async settled(activityId: string, status: RoundStatus) {
     this.ended.add(activityId);
@@ -551,4 +590,12 @@ export class ActorServices {
     if (definition && this.active.get(definition.id) === definition) this.active.delete(definition.id);
     this.definitions.delete(activityId); this.depths.delete(activityId); this.origins.delete(activityId); this.stoppedActors.delete(activityId);
   }
+}
+
+/** Rewrites a deferred failure whose recovery budget was exhausted so that the human's new message is not overridden by the old stop. */
+function liftExhaustion(item: Delivery): Delivery {
+  const recovery = item.origin?.recovery;
+  if (!recovery?.exhausted || recovery.key.startsWith('execution:')) return item;
+  const {exhausted: _, ...open} = recovery;
+  return {...item, text: item.text.replace(DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED), origin: {...item.origin, recovery: open}};
 }

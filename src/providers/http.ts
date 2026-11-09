@@ -27,8 +27,13 @@ type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid
 export interface ProviderDiagnostic {
   status?: number; code?: string; phase?: 'connection' | 'stream'; parameter?: string; issue?: ProtocolIssue;
   retryAfterMs?: number; elapsedMs?: number; progressIdleMs?: number; transportIdleMs?: number; receivedBytes?: number;
+  /** Public request id from the response headers, and a sanitized, truncated excerpt of the error body (see `publicSnippet`). */
+  requestId?: string; snippet?: string;
 }
+/** Where and how often a failure happened; stamped by the agent loop when the error is finally rethrown. */
+export interface ProviderFailureContext {provider?: string; model?: string; attempts?: number}
 export class ProviderError extends Error {
+  context?: ProviderFailureContext;
   constructor(message: string, readonly retryable = false,
     readonly category: ProviderErrorCategory = retryable ? 'temporary' : 'protocol',
     readonly diagnostic?: ProviderDiagnostic) {super(message);}
@@ -53,6 +58,36 @@ export function providerTimeout(): ProviderError {
 export function isProviderTimeout(error: unknown): boolean {
   return error instanceof ProviderError && error.category === 'temporary' &&
     (error.diagnostic?.code === 'idle_timeout' || error.message === 'Model request timed out');
+}
+/** Any temporary provider failure (timeouts, dropped connections, HTTP 408/429/5xx/529); authentication, quota and missing-model errors are never outages. */
+export function isProviderOutage(error: unknown): error is ProviderError {
+  return error instanceof ProviderError && error.category === 'temporary';
+}
+const SNIPPET_LIMIT = 500;
+/** One-line excerpt of a provider error body that is safe to persist: markup, keys, tokens, key-like query values and long opaque strings are removed. */
+export function publicSnippet(text: string | undefined): string | undefined {
+  const clean = (text ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/\b(Bearer|Basic)\s+[\w.~+/=-]{6,}/gi, '$1 [redacted]')
+    .replace(/\beyJ[\w-]{8,}\.[\w-]{8,}(?:\.[\w-]*)?/g, '[redacted]')
+    .replace(/\b(?:sk|pk|rk|ghp|gho|xox[a-z])[-_][\w-]{8,}/gi, '[redacted]')
+    .replace(/((?:api[_-]?key|access[_-]?token|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^\s"',&]{4,}/gi, '$1[redacted]')
+    .replace(/([?&](?:key|token|api_key|access_token|sig|signature)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, '[redacted]');
+  return clean ? clean.slice(0, SNIPPET_LIMIT) : undefined;
+}
+/**
+ * Multi-line failure text: the short title first, then `Provider · Model · HTTP <status> · <n> attempts`, then the sanitized body excerpt.
+ * Non-provider errors keep their message as the single line.
+ */
+export function formatFailureDetail(error: unknown, fallback: ProviderFailureContext = {}): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof ProviderError)) return message;
+  const context = {...fallback, ...error.context}, diagnostic = error.diagnostic;
+  const facts = [context.provider, context.model, diagnostic?.status !== undefined ? 'HTTP ' + diagnostic.status : undefined,
+    diagnostic?.code && diagnostic.code !== 'idle_timeout' ? diagnostic.code : undefined,
+    diagnostic?.requestId ? 'request ' + diagnostic.requestId : undefined,
+    context.attempts ? context.attempts + (context.attempts === 1 ? ' attempt' : ' attempts') : undefined].filter(Boolean);
+  return [message, facts.join(' · '), diagnostic?.snippet].filter(Boolean).join('\n');
 }
 export function isProviderInterruption(error: unknown): boolean {
   return isProviderTimeout(error) || error instanceof ProviderError && error.category === 'temporary' &&
@@ -99,10 +134,12 @@ function idleDeadline(signal: AbortSignal, milliseconds: number) {
     }, close: () => clearTimeout(timer)};
 }
 /** Known public errors keep API wording; unknown echoes use structured diagnostics and never carry the whole response body. */
-export function providerFailure(status: number, payload?: unknown, retryAfterMs?: number): ProviderError {
+export function providerFailure(status: number, payload?: unknown, retryAfterMs?: number, response?: {requestId?: string; body?: string}): ProviderError {
   const parsed = z.object({error: z.object({code: z.string().optional(), type: z.string().optional(),
     message: z.string().optional(), param: z.string().nullable().optional()}).optional()}).safeParse(payload);
   const code = parsed.success ? parsed.data.error?.code ?? parsed.data.error?.type : undefined;
+  const snippet = publicSnippet(parsed.success && parsed.data.error?.message ? parsed.data.error.message : response?.body);
+  const evidence = {...(response?.requestId ? {requestId: response.requestId} : {}), ...(snippet ? {snippet} : {})};
   if (status === 401 || status === 403) return new ProviderError('Model authentication or permission unavailable', false, 'authentication');
   if (status === 402 || ['insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached', 'credit_balance_exhausted'].includes(code ?? '')) {
     const message = parsed.success ? parsed.data.error?.message?.trim() ?? '' : '';
@@ -117,9 +154,9 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   const rateLimited = status === 429 || status === 529 || rateLimitCodes.includes(code ?? '');
   if (rateLimited) {
     return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status,
-      ...(code && rateLimitCodes.includes(code) ? {code} : {}), ...(retryAfterMs !== undefined ? {retryAfterMs} : {})});
+      ...(code && rateLimitCodes.includes(code) ? {code} : {}), ...(retryAfterMs !== undefined ? {retryAfterMs} : {}), ...evidence});
   }
-  if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary');
+  if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status, ...evidence});
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
   const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
     : /too many (?:images|media)|(?:images?|media).{0,60}(?:exceed|too many|maximum|at most|limit)|(?:exceed|maximum|more than|at most).{0,60}images?/i.test(text) ? 'too_many_images'
@@ -135,23 +172,34 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   const safeCode = ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? code : undefined;
   return new ProviderError('Model request failed (HTTP ' + status + ')' + (issue ? ': ' + descriptions[issue] : '') +
     (parameter ? '; field: ' + parameter : ''), false, 'protocol',
-    {status, ...(safeCode ? {code: safeCode} : {}), ...(parameter ? {parameter} : {}), ...(issue ? {issue} : {})});
+    {status, ...(safeCode ? {code: safeCode} : {}), ...(parameter ? {parameter} : {}), ...(issue ? {issue} : {}), ...(response?.requestId ? {requestId: response.requestId} : {})});
 }
-async function errorPayload(response: Response): Promise<unknown> {
+/** Parsed JSON error body (when it is JSON) plus the raw text, capped; the text feeds `publicSnippet` for non-JSON gateways. */
+async function errorBody(response: Response): Promise<{payload?: unknown; text?: string}> {
   const reader = response.body?.getReader();
-  if (!reader) return undefined;
+  if (!reader) return {};
+  const chunks: Uint8Array[] = []; let size = 0, oversized = false;
   try {
-    const chunks: Uint8Array[] = []; let size = 0;
     for (;;) {
       const {done, value} = await reader.read();
       if (done) break;
       size += value.length;
-      if (size > 16384) return undefined;
       chunks.push(value);
+      if (size > 16384) {oversized = true; break;}
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  } catch {return undefined;}
+  } catch {/* keep what arrived */}
   finally {await reader.cancel().catch(() => {}); reader.releaseLock();}
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (oversized) return {text: text.slice(0, 2048)};
+  try {return {payload: JSON.parse(text) as unknown, text: text.slice(0, 2048)};}
+  catch {return text ? {text: text.slice(0, 2048)} : {};}
+}
+function responseRequestId(response: Response): string | undefined {
+  for (const name of ['x-request-id', 'request-id', 'anthropic-request-id', 'x-amzn-requestid', 'cf-ray']) {
+    const value = response.headers.get(name)?.trim();
+    if (value && /^[\w.:-]{1,80}$/.test(value)) return value;
+  }
+  return undefined;
 }
 type ObjectValue = Record<string, unknown>;
 const usageSchema = z.object({
@@ -509,10 +557,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         throw timed.aborted ? providerTimeout() : transportFailure(error, 'connection');
       }
       if (!response.ok) {
-        const payload = await errorPayload(response);
+        const body = await errorBody(response);
         signal.throwIfAborted();
         if (timed.aborted) throw providerTimeout();
-        throw providerFailure(response.status, payload, parseRetryAfter(response.headers.get('retry-after')));
+        const requestId = responseRequestId(response);
+        throw providerFailure(response.status, body.payload, parseRetryAfter(response.headers.get('retry-after')),
+          {...(requestId ? {requestId} : {}), ...(body.text ? {body: body.text} : {})});
       }
       let text = '', reasoning = '', signature = '';
       let stop: ModelTurn['stop'] = 'other';

@@ -194,7 +194,12 @@ export function renderActivity(context: ActorActivityContext): void {
         }
       }
       if (context.detailed) for (const request of context.pending) context.renderInteraction(request, actorTreeFrame);
-      if (['failed', 'cancelled'].includes(activity.status)) builder.pushProse(activity.activityId + '-error', activity.detail, palette.muted, 'body', actorTreeFrame, undefined, palette.muted);
+      if (['failed', 'cancelled'].includes(activity.status)) {
+        // The header already shows the first line of a failure; the body adds the diagnostic lines, and the first line only when it is too long for the header.
+        const [first = '', ...rest] = activity.detail.split('\n');
+        const body = activity.status === 'failed' && first.length <= 70 ? rest.join('\n') : activity.detail;
+        if (body.trim()) builder.pushProse(activity.activityId + '-error', body, palette.muted, 'body', actorTreeFrame, undefined, palette.muted);
+      }
     }});
 }
 const base = createToolUI(['actor', 'ownerId']);

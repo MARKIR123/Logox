@@ -170,7 +170,8 @@ test('a failed round keeps one thinking row; only the activity failure owns the 
   f.store.activities.update('s', 'a', {status: 'failed', detail: '最终请求连接中断'});
   rows = buildStageRows(f.store.getSnapshot(), 's', 'logox', 99, {a: true, [f.first]: true}, null);
   assert.equal(rows.filter(row => row.messageId === f.first).length, 1);
-  assert.equal(rows.find(row => row.messageId === 'a-error')!.text, '最终请求连接中断');
+  assert.ok(rows.find(row => row.messageId === 'a')!.text.includes('最终请求连接中断'), 'the header owns the one-line failure');
+  assert.equal(rows.find(row => row.messageId === 'a-error'), undefined, 'the body does not repeat the title');
 });
 
 test('actor resume follows same-owner links to the complete original goal', () => {

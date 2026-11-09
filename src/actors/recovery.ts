@@ -87,6 +87,12 @@ export class ActorRecovery {
     await this.persist();
     return {key: fault, attempt: counts[fault]!, ...(exhausted ? {exhausted: true} : {})};
   }
+  /** A new human message resets the failure counts of the roots whose recovery had been exhausted. */
+  async lift(roots: readonly (string | undefined)[]): Promise<void> {
+    let changed = false;
+    for (const root of roots) if (root && this.state.roots[root]) {delete this.state.roots[root]; changed = true;}
+    if (changed) await this.persist();
+  }
   async execution(root: string, kind: ExecutionRecoveryKind, ownerId: string): Promise<ExecutionRecoveryDecision> {
     const state = this.executionState(root), budget = kind === 'no_delivery' ? state.noDelivery : state.truncation;
     if (kind === 'no_delivery' && ownerId !== 'logox' && budget.used === 1) return 'handoff';

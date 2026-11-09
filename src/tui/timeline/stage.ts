@@ -1,4 +1,5 @@
 import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
+import {isOutageWake} from '../../runtime/outage.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
 import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
@@ -218,12 +219,15 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   };
   const failure = (activityId: string) => {
     const activity = activities.get(activityId);
-    if (!activity || !['failed', 'cancelled'].includes(activity.status)) return;
+    if (!activity || !['failed', 'cancelled'].includes(activity.status) || isOutageWake(activity)) return;
     builder.pushBlank(palette.muted);
     const kind = statuses[activity.status] ?? activity.status;
-    builder.pushOrdinaryCard({id: activityId, kind: statuses[activity.status] ?? activity.status,
-      title: clipLine(activityTitle(activity), Math.max(1, builder.contentWidth - 4 - stringWidth(kind) - 3)),
-      bodyLines: [activity.detail], open: open(activityId), railColor: palette.muted, toneColor: palette.muted});
+    const room = Math.max(1, builder.contentWidth - 4 - stringWidth(kind) - 3);
+    const title = clipLine(activityTitle(activity), room);
+    // The first detail line is the title; the body shows the diagnostic lines (provider, model, HTTP status, excerpt) and repeats the title only when it was clipped.
+    const [first = '', ...rest] = activity.detail.split('\n');
+    const bodyLines = [...title === first.replace(/^Failure reason: /, '').trim() ? [] : [first], ...rest].filter(line => line.trim());
+    builder.pushOrdinaryCard({id: activityId, kind, title, bodyLines, open: open(activityId), railColor: palette.muted, toneColor: palette.muted});
   };
   const interaction = (request: Interaction, parent?: Frame) => {
     // The focused question is rendered in the dedicated panel above the composer.

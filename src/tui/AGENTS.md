@@ -92,6 +92,8 @@
 - **No artifact blank rows**: `timeline/scene.ts:pushMarkdown` trims leading and trailing blank lines (and draws nothing for blank text), `pushProse` and `pushOrdinaryCard` drop trailing newlines and trailing empty body lines, and thinking text goes through `compactParagraphs()` (no empty rows at the edges or between paragraphs; stored text is unchanged). Interior blank lines of tool output and Markdown paragraph breaks are content and stay. Enforced by `tests/stage-blank-rows.test.ts`.
 - **Login secrets stay local**: never in runtime questions, transcripts or model context; one keyboard owner for runtime questions. Enforced by `tests/login-panel.test.tsx`, `tests/question-panel.test.tsx`, `tests/fullscreen-composer.test.tsx`.
 
+- **A failure card never repeats its title as body**: the header shows the first line of the activity detail, and the expanded body (`timeline/stage.ts` failure cards, `src/tools/orchestration/ActorTool/UI.ts` actor cards) shows only the following diagnostic lines (provider, model, HTTP status, excerpt), plus the first line when it is too long for the header. Enforced by `tests/provider-outage.test.ts`, `tests/stage-flow.test.ts`.
+
 ## 5. Dependencies
 - **Depends on**: `src/runtime/` (store snapshots, `CommandSurface`, `StageStatus`), `src/config/` (theme palette, statusbar preferences), `src/tools/` (`src/tools/ui-registry.ts` via `timeline/tool-ui.ts`), `src/actors/` (profile identity and animation frames), `src/providers/` (login wizard flows).
 - **Used by**: `src/cli.tsx` (mounts the App), `src/application.ts` (`CommandSurfaces`, command tabs, receipts), `src/resources/` (custom command names in completion).

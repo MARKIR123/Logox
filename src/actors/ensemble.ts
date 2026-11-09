@@ -1,4 +1,5 @@
 import type {JobGrant} from '../tools/orchestration/AutomaTool/grant.js';
+import {formatFailureDetail} from '../providers/http.js';
 import {stripNarration} from '../runtime/narration.js';
 import type {AutomaSwarm} from '../runtime/contracts.js';
 import {randomUUID} from 'node:crypto';
@@ -610,7 +611,7 @@ export class EnsembleRuntime<Id extends string> {
         task.stopReason === 'user';
       if (isUserCancel) task.stopReason = 'user';
       const status: RoundStatus = signal.aborted || isUserCancel ? 'cancelled' : 'failed';
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = formatFailureDetail(error);
       // Tell the stopped actor's own ledger who stopped it, once, before the round is closed.
       const stopMarker = status === 'cancelled' ? stopNotice(task.stopReason, task.stopDetail, activityId) : undefined;
       if (stopMarker) await this.history.append({version: 1, ...identity, role: 'context', text: stopMarker.text, message: stopMarker}).catch(() => {});
@@ -636,7 +637,7 @@ export class EnsembleRuntime<Id extends string> {
         const roleName = member?.name ?? ownerId;
         const noticeText = status === 'cancelled'
           ? `[Notice] ${roleName} (${ownerId}) activity ${activityId} was cancelled (${task.stopReason ?? 'user'}).`
-          : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed: ${detail.slice(0, 300)}.`;
+          : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed: ${detail.replace(/\n+/g, ' · ').slice(0, 300)}.`;
         this.store.message(this.sessionId, 'logox', 'notice', noticeText, {
           activityId,
           source: ownerId,
