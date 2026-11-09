@@ -327,7 +327,11 @@ function chatReasoningDetails(details: unknown): string {
     .filter((value): value is string => typeof value === 'string' && !!value).join('');
 }
 
-export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false): ObjectValue[] {
+/**
+ * `replayReasoning = false` drops stored thinking from assistant turns: OpenAI-style streams carry no signature, so gateways that
+ * mislabel answer text as `reasoning_content` would otherwise be shown their own mistake as history. `requiresReasoningContent` still forces the field.
+ */
+export function openaiMessages(input: readonly ModelMessage[], requiresReasoningContent = false, supportsVision = false, replayReasoning = true): ObjectValue[] {
   const messages = portableMessages(input);
 
   return messages.map(message => {
@@ -357,7 +361,7 @@ export function openaiMessages(input: readonly ModelMessage[], requiresReasoning
       return {role: 'user', content: message.text};
     }
     return {role: 'assistant', content: message.text || null,
-      ...(message.reasoning || requiresReasoningContent ? {reasoning_content: message.reasoning ?? ''} : {}),
+      ...(requiresReasoningContent || replayReasoning && message.reasoning ? {reasoning_content: replayReasoning ? message.reasoning ?? '' : ''} : {}),
       ...(message.toolCalls?.length ? {tool_calls: message.toolCalls.map(call => ({
         id: call.id, type: 'function', function: {name: call.name, arguments: call.arguments},
       }))} : {})};
@@ -541,7 +545,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           }
         : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature, ...cacheKey, ...openAiRetentionFields(settings, false),
           ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
-          messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision)], tools,
+          messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision, settings.thinkingProtocol !== 'reasoning-effort')], tools,
           ...thinking};
     signal.throwIfAborted();
     const deadline = idleDeadline(signal, settings.timeoutMs), timed = deadline.signal;

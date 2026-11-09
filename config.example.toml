@@ -49,6 +49,8 @@ readonly_concurrency = 4
 # base_url = "https://example.com/v1"
 # api_key_env = "WORK_MODEL_API_KEY"
 # default_model = "your-model-id"
+# Route some models of this provider through the Anthropic Messages protocol (same base_url, /messages).
+# model_kinds = { "claude-*" = "anthropic" }
 
 # Local service example; start the server and install its model separately.
 # [providers.local]

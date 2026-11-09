@@ -18,7 +18,9 @@ export function resolveProviderCapabilities(settings: ModelSettings): ProviderCa
     : responses && settings.kind === 'openai_compat' ? 'openai-responses' : 'none' : declared;
   // Chat and Responses both accept `prompt_cache_key` on the official endpoint; other gateways opt in with `prompt_cache_key = true`.
   // https://developers.openai.com/api/docs/guides/prompt-caching (checked 2026-11-08): keys influence routing, they never pin a machine.
-  const caching = settings.kind === 'anthropic' ? official || declared === 'anthropic' ? 'anthropic' : 'none'
+  // A model routed to the Messages protocol inside an OpenAI-style provider (`model_kinds`) points at a gateway that forwards `cache_control` (checked live against the antigravity proxy, including ttl 1h).
+  const routed = settings.providerKind !== undefined && settings.providerKind !== settings.kind;
+  const caching = settings.kind === 'anthropic' ? official || routed || declared === 'anthropic' ? 'anthropic' : 'none'
     : (settings.promptCacheKey ?? settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1') ? 'openai-key' : 'none';
   return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching};
 }

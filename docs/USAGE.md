@@ -69,7 +69,18 @@
 | `openai` | OpenAI 兼容 / 特定 OAuth 路由 | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `deepseek` | OpenAI 兼容 | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `anthropic` | Anthropic 原生 | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
-| `antigravity` | 本地 OpenAI 兼容代理 | `http://127.0.0.1:8045/v1` | 通常无需配置 |
+| `antigravity` | 本地代理：默认 OpenAI 兼容，`claude-*` 模型走 Anthropic 原生 `/v1/messages` | `http://127.0.0.1:8045/v1` | 通常无需配置 |
+
+同一个提供商可以按模型切换协议：`model_kinds` 把模型名模式（`*` 匹配任意字符，不区分大小写，先匹配先用）映射到 `openai_compat` 或 `anthropic`，未命中的模型保持提供商自身的 `kind`。`antigravity` 预置了 `{"claude-*" = "anthropic"}`：同一地址和端口，Claude 模型发往 `/v1/messages`（思考、缓存断点、用量都按 Anthropic 协议），Gemini 等仍走 `/chat/completions`。预置只对预置地址生效；自定义时写在 `[providers.<name>]` 或 `[provider]` 下，写 `{}` 可关闭。`[provider] kind` 显式设置时整体固定为该协议。
+
+```toml
+[providers.work]
+kind = "openai_compat"
+base_url = "http://127.0.0.1:8045/v1"
+model_kinds = { "claude-*" = "anthropic" }
+```
+
+使用 `reasoning-effort` 思考协议（如 antigravity 的 Gemini）的 OpenAI 兼容请求不再把历史思考作为 `reasoning_content` 回传，避免代理把正文误标为思考后被当作示范。DeepSeek 等需要回传的提供商不受影响。
 
 Ollama、LM Studio 等本地服务需要显式定义。先启动本地服务，再在项目配置中添加：
 

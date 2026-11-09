@@ -283,7 +283,7 @@ export class ProviderRegistry {
     const settings = await this.settingsFor(name, true);
     signal.throwIfAborted();
     const headers: Record<string, string> = {};
-    if (settings.kind === 'anthropic') {
+    if ((settings.providerKind ?? settings.kind) === 'anthropic') {
       headers['anthropic-version'] = '2023-06-01';
       if (settings.key) headers['x-api-key'] = settings.key;
     } else if (settings.key) headers.authorization = 'Bearer ' + settings.key;

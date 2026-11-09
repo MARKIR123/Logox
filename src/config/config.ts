@@ -62,6 +62,7 @@ export const themeSchema = z.object({
   dream_expanded: hexColorSchema.default(legacyThemeDefaults.dream_expanded),
 }).default(legacyThemeDefaults);
 export type ThemeConfig = z.infer<typeof themeSchema>;
+const modelKindsSchema = z.record(z.string().min(1), z.enum(['openai_compat', 'anthropic']));
 const schema = z.object({
   theme: themeSchema,
   permissions: z.object({mode: z.enum(['default', 'auto', 'creative']).default('auto'), readonly_concurrency: z.number().int().min(1).max(8).default(4)}).default({mode: 'auto', readonly_concurrency: 4}),
@@ -81,6 +82,7 @@ const schema = z.object({
     prompt_cache_key: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
+    model_kinds: modelKindsSchema.optional(),
     api: z.enum(['completions', 'responses']).optional(),
     temperature: z.number().min(0).max(2).default(0.2),
     max_tokens: z.number().int().positive().default(16384),
@@ -100,15 +102,25 @@ const schema = z.object({
     prompt_cache_key: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
+    model_kinds: modelKindsSchema.optional(),
     api: z.enum(['completions', 'responses']).optional(),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
   })).default({}),
 });
 export type Config = z.infer<typeof schema>;
+/** Case-insensitive model id match where `*` stands for any run of characters (`claude-*`). */
+export function matchesModelPattern(pattern: string, model: string): boolean {
+  const source = pattern.split('*').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp('^' + source + '$', 'i').test(model);
+}
 export interface ModelSettings {
   api?: 'completions' | 'responses' | undefined;
-  kind: 'openai_compat' | 'anthropic'; baseUrl: string; model: string; key: string;
+  /** Protocol of this model after `model_kinds` routing. */
+  kind: 'openai_compat' | 'anthropic';
+  /** Protocol of the provider as a whole (model listing and credentials), before per-model routing. */
+  providerKind?: 'openai_compat' | 'anthropic';
+  baseUrl: string; model: string; key: string;
   temperature: number; maxTokens: number; timeoutMs: number; thinkingControl?: boolean;
   thinkingEffort?: import('./model-preferences.js').ThinkingEffort;
   thinkingProtocol?: 'deepseek' | 'anthropic-budget' | 'anthropic-adaptive' | 'reasoning-effort';
@@ -119,11 +131,12 @@ export interface ModelSettings {
   cacheRetention?: z.infer<typeof cacheRetentionSchema> | undefined;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
-export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string}> = {
+export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>}> = {
   'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
   openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
-  antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1'},
+  // The local proxy serves Claude over the native Messages endpoint too; its OpenAI view of Claude intermittently mislabels the answer as reasoning.
+  antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1', model_kinds: {'claude-*': 'anthropic'}},
   anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY'},
 };
 function pathKey(path: string): string {return process.platform === 'win32' ? path.toLowerCase() : path;}
@@ -221,13 +234,16 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   const official = baseUrl.replace(/\/$/, '') === presets[provider.name]?.base_url.replace(/\/$/, '');
   const cleanModel = model.toLowerCase();
   const cleanProvider = provider.name.toLowerCase();
-  const kind = provider.kind ?? selected?.kind ?? 'openai_compat';
+  const providerKind = provider.kind ?? selected?.kind ?? 'openai_compat';
+  // Explicit `[provider] kind` pins the whole provider; otherwise the first matching `model_kinds` pattern routes this model. Preset routes apply only to the preset's own endpoint.
+  const routes = provider.kind ? undefined : provider.model_kinds ?? config.providers[provider.name]?.model_kinds ?? (official ? presets[provider.name]?.model_kinds : undefined);
+  const kind = routes ? Object.entries(routes).find(([pattern]) => matchesModelPattern(pattern, model))?.[1] ?? providerKind : providerKind;
   const toolDiscovery = declared?.tool_discovery ?? provider.tool_discovery ?? config.providers[provider.name]?.tool_discovery ?? 'auto';
   if (toolDiscovery === 'anthropic' && kind !== 'anthropic') throw new Error('Anthropic tool discovery requires the Anthropic message protocol.');
   if (toolDiscovery === 'openai-responses' && kind !== 'openai_compat') throw new Error('OpenAI Responses discovery requires the OpenAI protocol.');
   const protocol = declared?.thinking_protocol ?? (
     official && provider.name === 'deepseek' && ['deepseek-flash', 'deepseek-v4-pro'].includes(model) ? 'deepseek'
-    : official && provider.name === 'anthropic' && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
+    : (official && provider.name === 'anthropic' || kind !== providerKind && kind === 'anthropic') && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
     : (provider.name === 'anthropic' || cleanModel.includes('claude')) && kind === 'anthropic' ? 'anthropic-budget'
     : (cleanProvider === 'deepseek' || cleanModel.includes('deepseek') || cleanModel.includes('reasoner') || cleanModel.includes('r1')) && kind === 'openai_compat' ? 'deepseek'
     : (cleanProvider === 'openai' || cleanProvider === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
@@ -236,7 +252,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
   const promptCacheKey = declared?.prompt_cache_key ?? provider.prompt_cache_key ?? config.providers[provider.name]?.prompt_cache_key;
   const cacheRetention = declared?.cache_retention ?? provider.cache_retention ?? config.providers[provider.name]?.cache_retention;
-  return {kind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, api: provider.api ?? config.providers[provider.name]?.api,
+  return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

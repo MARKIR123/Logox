@@ -54,6 +54,7 @@
 
 ## 4. Hard Boundaries
 - **`cache_retention` resolves model > provider > named provider** like `prompt_cache_key` (`config.ts:modelSettings()` -> `ModelSettings.cacheRetention`); unset stays unset so providers can tell an explicit choice from a default. `[kernel] cache_keepalive` (default true) switches cache keep-alive. Enforced by `tests/provider-cache-retention.test.ts`.
+- **`model_kinds` routes a model to another protocol inside one provider** (`config.ts:modelSettings()`, patterns via `config.ts:matchesModelPattern()`): lookup is `[provider]`, then `[providers.<name>]`, then the preset (only when `base_url` is the preset's own); explicit `[provider] kind` disables routing. `ModelSettings.kind` is the model's kind, `providerKind` the provider's. Enforced by `tests/provider-model-kinds.test.ts`.
 - **Cascade order** is `~/.logox/config.toml`, then ancestor `.logox/config.toml` files (far to near, home excluded, each physical file loaded once), then the saved model preference, then `LOGOX__*`, then CLI overrides. Enforced by `tests/config.test.ts`.
 - **Switching provider drops the old endpoint, model and credentials** and keeps only `temperature`, `max_tokens`, `timeout`, `thinking_effort`. Enforced by `tests/config.test.ts`.
 - **Config never stores keys**: `api_key`, prototype keys and credentialed URLs are rejected. Enforced by `tests/config.test.ts`.
