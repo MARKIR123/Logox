@@ -13,6 +13,12 @@ export const DIRECTOR_STREAM_REVIEW = 'Output recovery reached its limit. Preser
 export const DIRECTOR_USER_STOP = 'The human stopped this Actor task. Do not automatically retry, reassign or take over.';
 export const DIRECTOR_RESUME_ADVICE = 'Prefer resuming the original Actor activity with resumeTask: ';
 export const DIRECTOR_PAUSED_BATCH = 'Dependent work remains paused in batch ';
+export const DIRECTOR_PAUSED_BATCHES = 'Earlier dependent tasks are still paused. Decide based on the new user instructions first; to resume, use Actor({resumeBatch: "<batch id>"}) to restore the existing queue instead of dispatching again. Batches: ';
+/** Appended to a restored batch that waits for work a restart interrupted. */
+export const DIRECTOR_RESTART_BLOCKERS = ' (waits for work a restart interrupted; resume that first with resumeTask, or its dependents are cancelled when the batch resumes: ';
+export function pausedBatchesHint(batches: ReadonlyArray<{id: string; interrupted: readonly string[]}>): string {
+  return DIRECTOR_PAUSED_BATCHES + batches.map(batch => batch.id + (batch.interrupted.length ? DIRECTOR_RESTART_BLOCKERS + batch.interrupted.join(', ') + ')' : '')).join(', ');
+}
 export const DIRECTOR_PAUSED_BATCH_RULE = '. Use Actor resumeBatch only when safe; do not duplicate queued tasks.';
 export function directorResumeAdvice(target: {ownerId: string; activityId: string}): string {
   return DIRECTOR_FAILURE + '\n' + DIRECTOR_RESUME_ADVICE + target.activityId + '\nActor(' +

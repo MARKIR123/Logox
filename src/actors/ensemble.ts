@@ -10,6 +10,7 @@ import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.
 import {storedMessage, type HistoryEntry, type HistoryStore, type TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
 import {DeliveryQueue} from './delivery-queue.js';
+import {checkpointOrigin, type RestartDependencies} from './restart.js';
 import type {DeliveryKind} from '../runtime/delivery.js';
 import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses, killBackgroundJobs} from '../tools/process.js';
@@ -112,6 +113,8 @@ export class EnsembleRuntime<Id extends string> {
   private readonly finished = new Map<string, {ownerId: string; status: RoundStatus; title: string; text: string}>();
   private readonly activeSlots = new Map<Id, Promise<void>>();
   private readonly pausedBatches = new Set<string>();
+  /** Blockers a restart interrupted (activity id to owner); they count as unfinished until the Director resumes them. */
+  private readonly interrupted = new Map<string, string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly pendingWrites = new Set<Promise<void>>();
   readonly deliveries: DeliveryQueue;
@@ -140,19 +143,15 @@ export class EnsembleRuntime<Id extends string> {
     if (host) return this.foldIntoQueued(host, prompt, source);
     const activityId = randomUUID();
     origin = {...origin, rootActivityId: origin.rootActivityId ?? activityId, inputKind: inputKind({ownerId, source, ...origin})};
-    const controller = new AbortController();
-    this.controllers.set(activityId, controller);
+    const paused = !!origin.batchId && this.pausedBatches.has(origin.batchId);
     this.store.activities.create({
       sessionId: this.sessionId, activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
       title: origin.taskTitle ?? (member.name + ' · ' + member.title),
-      status: origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued', stage: this.waitingStage(origin.after) ?? 'Waiting to enter', detail: prompt,
+      status: paused ? 'paused' : 'queued', stage: this.waitingStage(origin.after) ?? 'Waiting to enter', detail: prompt,
       ...this.identityOrigin(origin),
     });
     if (!(ownerId === 'logox' && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
-    let resolve!: () => void;
-    const done = new Promise<void>(finish => {resolve = finish;});
-    const task: QueuedTask<Id> = {ownerId, prompt, activityId, source, origin, controller, resolve, done, ready: Promise.resolve()};
-    task.ready = this.trackWrite((async () => {
+    const task = this.enqueue(ownerId, prompt, activityId, source, origin, async task => {
       const progress = origin.resumeTaskId
         ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId)
         : undefined;
@@ -160,15 +159,56 @@ export class EnsembleRuntime<Id extends string> {
         task.progress = progress;
         this.store.activities.update(this.sessionId, activityId, {progress});
       }
-      await this.checkpoint(task, origin.batchId && this.pausedBatches.has(origin.batchId) ? 'paused' : 'queued');
-    })());
+      await this.checkpoint(task, paused ? 'paused' : 'queued');
+    });
+    if (origin.resumeTaskId && this.interrupted.delete(origin.resumeTaskId)) this.remapAfter(origin.resumeTaskId, activityId);
+    return {activityId, done: task.done, cancel: () => {this.cancel(activityId);}};
+  }
+  /** Registers a task and queues it behind everything of equal or higher priority; `prepare` is its recorded start. */
+  private enqueue(ownerId: Id, prompt: string, activityId: string, source: string, origin: TaskOrigin, prepare: (task: QueuedTask<Id>) => Promise<void>): QueuedTask<Id> {
+    const controller = new AbortController();
+    this.controllers.set(activityId, controller);
+    let resolve!: () => void;
+    const done = new Promise<void>(finish => {resolve = finish;});
+    const task: QueuedTask<Id> = {ownerId, prompt, activityId, source, origin, controller, resolve, done, ready: Promise.resolve()};
+    task.ready = this.trackWrite(prepare(task));
     void task.ready.catch(() => {});
     this.tasks.set(activityId, task);
     const priority = (item: QueuedTask<Id>) => item.origin.inputKind === 'human' ? 0 : item.origin.priority ? 1 : item.origin.coordinationWake ? 3 : 2;
     const nextIndex = this.queue.findIndex(item => priority(item) > priority(task));
     if (nextIndex >= 0) this.queue.splice(nextIndex, 0, task); else this.queue.push(task);
     queueMicrotask(() => this.pump());
-    return {activityId, done, cancel: () => {this.cancel(activityId);}};
+    return task;
+  }
+  /** Recreates Director dispatches that never started before a restart as paused members of their batches; nothing runs until the batch is resumed. */
+  restoreQueued(checkpoints: readonly TaskCheckpoint[], dependencies: RestartDependencies): void {
+    if (this.closed) throw new Error('Ensemble is closed');
+    for (const [id, ownerId] of dependencies.interrupted) this.interrupted.set(id, ownerId);
+    for (const [id, ended] of dependencies.ended) this.finished.set(id, ended);
+    for (const checkpoint of checkpoints) {
+      const {activityId, ownerId, prompt, source, progress, time} = checkpoint, origin = checkpointOrigin(checkpoint);
+      const member = this.options.member ? this.options.member(ownerId as Id) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
+      if (!member || !origin.batchId || this.tasks.has(activityId)) continue;
+      this.pausedBatches.add(origin.batchId);
+      if (!this.store.activities.get(this.sessionId, activityId)) {
+        this.store.activities.create({sessionId: this.sessionId, activityId, ownerId, kind: 'actor', title: origin.taskTitle ?? (member.name + ' · ' + member.title),
+          status: 'paused', stage: 'Waiting for further instructions', detail: prompt, ...this.identityOrigin(origin)});
+        this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: 'director', time});
+      }
+      this.enqueue(ownerId as Id, prompt, activityId, source, origin, async task => {
+        if (progress) {task.progress = progress; this.store.activities.update(this.sessionId, activityId, {progress});}
+        await this.checkpoint(task, 'paused');
+      });
+    }
+  }
+  /** A resumed blocker has a new activity: queued tasks that waited for the interrupted one now wait for it. */
+  private remapAfter(previous: string, next: string): void {
+    for (const task of this.queue) {
+      if (!task.origin.after?.includes(previous)) continue;
+      task.origin = {...task.origin, after: task.origin.after.map(id => id === previous ? next : id)};
+      task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, this.store.activities.get(this.sessionId, task.activityId)?.status === 'paused' ? 'paused' : 'queued')));
+      void task.ready.catch(() => {});
+    }
   }
   /** A Director-dispatched task of `ownerId` that has not started yet (held by `after`, a paused batch or a busy actor). */
   private queuedHost(ownerId: string): QueuedTask<Id> | undefined {
@@ -272,7 +312,8 @@ export class EnsembleRuntime<Id extends string> {
       this.finished.set(activityId, {ownerId: task.ownerId, status: 'cancelled', title: 'Queued task cancelled', text: (reason === 'user' ? undefined : detail) ?? 'The task had not started.'});
       this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: (reason === 'user' ? undefined : detail) ?? 'Queued task cancelled'});
       void this.trackWrite(task.ready.catch(() => {}).then(async () => {
-        await this.checkpoint(task, 'cancelled');
+        // A task that never started keeps its queued checkpoint on shutdown, so the next session can restore it.
+        if (reason !== 'shutdown') await this.checkpoint(task, 'cancelled');
         await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId, source: task.source,
           ...task.origin, status: 'cancelled', stopReason: reason, summary: {title: 'Queued task cancelled', report: 'The task had not started.', source: 'local'}});
         await this.options.settled?.(activityId, 'cancelled');
@@ -292,6 +333,12 @@ export class EnsembleRuntime<Id extends string> {
   resumeBatch(batchId: string): void {
     this.pausedBatches.delete(batchId);
     for (const task of this.queue.filter(task => task.origin.batchId === batchId)) {
+      const lost = task.origin.after?.find(id => this.interrupted.has(id));
+      if (lost) {
+        task.doomed = true; task.dependenciesReleased = true;
+        queueMicrotask(() => {this.cancel(task.activityId, 'director_cancel', `Not started: the task it waited for (${this.interrupted.get(lost)}, ${lost}) was interrupted by a restart.`);});
+        continue;
+      }
       this.store.activities.update(this.sessionId, task.activityId, {status: 'queued', stage: this.waitingStage(task.origin.after) ?? 'Waiting to enter'});
       task.ready = this.trackWrite(task.ready.then(() => this.checkpoint(task, 'queued')));
       void task.ready.catch(() => {});
@@ -311,6 +358,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(resumeTaskId ? {resumeTaskId} : {}),
       ...(taskTitle ? {taskTitle} : {}),
       ...(origin.ownedFiles?.length ? {ownedFiles: [...origin.ownedFiles]} : {}),
+      ...(origin.after?.length ? {after: [...origin.after]} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
       ...(origin.coordinationWake ? {coordinationWake: true} : {}),
@@ -362,12 +410,12 @@ export class EnsembleRuntime<Id extends string> {
     const current = this.store.activities.get(this.sessionId, task.activityId);
     if (current?.status === 'queued' && current.stage !== stage) this.store.activities.update(this.sessionId, task.activityId, {stage});
   }
-  /** Ids named in `after` that are still unfinished (queued, running or waiting). Unknown ids count as finished. */
+  /** Ids named in `after` that are still unfinished (queued, running or waiting). Interrupted-by-restart ids count as unfinished; unknown ids count as finished. */
   private blockers(after: readonly string[] | undefined): string[] {
-    return (after ?? []).filter(id => this.tasks.has(id) && !this.finished.has(id));
+    return (after ?? []).filter(id => this.tasks.has(id) && !this.finished.has(id) || this.interrupted.has(id));
   }
   private waitingStage(after: readonly string[] | undefined): string | undefined {
-    const names = this.blockers(after).map(id => {const owner = this.tasks.get(id)!.ownerId; const member = this.options.member ? this.options.member(owner as Id) : Object.hasOwn(cast, owner) ? cast[owner as ActorId] : undefined; return member?.name ?? owner;});
+    const names = this.blockers(after).map(id => {const owner = this.tasks.get(id)?.ownerId ?? this.interrupted.get(id)!; const member = this.options.member ? this.options.member(owner as Id) : Object.hasOwn(cast, owner) ? cast[owner as ActorId] : undefined; return member?.name ?? owner;});
     return names.length ? 'Waiting on ' + [...new Set(names)].join(', ') : undefined;
   }
   private fallbackOutcome(task: QueuedTask<Id>) {

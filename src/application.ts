@@ -17,6 +17,7 @@ import {ActorServices} from './actors/services.js';
 import {steeredText} from './prompts/runtime/interruption.js';
 import {roundScope, workingNames} from './runtime/round-scope.js';
 import {DeliveryQueue} from './actors/delivery-queue.js';
+import {planRestart, restartDependencies, restartStopped} from './actors/restart.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
 import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
@@ -1124,12 +1125,15 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   // Restore the actual model messages; legacy TS demo ledgers remain readable, and tools are not re-executed.
   const savedRounds = new Map<string, Awaited<ReturnType<Journal['rounds']>>[number]>();
-  for (const task of checkpoints) {
-    if (['queued', 'running', 'waiting_input', 'paused'].includes(task.status)) {
-      await journal.checkpoint(session, {...task, status: 'cancelled', stopReason: 'interrupted'});
-      task.status = 'cancelled';
-    }
+  // Nothing runs after a restart: Director dispatches that never started come back as a paused batch, human requests that never started as held
+  // messages, and everything else that was in flight is marked interrupted.
+  const plan = planRestart(checkpoints, owner => !!actors.find(owner));
+  for (const task of plan.cancel) {
+    await journal.checkpoint(session, {...task, status: 'cancelled', stopReason: 'interrupted'});
+    task.status = 'cancelled'; task.stopReason = 'interrupted';
   }
+  for (const task of plan.restore) task.status = 'paused';
+  const restoring = new Set(plan.restore.map(task => task.activityId));
   const restored = (await Promise.all(owners.map(async owner => {
     const entries = await journal.load(session, owner);
     try {for (const round of await journal.rounds(session, owner, entries)) savedRounds.set(round.activityId, round);}
@@ -1174,7 +1178,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       {...origin, ...(entry.role === 'tool' ? {kind: 'tool' as const, ...(step ? {step} : {})} : {})});
   }
   for (const task of checkpoints) {
-    if (store.activities.get(session, task.activityId)) continue;
+    if (store.activities.get(session, task.activityId) || restoring.has(task.activityId)) continue;
     store.activities.create({sessionId: session, activityId: task.activityId, ownerId: task.ownerId,
       kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.taskTitle ?? task.prompt.slice(0, 80),
       status: task.status, stage: task.status === 'cancelled' ? 'Interrupted' : 'Checkpoint loaded',
@@ -1188,6 +1192,21 @@ export async function createSessionApplication(options: SessionApplicationOption
     store.message(session, task.ownerId, 'user', task.prompt, {activityId: task.activityId, source: task.source,
       inputKind: inputKind(task), time: task.time});
   }
+  const dependencies = restartDependencies(plan.restore, checkpoints);
+  ensemble.restoreQueued(plan.restore, dependencies);
+  actorServices.restoreRestart(plan.restore, dependencies.interrupted, checkpoints.filter(task => restartStopped(task) && task.ownerId !== 'logox' && inputKind(task) === 'director').map(task => task.activityId));
+  // Held human messages are saved whenever the list changes (one write at a time) and come back marked restored, so they never auto-send.
+  let heldRef = store.getSnapshot().pending, heldTail: Promise<void> = Promise.resolve();
+  const stopHeld = store.subscribe(() => {
+    const next = store.getSnapshot().pending;
+    if (next === heldRef) return;
+    heldRef = next;
+    const items = next.filter(item => item.sessionId === session).map(({restored: _restored, ...item}) => item);
+    heldTail = heldTail.then(() => journal.saveHeld(session, items)).catch(() => {notice('Held messages could not be saved.', 'command_error');});
+  });
+  const heldBefore = await journal.loadHeld(session).catch(() => {notice('Held messages could not be restored.', 'command_error'); return [];});
+  for (const task of plan.held) store.addPending({sessionId: session, ownerId: task.ownerId, windowId: task.source === 'direct' ? 'logox' : task.source, text: task.prompt, time: task.time, restored: true});
+  for (const item of heldBefore) store.addPending({...item, restored: true});
   const welcomeTitle = 'Session ' + session;
   const welcomeBody = settings.model
     ? `${settings.provider}/${settings.model} · Type /help for assistance`
@@ -1219,7 +1238,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const settlePending = () => {
     if (settling || closed) return;
     const snapshot = store.getSnapshot();
-    const next = snapshot.pending.find(item => item.sessionId === session && !ownerIsBusy(item.ownerId) &&
+    const next = snapshot.pending.find(item => item.sessionId === session && !item.restored && !ownerIsBusy(item.ownerId) &&
       !snapshot.activities.some(activity => activity.sessionId === session && activity.ownerId === item.ownerId && activity.status === 'queued' && activity.inputKind === 'human'));
     if (!next) return;
     settling = true;
@@ -1235,7 +1254,11 @@ export async function createSessionApplication(options: SessionApplicationOption
     const item = store.getSnapshot().pending.find(entry => entry.id === pendingId);
     if (!item || closed) return;
     const active = ensemble.getActiveTask(item.ownerId);
-    if (!active) {settlePending(); return;}
+    if (!active) {
+      if (!item.restored) settlePending();
+      else if (store.takePending(pendingId)) await dispatchInput(item.ownerId, item.text, item.ownerId === 'logox' ? item.windowId : 'direct');
+      return;
+    }
     store.takePending(pendingId);
     if (!await ensemble.injectTaskMessage(item.ownerId, item.text, 'steered', undefined, 'queue',
       {activityId: active.activityId, inputKind: 'human', kind: 'human_steer'})) {
@@ -1314,8 +1337,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       closed = true; keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), compactTask?.done, reloadTask, permissionTask, meterRestore, subscriptionsDone, permissions.flushStats()]);
-        await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush();
-      } finally {stopGitWatch(); await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
+        await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush(); await heldTail;
+      } finally {stopHeld(); stopGitWatch(); await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();

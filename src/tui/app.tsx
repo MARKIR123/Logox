@@ -548,7 +548,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     const index = point.y - pendingY;
     const item = pendingShown[index];
     if (!item || index < 0) return undefined;
-    const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId);
+    const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId, !!item.restored);
     const control = row.send && point.x >= row.send.x0 && point.x < row.send.x1 ? 'send' as const : row.discard && point.x >= row.discard.x0 && point.x < row.discard.x1 ? 'discard' as const : undefined;
     return {item, control};
   };
@@ -1572,7 +1572,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     </MouseHost>}
     {pendingHeight > 0 && <Box height={pendingHeight} flexShrink={0} flexDirection="column" overflow="hidden">
       {pendingShown.map(item => {
-        const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId);
+        const row = pendingRowLayout(width, item.text, item.ownerId === currentView ? undefined : roles[item.ownerId]?.name ?? item.ownerId, !!item.restored);
         const hover = (control: 'send' | 'discard') => pendingHover?.id === item.id && pendingHover.control === control;
         return <Box key={item.id} height={1} flexShrink={0} overflow="hidden"><Text wrap="truncate">
           <Text color={palette.muted}>{row.left + ' '.repeat(row.gap) + row.badge}</Text>

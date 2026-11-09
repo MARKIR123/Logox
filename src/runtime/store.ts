@@ -70,9 +70,9 @@ export class RuntimeStore {
     this.messages[index] = immutable({...message, ...patch}); this.publish();
   }
   /** Messages waiting for a busy target (shown above the composer, never in the timeline). */
-  addPending(input: Pick<PendingInput, 'sessionId' | 'ownerId' | 'windowId' | 'text'>): string {
-    const id = randomUUID();
-    this.pending = [...this.pending, immutable({id, time: Date.now(), ...input})];
+  addPending(input: Pick<PendingInput, 'sessionId' | 'ownerId' | 'windowId' | 'text'> & Partial<Pick<PendingInput, 'id' | 'time' | 'restored'>>): string {
+    const id = input.id ?? randomUUID();
+    this.pending = [...this.pending, immutable({time: Date.now(), ...input, id})];
     this.publish();
     return id;
   }

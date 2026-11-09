@@ -192,6 +192,8 @@ export interface PendingInput {
   /** The window it was typed in. */
   readonly windowId: string;
   readonly text: string; readonly time: number;
+  /** Loaded from a previous process: it stays held until the human sends or discards it, and never auto-delivers. */
+  readonly restored?: true;
 }
 export interface RuntimeSnapshot {
   readonly revision: number;

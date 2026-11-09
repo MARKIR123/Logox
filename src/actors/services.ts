@@ -42,7 +42,9 @@ import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
 import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
-  DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice} from '../prompts/runtime/director.js';
+  DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint} from '../prompts/runtime/director.js';
+import {checkpointOrigin, restartStopped} from './restart.js';
+import type {TaskCheckpoint} from '../store/journal.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {inputKind} from '../runtime/provenance.js';
 
@@ -107,6 +109,9 @@ export class ActorServices {
   private releaseTask: Promise<void> = Promise.resolve();
   private readonly continuedTasks = new Set<string>();
   private readonly resumableBatches = new Set<string>();
+  /** Activities a restart interrupted that the Director may resume from a later root, and the interrupted blockers each restored batch still waits for. */
+  private readonly restartInterrupted = new Set<string>();
+  private readonly restartBlockers = new Map<string, Set<string>>();
   private readonly dispatchSignatures = new Map<string, number>();
   private readonly groups = new Map<string, {remaining: Set<string>; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
@@ -226,9 +231,9 @@ export class ActorServices {
             if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
             if (previous.ownerId !== task.ownerId) throw new Error('Resume actor mismatch: the original activity belongs to ' + previous.ownerId);
             if (previous.stopReason === 'user') throw new Error('This activity was stopped by the user and cannot be resumed automatically');
-            if (previous.status !== 'failed') throw new Error('Only failed activities can be resumed; current status: ' + previous.status);
+            if (previous.status !== 'failed' && !restartStopped(previous)) throw new Error('Only failed or restart-interrupted activities can be resumed; current status: ' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
-            if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) &&
+            if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) && !this.restartInterrupted.has(task.resumeTask) &&
               !this.deliveries.snapshot().some(item => item.recipientActivityId === context.activityId && item.rootActivityId === root)) {
               throw new Error('The resume target was not handed off to the current task; other root goals cannot be resumed');
             }
@@ -266,6 +271,8 @@ export class ActorServices {
           for (const ref of task.after ?? []) group.after.add(ref);
           grouped.set(task.ownerId, group);
         }
+        // The batch resumes after the new tasks exist, so a resumed blocker can take over its waiting dependents first.
+        let applyBatch: (() => void) | undefined;
         if (resumeBatch) {
           const group = [...this.groups.values()].find(group => group.batchId === resumeBatch);
           const finishedBatch = !group && saved.some(previous => previous.batchId === resumeBatch && resumed.has(previous.activityId)) &&
@@ -273,8 +280,8 @@ export class ActorServices {
           if (!finishedBatch && (!group || (group.origin.rootActivityId !== rootActivityId && !this.resumableBatches.has(resumeBatch)))) {
             throw new Error('Cannot resume a batch from another task or a batch that does not exist');
           }
-          if (group) {this.resumableBatches.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);}
-          if (!tasks.length) return {text: 'Resumed original batch: ' + resumeBatch, isError: false};
+          if (group) applyBatch = () => {this.resumableBatches.delete(resumeBatch); this.restartBlockers.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);};
+          if (!tasks.length) {applyBatch?.(); return {text: 'Resumed original batch: ' + resumeBatch, isError: false};}
         }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
@@ -293,7 +300,11 @@ export class ActorServices {
           dispatched.set(owner, handle.activityId);
           return handle;
         });
-        for (const activityId of resumed) this.continuedTasks.add(activityId);
+        applyBatch?.();
+        for (const activityId of resumed) {
+          this.continuedTasks.add(activityId); this.restartInterrupted.delete(activityId);
+          for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
+        }
         const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
           text: `Tasks dispatched to ${targets} (Batch ${group.batchId}). Companions keep running after your round ends, and their reports wake you automatically. Unless you have independent work of your own, reply now with one short line and end your round. Do not check files or actor status to see whether they are done.`,
@@ -397,7 +408,24 @@ export class ActorServices {
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
     if (activityId) for (const batch of batches) this.resumableBatches.add(batch);
-    return [report, batches.length ? 'Earlier dependent tasks are still paused. Decide based on the new user instructions first; to resume, use dispatch_role({resumeBatch: "<batch id>"}) to restore the existing queue instead of dispatching again. Batches: ' + batches.join(', ') : ''].filter(Boolean).join('\n');
+    return [report, batches.length ? pausedBatchesHint(batches.map(id => ({id, interrupted: [...this.restartBlockers.get(id) ?? []]}))) : ''].filter(Boolean).join('\n');
+  }
+  /**
+   * After a restart: Director dispatches that never started return as paused groups (listed by `resumeDirector` and resumable from the next root),
+   * and `resumable` names the activities the restart interrupted, which the Director may resume with `resumeTask`.
+   */
+  restoreRestart(restore: readonly TaskCheckpoint[], blockers: ReadonlyMap<string, string>, resumable: readonly string[]): void {
+    for (const id of resumable) this.restartInterrupted.add(id);
+    const batches = new Map<string, TaskCheckpoint[]>();
+    for (const task of restore) if (task.batchId) batches.set(task.batchId, [...batches.get(task.batchId) ?? [], task]);
+    for (const [batchId, tasks] of batches) {
+      const origin: TaskOrigin = {...checkpointOrigin(tasks[0]!), inputKind: 'director'};
+      const depth = Math.max(0, ...tasks.map(task => task.dispatchDepth ?? 0)), group = {remaining: new Set(tasks.map(task => task.activityId)), depth, batchId, origin, paused: true};
+      for (const task of tasks) {this.groups.set(task.activityId, group); this.origins.set(task.activityId, checkpointOrigin(task)); this.depths.set(task.activityId, depth);}
+      this.resumableBatches.add(batchId);
+      const waiting = new Set(tasks.flatMap(task => task.after ?? []).filter(id => blockers.has(id)));
+      if (waiting.size) this.restartBlockers.set(batchId, waiting);
+    }
   }
   async recover(validActivities?: ReadonlySet<string>): Promise<void> {
     await this.recovery.recover(validActivities);

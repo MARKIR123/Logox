@@ -187,7 +187,7 @@ test('new human instructions resume paused batches without repeating completed w
     const dependent = f.store.getSnapshot().activities.find(task => task.ownerId === 'kalon')!;
     batchId = dependent.batchId!; assert.equal(dependent.status, 'paused');
     const user = f.ensemble.dispatch('logox', '用户允许继续', 'direct');
-    assert.match(f.services.resumeDirector(user.activityId), /dispatch_role/);
+    assert.match(f.services.resumeDirector(user.activityId), /Actor\(\{resumeBatch/);
     await user.done; await idle(f.ensemble);
     assert.equal(dependentRuns, 1);
     assert.equal(f.store.activities.get('s', dependent.activityId)?.status, 'completed');

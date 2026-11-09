@@ -29,6 +29,8 @@ export function storedMessage(entry: HistoryEntry): ModelMessage {
   if (entry.role === 'context') throw new Error('Runtime history requires its typed context message.');
   return {role: entry.role === 'tool' ? 'user' : entry.role, text: entry.text};
 }
+const heldInputSchema = z.strictObject({id: z.string().min(1), sessionId: z.string(), ownerId: z.string(), windowId: z.string(), text: z.string(), time: z.number()});
+export type HeldInput = z.infer<typeof heldInputSchema>;
 const branchSchema = z.strictObject({version: z.literal(1), id: z.string().regex(/^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$/), sessionId: z.string(),
   hidden: z.record(z.string(), z.array(z.number().int().nonnegative())), excludedTasks: z.array(z.string()).default([])});
 const taskSchema = z.strictObject({activityId: z.string(), ownerId: z.string(), prompt: z.string(), source: z.string(),
@@ -255,6 +257,20 @@ export class Journal implements HistoryStore {
       await mkdir(treeDir, {recursive: true});
       await atomicWrite(join(treeDir, 'deliveries.json'), Buffer.from(JSON.stringify(parsed, null, 2)));
     } catch {}
+  }
+  /** Human messages held for a busy target (`pending.json` in the session tree); empty when the file is missing. */
+  async loadHeld(sessionId: string): Promise<HeldInput[]> {
+    const raw = await this.read(join(this.directory, sessionId, 'pending.json'));
+    const items = raw === undefined ? [] : z.array(heldInputSchema).parse(JSON.parse(raw));
+    if (items.some(item => item.sessionId !== sessionId)) throw new Error('Held input session identity does not match.');
+    return items;
+  }
+  async saveHeld(sessionId: string, items: readonly HeldInput[]): Promise<void> {
+    const file = join(this.directory, sessionId, 'pending.json'), parsed = z.array(heldInputSchema).parse(items);
+    if (parsed.some(item => item.sessionId !== sessionId)) throw new Error('Held input session identity does not match.');
+    if (!parsed.length && await this.read(file) === undefined) return;
+    await mkdir(join(this.directory, sessionId), {recursive: true});
+    await atomicWrite(file, Buffer.from(JSON.stringify(parsed, null, 2)));
   }
   async collaborations(sessionId: string): Promise<CollaborationRecord[]> {
     const raw = await this.read(await this.statePath(sessionId, '$collaboration', 'records'));
