@@ -55,7 +55,7 @@ test('an ask does not stop work; closing parks with no requests; only a reply le
     f.peer('kalon');
     const task = f.ensemble.dispatch('techne', 'Build the rig', 'direct');
     while (f.requests.length < 3) await delay(10);
-    assert.ok(said(f.requests[1]!, /Your question is open/));
+    assert.ok(!said(f.requests[1]!, /Your question is open/), 'the sent ask result carries no runtime note');
     assert.ok(f.requests[1]!.tools.some(tool => tool.name === 'Glob'), 'asking takes no tools away');
     await delay(1200);
     assert.equal(f.requests.length, 3, 'no model requests while parked');
@@ -192,7 +192,7 @@ test('the Director can ask and end its round: it never parks', async () => {
     const task = f.ensemble.dispatch('logox', 'Plan', 'direct');
     await task.done;
     assert.equal(f.status(task.activityId), 'completed');
-    assert.ok(said(f.requests[1]!, /The reply wakes you/));
+    assert.ok(!said(f.requests[1]!, /The reply wakes you/), 'the sent ask result carries no runtime note');
     assert.equal(f.board.owed('s', 'techne').length, 1, 'Techne still owes the answer');
   } finally { await f.cleanup(); }
 });

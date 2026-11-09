@@ -61,7 +61,7 @@ export class PeerWait {
       const changed = [...teammates].some(id => !active.some(activity => activity.activityId === id)) || !active.length;
       if (changed || Date.now() >= deadline || active.every(activity => this.board.isParked(this.env.sessionId, activity.ownerId))) {
         this.watch = undefined;
-        notices.push({id: 'watch-' + Date.now(), text: '[Runtime] Your tools are back. Check whether what you were waiting for is there.'});
+        notices.push({id: 'watch-' + Date.now(), text: 'Your tools are back. Check whether what you were waiting for is there.'});
       }
     }
     return notices;

@@ -46,8 +46,7 @@ test('a Director re-checking while a companion runs loses its tools and closes t
     assert.equal(f.requests.length, REPEAT_LIMIT + 2, 'one first look, the repeats, then the closing request');
     assert.deepEqual(toolNames(f.requests.at(-1)!), ['_FinishRound']);
     assert.ok(toolNames(f.requests[0]!).includes('Glob'));
-    assert.match(toolTexts(f.requests.at(-1)!).at(-1)!, /\[Runtime\] Same result/);
-    assert.ok(!toolTexts(f.requests[1]!).some(text => text.includes('[Runtime]')), 'the first look carries no note');
+    assert.ok(!toolTexts(f.requests.at(-1)!).some(text => text.includes('[Runtime]')), 'a repeated look carries no runtime note');
     assert.ok(f.requests.at(-1)!.messages.some(message => message.role === 'context' && message.text.includes('tools are withdrawn')));
   } finally { await f.cleanup(); }
 });
@@ -80,7 +79,7 @@ test('pacing counts only identical observations, and new input clears the count'
   assert.equal(pacing.observe(call('*.js'), ok('a'), waiting), undefined, 'other arguments are a new look');
   assert.equal(pacing.observe(call('*'), {text: 'a', isError: true}, waiting), undefined, 'errors do not count');
   assert.equal(pacing.observe({id: 'x', name: 'Actor', arguments: '{}'}, ok('a'), waiting), undefined);
-  assert.ok(pacing.observe(call('*'), ok('a'), waiting));
+  pacing.observe(call('*'), ok('a'), waiting);
   pacing.observe(call('*'), ok('a'), waiting);
   assert.equal(pacing.withdrawn, false);
   pacing.observe(call('*'), ok('a'), waiting);

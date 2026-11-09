@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {COMPANION_REPEAT_NOTE, DIRECTOR_REPEAT_NOTE, AUTOMA_STREAK_NOTE} from '../prompts/runtime/recovery.js';
+import {AUTOMA_STREAK_NOTE} from '../prompts/runtime/recovery.js';
 import type {ToolCall} from '../runtime/messages.js';
 import {canonicalToolName} from '../tools/types.js';
 import type {ToolResult} from '../tools/tools.js';
@@ -37,7 +37,7 @@ export class ToolPacing {
       const key = fingerprint(name, call.arguments, result.text);
       if (this.seen.has(key)) {
         this.repeats++;
-        return state.waiting === 'director' ? DIRECTOR_REPEAT_NOTE : COMPANION_REPEAT_NOTE;
+        return;
       }
       this.seen.add(key);
       if (state.waiting === 'director') return;

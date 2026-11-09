@@ -307,7 +307,7 @@ export class ActorServices {
         }
         const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
-          text: `Tasks dispatched to ${targets} (Batch ${group.batchId}). Companions keep running after your round ends, and their reports wake you automatically. Unless you have independent work of your own, reply now with one short line and end your round. Do not check files or actor status to see whether they are done.`,
+          text: `Dispatched to ${targets} (Batch ${group.batchId}).`,
           isError: false,
         };
       }

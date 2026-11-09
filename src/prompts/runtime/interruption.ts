@@ -1,5 +1,5 @@
 /** Marker text appended to a ledger after the user stopped a whole run (Esc / Ctrl+C). */
-export const USER_INTERRUPT_MARKER = '[Interrupted by user]\nThe user stopped your previous run before it finished. Tool calls that were still unfinished have no complete result; the round record lists the unfinished items. Read the user\'s next message first: if it gives new instructions, follow them. Otherwise re-check the current state and ask before resuming the interrupted work.';
+export const USER_INTERRUPT_MARKER = '[Interrupted by user]\nThe user stopped your previous run before it finished. Read the user\'s next message first: if it gives new instructions, follow them. Otherwise re-check the current state and ask before resuming the interrupted work.';
 
 /** Marker text when the user stopped this run while the named companions kept working (the names are data). */
 export function userInterruptMarkerWithWorking(names: readonly string[]): string {
@@ -21,7 +21,7 @@ export const DIRECTOR_INTERRUPTED_TOOL_TEXT = 'The Director stopped this run bef
 
 /** Marker appended to an actor ledger after the Director stopped its run; the Director's reason is data. */
 export function directorStopMarker(reason: string): string {
-  return `[Stopped by Director]\nThe Director stopped your previous run before it finished. Reason given by the Director: ${reason}\nTool calls that were still unfinished have no complete result; the round record lists the unfinished items. Do not resume the stopped work on your own: read the Director's next message first and follow it.`;
+  return `[Stopped by Director]\nThe Director stopped your previous run before it finished. Reason given by the Director: ${reason}\nDo not resume the stopped work on your own: read the Director's next message first and follow it.`;
 }
 
 /** Fallback when the Director gave no reason. */
