@@ -191,7 +191,7 @@ test('durable closure covers the whole activity and stores report separately fro
     assert.deepEqual(record.memory, {title: 'Fixed cancellation cleanup', outcome: 'Round outcome.', verification: 'Targeted tests passed', carryForward: ['Windows integration unverified'], source: 'model'});
     assert.ok(record.delivery);
     assert.equal(record.delivery.text, report, 'A full report is not truncated to the legacy summary limit');
-    assert.equal(record.delivery.title, 'Outcome: completed', 'Report presentation does not expose private memory metadata');
+    assert.equal(record.delivery.title, 'Fixed cancellation cleanup', 'The report is titled by the _FinishRound title, not by its first text line');
     assert.equal((await journal.finishRecord('s', 'techne', 'a', 'completed')).ordinal, 1);
     const entries = await journal.load('s', 'techne');
     assert.equal((await journal.rounds('s', 'techne', entries)).length, 1);
@@ -220,5 +220,21 @@ test('ordinals and physical lines survive rollback, restart and a failed readabl
     assert.equal(third.ordinal, 3);
     assert.deepEqual(third.sourceLines, {start: 7, end: 9});
     assert.equal(await readFile(journal.path('s', 'techne'), 'utf8'), before);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('the round title is the _FinishRound title, never a stage line or a parenthetical aside from the reply', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-round-title-'));
+  try {
+    const journal = new Journal(root);
+    for (const [activityId, reply] of [['a', '(closes the test log) Tests pass.'], ['b', 'Tests pass and the page is ready.']] as const) {
+      const identity = {version: 1 as const, sessionId: 's', ownerId: 'techne', activityId};
+      await journal.append({...identity, role: 'user', inputKind: 'director', text: 'Fix it'});
+      await journal.append({...identity, role: 'assistant', text: reply, message: {role: 'assistant', text: reply, toolCalls: [finalCall()]}});
+      await journal.append({...identity, role: 'tool', text: '', message: {role: 'tool', callId: 'finish', name: '_FinishRound', text: '', isError: false}});
+      const record = await journal.finishRecord('s', 'techne', activityId, 'completed');
+      assert.equal(record.summary.title, 'Fixed cancellation cleanup');
+      assert.equal(record.delivery?.title, 'Fixed cancellation cleanup');
+    }
   } finally {await rm(root, {recursive: true, force: true});}
 });

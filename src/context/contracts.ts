@@ -56,6 +56,9 @@ export function deliberateStopLabel(messages: readonly ModelMessage[]): string |
 /** A persona micro-action such as "（核对色板与标尺）" or "(checks the palette)": a whole line wrapped in full-width or ASCII brackets. */
 const ACTION_LINE = /^\s*(?:⏵.*|（[^（）\n]{1,160}）|\([^()\n]{1,160}\)|【[^【】\n]{1,160}】)\s*$/;
 
+/** True for a stage line or a whole-line parenthetical aside, which never names a round. */
+export function isActionLine(line: string): boolean {return ACTION_LINE.test(line);}
+
 /** The first line that can name a task or round: blank lines and leading bracketed micro-action lines are skipped. */
 export function titleLine(text: string): string {
   return text.split(/\r?\n/).map(line => line.trim()).find(line => line && !ACTION_LINE.test(line)) ?? '';
@@ -89,7 +92,7 @@ export function clampText(text: string, max: number): string {
 }
 
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
-  messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly);
+  messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly && !message.textToolCall);
   const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
   const match = /(?:【轮次摘要】|\[Round Summary\])\s*(?:标题|Title)[：:]\s*([^\n]+)\s*(?:报告|Report)[：:]\s*([\s\S]+)$/i.exec(final);
   const parsed = match

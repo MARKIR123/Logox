@@ -63,7 +63,7 @@ export class RuntimeStore {
       this.publishTimer.unref?.();
     }
   }
-  updateMessage(id: string, patch: Partial<Pick<Message, 'text' | 'step'>>): void {
+  updateMessage(id: string, patch: Partial<Pick<Message, 'text' | 'step' | 'role'>>): void {
     const index = this.messages.findIndex(message => message.id === id);
     const message = this.messages[index];
     if (!message) throw new Error('Message not found: ' + id);

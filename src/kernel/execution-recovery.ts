@@ -3,13 +3,14 @@ import type {ToolCall} from '../runtime/messages.js';
 import {canonicalToolName} from '../tools/types.js';
 import type {ToolResult} from '../tools/tools.js';
 
-export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools';
+export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools' | 'text_tool_call';
 export type ExecutionRecoveryDecision = 'retry' | 'handoff' | 'stop';
 
 /** Output-ending problems are not provider failures; after execution ends, the ensemble takes over under the original root goal. */
 export class ExecutionRecoveryError extends Error {
   constructor(readonly kind: ExecutionRecoveryKind, readonly disposition: 'handoff' | 'stop', message?: string) {
     super(message ?? (kind === 'no_delivery' ? 'Model returned only thinking or an empty reply and delivered nothing for the current step'
+      : kind === 'text_tool_call' ? 'The model repeatedly wrote tool calls as plain text; nothing was executed'
       : kind === 'truncated_tools' ? 'Tool arguments were truncated repeatedly; incomplete calls were not executed' : 'Model output was truncated repeatedly; partial results were kept'));
     this.name = 'ExecutionRecoveryError';
   }

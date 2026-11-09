@@ -107,7 +107,7 @@ test('stage rule: short, stated once, rare by design, no priming examples', () =
   assert.match(rule, /When you start a task, and again only when the deliverable you are working on changes/);
   assert.match(rule, /Most turns have none: a task has two to four in all/);
   assert.match(rule, /do not deliberate over it/);
-  assert.match(rule, /your history shows your stages as headings, and you declare a new one only by writing this status line/);
+  assert.match(rule, /your history shows your earlier stages the same way, and you declare a new one only by writing this status line/);
   assert.doesNotMatch(rule, /UpdateTaskProgress|will not see it/);
   assert.ok(rule.length < 700, 'the rule stays short: ' + rule.length);
   assert.equal(rule.split('⏵').length - 1, 2, 'one format mention plus one example');

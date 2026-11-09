@@ -13,6 +13,8 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     contextExcluded: z.literal(true).optional(),
     toolsExcluded: z.literal(true).optional(),
     memoryOnly: z.literal(true).optional(),
+    /** The text is a tool call the provider returned as plain text: it executed nothing and is never a delivery (kept in history so the model can reissue it). */
+    textToolCall: z.literal(true).optional(),
     /** The `⏵` stage this turn declared (observability only; the text keeps no stage line). */
     stage: z.string().optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),

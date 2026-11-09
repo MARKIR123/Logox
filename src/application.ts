@@ -16,6 +16,7 @@ import {DynamicEnsemble} from './actors/ensemble.js';
 import {ActorCatalog} from './actors/catalog.js';
 import {ActorServices} from './actors/services.js';
 import {steeredText} from './prompts/runtime/interruption.js';
+import {TEXT_TOOL_CALL_NOTE} from './prompts/runtime/recovery.js';
 import {roundScope, workingNames} from './runtime/round-scope.js';
 import {DeliveryQueue} from './actors/delivery-queue.js';
 import {planRestart, restartDependencies, restartStopped} from './actors/restart.js';
@@ -1175,6 +1176,11 @@ export async function createSessionApplication(options: SessionApplicationOption
           switched: savedModel.switched, phase: savedModel.phase}} : {})});
     }
     if (entry.message?.role === 'assistant' && entry.message.memoryOnly) continue;
+    if (entry.message?.role === 'assistant' && entry.message.textToolCall) {
+      if (entry.message.reasoning) store.message(session, entry.ownerId, 'assistant', entry.message.reasoning, {...origin, kind: 'thinking'});
+      store.message(session, entry.ownerId, 'notice', TEXT_TOOL_CALL_NOTE, origin);
+      continue;
+    }
     // Nothing runs after a restart: a step the ledger left open is closed here, whatever tool it belonged to. A tool record that
     // carries its result finished the way the result says; one without a result was interrupted.
     const step = entry.step ? settleStep(entry.step, entry.message?.role === 'tool' ? entry.message.isError ? 'failed' : 'completed' : 'cancelled', entry.step.runningSince ?? 0) : undefined;

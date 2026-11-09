@@ -8,7 +8,7 @@ import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnaps
 import {inputKindSchema} from '../runtime/provenance.js';
 import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
-import {contextStateSchema, deliberateStopLabel, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
+import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
 import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
@@ -333,8 +333,10 @@ export class Journal implements HistoryStore {
       carryForward: [legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'],
       source: modernClosure ? 'runtime' : 'legacy',
     };
-    const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && stripNarration(message.text).trim())?.text ?? '');
-    const summary: RoundSummary = accepted ? {title: legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
+    const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text ?? '');
+    // The `_FinishRound` title names the round; only a stage line or a parenthetical aside falls back to the text-derived one.
+    const modelTitle = accepted?.title.trim();
+    const summary: RoundSummary = accepted ? {title: modelTitle && !isActionLine(modelTitle) ? modelTitle : legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
     const raw = await this.loadRaw(sessionId, ownerId);
     const activities = [...new Set(raw.filter(entry => entry.role === 'user' && entry.activityId).map(entry => entry.activityId!))];
     const ordinal = activities.indexOf(activityId) + 1;

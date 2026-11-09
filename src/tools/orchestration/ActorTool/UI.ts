@@ -91,15 +91,6 @@ export function renderActivity(context: ActorActivityContext): void {
           },
         });
       }
-      const lastAssistantMessage = messages.filter(m => m.role === 'assistant' && !m.kind && stripNarration(m.text).trim()).at(-1);
-      const isReportDeliveredInTranscript = lastAssistantMessage && activity.summary?.report &&
-        (stripNarration(lastAssistantMessage.text).trim() === activity.summary.report.trim() ||
-         lastAssistantMessage.text.includes(activity.summary.report.trim().slice(0, 80)));
-
-      if (activity.summary && !isReportDeliveredInTranscript) {
-        builder.pushMarkdown(activity.activityId + '-summary', activity.summary.report, color, actorTreeFrame, roleColor);
-      }
-
       const renderableItems = groupToolMessages(messages.filter(message => {
         if (message.inputKind === 'collaboration_interrupt' || message.inputKind === 'collaboration') return true;
         if (!context.detailed || message.role === 'user' || (message.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) return false;
@@ -107,17 +98,13 @@ export function renderActivity(context: ActorActivityContext): void {
         return !(message.role === 'assistant' && !message.kind && (!message.text || !message.text.trim()));
       }), {stages: true});
 
-      let currentPhaseFrame: ToolFrame = actorTreeFrame;
-      let inPhase = false;
-
       for (let i = 0; i < renderableItems.length; i++) {
         const item = renderableItems[i]!;
-        const nextItem = renderableItems[i + 1];
 
         if (item.type === 'group') {
           pushToolGroupCard(builder, item, {
             ownerId: activity.ownerId, open: context.isOpen ? context.isOpen(item.id) : false,
-            railColor: color, parentFrame: inPhase ? currentPhaseFrame : actorTreeFrame,
+            railColor: color, parentFrame: actorTreeFrame,
             verbs: roles[activity.ownerId]?.activityVerbs,
             renderChild: (m, inner) => context.renderMessage(m, inner),
           });
@@ -126,18 +113,16 @@ export function renderActivity(context: ActorActivityContext): void {
 
         if (item.type === 'stage') {
           // The model's `⏵` line is its own prose row between the rows around it; the outer rail keeps the surface colour.
-          pushStageLine(builder, item, color, inPhase ? currentPhaseFrame : actorTreeFrame);
+          pushStageLine(builder, item, color, actorTreeFrame);
           continue;
         }
         if (item.type === 'edits') {
-          context.renderMessage(item.messages[0]!, inPhase ? currentPhaseFrame : actorTreeFrame, item.messages);
+          context.renderMessage(item.messages[0]!, actorTreeFrame, item.messages);
           continue;
         }
         const message = item.message;
         if (message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()) continue; // stage marker only; it labels the next group
         if (message.inputKind === 'collaboration_interrupt' || message.inputKind === 'collaboration') {
-          inPhase = false;
-          currentPhaseFrame = frame;
           const isInterrupt = message.inputKind === 'collaboration_interrupt';
           const {rawSender, senderLabel, summary, cleanBody, lines} = parseIncomingCollaboration(message, roles);
           const senderColor = isInterrupt ? palette.directorIntervention : ownerColor(rawSender, roles);
@@ -164,36 +149,20 @@ export function renderActivity(context: ActorActivityContext): void {
               if (cleanBody) builder.pushMarkdown(message.id + '-body', cleanBody, senderColor, inner, senderColor);
             },
           });
-        } else if (message.role === 'assistant' && !message.kind && message.text.trim()) {
-          const lines = message.text.trim().split(/\r?\n/);
-          const firstLine = lines[0]!.trim();
-          const isNextTool = nextItem && (nextItem.type === 'group' || nextItem.type === 'edits' || (nextItem.type === 'stage' || nextItem.type === 'message' && (nextItem.message.kind === 'tool' || (nextItem.message.role as string) === 'tool')));
-          const symbol = roles[activity.ownerId]?.symbol || '◈';
-          const isExplicitPhase = firstLine.startsWith(symbol) || /^#{1,4}\s+/.test(firstLine);
-          if (isNextTool && isExplicitPhase && firstLine.length <= 80) {
-            const cleanText = firstLine.startsWith(symbol) ? firstLine.slice(symbol.length).trim() : firstLine.replace(/^#{1,4}\s+/, '').trim();
-            builder.pushFramedLine(message.id + '-intent', color, [
-              {text: symbol + ' ', color: roleColor, bold: true, selectionKey: message.id + ':intent_symbol'},
-              {text: cleanText, color: palette.fg, bold: false, selectionKey: message.id + ':intent_text'}
-            ], frame);
-            currentPhaseFrame = insetRailFrame(frame, roleColor);
-            inPhase = true;
-            if (lines.length > 1) {
-              const remaining = lines.slice(1).join('\n').trim();
-              if (remaining) {
-                builder.pushMarkdown(message.id + '-body', remaining, color, currentPhaseFrame, roleColor);
-              }
-            }
-          } else {
-            context.renderMessage(message, inPhase ? currentPhaseFrame : actorTreeFrame);
-          }
-        } else if (message.kind === 'tool' || (message.role as string) === 'tool') {
-          context.renderMessage(message, inPhase ? currentPhaseFrame : actorTreeFrame);
         } else {
-          context.renderMessage(message, inPhase ? currentPhaseFrame : actorTreeFrame);
+          context.renderMessage(message, actorTreeFrame);
         }
       }
       if (context.detailed) for (const request of context.pending) context.renderInteraction(request, actorTreeFrame);
+      // The delivered report closes the card. A completed round's report is its last substantive assistant message, possibly wrapped
+      // (`Goal/Status/Reply:`) or clipped, so it is not repeated when that message is in the transcript and holds the whole reply body.
+      const wrapped = activity.summary ? /(?:^|\n)Reply: ([\s\S]*?)(?:\n[A-Za-z]+: |$)/.exec(activity.summary.report) : null;
+      const reply = (wrapped?.[1] ?? activity.summary?.report ?? '').trim();
+      const deliveredInTranscript = context.detailed && activity.status === 'completed' && !!reply &&
+        messages.some(m => m.role === 'assistant' && !m.kind && stripNarration(m.text).includes(reply));
+      if (activity.summary && !deliveredInTranscript) {
+        builder.pushMarkdown(activity.activityId + '-summary', activity.summary.report, color, actorTreeFrame, roleColor);
+      }
       if (['failed', 'cancelled'].includes(activity.status)) {
         // The header already shows the first line of a failure; the body adds the diagnostic lines, and the first line only when it is too long for the header.
         const [first = '', ...rest] = activity.detail.split('\n');

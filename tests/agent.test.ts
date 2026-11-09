@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createApplication as productionApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -13,7 +14,7 @@ import {createProvider, ProviderError} from '../src/providers/http.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {runProcess} from '../src/tools/process.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
-import {EMPTY_REPLY_REMINDER} from '../src/prompts/runtime/recovery.js';
+import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE} from '../src/prompts/runtime/recovery.js';
 
 function assistant(text = '完成', stop: ModelTurn['stop'] = 'complete'): ModelTurn {
   return {message: {role: 'assistant', text}, stop};
@@ -467,7 +468,7 @@ test('repeated empty replies still end in a failed task after the reminder and t
   } finally {await f.cleanup();}
 });
 
-test('the model sees its own stage as a plain "### " heading first line, once per change and never with the glyph', async () => {
+test('the model sees its own stage as a "⏵ " first line, once per change and never as a ### heading', async () => {
   const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
@@ -481,8 +482,8 @@ test('the model sees its own stage as a plain "### " heading first line, once pe
     await f.app.ensemble.dispatch('techne', 'build').done;
     const last = seen.at(-1)!;
     const texts = last.messages.filter(message => message.role === 'assistant').map(message => message.text);
-    assert.deepEqual(texts, ['### Understanding the brief\nLooking around.', 'Still looking.', '### Building the page']);
-    assert.ok(!JSON.stringify(last.messages).includes('⏵'), 'the glyph never reaches the model');
+    assert.deepEqual(texts, ['⏵ Understanding the brief\nLooking around.', 'Still looking.', '⏵ Building the page']);
+    assert.ok(!JSON.stringify(last.messages).includes('###'), 'no heading stage reaches the model');
     // The same history renders identically on the next request: earlier messages never change.
     const earlier = seen.at(-2)!.messages.filter(message => message.role === 'assistant').map(message => message.text);
     assert.deepEqual(earlier, texts.slice(0, earlier.length));
@@ -504,5 +505,56 @@ test('a failed or cancelled partial turn keeps no stage line in the ledger text'
     assert.ok(entries.length > 0);
     for (const entry of entries) assert.ok(!entry.text.includes('⏵'), entry.text);
     assert.ok(entries.some(entry => entry.message?.role === 'assistant' && entry.message.stage === 'Building the animation'));
+  } finally {await f.cleanup();}
+});
+
+/** Like `fixture`, but the provider is not adapted to the terminal protocol: text-only turns stay text. */
+async function rawFixture(provider: Provider) {
+  const f = await fixture(provider);
+  await f.app.close();
+  const app = await productionApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, sessionId: 'test', config: f.config, provider});
+  return {...f, app, async cleanup() {await app.close(); await rm(f.cwd, {recursive: true, force: true});}};
+}
+const activityTitle = (f: Awaited<ReturnType<typeof rawFixture>>, id: string) => f.app.store.activities.get('test', id)?.summary?.title;
+
+test('a tool call that came out as plain text is not a delivery: it is recovered, kept in the ledger and out of the report', async () => {
+  const dump = '### Overwriting the page\ncall:default_api:Write{content:<!DOCTYPE html>' + 'x'.repeat(3000) + ',file_path:page.html,overwrite:true}';
+  const seen: ModelRequest[] = [];
+  const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
+  const closing = call('_FinishRound', {title: 'Built the page', outcome: 'Page written.', verification: null, carry_forward: []}, 'fin');
+  const f = await rawFixture(scripted([
+    watch(assistant(dump)),
+    watch(call('glob', {pattern: '*.nothing'}, 'g1')),
+    watch(assistant('Page is ready.')),
+    watch(closing),
+  ]));
+  try {
+    const handle = f.app.ensemble.dispatch('techne', 'build');
+    await handle.done;
+    assert.equal(seen.length, 4);
+    const noteOf = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'recovery').map(message => message.text);
+    assert.deepEqual(noteOf(seen[0]!), []);
+    assert.equal(noteOf(seen[1]!).length, 1);
+    assert.match(noteOf(seen[1]!)[0]!, /plain text.*real tool call/);
+    assert.deepEqual(noteOf(seen[2]!), [], 'the note is request-only and dropped once answered');
+    assert.equal(activityTitle(f, handle.activityId), 'Built the page');
+    await f.app.journal.flush();
+    const entries = await f.app.journal.load('test', 'techne');
+    assert.ok(entries.some(entry => entry.message?.role === 'assistant' && entry.message.textToolCall && entry.text.includes('call:default_api:Write')), 'raw text kept for audit');
+    const activity = f.app.store.activities.get('test', handle.activityId)!;
+    assert.equal(activity.status, 'completed');
+    assert.equal(activity.summary?.report, 'Page is ready.');
+    const shown = f.app.store.getSnapshot().messages.filter(message => message.activityId === handle.activityId);
+    assert.ok(!shown.some(message => message.text.includes('call:default_api')), 'the dump never reaches the card');
+    assert.ok(shown.some(message => message.role === 'notice' && message.text === TEXT_TOOL_CALL_NOTE));
+  } finally {await f.cleanup();}
+});
+
+test('prose that mentions a call pattern for an unknown tool is an ordinary reply', async () => {
+  const f = await rawFixture(scripted([assistant('The log shows call:default_api:NotATool{x:1} being parsed.'), call('_FinishRound', {title: 'Explained the log', outcome: 'Explained.', verification: null, carry_forward: []}, 'fin')]));
+  try {
+    const handle = f.app.ensemble.dispatch('techne', 'explain');
+    await handle.done;
+    assert.match(f.app.store.activities.get('test', handle.activityId)!.summary!.report, /NotATool/);
   } finally {await f.cleanup();}
 });

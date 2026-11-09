@@ -480,8 +480,8 @@ export class EnsembleRuntime<Id extends string> {
         this.store.message(this.sessionId, ownerId, 'notice', 'Round memory could not be saved; original messages are preserved.', {activityId});
         const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
         const messages: ModelMessage[] = entries.map(storedMessage);
-        const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly), status);
-        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && stripNarration(message.text).trim())?.text;
+        const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly && !message.textToolCall), status);
+        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text;
         if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
         return summary;
       }

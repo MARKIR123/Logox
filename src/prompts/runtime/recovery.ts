@@ -1,4 +1,7 @@
-export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools';
+export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools' | 'text_tool_call';
+
+/** Card step note and timeline text for a turn whose tool call came out as plain text. */
+export const TEXT_TOOL_CALL_NOTE = 'Tool call came out as text and was not executed.';
 
 export interface FailedToolReport {
   readonly name: string;
@@ -41,6 +44,8 @@ export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerI
     ? adjustment && ownerId === 'logox'
       ? 'Pivot the action plan: narrow the current phase or delegate explicit smaller steps to a suitable actor. Deliver concrete artifacts or complete tool calls first.'
       : EMPTY_REPLY_REMINDER + ' Narrow to the minimum deliverable step, avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
+    : kind === 'text_tool_call'
+      ? 'Your previous reply wrote a tool call as plain text, so nothing was executed and it was not delivered. Issue it again as a real tool call.'
     : kind === 'truncated_tools'
       ? 'Previous tool arguments were truncated; the entire batch was not executed. Issue smaller, complete tool calls without replaying completed tools.'
       : 'Previous output reached token limits. Continue the current step from the break point using existing text; do not replan or regenerate delivered content.';

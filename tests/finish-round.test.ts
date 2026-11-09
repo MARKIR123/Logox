@@ -135,13 +135,13 @@ test('internal repair text and memory metadata stay invisible across actor views
     assert.ok(original.includes('PRIVATE_REPAIR_TEXT') && original.includes('PRIVATE_MEMORY_TITLE'));
     for (const view of ['logox', 'techne']) {
       const rows = buildStageRows(app.store.getSnapshot(), 's', view, 90, {[first.activityId]: true}, null);
-      assert.ok(rows.every(row => !row.text.includes('PRIVATE_') && !row.text.includes('_FinishRound')));
+      assert.ok(rows.every(row => !row.text.includes('PRIVATE_REPAIR_TEXT') && !row.text.includes('_FinishRound')), 'the title may name the round; repair text and the finalizer stay hidden');
     }
     await app.close(); app = await createApplication(options);
     assert.equal(calls, 2, 'Restart does not request a model');
     for (const view of ['logox', 'techne']) {
       const rows = buildStageRows(app.store.getSnapshot(), 's', view, 90, {[first.activityId]: true}, null);
-      assert.ok(rows.every(row => !row.text.includes('PRIVATE_') && !row.text.includes('_FinishRound')));
+      assert.ok(rows.every(row => !row.text.includes('PRIVATE_REPAIR_TEXT') && !row.text.includes('_FinishRound')), 'the title may name the round; repair text and the finalizer stay hidden');
     }
     await app.ensemble.dispatch('techne', 'Continue', 'direct', {inputKind: 'human'}).done;
     assert.equal(calls, 3);

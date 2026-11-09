@@ -31,13 +31,13 @@ export function stripNarration(text: string): string {
   return extracted ? extracted.cleanText : text;
 }
 
-/** How a declared stage appears in model-facing history: a markdown heading as the first line, deliberately without the `⏵` glyph. */
-export const STAGE_HISTORY_PREFIX = '### ';
+/** How a declared stage appears in model-facing history: the same `⏵ <phase>` first line the prompts ask models to write. */
+export const STAGE_HISTORY_PREFIX = '⏵ ';
 
 /**
- * Model-facing history: an assistant message that changed the stage opens with `### <text>`. Pure and order-only
+ * Model-facing history: an assistant message that changed the stage opens with `⏵ <text>`. Pure and order-only
  * (a message renders from itself and the messages before it), so the same prefix of history always yields the same bytes.
- * A legacy ledger text that still opens with `⏵` is read as the stage it declared, so the glyph never reaches the model.
+ * A legacy ledger text that still opens with `⏵` is read as the stage it declared and rendered the same way.
  */
 export function withStageLines(messages: readonly ModelMessage[]): ModelMessage[] {
   let current: string | undefined;

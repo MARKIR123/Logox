@@ -85,7 +85,7 @@ test('activity labels execute through Agent, remain self-reports and restore wit
     assert.deepEqual(activity.progress, {label: 'Preparing the report', stageHistory: ['Reading facts', 'Preparing the report']});
     assert.equal(f.requests.length, 5);
     const seen = f.requests[4]!.messages.filter(message => message.role === 'assistant').map(message => message.text);
-    assert.deepEqual(seen, ['### Reading facts', '### Preparing the report'], 'the model sees each stage once, without the glyph');
+    assert.deepEqual(seen, ['⏵ Reading facts', '⏵ Preparing the report'], 'the model sees each stage once, as the ⏵ line it wrote');
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.ok(history.every(entry => entry.step?.stage === undefined));
     await f.app.close();
