@@ -47,7 +47,7 @@
 - **Project rule files are bound to the project root, written under `withFileLock`, and a corrupt or mismatched file is never overwritten**. Enforced by `tests/permissions.test.ts`.
 - **Denials are remembered per operation fingerprint and cleared when the user's authorization changes**; a late `allow` after a new `deny` rule does not execute. Enforced by `tests/permission-modes.test.ts`.
 - **An approval model verdict must be complete and valid; otherwise the action pauses** (one automatic retry, then ask the user to retry or switch mode). Enforced by `tests/permission-modes.test.ts`.
-- **Scratchpad operations are auto-approved without prompts** (`engine.ts` allows when every path is inside the directory set by `setScratchpadDir()`). Workspace-relative `../` twins of outside paths are ignored because their absolute twins are checked. Enforced by `tests/automa-tool.test.ts` (worker scratchpad writes).
+- **Scratchpad operations are auto-approved without prompts** (`engine.ts` allows when every path is inside the directory set by `setScratchpadDir()`). `isScratchpadPath()` canonicalizes both sides (realpath of the deepest existing ancestor, case-insensitive on Windows), so `tmpdir()`'s 8.3 `ADMINI~1` spelling and the `Administrator` spelling of tool paths match. Workspace-relative `../` twins of outside paths are ignored because their absolute twins are checked. Enforced by `tests/automa-tool.test.ts` (worker scratchpad writes), `tests/tool-scratchpad.test.ts` (short/long path equivalence).
 - **Permission modes are not an OS sandbox**: they gate tool calls only. *Unenforced* (documented limitation).
 
 ## 5. Dependencies

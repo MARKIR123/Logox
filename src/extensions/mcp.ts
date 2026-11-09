@@ -7,6 +7,8 @@ import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import type {ToolResult} from '../tools/tools.js';
 import type {McpServerConfig} from './config.js';
 import {McpClient} from './mcp-client.js';
+import {scratchOutputArguments, withOutputDir} from './playwright.js';
+import {ensureActorScratchpadDir, getActorScratchpadDir} from '../kernel/scratchpad.js';
 
 const argsSchema = z.discriminatedUnion('action', [
   z.strictObject({server: z.string().min(1), action: z.literal('list')}),
@@ -77,7 +79,7 @@ export class Mcp {
   status() {
     return Object.keys(this.servers).filter(name => this.clients.has(name)).map(name => ({name, state: this.clients.get(name)!.status()}));
   }
-  private clientFor(server: string, ownerId?: string): McpClient | undefined {
+  private clientFor(server: string, ownerId?: string, sessionId?: string): McpClient | undefined {
     const base = this.clients.get(server);
     if (!base) return undefined;
     if (!ownerId || ownerId === 'logox') return base;
@@ -86,7 +88,9 @@ export class Mcp {
     if (!scoped) {
       const config = this.servers[server];
       if (!config) return base;
-      scoped = new McpClient(config, this.cwd);
+      // A scoped browser writes automatically named output (screenshots without a filename) to its own actor's scratchpad.
+      scoped = new McpClient(sessionId && server === 'playwright'
+        ? {...config, args: withOutputDir(config.args, getActorScratchpadDir(this.cwd, sessionId, ownerId))} : config, this.cwd);
       this.clients.set(key, scoped);
     }
     return scoped;
@@ -109,7 +113,7 @@ export class Mcp {
       context.signal.throwIfAborted();
       if (call.name !== 'mcp') throw new Error('Unknown extension tool');
       const args = argsSchema.parse(JSON.parse(call.arguments));
-      const client = this.clientFor(args.server, context.ownerId);
+      const client = this.clientFor(args.server, context.ownerId, context.sessionId);
       if (!client) throw new Error('MCP server does not exist or is disabled');
       if (args.action === 'list') {
         context.startTool?.();
@@ -138,6 +142,11 @@ export class Mcp {
         tool.validator = compiler.compile(tool.inputSchema);
       }
       const validator = tool.validator;
+      if (args.server === 'playwright') {
+        const owner = context.ownerId ?? 'logox';
+        const redirected = scratchOutputArguments(args.arguments, getActorScratchpadDir(this.cwd, context.sessionId, owner));
+        if (redirected !== args.arguments) {args.arguments = redirected as typeof args.arguments; await ensureActorScratchpadDir(this.cwd, context.sessionId, owner);}
+      }
       if (!validator(args.arguments)) throw new Error('MCP arguments do not satisfy the full schema: ' + JSON.stringify(validator.errors));
       const allowed = await this.approve({source: 'mcp', action: 'call', server: args.server, tool: args.tool, callId: call.id,
         arguments: args.arguments, inputSchema: tool.inputSchema}, context);

@@ -1,4 +1,5 @@
-import {join} from 'node:path';
+import {join, posix, win32} from 'node:path';
+import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, rm, writeFile} from 'node:fs/promises';
@@ -38,12 +39,34 @@ export async function ensureActorScratchpadDir(cwd: string, sessionId: string, a
   return dir;
 }
 
+export type PathResolver = (path: string) => string;
+
 /**
- * Checks if a path is inside the scratchpad directory.
+ * Canonical form of a path for comparison: the deepest existing ancestor is resolved through the filesystem (8.3 short names such as
+ * `ADMINI~1`, symlinks, drive-letter case) and the not-yet-existing remainder is appended. Forward slashes; lowercased on Windows.
  */
-export function isScratchpadPath(path: string, scratchpadDir: string): boolean {
-  const normalized = path.replaceAll('\\', '/').toLowerCase();
-  const target = scratchpadDir.replaceAll('\\', '/').toLowerCase();
+export function canonicalPath(path: string, resolve: PathResolver = realpathSync.native, windows = process.platform === 'win32'): string {
+  const finish = (value: string) => {const slashed = value.replaceAll('\\', '/'); return windows ? slashed.toLowerCase() : slashed;};
+  let head = path, tail = '';
+  for (;;) {
+    try {return finish(tail ? (windows ? win32 : posix).join(resolve(head), tail) : resolve(head));}
+    catch {
+      const parent = (windows ? win32 : posix).dirname(head);
+      if (parent === head) return finish(path);
+      const name = head.slice(Math.max(head.lastIndexOf('/'), head.lastIndexOf('\\')) + 1);
+      tail = tail ? name + '/' + tail : name;
+      head = parent;
+    }
+  }
+}
+
+/**
+ * Checks if a path is inside the scratchpad directory. Both sides are canonicalized first, so a Windows short-name alias
+ * (`C:\Users\ADMINI~1\...` for `C:\Users\Administrator\...`) or a symlink cannot defeat or fake the match.
+ */
+export function isScratchpadPath(path: string, scratchpadDir: string, resolve: PathResolver = realpathSync.native, windows = process.platform === 'win32'): boolean {
+  const normalized = canonicalPath(path, resolve, windows);
+  const target = canonicalPath(scratchpadDir, resolve, windows);
   return normalized === target || normalized.startsWith(target.endsWith('/') ? target : target + '/');
 }
 

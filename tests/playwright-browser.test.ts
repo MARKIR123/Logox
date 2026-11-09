@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
-import {playwrightServer} from '../src/extensions/playwright.js';
+import {playwrightServer, scratchOutputArguments, withOutputDir} from '../src/extensions/playwright.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 
 const enabled = process.env.LOGOX_BROWSER_TEST === '1';
@@ -76,6 +76,17 @@ test('local Playwright preserves page state and returns screenshots while offlin
 test('local Playwright launch allows file URLs and keeps an isolated headless profile', () => {
   const args = playwrightServer(tmpdir()).args;
   for (const flag of ['--headless', '--isolated', '--allow-unrestricted-file-access']) assert.ok(args.includes(flag), flag);
+});
+
+test('relative screenshot filenames are redirected into the actor scratchpad, absolute ones are kept', () => {
+  const scratch = join(tmpdir(), 'actor-dir');
+  assert.equal(scratchOutputArguments({filename: 'shot.png'}, scratch)['filename'], join(scratch, 'shot.png'));
+  assert.equal(scratchOutputArguments({filename: '../../x/./shot.png'}, scratch)['filename'], join(scratch, 'x', 'shot.png'));
+  const absolute = {filename: join(tmpdir(), 'abs.png')};
+  assert.equal(scratchOutputArguments(absolute, scratch), absolute);
+  const none = {fullPage: true};
+  assert.equal(scratchOutputArguments(none, scratch), none);
+  assert.deepEqual(withOutputDir(['a', '--output-dir', 'old', 'b'], 'new'), ['a', '--output-dir', 'new', 'b']);
 });
 
 test('local Playwright opens file URLs from the workspace and scratchpad', {skip: !enabled, timeout: 120_000}, async () => {
