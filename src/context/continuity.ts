@@ -1,5 +1,5 @@
 import type {ModelMessage} from '../runtime/messages.js';
-import {executionEnvironmentSchema, type RuntimeContextMessage} from '../runtime/context-updates.js';
+import {executionEnvironmentSchema, isTransientContext, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {collectDiscoveredTools} from '../tools/discovery.js';
 import {formatEnvironment} from './environment.js';
 
@@ -19,7 +19,7 @@ export function contextSnapshot(messages: readonly ModelMessage[]) {
 export function retainRuntimeContext(messages: readonly ModelMessage[], activityId?: string): readonly RuntimeContextMessage[] {
   const selected = new Map<string, {index: number; message: RuntimeContextMessage}>();
   messages.forEach((message, index) => {
-    if (message.role !== 'context' || message.kind === 'ledger') return;
+    if (message.role !== 'context' || message.kind === 'ledger' || isTransientContext(message)) return;
     let key: string, retained = message;
     if (message.kind === 'environment-baseline') key = message.kind;
     else if (message.kind === 'environment-change') {

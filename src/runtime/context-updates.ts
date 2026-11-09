@@ -28,3 +28,23 @@ export function createRuntimeContextMessage(kind: RuntimeContextMessage['kind'],
 export function runtimeContextText(message: RuntimeContextMessage): string {
   return '[Application context: ' + message.kind + '; not a human request or new authorization]\n' + message.text;
 }
+
+/** Kinds that matter only to the model's next request: persisted for audit and restore, projected until an assistant message follows. */
+const TRANSIENT_KINDS: ReadonlySet<RuntimeContextMessage['kind']> = new Set(['recovery']);
+
+export function isTransientContext(message: {readonly role: string; readonly kind?: string}): boolean {
+  return message.role === 'context' && TRANSIENT_KINDS.has(message.kind as RuntimeContextMessage['kind']);
+}
+
+/** Drops transient notes the model has already answered (an assistant message follows them). Pure and order-only, so later requests stay byte-stable. */
+export function withoutAnsweredTransient<T extends {readonly role: string}>(messages: readonly T[]): T[] {
+  const kept: T[] = [];
+  let answered = false;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role === 'assistant') answered = true;
+    else if (answered && isTransientContext(message)) continue;
+    kept.push(message);
+  }
+  return kept.reverse();
+}

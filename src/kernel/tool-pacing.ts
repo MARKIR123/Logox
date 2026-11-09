@@ -28,7 +28,7 @@ export class ToolPacing {
   /** New input arrived or a hook fired, so the caller has something fresh to act on. */
   reset(): void { this.seen.clear(); this.repeats = 0; }
 
-  /** Returns a note to append to the result the model sees, if any. */
+  /** Returns a request-only note for the model's next request, if any. */
   observe(call: ToolCall, result: ToolResult, state: {readonly waiting: 'director' | 'companion' | undefined; readonly automaOffered: boolean}): string | undefined {
     const name = (canonicalToolName(call.name) ?? call.name).toLowerCase();
     if (!OBSERVATIONS.has(name)) { this.streak = 0; return; }
