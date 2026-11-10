@@ -18,7 +18,7 @@ test('云端兼容流允许空用量，保留推理、正文和最终真实用�
   const provider = createProvider({kind: 'openai_compat', baseUrl: 'https://example.com/v1', model: 'test', key: 'test',
     temperature: 0.2, maxTokens: 256, timeoutMs: 1000}, fetcher);
   const deltas: string[] = [];
-  const turn = await provider.respond({system: 'test', messages: [{role: 'user', text: 'test'}], tools: []}, delta => deltas.push(delta.text), new AbortController().signal);
+  const turn = await provider.respond({system: 'test', messages: [{role: 'user', text: 'test'}], tools: []}, delta => deltas.push('text' in delta ? delta.text : ''), new AbortController().signal);
   assert.equal(turn.message.text, 'LOGOX_PROVIDER_READY');
   assert.equal(turn.message.reasoning, '核对');
   assert.equal(turn.stop, 'complete');
@@ -122,7 +122,7 @@ test('真实模型流断连保留传输阶段和底层错误码，已收到增�
     model: 'test', key: '', temperature: 0, maxTokens: 100, timeoutMs: 2000});
   try {
     let partial = '';
-    await assert.rejects(provider.respond({system: '', messages: [], tools: []}, delta => {partial += delta.text;}, new AbortController().signal), error => {
+    await assert.rejects(provider.respond({system: '', messages: [], tools: []}, delta => {partial += 'text' in delta ? delta.text : '';}, new AbortController().signal), error => {
       assert.ok(error instanceof ProviderError && error.retryable && error.category === 'temporary');
       const diagnostic = error.diagnostic;
       assert.equal(diagnostic?.code, 'UND_ERR_SOCKET'); assert.equal(diagnostic?.phase, 'stream'); assert.equal(diagnostic?.status, 200);
@@ -173,7 +173,7 @@ test('已收到 HTTP 流头后无进展超时明确报告，用户取消保留�
   const request = {system: 'fixture', messages: [{role: 'user' as const, text: 'fixture'}], tools: []};
   try {
     let partial = '';
-    await assert.rejects(provider.respond(request, delta => {partial += delta.text;}, new AbortController().signal), /Model request timed out/);
+    await assert.rejects(provider.respond(request, delta => {partial += 'text' in delta ? delta.text : '';}, new AbortController().signal), /Model request timed out/);
     assert.equal(partial, 'partial');
     const controller = new AbortController();
     const reason = new Error('fixture cancellation');

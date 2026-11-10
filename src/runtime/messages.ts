@@ -68,7 +68,8 @@ export interface ModelTurn {
   /** `cacheWrite1h` is the part of `cacheWrite` stored with the 1-hour lifetime, when the provider reports it. */
   usage?: {input: number; output: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number | undefined};
 }
-export type Delta = {kind: 'text' | 'reasoning'; text: string};
+/** `tool` reports a tool call whose arguments are still streaming: `chars` is the accumulated argument length so far, `target` its file path once that has arrived. */
+export type Delta = {kind: 'text' | 'reasoning'; text: string} | {kind: 'tool'; name: string; chars: number; target?: string};
 export interface Provider {
   readonly capabilities?: ProviderCapabilities;
   resolveCapabilities?(signal: AbortSignal): Promise<ProviderCapabilities>;

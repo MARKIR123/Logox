@@ -332,6 +332,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     return intent ? {label: intent} : undefined;
   };
+  /** `Writing Edit(file.svg) · 14.2k chars`: what a request is doing while a tool call's arguments stream in. */
+  const draftingLabel = (drafting: NonNullable<Step['drafting']>): string => {
+    const file = drafting.target?.split(/[\\/]/).filter(Boolean).at(-1);
+    const chars = drafting.chars < 1000 ? String(drafting.chars) : (drafting.chars / 1000).toFixed(drafting.chars < 100_000 ? 1 : 0) + 'k';
+    return `Writing ${drafting.tool}${file ? '(' + file + ')' : ''} · ${chars} chars`;
+  };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
     const requests = items.flatMap(item => {
@@ -358,13 +364,16 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const runningStep = live ? (() => {
       const running = requests.filter(entry => entry.request.step.state === 'running').map(entry => entry.request.step);
       const since = Math.min(...running.map(step => step.runningSince ?? now));
-      const done = requests.reduce((sum, entry) => sum + (entry.request.step.state === 'running' ? entry.request.step.elapsedMs : stepElapsed(entry.request.step, now)), 0);
-      return {title: text, state: 'running', elapsedMs: done, runningSince: since} as Step;
+      // The live clock is the current request only; completed thoughts stay in the finished `Thought N times` total.
+      const current = running.reduce((sum, step) => sum + step.elapsedMs, 0);
+      return {title: text, state: 'running', elapsedMs: current, runningSince: since} as Step;
     })() : undefined;
     // A finished row is an italic summary (`Thought 6 times · …`); a running one keeps the actor's own thinking glyph, `Thinking` with the shimmer and the live clock.
     const summary: readonly SceneSegment[] = [{text, color: isOpen ? palette.fg : palette.muted, italic: true, selectionKey: id + ':title', selectionOffset: 0}];
-    const liveSegments: readonly SceneSegment[] = [{text: 'Thinking', italic: true, selectionKey: id + ':title', selectionOffset: 0}];
-    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: live ? 'Thinking' : 'Tool', title: live ? 'Thinking' : text, expandable: !live, bodyLines: [], open: isOpen,
+    const drafting = requests.findLast(entry => entry.request.step.state === 'running' && entry.request.step.drafting)?.request.step.drafting;
+    const liveLabel = drafting ? draftingLabel(drafting) : 'Thinking';
+    const liveSegments: readonly SceneSegment[] = [{text: liveLabel, italic: true, selectionKey: id + ':title', selectionOffset: 0}];
+    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: live ? 'Thinking' : 'Tool', title: live ? liveLabel : text, expandable: !live, bodyLines: [], open: isOpen,
       railColor: viewColor, ...(frame ? {parentFrame: frame} : {}), ...(runningStep ? {step: runningStep} : {}),
       titleSegments: live ? liveSegments : summary,
       renderBody(inner) {

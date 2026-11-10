@@ -207,3 +207,54 @@ test('model requests retain independent Thinking identities and visible tool pee
     } finally {await restored.close();}
   } finally {release.resolve(); await app.close(); await rm(cwd, {recursive: true, force: true});}
 });
+
+test('streaming tool arguments mark the running step as drafting (throttled) and finished steps drop it', {timeout: 7000}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-step-drafting-'));
+  const seen: Array<{chars: number | undefined; target: string | undefined; separate: boolean}> = [];
+  let app!: Awaited<ReturnType<typeof createApplication>>;
+  const probe = () => {
+    const live = app.store.getSnapshot().messages.filter(message => message.kind === 'thinking' && message.step?.drafting);
+    assert.ok(live.length <= 1);
+    seen.push({chars: live[0]?.step?.drafting?.chars, target: live[0]?.step?.drafting?.target, separate: Boolean(live[0] && live[0].step?.groupId === undefined)});
+  };
+  let requests = 0;
+  const provider: Provider = {async respond(_request, onDelta) {
+    if (++requests === 1) {
+      onDelta({kind: 'tool', name: 'Edit', chars: 100}); probe();
+      onDelta({kind: 'tool', name: 'Edit', chars: 200}); probe(); // under 1 KB and 250 ms: not published
+      onDelta({kind: 'tool', name: 'Edit', chars: 2000}); probe(); // grew by 1 KB
+      onDelta({kind: 'tool', name: 'Edit', chars: 2010, target: 'a/pelican.svg'}); probe(); // target arrived
+      return complete('first');
+    }
+    onDelta({kind: 'text', text: 'Prose first.'});
+    onDelta({kind: 'tool', name: 'Write', chars: 50, target: 'b.ts'}); probe(); // prose already closed the thinking step
+    return complete('Prose first.');
+  }};
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  app = await createApplication({cwd, config, provider, sessionId: 's', resourceOptions: {home: cwd, boundary: cwd}});
+  try {
+    await app.submit('one'); await waitForSnapshot(app.store, snapshot => snapshot.activities.every(activity => activity.status !== 'running') && requests >= 1);
+    await app.submit('two'); await waitForSnapshot(app.store, snapshot => snapshot.activities.every(activity => activity.status !== 'running') && requests >= 2);
+    assert.deepEqual(seen.slice(0, 4).map(entry => [entry.chars, entry.target]), [[100, undefined], [100, undefined], [2000, undefined], [2010, 'a/pelican.svg']]);
+    assert.deepEqual([seen[4]!.chars, seen[4]!.target, seen[4]!.separate], [50, 'b.ts', true], 'after prose a separate group-less draft step carries it');
+    const thinking = app.store.getSnapshot().messages.filter(message => message.kind === 'thinking');
+    assert.ok(thinking.every(message => !message.step?.drafting && message.step?.state !== 'running'), 'no finished step keeps drafting or a live clock');
+  } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
+});
+
+test('live Thinking row shows Writing <Tool>(<file>) with chars and counts only the current request', () => {
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'run', ownerId: 'logox', kind: 'director', title: 'Run', status: 'running', stage: 'Working', detail: ''});
+  store.message('s', 'logox', 'user', 'Draw a pelican', {activityId: 'run', inputKind: 'human'});
+  store.message('s', 'logox', 'assistant', 'Earlier thought', {activityId: 'run', kind: 'thinking', step: {title: 'Thinking', state: 'completed', elapsedMs: 13 * 60_000}});
+  const running = store.message('s', 'logox', 'assistant', '', {activityId: 'run', kind: 'thinking', step: {title: 'Thinking', state: 'running', elapsedMs: 0, runningSince: Date.now() - 42_000}});
+  const text = () => buildStageRows(store.getSnapshot(), 's', 'logox', 100, {}, null).map(row => row.text).join('\n');
+  assert.match(text(), /Thinking/);
+  assert.match(text(), / 4[2-5]\.\ds/, 'clock counts the running request only');
+  assert.doesNotMatch(text(), /13m|78\d\.\ds|79\d\.\ds/);
+  const step = store.getSnapshot().messages.find(message => message.id === running)!.step!;
+  store.updateMessage(running, {step: {...step, drafting: {tool: 'Edit', target: 'C:\\art\\pelican-art.svg', chars: 14_231}}});
+  assert.match(text(), /Writing Edit\(pelican-art\.svg\) · 14\.2k chars/);
+  store.updateMessage(running, {step: {...step, drafting: {tool: 'Write', chars: 850}}});
+  assert.match(text(), /Writing Write · 850 chars/);
+});

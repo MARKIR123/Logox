@@ -364,7 +364,7 @@ test('SSE 可跨 UTF-8 字节和 CRLF 边界，错误状态不回显服务正文
     start(controller) {for (const byte of payload) controller.enqueue(Uint8Array.of(byte)); controller.close();},
   })));
   const chunks: string[] = [];
-  const turn = await provider.respond({system: '', messages: [], tools: []}, delta => chunks.push(delta.text), new AbortController().signal);
+  const turn = await provider.respond({system: '', messages: [], tools: []}, delta => chunks.push('text' in delta ? delta.text : ''), new AbortController().signal);
   assert.equal(turn.message.text, '中文🙂');
   assert.equal(chunks.join(''), '中文🙂');
   const bad = createProvider(settings, async () => new Response('PRIVATE_SECRET', {status: 401}));

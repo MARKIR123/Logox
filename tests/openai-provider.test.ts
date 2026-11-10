@@ -7,6 +7,7 @@ import {ProviderRegistry} from '../src/providers/registry.js';
 import {loadConfig} from '../src/config/config.js';
 import {CustomProviderStorage} from '../src/providers/custom-storage.js';
 import {AuthStorage} from '../src/providers/auth.js';
+import type {Delta} from '../src/runtime/messages.js';
 
 test('ProviderRegistry includes openai in presets and identifies reasoning models', async () => {
   const config = await loadConfig(process.cwd(), {}, {});
@@ -50,8 +51,9 @@ async function reasoningTurn(baseUrl: string, key: string, respond: () => Respon
   const provider = createReasoningProvider({kind: 'openai_compat', baseUrl, model: 'gpt-6.1-sol', key, temperature: 0, maxTokens: 100, timeoutMs: 2000,
     ...(api ? {api} : {}), thinkingEffort: 'high'} as never, fetcher);
   const deltas: Array<{kind: string; text: string}> = [];
-  const turn = await provider.respond({system: '', messages: [{role: 'user', text: 'hi'}], tools: [], stream}, delta => deltas.push(delta), new AbortController().signal);
-  return {turn, deltas, bodies};
+  const tools: Array<Extract<Delta, {kind: 'tool'}>> = [];
+  const turn = await provider.respond({system: '', messages: [{role: 'user', text: 'hi'}], tools: [], stream}, delta => {if (delta.kind === 'tool') tools.push(delta); else deltas.push(delta);}, new AbortController().signal);
+  return {turn, deltas, tools, bodies};
 }
 
 test('Responses requests ask for reasoning summaries only on the official endpoint', async () => {

@@ -168,6 +168,8 @@ export type AutomaJobState = z.infer<typeof automaJobStateSchema>;
 export type AutomaSwarm = z.infer<typeof automaSwarmSchema>;
 export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),
   swarm: automaSwarmSchema.optional(),
+  /** Live only: the tool call this request is still streaming arguments for. Never kept on a finished step. */
+  drafting: z.strictObject({tool: z.string(), target: z.string().optional(), chars: z.number().nonnegative()}).optional(),
   terminalVisibility: z.enum(['card', 'notice', 'silent']).optional(),
   stage: stepStageSchema.optional(), disposition: z.enum(['denied', 'error']).optional(), note: z.string().max(1000).optional(),
   groupId: z.string().optional(), groupState: z.enum(['completed', 'failed', 'cancelled']).optional(),
@@ -181,7 +183,7 @@ export type StepEnd = 'completed' | 'failed' | 'cancelled';
  */
 export function settleStep(step: Step, state: StepEnd, at = Date.now()): Step {
   if (step.state === 'completed' || step.state === 'failed' || step.state === 'cancelled') return step;
-  const {runningSince, waiting: _, ...rest} = step;
+  const {runningSince, waiting: _, drafting: __, ...rest} = step;
   return {...rest, state, elapsedMs: step.elapsedMs + (step.state === 'running' && runningSince !== undefined ? Math.max(0, at - runningSince) : 0)};
 }
 /** A human message held back because its target was mid-round; it is not part of the timeline until it is delivered or steered. */

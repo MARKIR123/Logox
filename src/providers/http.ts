@@ -574,10 +574,16 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       const calls = new Map<number, ToolCall>();
       let pendingBreak = false;
       const streamedReasoning = new Set<number>();
-      const append = (kind: Delta['kind'], value: unknown) => {
+      const append = (kind: 'text' | 'reasoning', value: unknown) => {
         if (typeof value !== 'string' || !value) return;
         if (kind === 'text') text += value; else reasoning += value;
         onDelta({kind, text: value});
+      };
+      /** Tool-argument streaming is invisible in text/reasoning; report the call's accumulated size and file target so the UI can show progress. */
+      const drafting = (call: ToolCall) => {
+        if (!call.name) return;
+        const target = partialTarget(call.arguments);
+        onDelta({kind: 'tool', name: call.name, chars: call.arguments.length, ...(target ? {target} : {})});
       };
       const contentType = response.headers.get('content-type') || '';
       if (!isStream && !contentType.includes('text/event-stream')) {
@@ -694,6 +700,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               const call = calls.get(idx) ?? {id: '', name: '', arguments: ''};
               if (typeof event.delta === 'string') call.arguments += event.delta;
               calls.set(idx, call);
+              if (typeof event.delta === 'string' && event.delta) drafting(call);
             } else if (event.type === 'response.output_item.added') {
               if (event.item?.type === 'tool_search_call') {
                 const idx = event.output_index ?? calls.size;
@@ -755,7 +762,10 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               if (delta?.type === 'signature_delta') signature += delta.signature ?? '';
               if (delta?.type === 'input_json_delta') {
                 const call = event.index === undefined ? undefined : calls.get(event.index);
-                if (call) call.arguments += delta.partial_json ?? '';
+                if (call) {
+                  call.arguments += delta.partial_json ?? '';
+                  if (delta.partial_json) drafting(call);
+                }
               }
             }
             if (event.type === 'message_delta') {
@@ -777,6 +787,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               if (item.function?.name) call.name += item.function.name;
               if (item.function?.arguments) call.arguments += item.function.arguments;
               calls.set(item.index, call);
+              if (item.function?.arguments) drafting(call);
             }
             if (choice?.finish_reason) {
               const fr = choice.finish_reason.toLowerCase();
@@ -815,4 +826,11 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       throw error;
     } finally {deadline.close();}
   }};
+}
+
+/** The `file_path` or `path` string of a possibly incomplete JSON arguments string, once it has fully arrived. */
+export function partialTarget(partial: string): string | undefined {
+  const match = /"(?:file_path|path)"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(partial);
+  if (!match) return undefined;
+  try {const value: unknown = JSON.parse(match[1]!); return typeof value === 'string' && value ? value : undefined;} catch {return undefined;}
 }

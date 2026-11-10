@@ -29,6 +29,21 @@ export class Steps {
     this.groupThinking = this.create('thinking', {title: 'Thinking', groupId: this.groupId, state: 'running', elapsedMs: 0, runningSince: this.now()}, '');
     return this.groupThinking;
   }
+  /**
+   * A live-only request clock for a response that streams tool arguments after its thinking step already closed (prose came first).
+   * It carries no text and no group, so once finished the timeline drops it and group, ledger and summary bookkeeping stay untouched.
+   */
+  draftStep(): string {
+    return this.create('thinking', {title: 'Thinking', state: 'running', elapsedMs: 0, runningSince: this.now()}, '');
+  }
+  /** Marks a running request as streaming a tool call's arguments; finished steps never carry it. */
+  drafting(id: string, drafting: NonNullable<Step['drafting']>): void {
+    const step = this.get(id);
+    if (step.state !== 'running') return;
+    const updated = {...step, drafting};
+    this.stepsCache.set(id, updated);
+    this.store.updateMessage(id, {step: updated});
+  }
   endGroup(state: 'completed' | 'failed' | 'cancelled'): void {
     if (this.groupThinking) this.store.updateMessage(this.groupThinking, {step: {...this.get(this.groupThinking), groupState: state}});
     this.groupId = undefined; this.groupThinking = undefined;
@@ -89,7 +104,7 @@ export class Steps {
     this.store.updateMessage(id, {step: updated});
   }
   finish(id: string, state: 'completed' | 'failed' | 'cancelled', text?: string, disposition?: Step['disposition']): Step {
-    const previous = this.get(id), {runningSince: _, waiting: __, ...rest} = previous;
+    const previous = this.get(id), {runningSince: _, waiting: __, drafting: ___, ...rest} = previous;
     const step: Step = {...rest, state, elapsedMs: stepElapsed(previous, this.now()), ...(disposition ? {disposition} : {})};
     this.stepsCache.set(id, step);
     try {
