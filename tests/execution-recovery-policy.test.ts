@@ -41,6 +41,7 @@ test('only new execution evidence resets recovery; duplicate tools, labels and d
   assert.equal(await recovery.execution('root', 'no_delivery', 'logox'), 'retry');
   assert.equal(await recovery.progress('root', signature), false);
   assert.equal(toolProgressFingerprint({...read, name: 'dispatch_role'}, {text: '已排队', isError: false}), undefined);
+  for (const name of ['Actor', 'ReadActor', 'AskUserQuestion', 'SendMessage']) assert.equal(toolProgressFingerprint({...read, name}, {text: 'ok', isError: false}), undefined);
   assert.equal(toolProgressFingerprint(read, {text: '未获许可', isError: true, disposition: 'denied'}), undefined);
   assert.equal(await recovery.execution('root', 'no_delivery', 'logox'), 'stop');
   const changed = toolProgressFingerprint(read, {text: '1: improved scene', isError: false})!;

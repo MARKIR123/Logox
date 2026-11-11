@@ -197,6 +197,46 @@ test('参数校验错误原位返回 ToolResult 且不扣截断预算，整批�
   }
 });
 
+test('a read-only batch keeps its valid calls when one call has bad arguments', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-readonly-batch-'));
+  try {
+    await writeFile(join(cwd, 'kept.txt'), 'kept line');
+    const requests: ModelRequest[] = [];
+    const turns: ModelTurn[] = [
+      {stop: 'tools', message: {role: 'assistant', text: 'Reading both files.', toolCalls: [
+        {id: 'call-1', name: 'read', arguments: JSON.stringify({file_path: 'kept.txt'})},
+        {id: 'call-2', name: 'read', arguments: JSON.stringify({file_path: 'kept.txt', bogus_field: true})},
+      ]}},
+      {stop: 'complete', message: {role: 'assistant', text: 'Done.'}},
+    ];
+    const provider: Provider = {
+      async respond(request, onDelta) {
+        requests.push(request);
+        const turn = turns.shift();
+        assert.ok(turn, 'no extra requests');
+        if (turn.message.text) onDelta({kind: 'text', text: turn.message.text});
+        return structuredClone(turn);
+      },
+    };
+    const config = await loadConfig(cwd, {permissions: {mode: 'auto'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+    const app = await createApplication({cwd, sessionId: 'readonly-batch', config, provider, resourceOptions: {home: cwd, boundary: cwd}});
+    try {
+      await app.ensemble.dispatch('logox', 'read them').done;
+      const results = requests[1]!.messages.filter(message => message.role === 'tool');
+      assert.equal(results.length, 2);
+      const [valid, invalid] = results as Extract<ModelMessage, {role: 'tool'}>[];
+      assert.equal(valid!.isError, false);
+      assert.ok(valid!.text.includes('kept line'));
+      assert.equal(invalid!.isError, true);
+      assert.ok(invalid!.text.includes('Parameter validation failed') && invalid!.text.includes('reissue only this call'));
+    } finally {
+      await app.close();
+    }
+  } finally {
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+
 test('人设提示词只增不减：内置核心信条为底座，定制与项目级提示词追加在后', async () => {
   const {agentRequestBase} = await import('../src/kernel/agent.js');
   // 1. 当角色传入定制提示词时，内置的核心准则（如“与其思考，不如实践”）依然保留在最前，定制内容追加在后

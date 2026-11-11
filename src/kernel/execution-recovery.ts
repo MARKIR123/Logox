@@ -18,12 +18,12 @@ export class ExecutionRecoveryError extends Error {
 
 export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
-const coordinationTools = new Set(['dispatch_role', 'craft_actor', 'read_actor',
-  'SendMessage', 'ask_user', 'ask', 'read_skill', 'list_skills']);
+/** Canonical names: talking to people or actors is not progress on the work itself. */
+const coordinationTools = new Set<string>(['Actor', 'CraftActor', 'ReadActor', 'ListActors', 'CancelActor', 'SendMessage', 'AskUserQuestion', 'LoadTools']);
 
 /** Differences in argument JSON key order or formatting do not count as new progress, and re-reading the same result does not refresh the budget. */
 export function toolProgressFingerprint(call: ToolCall, result: ToolResult): string | undefined {
-  if (result.isError || coordinationTools.has(call.name) || coordinationTools.has(canonicalToolName(call.name) ?? call.name)) return;
+  if (result.isError || coordinationTools.has(canonicalToolName(call.name) ?? call.name)) return;
   let argumentsValue: unknown;
   try {argumentsValue = JSON.parse(call.arguments);} catch {return;}
   return createHash('sha256').update(JSON.stringify([call.name, canonicalJson(argumentsValue), result.text])).digest('hex');
