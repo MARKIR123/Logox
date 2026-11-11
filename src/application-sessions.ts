@@ -157,11 +157,12 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         if (!inspected.some(item => item.issue)) throw new Error('The source ledger is intact. Use a normal resume.');
         nextLease = await manager.acquire(id);
         for (const {owner, entries} of inspected) {
-          let activity: string | undefined;
+          let activity: string | undefined, round: string | undefined;
           const rounds = await journal.rounds(sourceId, owner, entries).catch(() => []);
-          const finish = async () => {if (activity) await journal.finish(id, owner, activity, rounds.find(round => round.activityId === activity)?.status ?? 'cancelled');};
+          // A record is keyed by the first activity of its round, so an activity that continued a round takes that round's status.
+          const finish = async () => {if (activity) await journal.finish(id, owner, activity, rounds.find(item => item.activityId === (round ?? activity))?.status ?? 'cancelled');};
           for (const entry of entries) {
-            if (entry.role === 'user' && entry.activityId !== activity) {await finish(); activity = entry.activityId;}
+            if (entry.role === 'user' && entry.activityId !== activity) {await finish(); activity = entry.activityId; round = entry.roundId;}
             await journal.append({...entry, sessionId: id});
           }
           await finish();

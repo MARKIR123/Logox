@@ -49,10 +49,16 @@ function message(entry: HistoryEntry): ModelMessage {
 }
 function splitRounds(entries: readonly HistoryEntry[], records: readonly RoundRecord[]): Round[] {
   const seen = new Set<string>();
+  // An activity that continues or joins a round (`roundId`) belongs to the group that round opened.
   const starts = entries.flatMap((entry, index) => {
-    if (entry.role !== 'user' || entry.activityId && seen.has(entry.activityId)) return [];
-    if (entry.activityId) seen.add(entry.activityId);
-    return [index];
+    if (entry.role !== 'user') return [];
+    const joins = !!entry.roundId && seen.has(entry.roundId);
+    if (entry.activityId) {
+      const known = seen.has(entry.activityId);
+      seen.add(entry.activityId);
+      if (known) return [];
+    }
+    return joins ? [] : [index];
   });
   return starts.map((start, index) => {
     const end = starts[index + 1] ?? entries.length;

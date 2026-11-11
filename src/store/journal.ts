@@ -21,6 +21,8 @@ const entrySchema = z.strictObject({
   time: z.number().optional(), message: modelMessageSchema.optional(), activityId: z.string().optional(), source: z.string().optional(),
   inputKind: inputKindSchema.optional(), step: stepSchema.optional(), deliveryIds: z.array(z.string()).optional(),
   usage: turnUsageSchema.optional(),
+  /** On an activity's first user entry: the activity id that opened the round this activity continues (a Director round that stayed open) or joins (a companion aside absorbed into its last round). Absent when the activity starts its own round. */
+  roundId: z.string().optional(),
 }).refine(entry => (entry.role !== 'context' || entry.message?.role === 'context') &&
   (!entry.message || entry.message.role === entry.role && entry.message.text === entry.text), 'History message or role does not match.');
 export type HistoryEntry = z.infer<typeof entrySchema>;
@@ -50,11 +52,21 @@ export type CollaborationRecord = z.infer<typeof collaborationSchema>;
 export type TaskCheckpoint = z.infer<typeof taskSchema>;
 const pendingSchema = z.strictObject({sessionId: z.string(), target: z.string(), activities: z.array(z.string())})
   .refine(value => value.activities.includes(value.target), 'Rewind range does not include the target');
+/**
+ * How a finished activity is written. `round` (default) closes the round it belongs to over the whole range it spans; `absorb` extends the
+ * closed round its user entry names (`roundId`) and keeps that record's memory; `reply` writes a short `[reply]` record for a teammate-started
+ * activity, titled from `title` when given.
+ */
+export interface RoundPlacement {kind: 'round' | 'reply' | 'absorb'; title?: string | undefined}
 export interface HistoryStore {
   load(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]>;
   append(entry: HistoryEntry): Promise<void>;
   finish?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary>;
-  finishRecord?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null): Promise<RoundRecord>;
+  finishRecord?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null, placement?: RoundPlacement): Promise<RoundRecord>;
+  /** The round a new Director activity continues: the one opened earlier whose last activity ended while dispatched work was still open. */
+  openRound?(sessionId: string, ownerId: string): Promise<string | undefined>;
+  /** The actor's latest closed round, when nothing but tool results follow it. */
+  lastRound?(sessionId: string, ownerId: string): Promise<RoundRecord | undefined>;
   checkpoint?(sessionId: string, task: TaskCheckpoint): Promise<void>;
   progress?(sessionId: string, ownerId: string, activityId: string): Promise<TaskProgressSnapshot | undefined>;
   activeTasks?(sessionId: string): Promise<TaskCheckpoint[]>;
@@ -316,37 +328,67 @@ export class Journal implements HistoryStore {
   async finish(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary> {
     return (await this.finishRecord(sessionId, ownerId, activityId, status)).summary;
   }
-  async finishRecord(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null): Promise<RoundRecord> {
+  async openRound(sessionId: string, ownerId: string): Promise<string | undefined> {
     const entries = await this.load(sessionId, ownerId);
-    const start = entries.findIndex(entry => entry.activityId === activityId && entry.role === 'user');
-    if (start < 0) throw new Error('Round input was not recorded.');
-    const last = entries.findLastIndex(entry => entry.activityId === activityId);
-    const end = last + 1;
+    const last = entries.findLast(entry => entry.role === 'user' && entry.activityId);
+    if (!last) return undefined;
+    const key = last.roundId ?? last.activityId!;
+    if (!entries.some(entry => entry.role === 'user' && entry.activityId === key)) return undefined;
+    return (await this.rounds(sessionId, ownerId, entries)).some(record => record.activityId === key) ? undefined : key;
+  }
+  async lastRound(sessionId: string, ownerId: string): Promise<RoundRecord | undefined> {
+    const entries = await this.load(sessionId, ownerId);
+    const last = (await this.rounds(sessionId, ownerId, entries)).at(-1);
+    return last && entries.slice(last.end).every(entry => entry.role === 'tool') ? last : undefined;
+  }
+  async finishRecord(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null, placement: RoundPlacement = {kind: 'round'}): Promise<RoundRecord> {
+    const entries = await this.load(sessionId, ownerId);
+    const own = entries.findIndex(entry => entry.activityId === activityId && entry.role === 'user');
+    if (own < 0) throw new Error('Round input was not recorded.');
+    const end = entries.findLastIndex(entry => entry.activityId === activityId) + 1;
+    const joined = entries[own]!.roundId;
+    const existing = await this.rounds(sessionId, ownerId, entries);
+    // An absorbed activity extends the record it joined and keeps its memory; if that record is gone it is written as a reply instead.
+    const absorbed = placement.kind === 'absorb' && joined ? existing.find(record => record.activityId === joined) : undefined;
+    if (absorbed) {
+      const extended: RoundRecord = {...absorbed, end, sourceHash: digest(entries.slice(absorbed.start, end)), sourceLines: this.sourceLines(sessionId, ownerId, absorbed.start, end)};
+      roundSchema.parse(extended);
+      return this.saveRounds(sessionId, ownerId, [...existing.filter(record => record.activityId !== absorbed.activityId), extended], extended);
+    }
+    const reply = placement.kind !== 'round';
+    // A Director activity that continued an open round closes it over the whole range, from the first entry of the round's first activity.
+    const roundId = !reply && joined && entries.some(entry => entry.role === 'user' && entry.activityId === joined) ? joined : activityId;
+    const start = roundId === activityId ? own : entries.findIndex(entry => entry.activityId === roundId && entry.role === 'user');
     const messages: ModelMessage[] = entries.slice(start, end).map(storedMessage);
     const legacy = summarizeRound(messages, status);
-    const accepted = status === 'completed' ? extractRoundMemory(messages, finalizerCallId) : undefined;
-    const modernClosure = finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
+    const accepted = status === 'completed' && !reply ? extractRoundMemory(messages, finalizerCallId) : undefined;
+    const modernClosure = reply || finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
       (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
+    const replyTitle = placement.title?.trim() || (legacy.source === 'model' ? legacy.title : legacy.title && legacy.title !== 'Completed' ? legacy.title : 'Reply');
     const memory: RoundMemory = accepted ?? {
-      title: legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
-      summary: modernClosure || status !== 'completed' ? runtimeRoundSummary(messages, status) : (legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'),
+      title: reply && status === 'completed' ? replyTitle : legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
+      summary: modernClosure || status !== 'completed' ? runtimeRoundSummary(messages, status, reply) : (legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'),
       source: modernClosure ? 'runtime' : 'legacy',
     };
     const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text ?? '');
     // The `_FinishRound` title names the round; only a stage line or a parenthetical aside falls back to the text-derived one.
     const modelTitle = accepted?.title.trim();
     const summary: RoundSummary = accepted ? {title: modelTitle && !isActionLine(modelTitle) ? modelTitle : legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
+    // A record rewritten for the same round keeps its ordinal; a new round takes the next number after the highest one saved and after every round the ledger opened before it (old records counted activities).
     const raw = await this.loadRaw(sessionId, ownerId);
-    const activities = [...new Set(raw.filter(entry => entry.role === 'user' && entry.activityId).map(entry => entry.activityId!))];
-    const ordinal = activities.indexOf(activityId) + 1;
+    const rawStart = this.lineMaps.get(this.path(sessionId, ownerId))?.[start] ?? start;
+    const earlier = new Set(raw.slice(0, rawStart).flatMap(entry => entry.role === 'user' && (entry.roundId ?? entry.activityId) ? [(entry.roundId ?? entry.activityId)!] : []));
+    const prior = existing.find(record => record.activityId === roundId);
+    const ordinal = prior?.ordinal ?? Math.max(earlier.size, ...existing.map(record => record.ordinal ?? 0)) + 1;
     const sourceLines = this.sourceLines(sessionId, ownerId, start, end);
     const delivery = ownerId !== 'logox' && entries[start]?.inputKind === 'director' && final.trim()
       ? {title: summary.title, text: final} : undefined;
-    const record: RoundRecord = {activityId, start, end, sourceHash: digest(entries.slice(start, end)), status, summary,
+    const record: RoundRecord = {activityId: roundId, start, end, sourceHash: digest(entries.slice(start, end)), status, summary,
       ordinal, memory, sourceLines, ...(delivery ? {delivery} : {})};
     roundSchema.parse(record);
-    const records = (await this.rounds(sessionId, ownerId, entries)).filter(record => record.activityId !== activityId);
-    records.push(record);
+    return this.saveRounds(sessionId, ownerId, [...existing.filter(item => item.activityId !== roundId), record], record);
+  }
+  private async saveRounds(sessionId: string, ownerId: string, records: RoundRecord[], saved: RoundRecord): Promise<RoundRecord> {
     records.sort((a, b) => a.start - b.start);
     await atomicWrite(await this.statePath(sessionId, ownerId, 'rounds'), Buffer.from(JSON.stringify(records)));
     try {
@@ -360,7 +402,7 @@ export class Journal implements HistoryStore {
         : join(treeDir, `${ownerId}.rounds.json`);
       await atomicWrite(roundsFile, Buffer.from(JSON.stringify(records, null, 2)));
     } catch {}
-    return record;
+    return saved;
   }
   async loadContext(sessionId: string, ownerId: string, entries: readonly HistoryEntry[]): Promise<ContextState | undefined> {
     const raw = await this.read(await this.statePath(sessionId, ownerId, 'context'));

@@ -8,8 +8,9 @@ import {immutable, type InteractionInput, type InteractionOutcome, type Step, ty
 import {repairToolResults, type ModelMessage, type TurnUsage} from '../runtime/messages.js';
 import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
 import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
-import {storedMessage, type HistoryEntry, type HistoryStore, type TaskCheckpoint} from '../store/journal.js';
+import {storedMessage, type HistoryEntry, type HistoryStore, type RoundPlacement, type TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
+import {roundEffect} from '../runtime/round-scope.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import {checkpointOrigin, type RestartDependencies} from './restart.js';
 import type {DeliveryKind} from '../runtime/delivery.js';
@@ -105,6 +106,10 @@ interface QueuedTask<Id extends string> extends Task<Id> {
   /** A dependency failed or was stopped: the task is being cancelled and never runs. */
   doomed?: boolean;
   dependenciesReleased?: boolean;
+}
+/** A teammate-message activity's title: the message summary from its `[Message from X · summary]` header, else the task title. */
+function asideTitle(prompt: string, origin: TaskOrigin): string | undefined {
+  return /^\[(?:Message|Broadcast) from [^\]·]+ · ([^\]]+)\]/.exec(prompt)?.[1]?.trim() || origin.taskTitle?.trim() || undefined;
 }
 const DEPENDENCY_REPORT_LIMIT = 8000;
 const DEPENDENCY_REPORTS_HEADER = 'Reports from the work this task was waiting for:';
@@ -456,6 +461,19 @@ export class EnsembleRuntime<Id extends string> {
     void operation.then(remove, remove);
     return operation;
   }
+  /**
+   * The round a starting activity belongs to, from what the ledger and checkpoints persist. A Director activity continues the open round (one whose last
+   * activity ended while dispatched work was open). An aside of a companion (started by a teammate's message while it was idle) joins the actor's latest
+   * round when both descend from the same root task; otherwise it stands alone as a short `[reply]` record. Everything else starts its own round.
+   */
+  private async joinedRound(ownerId: string, kind: InputKind, origin: TaskOrigin): Promise<string | undefined> {
+    if (ownerId === 'logox') return await this.history.openRound?.(this.sessionId, ownerId);
+    if (roundEffect([], this.sessionId, ownerId, kind) !== 'aside') return undefined;
+    const last = await this.history.lastRound?.(this.sessionId, ownerId);
+    if (!last || !origin.rootActivityId) return undefined;
+    const root = (await this.history.activeTasks?.(this.sessionId))?.find(task => task.activityId === last.activityId)?.rootActivityId;
+    return root === origin.rootActivityId ? last.activityId : undefined;
+  }
   private async run(task: QueuedTask<Id>): Promise<void> {
     const {ownerId, prompt, activityId, controller, source, origin} = task;
     if (this.store.activities.get(this.sessionId, activityId)?.status === 'cancelled') return;
@@ -468,22 +486,34 @@ export class EnsembleRuntime<Id extends string> {
     };
     let delivery: TaskDelivery | undefined;
     let acceptedFinalizer: string | null | undefined;
+    const kind = inputKind({ownerId, source, ...origin});
+    /** This activity's own entries as a summary; also what a suspended or absorbed activity shows on its card, since it writes no record of its own. */
+    const ownSummary = async (status: RoundStatus, forDelivery = false) => {
+      const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
+      const messages: ModelMessage[] = entries.map(storedMessage);
+      const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly && !message.textToolCall), status);
+      const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text;
+      if (forDelivery && ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
+      return summary;
+    };
+    /** The round this activity continues (Director) or joins (absorbed aside); decided once, when its input is recorded. */
+    let joined: string | undefined;
     const finish = async (status: 'completed' | 'failed' | 'cancelled') => {
       const inbox = this.inboxes.get(activityId);
       if (inbox) {inbox.sealed = true; await Promise.allSettled([...inbox.pending]);}
       try {
         if (!this.history.finishRecord) return await this.history.finish?.(this.sessionId, ownerId, activityId, status);
-        const record = await this.history.finishRecord(this.sessionId, ownerId, activityId, status, acceptedFinalizer);
+        const effect = roundEffect(this.store.getSnapshot().activities, this.sessionId, ownerId, kind);
+        // A Director activity that ends while its dispatched work is open only suspends the round, unless the model's closing memory was already accepted.
+        if (status === 'completed' && effect === 'suspends' && typeof acceptedFinalizer !== 'string') return await ownSummary(status);
+        const placement: RoundPlacement = effect !== 'aside' ? {kind: 'round'} : joined ? {kind: 'absorb'} : {kind: 'reply', title: asideTitle(prompt, origin)};
+        const record = await this.history.finishRecord(this.sessionId, ownerId, activityId, status, acceptedFinalizer, placement);
+        if (placement.kind === 'absorb') return await ownSummary(status);
         delivery = record.delivery;
         return record.summary;
       } catch {
         this.store.message(this.sessionId, ownerId, 'notice', 'Round memory could not be saved; original messages are preserved.', {activityId});
-        const entries = (await this.history.load(this.sessionId, ownerId).catch(() => [])).filter(entry => entry.activityId === activityId);
-        const messages: ModelMessage[] = entries.map(storedMessage);
-        const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly && !message.textToolCall), status);
-        const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text;
-        if (ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
-        return summary;
+        return await ownSummary(status, true);
       }
     };
     const output: string[] = [];
@@ -514,7 +544,8 @@ export class EnsembleRuntime<Id extends string> {
       for (const message of repairToolResults(omitInternalToolPairs(entries.flatMap(entry => entry.message ? [entry.message] : [])))) {
         await this.history.append({version: 1, ...identity, role: 'tool', text: message.text, message});
       }
-      await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}});
+      joined = await this.joinedRound(ownerId, kind, origin);
+      await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}, ...(joined ? {roundId: joined} : {})});
       signal.throwIfAborted();
       const authorization = [...origin.authorization ?? [], ...entries.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
         ...(origin.inputKind === 'human' ? [prompt] : [])].slice(-8);

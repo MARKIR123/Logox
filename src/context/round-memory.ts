@@ -30,17 +30,19 @@ export function formatRoundIndex(input: {ordinal: number; title: string; summary
   return `T${input.ordinal}|${field(input.title)}|${field(input.summary)}|${input.start}-${input.end}`;
 }
 
-/** The bracket marker that opens a runtime-written summary: stopped by user or Director, failed, or completed without a usable `_FinishRound`. */
-export const ROUND_MARKERS = Object.freeze({cancelled: '[interrupted]', failed: '[failed]', completed: '[runtime]'} as const);
+/** The bracket marker that opens a runtime-written summary: stopped by user or Director, failed, completed without a usable `_FinishRound`, or a teammate-started activity that was no round of its own. */
+export const ROUND_MARKERS = Object.freeze({cancelled: '[interrupted]', failed: '[failed]', completed: '[runtime]', reply: '[reply]'} as const);
 const MARKER_PHRASES = Object.freeze({
   cancelled: 'Stopped before finishing.',
   failed: 'Ended with an error.',
   completed: 'The model gave no round summary.',
+  reply: 'Answered a teammate.',
 } as const);
 const COMMAND_TOKENS = 40, MAX_FILES = 6;
 
-/** A summary the runtime writes from the round's ledger entries: changed files and the last Shell command with its exit status. */
-export function runtimeRoundSummary(messages: readonly ModelMessage[], status: RoundStatus): string {
+/** A summary the runtime writes from the round's ledger entries: changed files and the last Shell command with its exit status. A completed `reply` is marked `[reply]` instead of `[runtime]`. */
+export function runtimeRoundSummary(messages: readonly ModelMessage[], status: RoundStatus, reply = false): string {
+  const kind = reply && status === 'completed' ? 'reply' : status;
   const files: string[] = [];
   const results = new Map<string, Extract<ModelMessage, {role: 'tool'}>>();
   for (const message of messages) if (message.role === 'tool') results.set(message.callId, message);
@@ -63,7 +65,7 @@ export function runtimeRoundSummary(messages: readonly ModelMessage[], status: R
     files.length ? 'Changed ' + files.slice(0, MAX_FILES).join(', ') + (files.length > MAX_FILES ? ` and ${files.length - MAX_FILES} more` : '') + '.' : '',
     command ? `Last command "${command.text}" exit ${command.exit}.` : '',
   ].filter(Boolean);
-  return truncateToTokens(ROUND_MARKERS[status] + ' ' + (facts.length ? facts.join(' ') : MARKER_PHRASES[status]), FINISH_ROUND_SUMMARY_TOKENS);
+  return truncateToTokens(ROUND_MARKERS[kind] + ' ' + (facts.length ? facts.join(' ') : MARKER_PHRASES[kind]), FINISH_ROUND_SUMMARY_TOKENS);
 }
 
 /**

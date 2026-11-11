@@ -1,5 +1,5 @@
 import type {Activity} from './contracts.js';
-import {inputKind} from './provenance.js';
+import {inputKind, type InputKind} from './provenance.js';
 
 const OPEN = new Set(['queued', 'running', 'waiting_input', 'paused']);
 export const isOpenActivity = (activity: Pick<Activity, 'status'>): boolean => OPEN.has(activity.status);
@@ -38,6 +38,19 @@ export function roundScope(activities: readonly Activity[], sessionId: string): 
   const rank = (item: Activity) => item.status === 'running' || item.status === 'waiting_input' ? 1 : 0;
   const actors = mine.filter(item => item.ownerId !== 'logox' && item.kind === 'actor' && isOpenActivity(item) && !fromUser(item));
   return {director, actors: [...actors].sort((a, b) => rank(a) - rank(b))};
+}
+
+/** What the end of an activity means for its owner's round: it closes it, leaves it open (a Director whose dispatched work is still open), or is no round at all. */
+export type RoundEffect = 'closes' | 'suspends' | 'aside';
+
+/**
+ * The Director's round spans everything it does until an activity ends with none of its dispatched work open (paused batches included),
+ * so an activity that ends earlier only suspends it. A companion's rounds are Director dispatches and tasks the human started in its
+ * own window; an activity a teammate's message started while it was idle is an aside.
+ */
+export function roundEffect(activities: readonly Activity[], sessionId: string, ownerId: string, kind: InputKind): RoundEffect {
+  if (ownerId === 'logox') return roundScope(activities, sessionId).actors.length ? 'suspends' : 'closes';
+  return kind === 'director' || kind === 'human' ? 'closes' : 'aside';
 }
 
 /** Distinct display names of the scope's actors, sorted. */

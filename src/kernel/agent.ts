@@ -25,6 +25,7 @@ import {ExecutionRecoveryError, executionRecoveryInstruction, toolProgressFinger
 import {ToolPacing} from './tool-pacing.js';
 import {PeerWait} from './peer-wait.js';
 import {asksFor} from '../runtime/asks.js';
+import {roundEffect} from '../runtime/round-scope.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import {textToolCallName} from './text-tool-call.js';
 import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE, TOOLS_WITHDRAWN_RESULT, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
@@ -201,6 +202,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       let refusedBatches = 0;
       const directorWaiting = () => context.ownerId === 'logox' && options.store.getSnapshot().activities.some(activity =>
         activity.sessionId === context.sessionId && activity.kind === 'actor' && ['queued', 'running', 'waiting_input'].includes(activity.status));
+      /** What ending this activity means for the round: it closes it, leaves it open (Director with dispatched work still open) or is no round (a teammate's message woke an idle actor). */
+      const effect = () => roundEffect(options.store.getSnapshot().activities, context.sessionId, context.ownerId, inputKind(context));
       const teammatesRunning = () => options.store.getSnapshot().activities.some(activity => activity.sessionId === context.sessionId && activity.kind === 'actor' &&
         activity.ownerId !== context.ownerId && ['queued', 'running', 'waiting_input'].includes(activity.status));
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
@@ -501,7 +504,20 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           ids.add(call.id);
         }
         const calls = turn.message.toolCalls ?? [];
-        if (closing ? calls.length > 0 : calls.some(call => isFinishRound(call.name))) {
+        // Where this activity does not close a round, round memory is not asked for and a `_FinishRound` call is answered normally and otherwise ignored.
+        const closes = closing || effect() === 'closes';
+        if (!closes && turn.stop === 'tools' && calls.length && calls.every(call => isFinishRound(call.name))) {
+          const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
+          await persist({...turn.message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
+          if (prepared) options.context?.observe(context, request, turn, prepared.model);
+          for (const call of calls) await persist({role: 'tool', callId: call.id, name: call.name, text: '', isError: false});
+          context.signal.throwIfAborted();
+          if (await holdClose()) continue requestLoop;
+          if (await drainInbox(true)) continue requestLoop;
+          context.signal.throwIfAborted();
+          outcome = 'completed'; return;
+        }
+        if (closing ? calls.length > 0 : closes && calls.some(call => isFinishRound(call.name))) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {try {JSON.parse(call.arguments); return false;} catch {return true;}});
           const onlyFinalizer = calls.length === 1 && isFinishRound(calls[0]!.name);
           // Arguments are accepted leniently in one place; the call is rewritten to the accepted form so the ledger holds what the runtime used.
@@ -560,6 +576,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           if (!truncated) {
             const current = options.requestBase ? await options.requestBase(context, {capabilities: assembly.capabilities, history: messages}) : instruction;
             for (const call of calls) {
+              if (isFinishRound(call.name)) continue; // answered with a normal result when it runs
               const canonical = canonicalToolName(call.name);
               const eligible = current.pool?.some(item => item.definition.name.toLowerCase() === (canonical ?? call.name).toLowerCase()) ?? true;
               const callableNow = current.tools.some(tool => tool.name.toLowerCase() === (canonical ?? call.name).toLowerCase());
@@ -613,6 +630,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             instruction.pool?.find(item => item.definition.name === (canonicalToolName(call.name) ?? call.name))?.metadata.terminalVisibility)]));
           try {
             const execute = async (call: ToolCall): Promise<ToolResult> => {
+              if (isFinishRound(call.name) && !truncated) return {text: '', isError: false};
               if (refusal && !truncated) return {text: refusal, isError: true, disposition: 'error'};
               if (truncated) return {text: 'This batch of tools was not executed: the response did not end normally or the arguments were incomplete. Reissue complete tool calls.', isError: true};
               const invalid = schemaErrors.get(call.id);
@@ -780,7 +798,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           finally {await persist(turn.message, steps.get(thinkingId));}
         } else await persist(turn.message, thinkingStep);
         if (turn.stop === 'complete' && turn.message.text.trim()) {
-          const needsMemory = base.tools.some(tool => isFinishRound(tool.name));
+          const needsMemory = base.tools.some(tool => isFinishRound(tool.name)) && effect() === 'closes';
           if (await holdClose()) continue requestLoop;
           if (await drainInbox(!needsMemory)) continue requestLoop;
           context.signal.throwIfAborted();
