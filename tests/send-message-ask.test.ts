@@ -20,7 +20,7 @@ import type {ActorContext} from '../src/actors/ensemble.js';
 
 const call = (id: string, name: string, args: unknown): ToolCall => ({id, name, arguments: JSON.stringify(args)});
 const tools = (...calls: ToolCall[]): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: calls}, stop: 'tools'});
-const closing = (text: string, id = 'finish-' + Math.random()): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call(id, '_FinishRound', {title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})]}, stop: 'tools'});
+const closing = (text: string, id = 'finish-' + Math.random()): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call(id, '_FinishRound', {title: 'Done', summary: 'Round outcome.'})]}, stop: 'tools'});
 const send = (id: string, to: string, type: string, message = 'text') => call(id, 'SendMessage', {to, type, message});
 
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn, ownerId = 'techne') {
@@ -199,13 +199,13 @@ test('the Director can ask and end its round: it never parks', async () => {
 
 test('a polling companion loses its tools, keeps its task, and gets them back when a teammate finishes', async () => {
   const f = await fixture((request, index) => {
-    if (request.tools.length === 1) return closing('Waiting on Kalon.');
-    return said(request, /Your tools are back/) ? closing('Rig finished.') : tools(call('p' + index, 'Glob', {pattern: '*'}));
+    if (said(request, /Your tools are back/)) return closing('Rig finished.');
+    return said(request, /work tools are withdrawn/) ? closing('Waiting on Kalon.') : tools(call('p' + index, 'Glob', {pattern: '*'}));
   });
   try {
     f.peer('kalon');
     const task = f.ensemble.dispatch('techne', 'Build', 'direct');
-    while (!f.requests.some(request => request.tools.length === 1)) await delay(10);
+    while (!f.requests.some(request => said(request, /work tools are withdrawn/))) await delay(10);
     assert.equal(f.requests.length, REPEAT_LIMIT + 2);
     await delay(1200);
     assert.equal(f.requests.length, REPEAT_LIMIT + 2, 'no requests while parked');

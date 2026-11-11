@@ -75,7 +75,7 @@ test('application startup and reload apply tool overrides without global state o
     provider: {async respond(request) {
       seen.push(request);
       return {stop: 'tools', message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'done-' + seen.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
+        arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}};
     }}});
   try {
     await app.ensemble.dispatch('logox', 'Inspect the catalog.', 'direct', {inputKind: 'human'}).done;

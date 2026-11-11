@@ -7,7 +7,7 @@ import {Journal, storedMessage, type HistoryEntry} from '../store/journal.js';
 import {COMPACT_ACCEPT_RATIO, digest, estimateRequest, estimateText, TASK_END_FLOOR_RATIO, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
 import {historyForkInstruction, PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
-import {formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
+import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
 import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discovery.js';
@@ -146,9 +146,9 @@ export class ContextManager {
   }
   async taskEnd(identity: Identity, base: Pick<ModelRequest, "system" | "tools">, signal: AbortSignal): Promise<void> {
     // Called only when a real task (Director assignment or human request) ends; the floor and benefit gate live in prepare().
-    if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true, new Set(), true);
+    if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true, true);
   }
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, preserveCallIds: ReadonlySet<string> = new Set(), taskEnd = false):
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, taskEnd = false):
     Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
     signal.throwIfAborted();
     base = this.requestBase(identity, base);
@@ -234,15 +234,13 @@ export class ContextManager {
         output.push({role: 'assistant', text: formatRoundIndex({
           ordinal: round.record?.ordinal ?? (activityOrdinal || rounds.indexOf(round) + 1),
           title: memory?.source === 'model' ? memory.title : summary.title,
-          status: round.record?.status ?? 'failed', verification: memory?.verification ?? null,
-          outcome: memory?.source === 'model' ? memory.outcome : undefined,
-          carryForward: memory?.source === 'model' ? memory.carryForward : ['Legacy record; inspect evidence before relying on its claims.', summary.report],
+          summary: memory?.source === 'model' ? memory.summary : [round.record?.status === 'completed' ? '' : ROUND_MARKERS[round.record?.status ?? 'failed'], 'Legacy record; inspect evidence before relying on its claims.', summary.report].filter(Boolean).join(' '),
           start: lines.start, end: lines.end,
         })});
         retain(round.start, round.end, true);
       }
       // Reasoning and signatures belong to the provider protocol; fold whole rounds without stripping required fields.
-      return normalizeMessages(omitInternalToolPairs(output, preserveCallIds));
+      return normalizeMessages(omitInternalToolPairs(output));
     };
     const requestFor = (candidate: ContextState): ModelRequest => {
       const ledger = journal.path(identity.sessionId, identity.ownerId);

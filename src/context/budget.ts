@@ -11,6 +11,19 @@ export function estimateText(text: string): number {
   for (const char of text) tokens += char.codePointAt(0)! > 0x7f ? 1 : 0.25;
   return Math.ceil(tokens);
 }
+/** Shortens text to at most `budget` estimated tokens (same weights as `estimateText`), ending with an ellipsis when it was cut. Never throws. */
+export function truncateToTokens(text: string, budget: number): string {
+  const value = text.trim();
+  if (estimateText(value) <= budget) return value;
+  const room = Math.max(0, budget - 1);
+  let tokens = 0, end = 0;
+  for (const char of value) {
+    tokens += char.codePointAt(0)! > 0x7f ? 1 : 0.25;
+    if (Math.ceil(tokens) > room) break;
+    end += char.length;
+  }
+  return value.slice(0, end).trimEnd() + '…';
+}
 function estimateMessage(message: ModelMessage): number {
   if (message.role === 'context') {
     if (message.kind === 'environment-baseline' || message.kind === 'capability-change' && message.data?.baseline === true) return 0;

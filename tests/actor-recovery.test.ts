@@ -424,8 +424,8 @@ test('application timeout continuation preserves real writes and interrupted out
       const messages = request.messages.filter(message => !message.text.startsWith('[Direct conversation]'));
       const input = messages.findLast(message => message.role === 'user')?.text ?? '';
       const last = messages.at(-1);
-      if (request.tools.length === 1 && request.tools[0]?.name === '_FinishRound') {
-        assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'restriction')?.text ?? '', /This task has been remedied twice/);
+      if (/This task has been remedied twice/.test(request.messages.findLast(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'restriction')?.text ?? '')) {
+        assert.ok(request.tools.length > 1, 'the restricted turn keeps the full tool list; the note alone asks for no tools');
         assert.ok(!request.system.includes('当前可用工具：无'));
         limited = true; return complete('本任务补救已达上限');
       }

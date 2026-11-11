@@ -1,8 +1,6 @@
-export const FINISH_ROUND_REPAIR = `# Round memory correction
-This is a metadata-only correction. The final answer or report has already been delivered. Submit only a complete _FinishRound call with title, outcome, verification (null when unverified), and carry_forward. Preserve the existing answer and completed effects; no repeated answer, additional business tools, or further work. This is the single correction attempt.`;
-export const FINISH_ROUND_MISSING_TEXT = `# Round closure correction
-No usable final answer or report was delivered. Provide the final text, then a complete _FinishRound call alone. Business tools are unavailable during this single closure correction.`;
-export const FINISH_ROUND_DELIVERED = `# Round closure
-Your answer is delivered. Now call _FinishRound to close the round. Submit only a complete _FinishRound call with title, outcome, verification (null when unverified), and carry_forward; do not repeat the answer or run business tools.`;
+export const FINISH_ROUND_FOLLOW_UP = `# Round closure
+Your answer is delivered but the round is not closed. Reply with one _FinishRound call (title and summary) and nothing else: do not repeat the answer or call other tools.`;
+/** Result for a call that arrived in the single closing follow-up and was therefore not executed. */
+export const FINISH_ROUND_CLOSING_TOOL_RESULT = 'The round is closing, so this call was not executed.';
 
-export const FINISH_ROUND_DESCRIPTION = 'Call it in the same reply as your final answer or assigned task report: the text is the delivery, and this call records compact English round-memory metadata and ends the round. This internal tool has no user-facing result. Do not print its arguments in your reply. It is the only tool call in that reply, made once all business tools have finished; it does not verify work or declare Director acceptance.';
+export const FINISH_ROUND_DESCRIPTION = 'Call it in the same reply as your final answer or assigned task report: the text is the delivery, and this call records compact round-memory metadata and ends the round. This internal tool has no user-facing result. Do not print its arguments in your reply. It is the only tool call in that reply, made once all business tools have finished; it does not verify work or declare Director acceptance. Arguments: title (a short name for the round) and summary (what was concluded or changed, the files involved, what was verified, and what remains).';

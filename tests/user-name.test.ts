@@ -123,7 +123,7 @@ test('/name sets, shows and resets the name; the next model request carries it',
     provider: {async respond(request: ModelRequest) {
       requests.push(request);
       return {message: {role: 'assistant' as const, text: 'Done', toolCalls: [{id: 'f' + requests.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', outcome: 'ok', verification: null, carry_forward: []})}]}, stop: 'tools' as const};
+        arguments: JSON.stringify({title: 'Done', summary: 'ok'})}]}, stop: 'tools' as const};
     }}});
   const lastNotice = () => app.store.getSnapshot().messages.filter(message => message.role === 'system').at(-1)?.text;
   try {

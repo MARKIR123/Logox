@@ -33,7 +33,7 @@ test('a business tool revoked during the producing request cannot execute throug
   let legal = true, count = 0, turns = 0;
   const provider: Provider = {async respond() {
     if (++turns === 1) {legal = false; return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'probe', name: 'Probe', arguments: '{}'}]}};}
-    return {stop: 'tools', message: {role: 'assistant', text: 'Finished.', toolCalls: [{id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Finished', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
+    return {stop: 'tools', message: {role: 'assistant', text: 'Finished.', toolCalls: [{id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Finished', summary: 'Round outcome.'})}]}};
   }};
   const run = createAgent({cwd, store, tools: new Tools(cwd, undefined, undefined, {home: cwd}), provider: () => provider, iterations: 0, retries: 0,
     requestBase: async () => {const pool = legal ? [finish, {metadata, definition: probe}] : [finish]; return {system: 'Rules', pool, tools: pool.map(item => item.definition)};},

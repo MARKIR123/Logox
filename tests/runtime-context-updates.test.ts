@@ -36,7 +36,7 @@ test('a retry re-reads permission state, commits its delta once and preserves pr
       throw new ProviderError('Temporary fixture failure', true, 'temporary');
     }
     return {stop: 'tools', message: {role: 'assistant', text: 'Delivered.', toolCalls: [{id: 'done', name: '_FinishRound',
-      arguments: JSON.stringify({title: 'Delivered', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}};
+      arguments: JSON.stringify({title: 'Delivered', summary: 'Round outcome.'})}]}};
   }};
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, kernel: {max_retries: 1}}, {}, cwd, cwd);
   app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});

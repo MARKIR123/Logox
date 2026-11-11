@@ -17,7 +17,7 @@ import {Tools, toolDefinitions} from '../src/tools/index.js';
 
 const glob = (id: string, pattern = '*'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern})}]}, stop: 'tools'});
 const reply = (text: string, calls: NonNullable<ModelTurn['message']['toolCalls']> = []): ModelTurn => ({message: {role: 'assistant', text, ...(calls.length ? {toolCalls: calls} : {})}, stop: calls.length ? 'tools' : 'complete'});
-const finish = {id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})};
+const finish = {id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})};
 
 async function run(turns: ModelTurn[], opts: {companion?: boolean; appendOnly?: boolean} = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-transient-'));

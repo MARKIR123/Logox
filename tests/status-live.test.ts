@@ -18,7 +18,7 @@ async function fixture(sessionId?: string, shared?: {root: string}) {
     fetcher: async () => {throw new Error('offline');},
     provider: {async respond(request: ModelRequest) {
       return {message: {role: 'assistant' as const, text: 'done', toolCalls: [{id: 'finish-' + request.messages.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', outcome: 'ok', verification: null, carry_forward: []})}]}, stop: 'tools' as const,
+        arguments: JSON.stringify({title: 'Done', summary: 'ok'})}]}, stop: 'tools' as const,
         usage: {input: 700, output: 50, cacheRead: 200}};
     }}});
   return {root, app};

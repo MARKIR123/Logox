@@ -292,7 +292,7 @@ test('only the current snapshot is ever sent: it replaces the last one, comes la
   const turns: ModelTurn[] = [
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g1', name: 'Glob', arguments: '{"pattern":"a*"}'}]}, stop: 'tools'},
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g2', name: 'Glob', arguments: '{"pattern":"b*"}'}]}, stop: 'tools'},
-    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools'},
+    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'},
   ];
   const provider: Provider = {async respond(request, delta) {
     requests.push(structuredClone(request));
@@ -330,8 +330,8 @@ test('where the API binds thinking to history, the snapshot is appended only on 
   const requests: ModelRequest[] = [];
   const turn = (id: string): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern: id})}]}, stop: 'tools'});
   const turns = [turn('g1'), turn('g2'), turn('g3'),
-    {message: {role: 'assistant' as const, text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools' as const},
-    {message: {role: 'assistant' as const, text: 'Again.', toolCalls: [{id: 'f2', name: '_FinishRound', arguments: JSON.stringify({title: 'Again', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools' as const}];
+    {message: {role: 'assistant' as const, text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools' as const},
+    {message: {role: 'assistant' as const, text: 'Again.', toolCalls: [{id: 'f2', name: '_FinishRound', arguments: JSON.stringify({title: 'Again', summary: 'Round outcome.'})}]}, stop: 'tools' as const}];
   const provider: Provider = {capabilities: {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true},
     async respond(request, delta) {
       requests.push(structuredClone(request));

@@ -12,7 +12,7 @@ export function finalizingProvider(provider: Provider): Provider {
     if (!request.tools.some(tool => tool.name === '_FinishRound') || turn.stop !== 'complete' || !turn.message.text.trim() || turn.message.toolCalls?.length) return turn;
     const summary = summarizeRound([turn.message], 'completed');
     return {...turn, stop: 'tools', message: {...turn.message, toolCalls: [{id: 'fixture-finish-' + ++ordinal, name: '_FinishRound',
-      arguments: JSON.stringify({title: summary.title.slice(0, 120), outcome: summary.report.slice(0, 600) || 'Round outcome.', verification: null, carry_forward: []})}]}} satisfies ModelTurn;
+      arguments: JSON.stringify({title: summary.title.slice(0, 120), summary: summary.report.slice(0, 200) || 'Round outcome.'})}]}} satisfies ModelTurn;
   }};
 }
 export function createTestApplication(options: Parameters<typeof productionApplication>[0]) {

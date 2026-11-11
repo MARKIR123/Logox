@@ -108,7 +108,7 @@ test('/clear 只清显示，下一请求保留历史；恢复原文与压缩摘�
     try {
       assert.ok(app.store.getSnapshot().messages.some(message => message.text === '需要保留的输入'));
       await submit(app, '新输入');
-      assert.ok(requests.at(-1)?.messages.some(message => /^\d+ \| .* \| Completed/.test(message.text)));
+      assert.ok(requests.at(-1)?.messages.some(message => /^T\d+\|.*\|\d+-\d+$/.test(message.text)));
       assert.ok(requests.at(-1)?.messages.every(message => message.text !== '需要保留的输入'), 'Closed human input may fold; original remains in the journal');
     } finally {await app.close();}
   } finally {await f.cleanup();}

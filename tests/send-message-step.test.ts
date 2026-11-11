@@ -21,7 +21,7 @@ import {loadConfig} from '../src/config/config.js';
 
 const call = (id: string, name: string, args: unknown): ToolCall => ({id, name, arguments: JSON.stringify(args)});
 const tools = (...calls: ToolCall[]): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: calls}, stop: 'tools'});
-const closing = (text: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call('finish', '_FinishRound', {title: 'Done', outcome: 'Round outcome.', verification: null, carry_forward: []})]}, stop: 'tools'});
+const closing = (text: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call('finish', '_FinishRound', {title: 'Done', summary: 'Round outcome.'})]}, stop: 'tools'});
 
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn, ownerId: string) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-send-step-'));

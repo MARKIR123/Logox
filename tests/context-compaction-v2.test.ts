@@ -19,8 +19,7 @@ test('the high watermark is the larger of window minus reserve and a share of th
 
 const ROUNDS = 16;
 const finish = (index: number) => ({id: 'finish-' + index, name: '_FinishRound', arguments: JSON.stringify({
-  title: 'Round ' + index + ' work', outcome: 'Outcome of round ' + index + ' '.padEnd(560, 'o'), verification: 'Checked ' + index,
-  carry_forward: Array.from({length: 8}, (_, item) => 'Open item ' + item + ' '.padEnd(200, 'x'))})});
+  title: 'Round ' + index + ' work', summary: 'Outcome of round ' + index + ' '.padEnd(560, 'o')})});
 
 async function history() {
   const root = await mkdtemp(join(tmpdir(), 'logox-compaction-v2-'));
@@ -47,7 +46,7 @@ test('older rounds become an overview written at the end of the real conversatio
     summaries.push(request);
     return {message: {role: 'assistant', text: 'OVERVIEW of the early rounds'}, stop: 'complete'};
   }};
-  const model = {identity: 'fixture', window: 16384};
+  const model = {identity: 'fixture', window: 2400};
   const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
     policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0, keep_index_lines: 2})});
   try {
@@ -60,8 +59,8 @@ test('older rounds become an overview written at the end of the real conversatio
     assert.match(summary.messages.at(-1)!.role === 'user' ? summary.messages.at(-1)!.text : '', /up to and including round 14[\s\S]*Do not call tools/);
     const texts = request.messages.map(message => message.text);
     assert.ok(texts.some(text => text.includes('OVERVIEW of the early rounds')));
-    for (const kept of [15, 16]) assert.ok(texts.some(text => text.startsWith(kept + ' | Round ' + kept + ' work | Completed; Checked ' + kept + ' | Outcome of round ' + kept)), 'round ' + kept + ' keeps its index line');
-    assert.ok(!texts.some(text => /^3 \| /.test(text)), 'older index lines are inside the overview');
+    for (const kept of [15, 16]) assert.ok(texts.some(text => text.startsWith('T' + kept + '|Round ' + kept + ' work|Outcome of round ' + kept)), 'round ' + kept + ' keeps its index line');
+    assert.ok(!texts.some(text => /^T3\|/.test(text)), 'older index lines are inside the overview');
   } finally { await rm(f.root, {recursive: true, force: true}); }
 });
 
@@ -86,21 +85,21 @@ test('thinking from before a compaction is not sent again; thinking produced aft
   } finally { await rm(f.root, {recursive: true, force: true}); }
 });
 
-test('/rewind names each round by its _FinishRound title and outcome', async () => {
+test('/rewind names each round by its _FinishRound title and summary', async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-rewind-title-')));
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const app = await createTestApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'), sessionId: 'first', config,
     provider: {async respond() { return {message: {role: 'assistant', text: 'ok'}, stop: 'complete'}; }}});
   try {
-    const add = async (activityId: string, text: string, memory?: {title: string; outcome: string}) => {
+    const add = async (activityId: string, text: string, memory?: {title: string; summary: string}) => {
       const id = {version: 1 as const, sessionId: 'first', ownerId: 'logox', activityId};
       await app.journal.append({...id, role: 'user', inputKind: 'human', text, time: Date.now(), message: {role: 'user', text}});
-      const call = memory ? [{id: 'f-' + activityId, name: '_FinishRound', arguments: JSON.stringify({...memory, verification: null, carry_forward: []})}] : undefined;
+      const call = memory ? [{id: 'f-' + activityId, name: '_FinishRound', arguments: JSON.stringify(memory)}] : undefined;
       await app.journal.append({...id, role: 'assistant', text: 'answer', message: {role: 'assistant', text: 'answer', ...(call ? {toolCalls: call} : {})}});
       if (call) await app.journal.append({...id, role: 'tool', text: '', message: {role: 'tool', callId: call[0]!.id, name: '_FinishRound', text: '', isError: false}});
       await app.journal.finishRecord('first', 'logox', activityId, 'completed');
     };
-    await add('titled', '帮我看看这个缓存为什么不命中，顺便', {title: 'Explained the cache miss', outcome: 'Snapshot moved behind the cache boundary'});
+    await add('titled', '帮我看看这个缓存为什么不命中，顺便', {title: 'Explained the cache miss', summary: 'Snapshot moved behind the cache boundary'});
     await add('plain', 'An older round without memory');
     await app.submit('/rewind');
     const picker = app.surfaces.getSnapshot();

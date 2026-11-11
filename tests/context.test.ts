@@ -77,7 +77,7 @@ test('zero retained closed rounds still protect current work and include real le
     const {request} = await f.contexts.prepare(identity, base, signal, true);
     assert.ok(!request.messages.some(message => message.text.startsWith('OLD'.repeat(1000))));
     assert.equal(request.messages.filter(message => message.role !== 'context').at(-1)?.text, '当前进展');
-    assert.match(request.messages[0]!.text, /^1 \| .* \| Completed \| .* \| 1:2$/);
+    assert.match(request.messages[0]!.text, /^T1\|.*\|1-2$/);
     assert.ok(request.messages.some(message => message.text === '新的完整目标'));
   } finally {await f.cleanup();}
 });
@@ -357,7 +357,7 @@ test('application auto-compaction and manual compaction share policy and restore
   try {
     for (let index = 0; index < 3; index++) await app.ensemble.dispatch('logox', '目标' + index).done;
     assert.equal(requests.length, 3, JSON.stringify(app.store.getSnapshot().activities));
-    assert.ok(requests[2]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
+    assert.ok(requests[2]!.messages.some(message => message.text.includes('|已完成核对|')));
     const before = await app.journal.load('context-app', 'logox');
     await app.submit('/compact');
     assert.deepEqual(await app.journal.load('context-app', 'logox'), before);
@@ -366,7 +366,7 @@ test('application auto-compaction and manual compaction share policy and restore
     app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
     assert.equal(requests.length, 3, 'Restore makes no model request');
     await app.ensemble.dispatch('logox', '继续').done;
-    assert.ok(requests[3]!.messages.some(message => message.text.includes('| 已完成核对 | Completed')));
+    assert.ok(requests[3]!.messages.some(message => message.text.includes('|已完成核对|')));
     assert.equal(requests[3]!.messages.findLast(message => message.role === 'user')?.text, '继续');
     assert.ok(requests[3]!.maxTokens! < config.provider.max_tokens);
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}

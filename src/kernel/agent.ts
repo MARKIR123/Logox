@@ -27,17 +27,16 @@ import {PeerWait} from './peer-wait.js';
 import {asksFor} from '../runtime/asks.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import {textToolCallName} from './text-tool-call.js';
-import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
+import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE, TOOLS_WITHDRAWN_RESULT, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {composeBaseSystemPrompt} from '../prompts/index.js';
 import {settleToolResults} from './scratchpad.js';
 import {DIRECTOR_INTERRUPTED_TOOL_TEXT, TOOL_CANCELLED_TEXT, USER_INTERRUPTED_TOOL_TEXT} from '../prompts/runtime/interruption.js';
-import {omitInternalToolPairs} from '../context/round-memory.js';
-import {clampText} from '../context/contracts.js';
-import {finishRoundTool, isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
-import {FINISH_ROUND_REPAIR, FINISH_ROUND_MISSING_TEXT, FINISH_ROUND_DELIVERED} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {normalizeFinishRound, omitInternalToolPairs} from '../context/round-memory.js';
+import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {FINISH_ROUND_FOLLOW_UP, FINISH_ROUND_CLOSING_TOOL_RESULT} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {extractNarration, stripNarration, withStageLines} from '../runtime/narration.js';
 import {roleCacheRetention} from '../providers/cache.js';
 import type {CacheKeeper} from './cache-keepalive.js';
@@ -67,6 +66,8 @@ export interface AgentRequestBase {
   tools: readonly ToolDefinition[];
   pool: readonly ResolvedTool[];
   contextUpdates?: readonly RuntimeContextMessage[];
+  /** When set, every business tool call of this request is answered with this text instead of running; the tool list itself never changes. */
+  refuseTools?: string;
   /** The ensemble as it is right now: sent last on this request only, so earlier states never pile up in context. */
   snapshot?: string;
   /** The actor's own `cache_retention`; unset leaves the model's setting and the role default. */
@@ -141,6 +142,8 @@ const DRAFT_CHARS_STEP = 1024, DRAFT_MS_STEP = 250;
 const ASK_CLOSE_REMINDERS = 2;
 /** Model requests an actor may work with an unanswered question before its single working reminder. */
 const ASK_WORK_REMINDER_AFTER = 4;
+/** Consecutive tool batches refused (withdrawn or restricted tools) before the runtime ends the exchange itself. */
+const REFUSED_BATCH_LIMIT = 2;
 
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
   const localRecoveries = new Map<string, ActorRecovery>();
@@ -191,12 +194,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         recoveringKind = 'no_delivery';
         return true;
       };
-      let memoryRepair = false;
+      /** True once the delivered text is in and the single closing follow-up (same tools, one note) is the next or current request. */
+      let closing = false;
       let finalText = '';
-      /** True when the delivery text arrived during round-memory repair, so only `_FinishRound` is still owed. */
-      let deliveredInRepair = false;
-      const correctionCalls = new Set<string>();
       const pacing = new ToolPacing();
+      let refusedBatches = 0;
       const directorWaiting = () => context.ownerId === 'logox' && options.store.getSnapshot().activities.some(activity =>
         activity.sessionId === context.sessionId && activity.kind === 'actor' && ['queued', 'running', 'waiting_input'].includes(activity.status));
       const teammatesRunning = () => options.store.getSnapshot().activities.some(activity => activity.sessionId === context.sessionId && activity.kind === 'actor' &&
@@ -212,8 +214,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (owesReply()) {
           closeReminders++;
           recovery = askOwedAtClose(asks.owed(context.sessionId, context.ownerId));
-          recoveringKind = undefined; memoryRepair = false; finalText = ''; deliveredInRepair = false;
-          correctionCalls.clear();
+          recoveringKind = undefined; closing = false; finalText = '';
           context.acceptRoundMemory?.(null);
           return true;
         }
@@ -235,7 +236,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const inboundRecovery = context.inboundRecovery?.();
         if (inboundRecovery) context = {...context, recovery: inboundRecovery};
         context.acceptRoundMemory?.(null);
-        memoryRepair = false; finalText = ''; deliveredInRepair = false; correctionCalls.clear();
+        closing = false; finalText = '';
         return true;
       };
       const recoverOutput = async (kind: ExecutionRecoveryKind, thinkingId: string): Promise<void> => {
@@ -262,8 +263,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (waitNotices.length) {
           pacing.reset();
           closeReminders = 0;
-          memoryRepair = false; finalText = ''; deliveredInRepair = false; recovery = ''; recoveringKind = undefined;
-          correctionCalls.clear();
+          closing = false; finalText = ''; recovery = ''; recoveringKind = undefined;
           context.acceptRoundMemory?.(null);
         }
         const activeProvider = taskModel?.provider() ?? options.provider();
@@ -271,7 +271,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         instruction = options.requestBase ? await options.requestBase(context, assembly)
           : await agentRequestBase(options.cwd, context.ownerId, options.extraRegistrations ?? options.extraTools, options.resources,
             undefined, true, undefined, undefined, undefined, assembly);
-        if (!memoryRepair && options.iterations > 0 && iteration >= options.iterations) {
+        if (!closing && options.iterations > 0 && iteration >= options.iterations) {
           const outcome = await context.ask({kind: 'question', title: 'Continue this task?', questions: [{
             id: 'continue', header: 'Iterations', question: 'Reached ' + options.iterations + ' model round trips. Continue?',
             options: [{id: 'yes', label: 'Continue', description: 'Add another budget quota of round trips.'}, {id: 'no', label: 'Stop', description: 'Keep current results and end task.'}],
@@ -282,8 +282,10 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           iteration = 0;
         }
-        const closingOnly = memoryRepair || pacing.withdrawn && !owesReply();
-        const definitions = closingOnly ? [finishRoundTool] : instruction.tools;
+        // Withdrawn tools stay in the request (the cache prefix starts with the tool list); calls to them are answered with an error instead.
+        const withdrawn = pacing.withdrawn && !owesReply();
+        const refusal = withdrawn ? TOOLS_WITHDRAWN_RESULT : instruction.refuseTools;
+        const definitions = instruction.tools;
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const appendOnly = assembly.capabilities.appendOnlyHistory === true;
         const appendUpdate = async (value: RuntimeContextMessage) => {
@@ -313,14 +315,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           if (seen === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('task-state', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
         }
         if (recovery) await appendUpdate(createRuntimeContextMessage('recovery', recovery));
-        if (memoryRepair) {
-          await appendUpdate(createRuntimeContextMessage('finalizer', finalText ? deliveredInRepair ? FINISH_ROUND_DELIVERED : FINISH_ROUND_REPAIR : FINISH_ROUND_MISSING_TEXT));
-        }
+        if (closing) await appendUpdate(createRuntimeContextMessage('finalizer', FINISH_ROUND_FOLLOW_UP));
         const base = {system: instruction.system,
-          ...(!closingOnly && instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
+          ...(instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
           // Tool fields and validation are unchanged; omits the draft-version URL repeated in every schema.
           tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
-        const prepared = await options.context?.prepare(context, base, context.signal, false, correctionCalls);
+        const prepared = await options.context?.prepare(context, base, context.signal);
         if (await drainInbox()) continue requestLoop;
         if (taskModel && prepared && prepared.model.identity !== taskModel.model().identity) {
           throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');
@@ -328,8 +328,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const initialProjection = prepared?.request ?? {...base, messages};
         const snapshot = instruction.snapshot && !appendOnly ? [createRuntimeContextMessage('snapshot', instruction.snapshot, {activityId: context.activityId})] : [];
         // Hiding finished `_FinishRound` pairs and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
-        const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredTransient(initialProjection.messages), correctionCalls))
-          .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || memoryRepair && message.data?.activityId === context.activityId)
+        const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredTransient(initialProjection.messages)))
+          .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || closing && message.data?.activityId === context.activityId)
           // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
           .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
         // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
@@ -339,8 +339,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const dumpDir = options.requestDumpDir?.(context);
         request = {...request, cacheKey: promptCacheKey(context.sessionId, context.ownerId),
           cacheRetention: {role: roleCacheRetention(context.ownerId), ...(instruction.cacheRetention ? {actor: instruction.cacheRetention} : {})}, ...(dumpDir ? {dumpDir} : {})};
-        if (!memoryRepair) iteration++;
-        const metadataOnly = memoryRepair && !!finalText;
+        if (!closing) iteration++;
         context.report(recoveringKind ? recoveringKind === 'no_delivery' ? 'Adjusting' : 'Resuming' : 'Model processing',
           recoveringKind ? recovery : 'Round trip ' + iteration);
         let emitted = false, textId: string | undefined;
@@ -385,7 +384,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
               if (delta.kind === 'tool') return draft(delta);
               emitted = true;
               const kind = delta.kind;
-              if (metadataOnly && kind === 'text') return;
+              if (closing && kind === 'text') return;
               if (kind === 'text' && steps.get(thinkingId).state === 'running') {
                 steps.finish(thinkingId, 'completed'); steps.endGroup('completed'); steps.phase('text');
               }
@@ -455,8 +454,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             const step = steps.finish(thinkingId, context.signal.aborted ? 'cancelled' : 'failed');
             // The store keeps the raw `⏵` line for the timeline; the ledger never does.
             const partial = extractNarration(text);
-            await persist({role: 'assistant', text: partial ? partial.cleanText : text, ...(partial ? {stage: partial.narration} : {}), ...(reasoning ? {reasoning} : {}), ...(metadataOnly ? {memoryOnly: true as const} : {})}, step);
-            if (memoryRepair && finalText && !context.signal.aborted) {
+            await persist({role: 'assistant', text: partial ? partial.cleanText : text, ...(partial ? {stage: partial.narration} : {}), ...(reasoning ? {reasoning} : {}), ...(closing ? {memoryOnly: true as const} : {})}, step);
+            if (closing && !context.signal.aborted) {
               if (await drainInbox(true)) continue requestLoop;
               context.signal.throwIfAborted();
               outcome = 'completed'; return;
@@ -485,11 +484,11 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           void context.saveProgress?.(next);
           options.store.activities.update(context.sessionId, context.activityId, {progress: next});
         }
-        if (metadataOnly) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
+        if (closing) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
         // A call serialized as plain text executed nothing: it is not a delivery, and the card shows a short note instead of the dump.
-        const textCall = turn.stop === 'complete' && !turn.message.toolCalls?.length && !closingOnly && !!textToolCallName(turn.message.text, definitions);
+        const textCall = turn.stop === 'complete' && !turn.message.toolCalls?.length && !closing && !withdrawn && !!textToolCallName(turn.message.text, definitions);
         if (textCall && textId) options.store.updateMessage(textId, {text: TEXT_TOOL_CALL_NOTE, role: 'notice'});
-        if (storedText && !textId && !metadataOnly) {
+        if (storedText && !textId && !closing) {
           if (steps.get(thinkingId).state === 'running') steps.finish(thinkingId, 'completed');
           steps.endGroup('completed'); steps.phase('text');
           options.store.message(context.sessionId, context.ownerId, textCall ? 'notice' : 'assistant', textCall ? TEXT_TOOL_CALL_NOTE : storedText, {activityId: context.activityId});
@@ -502,51 +501,28 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           ids.add(call.id);
         }
         const calls = turn.message.toolCalls ?? [];
-        if (calls.some(call => isFinishRound(call.name)) || closingOnly && calls.length) {
+        if (closing ? calls.length > 0 : calls.some(call => isFinishRound(call.name))) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {try {JSON.parse(call.arguments); return false;} catch {return true;}});
           const onlyFinalizer = calls.length === 1 && isFinishRound(calls[0]!.name);
-          if (onlyFinalizer && !truncated) {
-            try {
-              const rawArgs: unknown = JSON.parse(calls[0]!.arguments);
-              if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
-                const obj = rawArgs as Record<string, unknown>;
-                let clamped = false;
-                if (typeof obj.title === 'string' && obj.title.trim().length > 120) {
-                  obj.title = clampText(obj.title, 120); clamped = true;
-                }
-                if (typeof obj.outcome === 'string' && obj.outcome.trim().length > 600) {
-                  obj.outcome = clampText(obj.outcome, 600); clamped = true;
-                }
-                if (typeof obj.verification === 'string' && obj.verification.trim().length > 240) {
-                  obj.verification = clampText(obj.verification, 240); clamped = true;
-                }
-                if (Array.isArray(obj.carry_forward)) {
-                  const nextCarry = obj.carry_forward.slice(0, 8).map(item =>
-                    typeof item === 'string' && item.trim().length > 240 ? (clamped = true, clampText(item, 240)) : item
-                  );
-                  if (obj.carry_forward.length > 8) clamped = true;
-                  if (clamped) obj.carry_forward = nextCarry;
-                }
-                if (clamped) calls[0] = {...calls[0]!, arguments: JSON.stringify(obj)};
-              }
-            } catch {}
-          }
-          const check = onlyFinalizer && !truncated ? validateToolCall(calls[0]!) : undefined;
-          if (!metadataOnly && turn.message.text.trim()) finalText = turn.message.text;
+          // Arguments are accepted leniently in one place; the call is rewritten to the accepted form so the ledger holds what the runtime used.
+          const finishCall = calls.find(call => isFinishRound(call.name));
+          const accepted = finishCall && !truncated ? normalizeFinishRound(finishCall.arguments, stages.at(-1) ?? context.taskTitle ?? '') : undefined;
+          if (finishCall && accepted) calls[calls.indexOf(finishCall)] = {...finishCall, arguments: JSON.stringify(accepted)};
+          if (!closing && turn.message.text.trim()) finalText = turn.message.text;
           const allowed = base.tools.some(tool => isFinishRound(tool.name));
-          const valid = allowed && onlyFinalizer && !truncated && check?.valid && !!finalText.trim();
-          const error = !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
+          const valid = allowed && !!accepted && (closing || onlyFinalizer && !!finalText.trim());
+          const error = !closing && !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
             : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
             : !allowed ? 'Terminal metadata is not available in this request.'
-            : check && !check.valid ? check.error : 'Deliver the final answer or task report before submitting round memory.';
+            : !accepted ? 'Round memory needs a non-empty summary.' : 'Deliver the final answer or task report before submitting round memory.';
           const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
           await persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
           if (prepared) options.context?.observe(context, request, turn, prepared.model);
-          correctionCalls.clear();
+          const sent = calls.find(call => isFinishRound(call.name));
           try {
             for (const call of calls) {
-              await persist({role: 'tool', callId: call.id, name: call.name, text: valid ? '' : error, isError: !valid});
-              if (!valid && !truncated && isFinishRound(call.name)) correctionCalls.add(call.id);
+              const ok = valid && call === sent;
+              await persist({role: 'tool', callId: call.id, name: call.name, text: ok ? '' : closing && call !== sent ? FINISH_ROUND_CLOSING_TOOL_RESULT : error, isError: !ok});
             }
           } catch (error) {
             context.signal.throwIfAborted();
@@ -557,19 +533,19 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             outcome = 'completed'; return;
           }
           context.signal.throwIfAborted();
-          if ((valid || closingOnly) && await holdClose()) continue requestLoop;
-          if (await drainInbox(valid || memoryRepair)) continue;
+          if ((valid || closing) && await holdClose()) continue requestLoop;
+          if (await drainInbox(valid || closing)) continue;
           context.signal.throwIfAborted();
-          if (valid) {context.acceptRoundMemory?.(calls[0]!.id); outcome = 'completed'; return;}
-          if (memoryRepair) {
-            if (!finalText && !directorWaiting()) {
+          // The follow-up is asked once: whatever it held besides a usable call, the runtime writes the record and the round ends.
+          if (valid) context.acceptRoundMemory?.(sent!.id);
+          if (valid || closing) {outcome = 'completed'; return;}
+          if (finalText.trim()) {closing = true; recovery = ''; recoveringKind = undefined; continue;}
+          // Nothing was ever delivered: the empty-reply recovery applies.
+          if (!directorWaiting()) {
             if (remindEmptyReply()) continue requestLoop;
             throw new ExecutionRecoveryError('no_delivery', 'stop');
           }
-            outcome = 'completed'; return;
-          }
-          memoryRepair = true;
-          continue;
+          outcome = 'completed'; return;
         }
         if (calls.length) {
           const truncated = turn.stop !== 'tools' || calls.some(call => {
@@ -637,6 +613,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             instruction.pool?.find(item => item.definition.name === (canonicalToolName(call.name) ?? call.name))?.metadata.terminalVisibility)]));
           try {
             const execute = async (call: ToolCall): Promise<ToolResult> => {
+              if (refusal && !truncated) return {text: refusal, isError: true, disposition: 'error'};
               if (truncated) return {text: 'This batch of tools was not executed: the response did not end normally or the arguments were incomplete. Reissue complete tool calls.', isError: true};
               const invalid = schemaErrors.get(call.id);
               if (invalid) return {text: 'Parameter validation failed for tool `' + call.name + '`: ' + invalid + (voidBatch
@@ -748,6 +725,20 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             recovery = '';
             recoveringKind = undefined;
           }
+          // A refused batch is answered once. A second one in a row ends the exchange without another request, so a model that ignores the refusal cannot loop.
+          refusedBatches = refusal && !truncated ? refusedBatches + 1 : 0;
+          if (refusedBatches >= REFUSED_BATCH_LIMIT) {
+            refusedBatches = 0;
+            if (withdrawn && wait.pending) {
+              context.report('Waiting', wait.describe());
+              await wait.park();
+              continue requestLoop;
+            }
+            if (await drainInbox(true)) continue requestLoop;
+            context.signal.throwIfAborted();
+            if (withdrawn) {outcome = 'completed'; return;}
+            throw new ExecutionRecoveryError('no_delivery', 'stop');
+          }
           if (pacing.withdrawn && !owesReply()) {
             recovery = context.ownerId === 'logox' ? DIRECTOR_WAIT_INSTRUCTION : COMPANION_WAIT_INSTRUCTION;
             recoveringKind = undefined;
@@ -762,20 +753,13 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           finally {await persist({...turn.message, textToolCall: true as const}, thinkingStep);}
           continue requestLoop;
         }
-        if (memoryRepair) {
-          // Text without `_FinishRound` during repair is the delivery: record it once and ask only for the closure.
-          const delivered = !finalText && turn.message.text.trim() !== '';
-          if (delivered) {finalText = turn.message.text; deliveredInRepair = true;}
+        if (closing) {
+          // The follow-up came back without a call: the delivered text stands and the runtime writes the record.
           await persist(turn.message, thinkingStep);
           context.signal.throwIfAborted();
           if (await holdClose()) continue requestLoop;
           if (await drainInbox(true)) continue;
           context.signal.throwIfAborted();
-          if (delivered) continue requestLoop;
-          if (!finalText && !directorWaiting()) {
-            if (remindEmptyReply()) continue requestLoop;
-            throw new ExecutionRecoveryError('no_delivery', 'stop');
-          }
           outcome = 'completed'; return;
         }
         if (turn.stop === 'complete' && !turn.message.text.trim() && (wait.pending || owesReply())) {
@@ -802,8 +786,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           context.signal.throwIfAborted();
           if (needsMemory) {
             finalText = turn.message.text;
-            memoryRepair = true;
-            correctionCalls.clear();
+            closing = true; recovery = ''; recoveringKind = undefined;
             continue;
           }
           outcome = 'completed';

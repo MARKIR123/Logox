@@ -15,8 +15,9 @@ import {answerEnvelope} from '../src/runtime/interactions.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import {createProvider} from '../src/providers/http.js';
+import {estimateText} from '../src/context/budget.js';
 
-const metadata = {title: 'Delivered result', outcome: 'Round outcome.', verification: null, carry_forward: []};
+const metadata = {title: 'Delivered result', summary: 'Round outcome.'};
 const finish = (id = 'finish', args: unknown = metadata): ToolCall => ({id, name: '_FinishRound', arguments: typeof args === 'string' ? args : JSON.stringify(args)});
 const turn = (text: string, calls?: ToolCall[], stop: ModelTurn['stop'] = calls ? 'tools' : 'complete'): ModelTurn => ({message: {role: 'assistant', text, ...(calls ? {toolCalls: calls} : {})}, stop});
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn | Promise<ModelTurn>, setup?: (journal: Journal) => void) {
@@ -195,12 +196,13 @@ test('only formal Director dispatch produces an independent full report', async 
   } finally {await f.cleanup();}
 });
 
-test('missing metadata gets one metadata-only correction without repeating the answer', async () => {
+test('missing metadata gets one follow-up with the same tools and a single note', async () => {
   const f = await fixture((request, index) => {
     if (index === 1) return turn('Already delivered');
     assert.equal(index, 2);
-    assert.deepEqual(request.tools.map(tool => tool.name), ['_FinishRound']);
-    assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'finalizer')?.text ?? '', /metadata-only/i);
+    assert.deepEqual(request.tools, f.requests[0]!.tools, 'the tool list is the start of the cache prefix and stays untouched');
+    assert.equal(request.system, f.requests[0]!.system);
+    assert.match(request.messages.findLast(message => message.role === 'context' && message.kind === 'finalizer')?.text ?? '', /Round closure/);
     return turn('Already delivered', [finish()]);
   });
   try {
@@ -214,7 +216,7 @@ test('missing metadata gets one metadata-only correction without repeating the a
   } finally {await f.cleanup();}
 });
 
-test('invalid metadata repair is bounded and falls back without fabricating verification', async () => {
+test('an unusable follow-up is not repeated and the runtime writes a [runtime] record', async () => {
   const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn(index === 1 ? 'Actual answer' : '', [finish('bad-' + index, {title: 'Only title'})]);});
   try {
     const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
@@ -224,20 +226,67 @@ test('invalid metadata repair is bounded and falls back without fabricating veri
     const entries = await f.journal.load('s', 'logox');
     const record = (await f.journal.rounds('s', 'logox', entries))[0]!;
     assert.equal(record.memory?.source, 'runtime');
-    assert.equal(record.memory?.verification, null);
-    assert.ok(record.memory?.carryForward.length);
+    assert.match(record.memory?.summary ?? '', /^\[runtime\]/);
+  } finally {await f.cleanup();}
+});
+
+test('business tools in the follow-up are answered but never executed, and the round ends without a second follow-up', async () => {
+  const f = await fixture((_request, index) => {
+    assert.ok(index <= 2);
+    return index === 1 ? turn('Delivered') : turn('', [{id: 'late-write', name: 'Write', arguments: JSON.stringify({file_path: join(f.cwd, 'late.txt'), content: 'x'})}]);
+  });
+  try {
+    const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
+    await task.done;
+    assert.equal(f.store.activities.get('s', task.activityId)?.status, 'completed');
+    assert.equal(f.requests.length, 2);
+    await assert.rejects(readFile(join(f.cwd, 'late.txt')), {code: 'ENOENT'});
+    const entries = await f.journal.load('s', 'logox');
+    const result = entries.find(entry => entry.message?.role === 'tool' && entry.message.callId === 'late-write')?.message;
+    assert.ok(result?.role === 'tool' && result.isError && /closing/.test(result.text));
+    const record = (await f.journal.rounds('s', 'logox', entries))[0]!;
+    assert.equal(record.memory?.source, 'runtime');
+    assert.match(record.memory?.summary ?? '', /^\[runtime\]/);
+  } finally {await f.cleanup();}
+});
+
+test('legacy finalizer arguments are joined into the summary and a missing title is filled from the task title', async () => {
+  const f = await fixture(() => turn('Done', [finish('legacy', {outcome: 'Fixed parser.', verification: 'npm test passed', carry_forward: ['Windows untested'], extra: 1})]));
+  try {
+    const task = f.ensemble.dispatch('logox', 'Explain', 'direct', {taskTitle: 'Parser repair'});
+    await task.done;
+    const entries = await f.journal.load('s', 'logox');
+    const record = (await f.journal.rounds('s', 'logox', entries))[0]!;
+    assert.equal(record.memory?.source, 'model');
+    assert.equal(record.memory?.title, 'Parser repair');
+    assert.equal(record.memory?.summary, 'Fixed parser.; npm test passed; Windows untested');
+    assert.equal(f.requests.length, 1);
+  } finally {await f.cleanup();}
+});
+
+test('over-long title and summary are truncated to their token budgets, never rejected', async () => {
+  const f = await fixture(() => turn('Done', [finish('long', {title: '标题'.repeat(60), summary: 'word '.repeat(400)})]));
+  try {
+    const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
+    await task.done;
+    const entries = await f.journal.load('s', 'logox');
+    const memory = (await f.journal.rounds('s', 'logox', entries))[0]!.memory!;
+    assert.equal(memory.source, 'model');
+    assert.ok(estimateText(memory.title) <= 30 && memory.title.endsWith('…'));
+    assert.ok(estimateText(memory.summary) <= 200 && memory.summary.endsWith('…'));
   } finally {await f.cleanup();}
 });
 
 test('metadata without a delivered answer cannot complete a round', async () => {
   // The first textless close gets one static reminder; the second ends the round as failed.
-  const f = await fixture((_request, index) => {assert.ok(index <= 3); return turn('', [finish('no-text-' + index)]);});
+  const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn('', [finish('no-text-' + index)]);});
   try {
     const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
     await task.done;
     assert.equal(f.store.activities.get('s', task.activityId)?.status, 'failed');
-    assert.equal(f.requests.length, 3);
-    assert.ok(JSON.stringify(f.requests[2]!.messages).includes('Your previous reply was empty.'));
+    assert.equal(f.requests.length, 2);
+    assert.ok(JSON.stringify(f.requests[1]!.messages).includes('Your previous reply was empty.'));
+    assert.deepEqual(f.requests[1]!.tools, f.requests[0]!.tools);
     const entries = await f.journal.load('s', 'logox');
     assert.ok(entries.filter(entry => entry.message?.role === 'tool').every(entry => entry.message?.role === 'tool' && entry.message.isError));
   } finally {await f.cleanup();}
@@ -247,7 +296,7 @@ test('mixed business/finalizer batches execute no side effects and require corre
   const f = await fixture((request, index) => {
     if (index === 1) return turn('No file was created', [{id: 'write', name: 'Write', arguments: JSON.stringify({file_path: 'never.txt', content: 'bad'})}, finish('mixed')]);
     assert.equal(index, 2);
-    assert.deepEqual(request.tools.map(tool => tool.name), ['_FinishRound']);
+    assert.deepEqual(request.tools, f.requests[0]!.tools);
     return turn('', [finish('corrected')]);
   });
   try {
@@ -336,7 +385,7 @@ test('continuation invalidates successful old metadata even when the next correc
     const record = (await f.journal.rounds('s', 'techne', entries))[0]!;
     assert.equal(record.memory?.source, 'runtime');
     assert.notEqual(record.memory?.title, 'Stale clean result');
-    assert.ok(record.memory?.carryForward.length);
+    assert.match(record.memory?.summary ?? '', /^\[runtime\]/);
     assert.equal(record.delivery?.text, 'Updated answer: integration is failing; do not ship');
   } finally {await f.cleanup();}
 });

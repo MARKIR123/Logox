@@ -52,7 +52,7 @@ async function createFixture() {
         assert.ok(request.tools.some(tool => tool.name === '_FinishRound'), 'Use the real production finalizer contract.');
         return {message: {role: 'assistant' as const, text: 'Task complete',
           toolCalls: [{id: 'receipt-finish-' + requests.length, name: '_FinishRound',
-            arguments: JSON.stringify({title: 'Receipt fixture complete', outcome: 'Round outcome.', verification: null, carry_forward: []})}]}, stop: 'tools' as const};
+            arguments: JSON.stringify({title: 'Receipt fixture complete', summary: 'Round outcome.'})}]}, stop: 'tools' as const};
       }}};
     const app = await createApplication(options);
     return {root, cwd, home, app, options, requests, network};

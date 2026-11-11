@@ -41,7 +41,7 @@ test('folding replaces human logs and Director assignments with exact indexes, n
       const {request} = await contexts.prepare({sessionId: 's', ownerId}, {system: 'Execution rules', tools: []}, new AbortController().signal, true);
       const text = JSON.stringify(request.messages);
       assert.ok(!text.includes('PASTED_LOG') && !text.includes('FULL_TASK_REPORT') && !text.includes('_FinishRound'));
-      assert.ok(request.messages.some(message => message.text === '1 | Fixed cancellation cleanup | Completed; Targeted tests passed | Round outcome. | Windows integration unverified | 1:5'));
+      assert.ok(request.messages.some(message => message.text === 'T1|Fixed cancellation cleanup|Round outcome.|1-5'));
       assert.deepEqual(request.messages.filter(message => message.role === 'tool').map(message => message.callId), ['read']);
       assert.match(request.messages.findLast(message => message.role === 'user')!.text, /do not write files[\s\S]*unverified/);
       assert.ok(request.messages.some(message => message.role === 'context' && message.kind === 'ledger' && message.text.includes(journal.path('s', ownerId))));
@@ -65,7 +65,7 @@ test('injected user messages keep an unfinished activity intact across projectio
     assert.ok(request.messages.some(message => message.text.includes('Current assignment')));
     assert.ok(request.messages.some(message => message.text.includes('Confirmed effect') && message.text.includes('Blocker') && message.text.includes('Next:')));
     assert.match(request.messages.at(-1)!.text, /Permission revoked/);
-    assert.ok(!request.messages.some(message => /^\d+ \|/.test(message.text)));
+    assert.ok(!request.messages.some(message => /^T\d+\|/.test(message.text)));
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
@@ -106,8 +106,8 @@ test('validated legacy sidecars beginning at injected input retain completed sta
       const contexts = new ContextManager({journal: restored, maxOutput: 512, policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0}),
         model: () => ({identity: 'fixture', window: 131072}), summarizer: () => {throw new Error('No summary request needed');}});
       const {request} = await contexts.prepare(identity, {system: '', tools: []}, new AbortController().signal, true);
-      assert.ok(request.messages.some(message => /^1 \| Legacy done \| Completed \|.*\| 1:4$/.test(message.text)), JSON.stringify(request.messages));
-      assert.ok(!request.messages.some(message => message.text.includes('| Failed')));
+      assert.ok(request.messages.some(message => /^T1\|Legacy done\|.*\|1-4$/.test(message.text)), JSON.stringify(request.messages));
+      assert.ok(!request.messages.some(message => message.text.includes('[failed]')));
     };
     await verify();
     await journal.append({...identity, activityId: 'b', role: 'user', text: 'Next assignment'});
@@ -119,28 +119,51 @@ test('validated legacy sidecars beginning at injected input retain completed sta
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-const finalCall = (id = 'finish') => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Fixed cancellation cleanup', outcome: 'Round outcome.', verification: 'Targeted tests passed', carry_forward: ['Windows integration unverified']})});
+const finalCall = (id = 'finish') => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Fixed cancellation cleanup', summary: 'Round outcome.'})});
 
-test('round indexes use six compact fields and keep empty columns in place', async () => {
+test('round indexes use four compact columns and sanitise separators', async () => {
   const {formatRoundIndex} = await memoryModule();
-  assert.equal(formatRoundIndex({ordinal: 42, title: 'Fixed cancellation cleanup', status: 'completed', verification: 'targeted tests passed', outcome: 'Release now waits for exit', carryForward: ['Windows integration unverified'], start: 120, end: 158}),
-    '42 | Fixed cancellation cleanup | Completed; targeted tests passed | Release now waits for exit | Windows integration unverified | 120:158');
-  assert.equal(formatRoundIndex({ordinal: 43, title: 'Explained actor model selection', status: 'completed', verification: null, carryForward: [], start: 159, end: 172}),
-    '43 | Explained actor model selection | Completed |  |  | 159:172');
-  const sanitized = formatRoundIndex({ordinal: 1, title: 'First\nSecond|Third', status: 'cancelled', verification: null, carryForward: ['Blocker\r\ncontinued|detail'], start: 1, end: 2});
-  assert.equal(sanitized, '1 | First Second/Third | Cancelled |  | Blocker continued/detail | 1:2');
-  assert.equal(sanitized.split('|').length, 6);
-  assert.throws(() => formatRoundIndex({ordinal: 0, title: 'Bad range', status: 'failed', verification: null, carryForward: [], start: 3, end: 2}));
+  assert.equal(formatRoundIndex({ordinal: 42, title: 'Fixed cancellation cleanup', summary: 'Release now waits for exit; tests passed', start: 120, end: 158}),
+    'T42|Fixed cancellation cleanup|Release now waits for exit; tests passed|120-158');
+  const sanitized = formatRoundIndex({ordinal: 1, title: 'First\nSecond|Third', summary: '[interrupted] Blocker\r\ncontinued|detail', start: 1, end: 2});
+  assert.equal(sanitized, 'T1|First Second/Third|[interrupted] Blocker continued/detail|1-2');
+  assert.equal(sanitized.split('|').length, 4);
+  assert.throws(() => formatRoundIndex({ordinal: 0, title: 'Bad range', summary: 'x', start: 3, end: 2}));
 });
 
-test('finalization accepts semantic metadata, not model-owned runtime facts', async () => {
+test('token-budget truncation counts non-ASCII as 1 and ASCII as 0.25 and never exceeds the budget', async () => {
+  const {truncateToTokens, estimateText} = await import('../src/context/budget.js');
+  assert.equal(truncateToTokens('  short text  ', 30), 'short text');
+  const chinese = truncateToTokens('这是一个很长的标题'.repeat(10), 30);
+  assert.ok(estimateText(chinese) <= 30 && chinese.endsWith('…'));
+  assert.equal([...chinese].length, 30, 'about one token per Chinese character: 29 characters plus the ellipsis');
+  const english = truncateToTokens('word '.repeat(100), 30);
+  assert.ok(estimateText(english) <= 30 && english.endsWith('…'));
+  assert.ok([...english].length > 100, 'ASCII text keeps roughly four characters per token');
+  assert.equal(truncateToTokens('漢'.repeat(30), 30), '漢'.repeat(30), 'exactly on budget stays whole');
+  assert.equal(truncateToTokens('x'.repeat(10), 0), '…');
+  const astral = truncateToTokens('😀'.repeat(50), 10);
+  assert.ok(estimateText(astral) <= 10 && !/[�-�](?![�-�])|(?<![�-�])[�-�]/.test(astral), 'surrogate pairs are never split');
+});
+
+test('finalization accepts title and summary and ignores everything else', async () => {
   const {finishRoundSchema, finishRoundTool, finishRoundPolicy} = await toolModule();
-  const metadata = {title: 'Explained tools', outcome: 'Round outcome.', verification: null, carry_forward: []};
+  const {normalizeFinishRound} = await memoryModule();
+  const metadata = {title: 'Explained tools', summary: 'Round outcome.'};
   assert.deepEqual(finishRoundSchema.parse(metadata), metadata);
-  for (const extra of [{status: 'completed'}, {ordinal: 3}, {start: 4}, {end: 7}]) assert.equal(finishRoundSchema.safeParse({...metadata, ...extra}).success, false);
-  for (const invalid of [{...metadata, title: ' '}, {...metadata, title: 'x'.repeat(121)}, {...metadata, carry_forward: [' ']}, {...metadata, verification: 'x'.repeat(241)}, {...metadata, carry_forward: Array(9).fill('item')}, {...metadata, outcome: 'x'.repeat(601)}, {title: 'No outcome', verification: null, carry_forward: []}]) {
-    assert.equal(finishRoundSchema.safeParse(invalid).success, false);
-  }
+  assert.deepEqual(finishRoundSchema.parse({...metadata, status: 'completed', ordinal: 3}), metadata, 'unknown fields are ignored');
+  assert.equal(finishRoundSchema.safeParse({title: ' ', summary: 'x'}).success, false);
+  assert.equal(finishRoundSchema.safeParse({title: 'No summary'}).success, false);
+  assert.deepEqual(normalizeFinishRound(JSON.stringify({summary: 'Only a summary', extra: 1}), 'Stage line'), {title: 'Stage line', summary: 'Only a summary'});
+  assert.deepEqual(normalizeFinishRound(JSON.stringify({summary: 'Only a summary'})), {title: 'Round', summary: 'Only a summary'});
+  assert.equal(normalizeFinishRound(JSON.stringify({title: 'No summary', summary: '  '})), undefined);
+  assert.equal(normalizeFinishRound('{"title":'), undefined);
+  assert.equal(normalizeFinishRound('[1]'), undefined);
+  assert.deepEqual(normalizeFinishRound(JSON.stringify({title: 'Legacy', outcome: 'Did X.', verification: 'Tests passed', carry_forward: ['Y remains', ' ']})),
+    {title: 'Legacy', summary: 'Did X.; Tests passed; Y remains'});
+  assert.deepEqual(normalizeFinishRound(JSON.stringify({title: 'Legacy', outcome: 'Did X.', verification: null, carry_forward: []})), {title: 'Legacy', summary: 'Did X.'});
+  assert.match(finishRoundTool.description, /files involved/);
+  assert.doesNotMatch(finishRoundTool.description + JSON.stringify(finishRoundTool.parameters), /English/);
   assert.equal(finishRoundTool.name, '_FinishRound');
   assert.equal(finishRoundPolicy.terminal, true);
   assert.equal(finishRoundPolicy.replay, 'omit-pair');
@@ -165,9 +188,6 @@ test('replay omits internal pairs without losing normal text, business calls or 
   assert.deepEqual(projected[2], messages[2]);
   assert.equal(JSON.stringify(messages), original);
   assert.ok(!JSON.stringify(projected).includes('_FinishRound'));
-  const correction = omitInternalToolPairs(messages, new Set(['empty']));
-  assert.ok(correction.some((message: ModelMessage) => message.role === 'tool' && message.callId === 'empty'));
-  assert.ok(!correction.some((message: ModelMessage) => message.role === 'tool' && message.callId === 'finish'));
 });
 
 test('durable closure covers the whole activity and stores report separately from memory', async () => {
@@ -188,7 +208,7 @@ test('durable closure covers the whole activity and stores report separately fro
     assert.equal(record.start, 0);
     assert.equal(record.ordinal, 1);
     assert.deepEqual(record.sourceLines, {start: 1, end: 5});
-    assert.deepEqual(record.memory, {title: 'Fixed cancellation cleanup', outcome: 'Round outcome.', verification: 'Targeted tests passed', carryForward: ['Windows integration unverified'], source: 'model'});
+    assert.deepEqual(record.memory, {title: 'Fixed cancellation cleanup', summary: 'Round outcome.', source: 'model'});
     assert.ok(record.delivery);
     assert.equal(record.delivery.text, report, 'A full report is not truncated to the legacy summary limit');
     assert.equal(record.delivery.title, 'Fixed cancellation cleanup', 'The report is titled by the _FinishRound title, not by its first text line');
@@ -236,5 +256,67 @@ test('the round title is the _FinishRound title, never a stage line or a parenth
       assert.equal(record.summary.title, 'Fixed cancellation cleanup');
       assert.equal(record.delivery?.title, 'Fixed cancellation cleanup');
     }
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('a record saved with outcome, verification and carryForward still loads and renders as one summary', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-legacy-memory-'));
+  try {
+    const journal = new Journal(root), identity = {version: 1 as const, sessionId: 's', ownerId: 'techne', activityId: 'closed'};
+    await journal.append({...identity, role: 'user', inputKind: 'director', text: 'Fix it'});
+    await journal.append({...identity, role: 'assistant', text: 'Done', message: {role: 'assistant', text: 'Done', toolCalls: [finalCall()]}});
+    await journal.append({...identity, role: 'tool', text: '', message: {role: 'tool', callId: 'finish', name: '_FinishRound', text: '', isError: false}});
+    await journal.finishRecord('s', 'techne', 'closed', 'completed');
+    const file = journal.path('s', 'techne') + '.rounds.json';
+    const saved = JSON.parse(await readFile(file, 'utf8')) as Array<{memory: unknown}>;
+    saved[0]!.memory = {title: 'Old title', outcome: 'Fixed cleanup.', verification: 'Targeted tests passed', carryForward: ['Windows unverified', 'Docs pending'], source: 'model'};
+    await writeFile(file, JSON.stringify(saved));
+    await journal.append({...identity, activityId: 'open', role: 'user', text: 'Continue'});
+    const before = await readFile(file, 'utf8');
+    const entries = await journal.load('s', 'techne');
+    assert.deepEqual((await journal.rounds('s', 'techne', entries))[0]!.memory,
+      {title: 'Old title', summary: 'Fixed cleanup.; Targeted tests passed; Windows unverified; Docs pending', source: 'model'});
+    const contexts = new ContextManager({journal, maxOutput: 512, policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0}),
+      model: () => ({identity: 'fixture', window: 131072}), summarizer: () => {throw new Error('No summary request needed');}});
+    const {request} = await contexts.prepare({sessionId: 's', ownerId: 'techne', activityId: 'open'}, {system: '', tools: []}, new AbortController().signal, true);
+    assert.ok(request.messages.some(message => message.text === 'T1|Old title|Fixed cleanup.; Targeted tests passed; Windows unverified; Docs pending|1-3'), JSON.stringify(request.messages));
+    assert.equal(await readFile(file, 'utf8'), before, 'old files are never rewritten by reading');
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('runtime-written rounds open with [interrupted], [failed] or [runtime] and list only ledger facts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-runtime-markers-'));
+  try {
+    const journal = new Journal(root);
+    const write = async (activityId: string, status: 'completed' | 'failed' | 'cancelled', work: boolean) => {
+      const identity = {version: 1 as const, sessionId: 's', ownerId: 'techne', activityId};
+      const put = async (message: ModelMessage) => journal.append({...identity, role: message.role, text: message.text, message});
+      await journal.append({...identity, role: 'user', inputKind: 'human', text: 'Work'});
+      if (work) {
+        await put({role: 'assistant', text: '', toolCalls: [
+          {id: 'w1', name: 'Write', arguments: JSON.stringify({file_path: 'src/a.ts', content: 'x'})},
+          {id: 'e1', name: 'Edit', arguments: JSON.stringify({file_path: 'src/b.ts', old_string: 'a', new_string: 'b'})},
+          {id: 'e2', name: 'Edit', arguments: JSON.stringify({file_path: 'src/failed.ts', old_string: 'a', new_string: 'b'})},
+          {id: 's1', name: 'Shell', arguments: JSON.stringify({command: 'npm test'})},
+        ]});
+        await put({role: 'tool', callId: 'w1', name: 'Write', text: 'ok', isError: false});
+        await put({role: 'tool', callId: 'e1', name: 'Edit', text: 'ok', isError: false});
+        await put({role: 'tool', callId: 'e2', name: 'Edit', text: 'no match', isError: true});
+        await put({role: 'tool', callId: 's1', name: 'Shell', text: 'Exit code: 1\nfailing', isError: true});
+      }
+      await put({role: 'assistant', text: 'Answer', ...(status === 'completed' ? {memoryOnly: true as const} : {})});
+      return journal.finishRecord('s', 'techne', activityId, status, null);
+    };
+    const interrupted = await write('i', 'cancelled', true), failed = await write('f', 'failed', false), runtime = await write('r', 'completed', true);
+    assert.equal(interrupted.memory?.source, 'runtime');
+    assert.equal(interrupted.memory?.summary, '[interrupted] Changed src/a.ts, src/b.ts. Last command "npm test" exit 1.');
+    assert.equal(failed.memory?.summary, '[failed] Ended with an error.');
+    assert.equal(runtime.memory?.summary, '[runtime] Changed src/a.ts, src/b.ts. Last command "npm test" exit 1.');
+    const {runtimeRoundSummary} = await memoryModule();
+    assert.match(runtimeRoundSummary([{role: 'user', text: 'x'}], 'completed'), /^\[runtime\] The model gave no round summary\.$/);
+    const {estimateText} = await import('../src/context/budget.js');
+    const many: ModelMessage[] = [{role: 'assistant', text: '', toolCalls: Array.from({length: 40}, (_, index) => ({id: 'c' + index, name: 'Write', arguments: JSON.stringify({file_path: 'src/very/long/path/file-' + index + '.ts', content: ''})}))},
+      ...Array.from({length: 40}, (_, index): ModelMessage => ({role: 'tool', callId: 'c' + index, name: 'Write', text: 'ok', isError: false}))];
+    assert.ok(estimateText(runtimeRoundSummary(many, 'completed')) <= 200);
   } finally {await rm(root, {recursive: true, force: true});}
 });

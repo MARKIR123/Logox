@@ -109,7 +109,6 @@ test('Actor 请求重试与 Director 接管共用预算，不叠加第三次自�
     await waitForSnapshot(f.app.store, s => s.activities.some(a => a.ownerId === 'logox' && a.status === 'completed'), 15000);
     assert.equal(f.requests.length, 4, 'Actor 三次请求后只允许 Director 说明，不继续派工');
     assert.match(JSON.stringify(f.requests[3]), /exhausted its recovery budget/);
-    assert.equal(f.requests[3]?.tools.length, 1);
-    assert.match(JSON.stringify(f.requests[3]?.tools), /_FinishRound/);
+    assert.ok((f.requests[3]?.tools.length ?? 0) > 1, 'the restricted turn keeps the full tool list; only the note asks for none');
   } finally {await f.close();}
 });

@@ -11,7 +11,7 @@ import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
-import {extractRoundMemory, type RoundMemory} from '../context/round-memory.js';
+import {extractRoundMemory, runtimeRoundSummary, type RoundMemory} from '../context/round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
@@ -329,8 +329,7 @@ export class Journal implements HistoryStore {
       (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
     const memory: RoundMemory = accepted ?? {
       title: legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
-      verification: null,
-      carryForward: [legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'],
+      summary: modernClosure || status !== 'completed' ? runtimeRoundSummary(messages, status) : (legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'),
       source: modernClosure ? 'runtime' : 'legacy',
     };
     const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text ?? '');

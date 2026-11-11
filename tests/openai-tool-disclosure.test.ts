@@ -12,7 +12,7 @@ import type {ModelMessage} from '../src/runtime/messages.js';
 const settings = {kind: 'openai_compat', baseUrl: 'https://fixture.invalid/v1', model: 'chosen-model', key: 'sk-fixture',
   temperature: 0.2, maxTokens: 1024, timeoutMs: 1000, toolDiscovery: 'openai-responses'} as ModelSettings;
 const search = {type: 'tool_search_call', id: 'item-search', execution: 'client', call_id: 'call-search', status: 'completed', arguments: {names: ['_GitStatus', 'ListActors']}};
-const final = {type: 'function_call', call_id: 'call-finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Loaded contracts', outcome: 'Round outcome.', verification: null, carry_forward: []})};
+const final = {type: 'function_call', call_id: 'call-finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Loaded contracts', summary: 'Round outcome.'})};
 const sse = (frames: unknown[]) => new Response(frames.map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
 
 test('client tool-search calls decode from non-stream Responses without model substitution or invented IDs', async () => {

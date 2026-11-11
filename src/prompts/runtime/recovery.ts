@@ -51,3 +51,6 @@ export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerI
       : 'Previous output reached token limits. Continue the current step from the break point using existing text; do not replan or regenerate delivered content.';
   return next;
 }
+
+/** Result for a tool call made while the caller's tools are withdrawn; the call is not executed. */
+export const TOOLS_WITHDRAWN_RESULT = 'Your tools are withdrawn until a teammate finishes or a message arrives, so this call was not executed. Reply with one short line saying what you are waiting for.';

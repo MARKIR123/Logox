@@ -66,7 +66,6 @@ import {Tools} from './tools/tools.js';
 import {USER_STOP_REASON, killActiveProcess, killActivityProcesses, killBackgroundJobs} from './tools/process.js';
 import {markInterruptedJobs} from './tools/orchestration/AutomaTool/AutomaTool.js';
 import {chooseAutomaModel} from './tools/orchestration/AutomaTool/preset.js';
-import {finishRoundTool} from './tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
@@ -81,7 +80,7 @@ import {planToolCatalog} from './tools/discovery.js';
 import {ToolRegistry} from './tools/registry.js';
 import type {ToolRegistration} from './tools/catalog.js';
 import {storedMessage} from './store/journal.js';
-import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION} from './prompts/runtime/environment.js';
+import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION, TOOLS_RESTRICTED_RESULT} from './prompts/runtime/environment.js';
 import {applyTheme, palette} from './tui/appearance/theme.js';
 import type {ResultLine, TabLine} from './runtime/command-surface.js';
 import {GitStatusSource} from './extensions/git-status.js';
@@ -480,7 +479,6 @@ export async function createSessionApplication(options: SessionApplicationOption
         compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history});
     const contextUpdates: RuntimeContextMessage[] = [...effective.updates, ...base.contextUpdates ?? []];
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
-    if (restriction) base.tools = [finishRoundTool];
     const pending = directorReports.get(context.activityId);
     await actorServices.flush();
     const facts = actorServices.facts(context);
@@ -489,7 +487,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         message.data?.slot === slot && message.data?.activityId === context.activityId);
       if (text || previous?.text) contextUpdates.push(createRuntimeContextMessage('task-state', text || 'No current ' + slot + '.', {slot, activityId: context.activityId}));
     }
-    return {...base, contextUpdates, ...(facts ? {snapshot: facts} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
+    return {...base, contextUpdates, ...(restriction ? {refuseTools: TOOLS_RESTRICTED_RESULT} : {}), ...(facts ? {snapshot: facts} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,

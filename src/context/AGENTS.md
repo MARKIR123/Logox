@@ -11,7 +11,8 @@
 | Trace one request's compaction decision | `manager.ts:ContextManager.prepare()` | `manager.ts:splitRounds()`, `budget.ts:watermarks()` |
 | Understand a closed round's stored form | `contracts.ts:roundSchema` | `../store/journal.ts:Journal.finishRecord()` |
 | Change the compact index line | `round-memory.ts:formatRoundIndex()` | `../prompts/charter.ts:ROUND_SUMMARY_CONTRACT` |
-| Change what `_FinishRound` carries | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` | `round-memory.ts:extractRoundMemory()` |
+| Change what `_FinishRound` carries | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` | `round-memory.ts:normalizeFinishRound()`, `round-memory.ts:extractRoundMemory()` |
+| Change a runtime-written round body or its marker | `round-memory.ts:runtimeRoundSummary()` | `round-memory.ts:ROUND_MARKERS`, `../store/journal.ts:Journal.finishRecord()` |
 | Change hidden-pair replay | `round-memory.ts:omitInternalToolPairs()` | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundPolicy` |
 | Change role memory focus | `contracts.ts:memoryFocusInstruction()` | `src/actors/profiles/<id>/compression.md` |
 | Keep discovery or environment across compaction | `continuity.ts:retainRuntimeContext()` | `contracts.ts:contextStateSchema`, `../tools/discovery.ts` |
@@ -28,10 +29,10 @@
 - Tests: `tests/context.test.ts`, `tests/actor-context.test.ts`.
 
 ### Add a field to round memory
-1. Add the argument to `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` (snake_case, bounded) and describe it in `../tools/protocol/_FinishRoundTool/prompt.ts`; `kernel/agent.ts` also clamps `carry_forward` arguments, so check it for list-like fields.
-2. Add the camelCase field to `round-memory.ts:roundMemorySchema` as `.optional()` so saved sidecars still parse; map it in `extractRoundMemory()`.
-3. Provide fallbacks for runtime and legacy records in `../store/journal.ts:Journal.finishRecord()`.
-4. Render it in `manager.ts` only if it belongs in the index. The index has six fixed fields (`formatRoundIndex()`: ordinal, title, status with verification, outcome, carry-forward, range), so another one changes `ROUND_SUMMARY_CONTRACT` in `../prompts/charter.ts` and every role's `src/actors/profiles/<id>/compression.md`.
+1. Add the argument to `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` and describe it in `../tools/protocol/_FinishRoundTool/prompt.ts`. Arguments are lenient: give it a token cap next to `FINISH_ROUND_SUMMARY_TOKENS` and handle it in `round-memory.ts:normalizeFinishRound()` (truncate, never reject).
+2. Add the camelCase field to `round-memory.ts:roundMemorySchema` (the preprocess step still joins old records) and map it in `extractRoundMemory()`.
+3. Provide the runtime value in `../store/journal.ts:Journal.finishRecord()` (`round-memory.ts:runtimeRoundSummary()`).
+4. Render it in `manager.ts` only if it belongs in the index. The index has four fixed fields (`formatRoundIndex()`: `T<ordinal>|<title>|<summary>|<start>-<end>`; status is a bracket marker opening the summary), so another one changes `ROUND_SUMMARY_CONTRACT` in `../prompts/charter.ts` and every role's `src/actors/profiles/<id>/compression.md`.
 - Tests: `tests/round-memory.test.ts`, `tests/finish-round.test.ts`, `tests/actor-compression-contracts.test.ts`.
 
 ### Change a role's memory focus
@@ -50,11 +51,11 @@
 - **Thinking from before a compaction is never sent again** (`contracts.ts:contextStateSchema`, `thinkingCut`): its signature bound the history that compaction replaced. Text and tool calls stay. Enforced by `tests/context-compaction-v2.test.ts`.
 - **Images leave history only through saved decisions**: every image has a file path from creation (`ImageBlock.path`, `src/kernel/scratchpad.ts:saveToolImages()`); archived tool results and everything below `contextStateSchema.imageCut` show `[image: <path>]` text (`images.ts:imagesAsText()`), and `imageCut` is written in one batch when a request exceeds `ModelCapacity.maxImages` (down to half) or after `ContextManager.downgradeImages()`. Enforced by `tests/image-history.test.ts`.
 - **A round is an activity**, not every injected user message. Enforced by `tests/round-memory.test.ts`.
-- **Missing or invalid metadata keeps raw working content** and never invents verification. Enforced by `tests/finish-round.test.ts`, `tests/round-memory.test.ts`.
+- **Missing or invalid metadata keeps raw working content** and never invents verification. Records the runtime writes open with `[interrupted]` (user or Director stop), `[failed]` or `[runtime]` (completed without a usable `_FinishRound`) and list only ledger facts (changed files, last Shell exit status). Records saved with `outcome` / `verification` / `carryForward` still load: `round-memory.ts:roundMemorySchema` joins them into `summary` on read and never rewrites the file. Enforced by `tests/round-memory.test.ts`. Enforced by `tests/finish-round.test.ts`, `tests/round-memory.test.ts`.
 - **Discovery pairs and the latest environment snapshot survive compaction**: original successful LoadTools pairs are retained, never fabricated or archived. Enforced by `tests/tool-disclosure-context.test.ts`.
 - **Conversation language comes only from human-authored input** (`role: user`, `inputKind: human`); tool output, actor reports and Director briefings never set it. It rides the environment snapshot (`language`), so changes are `environment-change` deltas and actors share the session value. Enforced by `tests/conversation-language.test.ts`.
 - **Budget estimates**: charge eager and actually expanded contracts once; exclude image base64 on full and incremental paths; an anchor is valid only for the same model, rules, tools and prefix. Enforced by `tests/tool-disclosure-context.test.ts`, `tests/context.test.ts`.
-- **Titles and summaries skip persona micro-action lines**: a leading line wrapped in `（…）`, `(…)` or `【…】` never becomes a round title or opens a delivered report (`contracts.ts:titleLine`, `contracts.ts:stripLeadingActionLines`); `_FinishRound` field overflow is clamped on a word boundary with `…` (`contracts.ts:clampText`). Enforced by `tests/context-titles.test.ts`.
+- **Titles and summaries skip persona micro-action lines**: a leading line wrapped in `（…）`, `(…)` or `【…】` never becomes a round title or opens a delivered report (`contracts.ts:titleLine`, `contracts.ts:stripLeadingActionLines`); `_FinishRound` title and summary overflow is truncated by estimated tokens, 30 and 200, with `…` (`budget.ts:truncateToTokens`). Enforced by `tests/context-titles.test.ts`.
 - **Reports are not indexes**: task reports are separate full deliveries; round memory only stores them separately. Enforced by `tests/round-memory.test.ts`, `tests/finish-round.test.ts`.
 - **One memory contract, one resident focus per role request**: Enforced by `tests/actor-compression-contracts.test.ts`.
 - **Memory is historical data, not authority** to widen permissions or promote hypotheses to verified facts. *Unenforced* (prompt text only).

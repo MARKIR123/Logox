@@ -111,11 +111,11 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     const ledgers = await Promise.all((await owners(current.sessionId)).map(async owner => ({owner, entries: await journal.load(current.sessionId, owner)})));
     const entries = ledgers.flatMap(ledger => ledger.entries);
     // The round's own _FinishRound title and outcome name it better than the first input does.
-    const memories = new Map<string, {title: string; outcome?: string | undefined}>();
+    const memories = new Map<string, {title: string; summary?: string | undefined}>();
     for (const ledger of ledgers) {
       try {
         for (const record of await journal.rounds(current.sessionId, ledger.owner, ledger.entries))
-          if (record.memory?.source === 'model') memories.set(record.activityId, {title: record.memory.title, outcome: record.memory.outcome});
+          if (record.memory?.source === 'model') memories.set(record.activityId, {title: record.memory.title, summary: record.memory.summary});
       } catch {}
     }
     const tasks = await journal.activeTasks(current.sessionId);
@@ -250,7 +250,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         async () => {
           const rounds = await turns(), pending = await journal.pending(current.sessionId);
           return {items: pending ? [{id: pending.target, label: 'Retry unfinished rewind', description: pending.target}] : rounds.map((round, index) => ({id: round.id, label: (index + 1) + '. ' + (round.memory?.title ?? round.text.replace(/\s+/g, ' ').slice(0, 100)),
-            description: round.owner + (round.memory ? ' · ' + (round.memory.outcome ?? round.text).replace(/\s+/g, ' ').slice(0, 160) : '')})).reverse()};
+            description: round.owner + (round.memory ? ' · ' + (round.memory.summary || round.text).replace(/\s+/g, ' ').slice(0, 160) : '')})).reverse()};
         }, async id => {await rewind(id); return {};});
       return true;
     }

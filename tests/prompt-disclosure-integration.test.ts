@@ -12,7 +12,7 @@ import {reloadResources} from '../src/resources/reload.js';
 import type {Provider, ModelRequest, ToolDiscoveryProtocol} from '../src/runtime/messages.js';
 
 const headings = ['# Persona', '# Execution Rules', '# Team Collaboration', '# Project Guidelines', '# Tools & Skills', '# Current Environment'];
-const finish = (id: string) => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Verified fixture', outcome: 'Round outcome.', verification: null, carry_forward: []})});
+const finish = (id: string) => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Verified fixture', summary: 'Round outcome.'})});
 
 for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisfies readonly ToolDiscoveryProtocol[]) {
   test('real application composes five owned topics for shipped and custom roles with ' + protocol, async () => {
@@ -35,7 +35,7 @@ for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisf
         assert.equal(app.store.activities.get('s', task.activityId)?.status, 'completed');
         const request = seen.at(-1)!;
         assert.deepEqual(request.system.match(/^# .+$/gm), headings);
-        assert.equal(request.system.split('<number> | <title> | <status>[; <verification>] | <outcome> | <carry-forward> | <start>:<end>').length - 1, 1);
+        assert.equal(request.system.split('T<number>|<title>|<summary>|<start>-<end>').length - 1, 1);
         assert.equal((request.system.match(/never delegate understanding/gi) ?? []).length, id === 'logox' ? 1 : 0, 'Delegation policy is Director-only and has one source');
         const role = builtinActors.find(actor => actor.id === id);
         for (const text of role ? [role.prompt, role.execution, role.collaboration, role.compression] : ['Custom identity.', 'Custom execution method.', 'Custom collaboration boundary.', 'Custom evidence focus.']) {

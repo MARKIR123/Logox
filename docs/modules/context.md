@@ -8,7 +8,9 @@
 - **轮（round）**：从一个活动的最初输入，到它完成、失败或取消。同一活动中途注入的协作消息不另算一轮。
 - **有效视图**：本次请求真正带上的历史，由账本经过归档、折叠、收缩得到，账本本身不变。
 - **`_FinishRound`**：每个正常结束的轮会调用的隐藏工具，用来提交这一轮的内部记忆。它不显示成工具卡片，也不算用户授权。
-- **轮次关闭时的送达判定**：在 `_FinishRound` 修复阶段，模型若只回复了文字而没有调用 `_FinishRound`，这段文字就算已送达（只持久化一次），随后只要求它调用 `_FinishRound` 收尾，不再把任务判为失败；真正的空回复仍先得到一次固定提醒。派出工作的报告由运行时按根任务成批送达（见 `docs/modules/actors.md`），Logox 只在它们到齐或有紧急事件时才被唤醒，所以关轮不再需要“仍有未结束工作”的提示和“迟到报告”的特殊路径。
+- **轮次关闭时的送达判定**：模型若只回复了文字而没有调用 `_FinishRound`，这段文字就算已送达（只持久化一次），运行时只追加一次请求要求它调用 `_FinishRound`。这次请求的工具列表和工具发现设置与普通请求完全相同（工具列表在缓存前缀的最前面，不能变），只靠一条仅限本次请求的提示约束。追加请求的回复若包含业务工具、不合格的参数、纯文字或空内容，业务工具不执行（给一条“轮次正在关闭”的错误结果以保持账本配对），运行时代写带 `[runtime]` 标记的记录，轮次照常结束，不再追问。真正没有任何交付文字的空回复仍先得到一次固定提醒。派出工作的报告由运行时按根任务成批送达（见 `docs/modules/actors.md`），Logox 只在它们到齐或有紧急事件时才被唤醒，所以关轮不再需要“仍有未结束工作”的提示和“迟到报告”的特殊路径。
+- **`_FinishRound` 参数与记录**：只有 `title`（上限估算 30 token）和 `summary`（上限估算 200 token，非 ASCII 字符计 1，ASCII 计 0.25），不规定语言。工具描述引导 `summary` 覆盖结论或改动、涉及的文件、验证了什么、还剩什么，不拆字段也不校验。参数宽进：超长截断不报错，缺失的 `title` 由运行时取阶段行或派单标题，未知字段忽略，旧字段 `outcome`、`verification`、`carry_forward` 会被合并进 `summary`；只有 `summary` 为空才算不合格。旧会话文件里的 `outcome` / `verification` / `carryForward` 读取时合并成 `summary`，不改写文件。
+- **运行时代写的记录**：被用户或 Director 中断、失败、或正常结束但模型没给出可用摘要的轮，正文由运行时根据这一轮账本里的事实写成，开头带标记：`[interrupted]`、`[failed]`、`[runtime]`。内容只有 Edit/Write 改动的文件和最后一条 Shell 命令的退出码，同样受 200 token 上限约束。
 - **高水位 / 低水位**：高水位是触发整理的上限，低水位是整理后要降到的目标。整理会重置提示词缓存，所以触发后一次降到低水位以下，而不是零碎地压。
 - **ContextManager**：每次请求前组装有效视图的组件。
 
@@ -18,7 +20,7 @@
 2. 估算 token 是否超过高水位。没超过就直接发送。Logox 统领全局，平时保留完整历史；Techne、Kalon、Aletheia 按任务工作，每开始一个新任务就把之前已结束的轮折叠起来。
 3. 超过时依次整理，每一步后重新估算：
    1. 较大的旧工具参数和结果归档到磁盘，视图里只留可回读的指针。
-   2. 已结束的轮折叠成单行索引：`序号 | 标题 | 状态; 验证 | 结果 | 遗留 | 账本行号`，内容来自这一轮 `_FinishRound` 的记录。仍超过低水位时折叠全部已结束的轮。
+   2. 已结束的轮折叠成单行索引：`T<序号>|<标题>|<摘要>|<起>-<止>`（四列，无空格），内容来自这一轮 `_FinishRound` 的记录；状态不再单独成列，异常轮次以摘要开头的方括号标记表示。仍超过低水位时折叠全部已结束的轮。
    3. 仍超过低水位时，最近 20 条索引（`keep_index_lines`）保留原样，更早的历史由模型合并成一份工作概览，上限约 4000 token。
    4. 当前任务自身仍超过高水位时，由模型写一份进度摘要，替换这个任务已完成的过程，原始输入保留。
 
@@ -82,7 +84,7 @@ token 估算（`TokenMeter`）优先用上一次响应的真实 usage 作为锚�
 - [manager.ts](../../src/context/manager.ts)：有效视图、分层整理与汇总。
 - [budget.ts](../../src/context/budget.ts)：水位、估算和 usage 锚点。
 - [contracts.ts](../../src/context/contracts.ts)：摘要、检查点与本地兜底。
-- [round-memory.ts](../../src/context/round-memory.ts)：`_FinishRound` 元数据与六字段索引；对应的隐藏工具在 [_FinishRoundTool](../../src/tools/protocol/_FinishRoundTool/_FinishRoundTool.ts)。
+- [round-memory.ts](../../src/context/round-memory.ts)：`_FinishRound` 元数据与四列索引；对应的隐藏工具在 [_FinishRoundTool](../../src/tools/protocol/_FinishRoundTool/_FinishRoundTool.ts)。
 - [continuity.ts](../../src/context/continuity.ts)、[environment.ts](../../src/context/environment.ts)：压缩后保留的工具发现与环境基线。
 - [usage.ts](../../src/context/usage.ts)：持久用量与费用估算。
 - [journal.ts](../../src/store/journal.ts)：原文、分支、归档与绑定验证。

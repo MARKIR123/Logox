@@ -521,7 +521,7 @@ test('a tool call that came out as plain text is not a delivery: it is recovered
   const dump = '### Overwriting the page\ncall:default_api:Write{content:<!DOCTYPE html>' + 'x'.repeat(3000) + ',file_path:page.html,overwrite:true}';
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
-  const closing = call('_FinishRound', {title: 'Built the page', outcome: 'Page written.', verification: null, carry_forward: []}, 'fin');
+  const closing = call('_FinishRound', {title: 'Built the page', summary: 'Page written.'}, 'fin');
   const f = await rawFixture(scripted([
     watch(assistant(dump)),
     watch(call('glob', {pattern: '*.nothing'}, 'g1')),
@@ -551,7 +551,7 @@ test('a tool call that came out as plain text is not a delivery: it is recovered
 });
 
 test('prose that mentions a call pattern for an unknown tool is an ordinary reply', async () => {
-  const f = await rawFixture(scripted([assistant('The log shows call:default_api:NotATool{x:1} being parsed.'), call('_FinishRound', {title: 'Explained the log', outcome: 'Explained.', verification: null, carry_forward: []}, 'fin')]));
+  const f = await rawFixture(scripted([assistant('The log shows call:default_api:NotATool{x:1} being parsed.'), call('_FinishRound', {title: 'Explained the log', summary: 'Explained.'}, 'fin')]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'explain');
     await handle.done;
