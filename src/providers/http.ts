@@ -6,7 +6,7 @@ import type {Delta, ModelMessage, ModelRequest, ModelTurn, Provider, ProviderCap
 import {runtimeContextText} from '../runtime/context-updates.js';
 import {resolveProviderCapabilities} from './capabilities.js';
 import {encodeAnthropicTools, encodeAnthropicContext} from './disclosure/anthropic.js';
-import {anthropicRetention, cacheControl, LONG_CACHE_MS, openAiRetentionFields, SHORT_CACHE_MS, type CacheRetention} from './cache.js';
+import {anthropicRetention, cacheControl, cacheLifetimeMs, openAiRetentionFields, SHORT_CACHE_MS, type CacheRetention} from './cache.js';
 import {dumpRequestBody} from './dump.js';
 import {decodeOpenAIToolSearchCall, encodeOpenAIToolSearch, encodeOpenAIFunction, encodeOpenAIToolSearchResult, encodeRuntimeContext} from './disclosure/openai.js';
 import {FALLBACK_CAPABILITIES} from './capabilities.js';
@@ -470,7 +470,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     if (settings.kind !== 'anthropic' || capabilities.caching !== 'anthropic') return undefined;
     // Budget thinking derives `budget_tokens` from `max_tokens`, so a `maxTokens: 1` replay would change the thinking configuration and the cache key.
     const effort = request.thinking === false ? 'off' : settings.thinkingEffort ?? 'auto';
-    return {ttlMs: anthropicRetention(settings, request) === 'long' ? LONG_CACHE_MS : SHORT_CACHE_MS, replayable: !(settings.thinkingProtocol === 'anthropic-budget' && effort !== 'off')};
+    return {ttlMs: cacheLifetimeMs(settings, request) ?? SHORT_CACHE_MS, replayable: !(settings.thinkingProtocol === 'anthropic-budget' && effort !== 'off')};
   }, async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('No model configured; use /model <name> or --model <name>');
     const native = settings.kind === 'anthropic';

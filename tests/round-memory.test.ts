@@ -69,7 +69,7 @@ test('injected user messages keep an unfinished activity intact across projectio
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
-test('missing finalizer and unsuccessful plain-text correction retain material constraints', async () => {
+test('a completed round without model memory folds to a [runtime] line that keeps the opening of its answer', async () => {
   const root = await mkdtemp(join(tmpdir(), 'logox-pending-memory-'));
   try {
     const journal = new Journal(root), identity = {version: 1 as const, sessionId: 's', ownerId: 'techne', activityId: 'closed'};
@@ -83,8 +83,8 @@ test('missing finalizer and unsuccessful plain-text correction retain material c
       model: () => ({identity: 'fixture', window: 131072}), summarizer: () => {throw new Error('No trustworthy overview available');}});
     const {request} = await contexts.prepare(identity, {system: '', tools: []}, new AbortController().signal, true);
     const text = JSON.stringify(request.messages);
-    assert.ok(text.includes('Keep pending issue A and full artifact references'));
-    assert.ok(text.includes('Unverified work B remains'));
+    assert.match(text, /T1\|[^|]*\|\[runtime\] Answer began: Answer: Full result detail/);
+    assert.ok(!text.includes('Material data Material data'), 'the raw round is folded');
     assert.ok(!text.includes('Unable to provide metadata'));
     assert.equal(await readFile(journal.path('s', 'techne'), 'utf8'), before);
   } finally {await rm(root, {recursive: true, force: true});}

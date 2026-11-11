@@ -8,16 +8,14 @@ thinking_effort = "auto"
 max_tokens = 16384
 timeout = 600 # Seconds without meaningful model progress.
 # cache_retention = "long" # short or long; also under [providers.<name>] and [models."provider/model"]. Anthropic: 1h cache. OpenAI: only sent when set here.
+# cache_ttl_seconds = 1800 # Seconds a gateway keeps a prompt cache entry (same places). When set it always wins. Unset: Anthropic uses the lifetime of cache_retention, everything else is unknown and treated as never expired.
 
 [context]
 keep_recent_rounds = 2
 keep_recent_tools = 2
-keep_index_lines = 20 # Folded rounds kept as index lines when older history becomes an overview.
 reserve_tokens = 32768
 high_watermark_ratio = 0.8 # The high watermark is the larger of window minus reserve and this share of the window.
 low_watermark_ratio = 0.5
-# task_end_floor_ratio = 0.5 # A real task end skips compaction below this share of the high watermark.
-# compact_accept_ratio = 0.75 # A task-end compaction is kept only if the result is at most this share of the original.
 # max_budget_tokens = 6000
 # target_budget_tokens = 4000
 # summary_provider = "work"

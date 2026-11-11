@@ -170,6 +170,8 @@ export class ProviderRegistry {
     modelSettings(next, this.env);
     this.config = next;
   }
+  /** Settings as configured for one provider/model, without credentials or network access. */
+  configuredSettings(name: string, model?: string): ModelSettings {return modelSettings(this.configFor(name, model), this.env);}
   async settings(requireAuth = true): Promise<ModelSettings> {return this.settingsFor(this.config.provider.name, requireAuth);}
   private async settingsFor(name: string, requireAuth: boolean): Promise<ModelSettings> {
     const config = this.configFor(name), settings = modelSettings(config, this.env), provider = config.provider;

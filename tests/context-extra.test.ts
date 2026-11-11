@@ -46,12 +46,16 @@ test('手动扬弃运行期间阻止新输入和切换，取消/关闭解除汇�
       await new Promise<void>((_resolve, reject) => {signal.addEventListener('abort', () => reject(signal.reason), {once: true});});
       throw new Error('取消后不能到达这里');
     }};
-    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 4096}, context: {keep_recent_rounds: 0}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 20000}, context: {keep_recent_rounds: 0}}, {}, cwd, cwd);
     const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, provider, sessionId: 'manual', env: {}, authPath: join(cwd, 'auth.json')});
     try {
-      await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId: 'old', role: 'user', text: '过去要求'.repeat(2200)});
-      await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId: 'old', role: 'assistant', text: '【轮次摘要】\n标题：已处理\n报告：保留确认要求。'});
-      await app.journal.finish('manual', 'logox', 'old', 'completed');
+      // Enough closed rounds that their index lines alone keep the request over the high watermark, so /compact must ask for the merge.
+      for (let n = 0; n < 70; n++) {
+        const activityId = 'old-' + n;
+        await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId, role: 'user', text: '过去要求'.repeat(100)});
+        await app.journal.append({version: 1, sessionId: 'manual', ownerId: 'logox', activityId, role: 'assistant', text: '【轮次摘要】\n标题：已处理\n报告：' + '保留确认要求。'.repeat(50)});
+        await app.journal.finish('manual', 'logox', activityId, 'completed');
+      }
       const compaction = app.submit('/compact');
       await started;
       assert.equal(calls, 1);
@@ -63,7 +67,7 @@ test('手动扬弃运行期间阻止新输入和切换，取消/关闭解除汇�
       await compaction;
       assert.equal(app.store.activities.get('manual', activity.activityId)?.status, 'cancelled');
       const entries = await app.journal.load('manual', 'logox');
-      assert.equal(entries.length, 2);
+      assert.equal(entries.length, 140);
       assert.equal(await app.journal.loadContext('manual', 'logox', entries), undefined);
     } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
   }

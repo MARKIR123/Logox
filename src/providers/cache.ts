@@ -17,6 +17,16 @@ export function roleCacheRetention(ownerId: string): CacheRetention {
 export function anthropicRetention(settings: Pick<ModelSettings, 'cacheRetention'>, request: Pick<ModelRequest, 'cacheRetention'>): CacheRetention {
   return request.cacheRetention?.actor ?? settings.cacheRetention ?? request.cacheRetention?.role ?? 'short';
 }
+/**
+ * How long this request's prompt cache entry lives, in milliseconds, or undefined when that is unknown. A `cache_ttl_seconds` the user
+ * configured wins (a gateway may keep entries for a different time than it is asked to). Otherwise Anthropic: the lifetime LOGOX itself sets
+ * on the request (`anthropicRetention`); every other protocol: unknown, because OpenAI and gateways do not disclose theirs. Callers treat
+ * undefined as "never expired".
+ */
+export function cacheLifetimeMs(settings: Pick<ModelSettings, 'kind' | 'cacheRetention' | 'cacheTtlMs'>, request: Pick<ModelRequest, 'cacheRetention'>): number | undefined {
+  if (settings.cacheTtlMs !== undefined) return settings.cacheTtlMs;
+  return settings.kind === 'anthropic' ? anthropicRetention(settings, request) === 'long' ? LONG_CACHE_MS : SHORT_CACHE_MS : undefined;
+}
 /** Omitting `ttl` keeps the default 5 minutes; `"1h"` costs 2x on writes instead of 1.25x. */
 export function cacheControl(retention: CacheRetention): {type: 'ephemeral'; ttl?: '1h'} {
   return retention === 'long' ? {type: 'ephemeral', ttl: '1h'} : {type: 'ephemeral'};

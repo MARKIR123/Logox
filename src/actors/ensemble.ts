@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {RuntimeStore} from '../runtime/store.js';
 import {immutable, type InteractionInput, type InteractionOutcome, type Step, type TaskProgressSnapshot, type TaskOriginData} from '../runtime/contracts.js';
 import {repairToolResults, type ModelMessage, type TurnUsage} from '../runtime/messages.js';
-import {summarizeRound, type RoundSummary, type RoundStatus} from '../context/contracts.js';
+import {summarizeRound, type RoundRecord, type RoundSummary, type RoundStatus} from '../context/contracts.js';
 import {omitInternalToolPairs, type TaskDelivery} from '../context/round-memory.js';
 import {storedMessage, type HistoryEntry, type HistoryStore, type RoundPlacement, type TaskCheckpoint} from '../store/journal.js';
 import {inputKind, type InputKind} from '../runtime/provenance.js';
@@ -91,7 +91,12 @@ export interface EnsembleOptions<Id extends string = ActorId> {
   settled?(activityId: string, status: RoundStatus): Promise<void>;
   member?(ownerId: string): {name: string; title: string} | undefined;
   taskStart?(context: ActorContext<Id>): Promise<void>;
-  taskEnd?(context: ActorContext<Id>, summary: RoundSummary, status: RoundStatus): Promise<void>;
+  /**
+   * Runs once the activity's input is recorded and before its first model request, only for activities that open a round (a Director
+   * dispatch, a human task) or, for Logox, continue one; never for a teammate-started aside. `keepLast` is true when the new task has the same
+   * root task as the actor's latest closed round.
+   */
+  roundStart?(context: ActorContext<Id>, info: {keepLast: boolean}): Promise<void>;
   directAnchor?(result: {sessionId: string; ownerId: Id; activityId: string; status: RoundStatus}): Promise<void>;
   handoff?(result: TaskResult<Id>): Promise<void>;
 }
@@ -469,10 +474,14 @@ export class EnsembleRuntime<Id extends string> {
   private async joinedRound(ownerId: string, kind: InputKind, origin: TaskOrigin): Promise<string | undefined> {
     if (ownerId === 'logox') return await this.history.openRound?.(this.sessionId, ownerId);
     if (roundEffect([], this.sessionId, ownerId, kind) !== 'aside') return undefined;
+    return (await this.sameRootRound(ownerId, origin))?.activityId;
+  }
+  /** The actor's latest closed round when it descends from the same root task as `origin` (persisted checkpoint root ids), else undefined. Ask before the new input is recorded. */
+  private async sameRootRound(ownerId: string, origin: TaskOrigin): Promise<RoundRecord | undefined> {
     const last = await this.history.lastRound?.(this.sessionId, ownerId);
     if (!last || !origin.rootActivityId) return undefined;
     const root = (await this.history.activeTasks?.(this.sessionId))?.find(task => task.activityId === last.activityId)?.rootActivityId;
-    return root === origin.rootActivityId ? last.activityId : undefined;
+    return root === origin.rootActivityId ? last : undefined;
   }
   private async run(task: QueuedTask<Id>): Promise<void> {
     const {ownerId, prompt, activityId, controller, source, origin} = task;
@@ -545,6 +554,8 @@ export class EnsembleRuntime<Id extends string> {
         await this.history.append({version: 1, ...identity, role: 'tool', text: message.text, message});
       }
       joined = await this.joinedRound(ownerId, kind, origin);
+      const opensRound = roundEffect([], this.sessionId, ownerId, kind) !== 'aside';
+      const keepLast = opensRound && ownerId !== 'logox' && !!await this.sameRootRound(ownerId, origin);
       await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}, ...(joined ? {roundId: joined} : {})});
       signal.throwIfAborted();
       const authorization = [...origin.authorization ?? [], ...entries.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
@@ -606,6 +617,8 @@ export class EnsembleRuntime<Id extends string> {
       };
       await this.options.taskStart?.(context);
       signal.throwIfAborted();
+      // A routine fold is best effort: the next model request still applies the watermark rules, so a failure here never fails the task.
+      if (opensRound) try {await this.options.roundStart?.(context, {keepLast});} catch {signal.throwIfAborted();}
       await this.execute(prompt, context);
       signal.throwIfAborted();
       if (output.length && !recorded) await this.history.append({version: 1, ...identity, role: 'assistant', text: output.join('\n')});
@@ -614,9 +627,6 @@ export class EnsembleRuntime<Id extends string> {
       if (summary) task.outcome = {status: 'completed', title: summary.title, text: delivery?.text ?? summary.report};
       if (summary) {
         this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: 'Wrapping up', detail: summary.report});
-        // Only a real task end (Director assignment or human request) may compact; collaboration and peer wakes never do.
-        try {if (origin.inputKind === 'director' || origin.inputKind === 'human') await this.options.taskEnd?.(context, summary, 'completed');}
-        catch {this.store.message(this.sessionId, ownerId, 'notice', 'Task completed, but wrap-up did not finish; the raw ledger is preserved.', {activityId});}
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status: 'completed'});
           else await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status: 'completed'});

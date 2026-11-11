@@ -39,7 +39,7 @@ async function history() {
   return {root, journal, put};
 }
 
-test('older rounds become an overview written at the end of the real conversation; the newest index lines stay', async () => {
+test('index lines that keep the request over the high watermark are merged by a request that sees only the lines', async () => {
   const f = await history();
   const summaries: ModelRequest[] = [];
   const provider: Provider = {async respond(request) {
@@ -47,20 +47,22 @@ test('older rounds become an overview written at the end of the real conversatio
     return {message: {role: 'assistant', text: 'OVERVIEW of the early rounds'}, stop: 'complete'};
   }};
   const model = {identity: 'fixture', window: 2400};
-  const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
-    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0, keep_index_lines: 2})});
+  const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model: {identity: 'summarizer', window: 200000}, provider}),
+    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0})});
   try {
     const base = {system: 'Execution rules', tools: []};
     const {request} = await contexts.prepare({sessionId: 's', ownerId: 'techne', activityId: 'open'}, base, new AbortController().signal, true);
     assert.equal(summaries.length, 1);
     const summary = summaries[0]!;
-    assert.equal(summary.system, base.system, 'same system prompt as the task, so the prefix is shared');
-    assert.equal(summary.messages[0]?.role === 'user' && summary.messages[0].text.includes('Task 1'), true, 'the prefix is the uncompacted conversation');
-    assert.match(summary.messages.at(-1)!.role === 'user' ? summary.messages.at(-1)!.text : '', /up to and including round 14[\s\S]*Do not call tools/);
+    assert.match(summary.system, /^Summarize only the supplied historical data/, 'the no-context merge instruction, not the task prompt');
+    assert.deepEqual(summary.tools, []);
+    const input = summary.messages.map(message => message.text).join('\n');
+    assert.match(input, /T1\|Round 1 work\|/, 'its input is the index lines');
+    assert.ok(!input.includes('Task 1') && !input.includes('Current task'), 'not the conversation itself');
     const texts = request.messages.map(message => message.text);
     assert.ok(texts.some(text => text.includes('OVERVIEW of the early rounds')));
-    for (const kept of [15, 16]) assert.ok(texts.some(text => text.startsWith('T' + kept + '|Round ' + kept + ' work|Outcome of round ' + kept)), 'round ' + kept + ' keeps its index line');
-    assert.ok(!texts.some(text => /^T3\|/.test(text)), 'older index lines are inside the overview');
+    assert.ok(texts.some(text => text.startsWith('T16|Round 16 work|Outcome of round 16')), 'the newest index line stays when the overview is enough');
+    assert.ok(!texts.some(text => /^T1\|/.test(text)), 'the oldest index lines are inside the overview');
   } finally { await rm(f.root, {recursive: true, force: true}); }
 });
 
@@ -69,7 +71,7 @@ test('thinking from before a compaction is not sent again; thinking produced aft
   const model = {identity: 'fixture', window: 16384};
   const provider: Provider = {async respond() { return {message: {role: 'assistant', text: 'OVERVIEW'}, stop: 'complete'}; }};
   const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
-    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 2, keep_index_lines: 2})});
+    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 2})});
   try {
     const identity = {sessionId: 's', ownerId: 'techne', activityId: 'open'}, base = {system: 'rules', tools: []}, signal = new AbortController().signal;
     const thinking = (request: ModelRequest) => request.messages.flatMap(message => message.role === 'assistant' && message.reasoning ? [message.reasoning] : []);
@@ -116,10 +118,10 @@ test('compaction is bracketed by the compacting hook, which closes even when the
   const f = await history();
   const events: string[] = [];
   const provider: Provider = {async respond() { throw new Error('summary unavailable'); }};
-  const model = {identity: 'fixture', window: 16384};
+  const model = {identity: 'fixture', window: 2400};
   const contexts = new ContextManager({journal: f.journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
     compacting: (identity, active) => events.push(identity.activityId + ':' + active),
-    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0, keep_index_lines: 2})});
+    policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 0})});
   try {
     await contexts.prepare({sessionId: 's', ownerId: 'techne', activityId: 'open'}, {system: 'rules', tools: []}, new AbortController().signal, true).catch(() => undefined);
     assert.deepEqual(events, ['open:true', 'open:false']);

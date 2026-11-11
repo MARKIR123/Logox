@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {parseDocument, stringify} from 'yaml';
-import {cacheRetentionSchema, contextPolicySchema} from '../config/config.js';
+import {cacheRetentionSchema, contextPolicySchema, RETIRED_CONTEXT_KEYS} from '../config/config.js';
 import {immutable} from '../runtime/contracts.js';
 import {automaProfileSchema} from '../tools/orchestration/AutomaTool/preset.js';
 
@@ -12,9 +12,12 @@ const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   reserve_tokens: contextPolicySchema.shape.reserve_tokens.removeDefault().optional(),
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),
   high_watermark_ratio: contextPolicySchema.shape.high_watermark_ratio.removeDefault().optional(),
-  keep_index_lines: contextPolicySchema.shape.keep_index_lines.removeDefault().optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
+/** Profiles written before these keys were retired still parse: the keys are dropped, never an error. */
+function dropRetiredContextKeys(context: unknown): void {
+  if (context && typeof context === 'object' && !Array.isArray(context)) for (const key of RETIRED_CONTEXT_KEYS) delete (context as Record<string, unknown>)[key];
+}
 const verbEntry = inline(48).refine(value => {
   const slash = value.indexOf('/');
   return slash > 0 && value.slice(0, slash).trim().length > 0 && value.slice(slash + 1).trim().length > 0;
@@ -96,6 +99,7 @@ export function parseActor(text: string): ActorDefinition {
     delete raw.cache_retention;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in the Markdown body');
+  dropRetiredContextKeys(raw.context);
   if (raw.context && typeof raw.context === 'object') {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }
@@ -150,6 +154,7 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
     delete raw.cache_retention;
   }
   if (Object.hasOwn(raw, 'prompt')) throw new Error('prompt must be in persona.md');
+  dropRetiredContextKeys(raw.context);
   if (raw.context && typeof raw.context === 'object') {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }

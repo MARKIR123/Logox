@@ -270,7 +270,7 @@ test('oversized closed history uses bounded summarization without tools, thinkin
     await f.append('current', {role: 'user', text: 'CURRENT_ONLY'});
     const result = await f.contexts.prepare(identity, base, signal);
     assert.ok(requests.length > 1 && requests.length <= 16);
-    assert.ok(f.reports.some(text => text.startsWith('[Context] Summarizing')));
+    assert.ok(f.reports.some(text => text.startsWith('[Context] Merging the oldest index lines')));
     assert.ok(f.reports.every(text => !/\p{Script=Han}/u.test(text)));
     assert.match(result.request.messages[0]!.text, /Historical working overview/);
     assert.equal(result.request.messages.filter(message => message.role !== 'context').at(-1)?.text, 'CURRENT_ONLY');

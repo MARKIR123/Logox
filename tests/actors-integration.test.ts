@@ -13,14 +13,17 @@ import {waitForSnapshot} from './runtime-fixture.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 
-test('Actor compaction notices retain activity ownership, folding and restart identity', async () => {
+test('Actor compaction notices (forced or watermark) retain activity ownership, folding and restart identity', async () => {
   let calls = 0;
   const f = await fixture(async () => {calls++; return complete('已完成调查');});
   try {
     await direct(f.app, '整理资料');
     const activity = f.app.store.getSnapshot().activities.find(item => item.ownerId === 'scout')!;
-    const notices = f.app.store.getSnapshot().messages.filter(message => message.ownerId === 'scout' && message.role === 'system' && message.text.startsWith('[Context] Compacted'));
-    assert.ok(notices.length > 0, 'Task closure publishes its compaction outcome');
+    const compacted = () => f.app.store.getSnapshot().messages.filter(message => message.ownerId === 'scout' && message.role === 'system' && message.text.startsWith('[Context] Compacted'));
+    assert.equal(compacted().length, 0, 'a routine fold at a task boundary publishes no Compacted notice');
+    await f.app.contexts.prepare({sessionId: 'actors', ownerId: 'scout', activityId: activity.activityId}, {system: '检查索引', tools: []}, new AbortController().signal, true);
+    const notices = compacted();
+    assert.ok(notices.length > 0, 'a forced compaction publishes its outcome');
     assert.ok(notices.every(message => message.activityId === activity.activityId));
     const rows = (app: typeof f.app, open: boolean) => buildStageRows(app.store.getSnapshot(), 'actors', 'logox', 119, {[activity.activityId]: open}, null);
     assert.ok(!rows(f.app, false).some(row => row.messageId === notices[0]!.id));
@@ -51,7 +54,7 @@ async function fixture(respond: Provider['respond'], defaultModel = false) {
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/main': {context_window: 131072}, 'local/special': {context_window: 131072}},
-    context: {reserve_tokens: 20000, task_end_floor_ratio: 0}}, {}, cwd, cwd);
+    context: {reserve_tokens: 20000}}, {}, cwd, cwd);
   const options = {cwd, sessionId: 'actors', config, env: {}, authPath: join(cwd, 'auth.json'),
     resourceOptions: {home: cwd, boundary: cwd}, provider: {respond}};
   const app = await createApplication(options);
@@ -80,12 +83,14 @@ test('dynamic actors compact closed rounds while preserving ledgers, anchors and
     const entries = await f.app.journal.load('actors', 'scout');
     assert.ok(entries.some(entry => entry.text.includes('原始工作细节')));
     const state = await f.app.journal.loadContext('actors', 'scout', entries);
-    assert.deepEqual(state?.folded, [0]);
+    assert.deepEqual(state?.folded ?? [], [], 'a companion folds when its next task starts, not when a task ends');
     assert.equal((await f.app.journal.load('actors', 'logox')).length, 0, 'Direct actor inputs do not rewrite Director history');
     const main = await f.app.contexts.prepare({sessionId: 'actors', ownerId: 'logox'}, {system: '检查索引', tools: []}, new AbortController().signal);
     assert.ok(main.request.messages.some(entry => entry.text.includes(first.activityId)));
     assert.ok(main.request.messages.every(entry => !entry.text.includes('sample.ts:2') && !entry.text.includes('原始工作细节')));
     await direct(f.app, '第二次调查');
+    const second = await f.app.journal.load('actors', 'scout');
+    assert.deepEqual((await f.app.journal.loadContext('actors', 'scout', second))?.folded, [0], 'the unrelated second task folded the first round at the tail');
     assert.ok(requests[1]!.messages.some(message => message.text.includes('找到边界')));
     assert.ok(requests[1]!.messages.every(message => !message.text.includes('原始工作细节')));
     assert.ok(!requests[0]!.system.includes('配色技能'), 'Unassigned skills do not enter the actor index');

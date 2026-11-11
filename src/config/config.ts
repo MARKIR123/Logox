@@ -14,11 +14,14 @@ export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
   /** Rate for 1-hour cache writes (Anthropic); unset means twice `input`. `cache_write` is the 5-minute rate. */
   cache_write_1h: z.number().finite().nonnegative().optional()});
 export const cacheRetentionSchema = z.enum(['short', 'long']);
+const cacheTtlSchema = z.number().finite().positive();
 export const toolDiscoverySchema = z.enum(['auto', 'none', 'anthropic', 'openai-responses']);
 const capacitySchema = z.object({
   tool_discovery: toolDiscoverySchema.optional(),
   prompt_cache_key: z.boolean().optional(),
   cache_retention: cacheRetentionSchema.optional(),
+  /** Seconds the gateway keeps a prompt cache entry. Anthropic lifetimes follow `cache_retention`; for other protocols unset means unknown, which is never treated as expired. */
+  cache_ttl_seconds: cacheTtlSchema.optional(),
   thinking_protocol: z.enum(['deepseek', 'anthropic-budget', 'anthropic-adaptive', 'reasoning-effort']).optional(),
   thinking_levels: z.array(effortSchema).min(1).optional(), prices: priceSchema.optional(),
   context_window: z.number().int().min(256).optional(),
@@ -32,18 +35,14 @@ export const catalogSchema = z.object({
   aliases: z.record(z.string().min(1), z.string().min(1)).default({}),
   subscription: z.boolean().optional(),
 }).strict();
+/** Context keys of earlier versions. Config files and actor profiles that still carry them load unchanged: the keys are accepted and ignored. */
+export const RETIRED_CONTEXT_KEYS = ['keep_index_lines', 'task_end_floor_ratio', 'compact_accept_ratio'] as const;
 export const contextPolicySchema = z.object({
   keep_recent_rounds: z.number().int().nonnegative().default(2),
   keep_recent_tools: z.number().int().nonnegative().default(2),
-  /** Folded rounds kept as index lines when older history is merged into an overview. */
-  keep_index_lines: z.number().int().nonnegative().default(20),
   reserve_tokens: z.number().int().nonnegative().default(32768),
   high_watermark_ratio: z.number().positive().lt(1).default(0.8),
   low_watermark_ratio: z.number().positive().lt(1).default(0.5),
-  /** A real task end skips compaction while the context is below this share of the high watermark (default 0.5). */
-  task_end_floor_ratio: z.number().min(0).max(1).optional(),
-  /** A task-end compaction is kept only when the result is at most this share of the original estimate (default 0.75). */
-  compact_accept_ratio: z.number().positive().max(1).optional(),
   max_budget_tokens: z.number().int().positive().optional(),
   target_budget_tokens: z.number().int().positive().optional(),
   summary_provider: z.string().min(1).optional(),
@@ -69,7 +68,7 @@ const schema = z.object({
   mcp: z.object({playwright: z.boolean().default(true), servers: z.record(z.string().min(1), mcpServerSchema).default({})})
     .default({playwright: true, servers: {}}),
   hooks: hooksSchema.default({enabled: false, timeout_s: 5, entries: []}),
-  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, keep_index_lines: 20, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5}),
+  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5}),
   models: z.record(z.string(), capacitySchema).default({}),
   catalogs: z.record(z.string().min(1), catalogSchema).default({}),
   provider: z.object({
@@ -81,6 +80,7 @@ const schema = z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
+    cache_ttl_seconds: cacheTtlSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
     model_kinds: modelKindsSchema.optional(),
     api: z.enum(['completions', 'responses']).optional(),
@@ -101,6 +101,7 @@ const schema = z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
+    cache_ttl_seconds: cacheTtlSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
     model_kinds: modelKindsSchema.optional(),
     api: z.enum(['completions', 'responses']).optional(),
@@ -129,6 +130,8 @@ export interface ModelSettings {
   promptCacheKey?: boolean | undefined;
   /** Explicit `cache_retention` of the model or provider. Unset leaves the per-actor and role default (Anthropic TTL) and sends nothing to OpenAI. */
   cacheRetention?: z.infer<typeof cacheRetentionSchema> | undefined;
+  /** Explicit `cache_ttl_seconds` of the model or provider, in milliseconds; unset means the gateway's cache lifetime is unknown. */
+  cacheTtlMs?: number | undefined;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
 export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>}> = {
@@ -252,7 +255,8 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
   const promptCacheKey = declared?.prompt_cache_key ?? provider.prompt_cache_key ?? config.providers[provider.name]?.prompt_cache_key;
   const cacheRetention = declared?.cache_retention ?? provider.cache_retention ?? config.providers[provider.name]?.cache_retention;
-  return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, api: provider.api ?? config.providers[provider.name]?.api,
+  const cacheTtl = declared?.cache_ttl_seconds ?? provider.cache_ttl_seconds ?? config.providers[provider.name]?.cache_ttl_seconds;
+  return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, ...(cacheTtl !== undefined ? {cacheTtlMs: Math.round(cacheTtl * 1000)} : {}), api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

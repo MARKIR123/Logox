@@ -4,6 +4,7 @@ import type {RoundStatus} from './contracts.js';
 import {truncateToTokens} from './budget.js';
 import {FINISH_ROUND_SUMMARY_TOKENS, FINISH_ROUND_TITLE_TOKENS, isFinishRound, type FinishRoundArgs} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
+import {stripNarration} from '../runtime/narration.js';
 
 const memoryBody = z.strictObject({
   title: z.string().min(1),
@@ -40,7 +41,7 @@ const MARKER_PHRASES = Object.freeze({
 } as const);
 const COMMAND_TOKENS = 40, MAX_FILES = 6;
 
-/** A summary the runtime writes from the round's ledger entries: changed files and the last Shell command with its exit status. A completed `reply` is marked `[reply]` instead of `[runtime]`. */
+/** A summary the runtime writes from the round's ledger entries: changed files, the last Shell command with its exit status, and for a completed round the opening of the delivered answer. A completed `reply` is marked `[reply]` instead of `[runtime]`. */
 export function runtimeRoundSummary(messages: readonly ModelMessage[], status: RoundStatus, reply = false): string {
   const kind = reply && status === 'completed' ? 'reply' : status;
   const files: string[] = [];
@@ -65,6 +66,10 @@ export function runtimeRoundSummary(messages: readonly ModelMessage[], status: R
     files.length ? 'Changed ' + files.slice(0, MAX_FILES).join(', ') + (files.length > MAX_FILES ? ` and ${files.length - MAX_FILES} more` : '') + '.' : '',
     command ? `Last command "${command.text}" exit ${command.exit}.` : '',
   ].filter(Boolean);
+  // A round that completed without a model summary still delivered an answer: its opening is the closest thing to the model's own conclusion.
+  const answer = kind === 'completed' ? messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly &&
+    !message.textToolCall && stripNarration(message.text).trim()) : undefined;
+  if (answer) facts.push('Answer began: ' + stripNarration(answer.text).replace(/\s+/g, ' ').trim());
   return truncateToTokens(ROUND_MARKERS[kind] + ' ' + (facts.length ? facts.join(' ') : MARKER_PHRASES[kind]), FINISH_ROUND_SUMMARY_TOKENS);
 }
 

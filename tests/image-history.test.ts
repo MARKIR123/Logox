@@ -27,7 +27,7 @@ async function fixture(shots: number) {
   const manager = (maxImages?: number) => {
     const model = {identity: 'fixture', window: 1_000_000, ...(maxImages ? {maxImages} : {})};
     return new ContextManager({journal, maxOutput: 512, model: () => model, summarizer: () => ({model, provider}),
-      policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 2, keep_index_lines: 2})});
+      policy: contextPolicySchema.parse({keep_recent_rounds: 0, keep_recent_tools: 2})});
   };
   return {root, journal, put, manager, identity: {sessionId: 's', ownerId: 'techne', activityId: 'open'}, base: {system: 'rules', tools: []}, signal: new AbortController().signal};
 }

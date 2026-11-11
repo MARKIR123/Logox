@@ -3,10 +3,10 @@ import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall, TurnUsag
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeMessages} from '../runtime/messages.js';
 import {inputMessage} from '../runtime/provenance.js';
-import {Journal, storedMessage, type HistoryEntry} from '../store/journal.js';
-import {COMPACT_ACCEPT_RATIO, digest, estimateRequest, estimateText, TASK_END_FLOOR_RATIO, TokenMeter, watermarks} from './budget.js';
+import {Journal, storedMessage, type HistoryEntry, type TaskCheckpoint} from '../store/journal.js';
+import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
-import {historyForkInstruction, PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
+import {PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
 import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
@@ -31,10 +31,16 @@ export interface ContextOptions {
   beforeCompact?(identity: Identity, tokens: number): void;
   /** Brackets a running compaction so the UI can show `Compacting context` for that owner. */
   compacting?(identity: Identity, active: boolean): void;
+  /** Prompt cache lifetime of the owner's current model in milliseconds (`providers/cache.ts:cacheLifetimeMs`); undefined when unknown, which counts as never expired. */
+  cacheLifetimeMs?(identity: Identity): number | undefined | Promise<number | undefined>;
+  /** Clock for the cache-expiry check; tests inject it. */
+  now?(): number;
   /** Source of list prices for the cost stored with each turn's usage (see `cost.ts:costOf`). */
   pricing?: Parameters<typeof costOf>[1];
 }
 export class ContextBudgetError extends Error {}
+/** What a routine fold at the start of a round may do: `keepLast` leaves the latest closed round in full (the new task continues its root task). */
+export interface RoundStartFold {keepLast: boolean}
 /** Upper bound for a model-written overview or progress summary. */
 const SUMMARY_TOKENS = 4000;
 interface Fork {readonly base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>; readonly prefix: readonly ModelMessage[]; readonly model: ModelCapacity; readonly safety: number}
@@ -150,11 +156,47 @@ export class ContextManager {
   requestBase(_identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>): Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'> {
     return base;
   }
-  async taskEnd(identity: Identity, base: Pick<ModelRequest, "system" | "tools">, signal: AbortSignal): Promise<void> {
-    // Called only when a real task (Director assignment or human request) ends; the floor and benefit gate live in prepare().
-    if (identity.ownerId !== "logox") await this.prepare(identity, base, signal, true, true);
+  /**
+   * Called when an activity that opens a round (or a Director activity that continues one) starts, before its first model request. It runs
+   * the routine fold of `prepare()`: a companion folds every closed round at the end of the history unless the new task continues the root
+   * task of its latest round; Logox folds down to its recent rounds when its cache has expired or the request is at half the high watermark.
+   */
+  async roundStart(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, fold: RoundStartFold): Promise<void> {
+    await this.prepare(identity, base, signal, false, fold);
   }
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, taskEnd = false):
+  /**
+   * Stopped or failed rounds the routine folds leave alone, by start index. A round unpins once it was resumed and the resumption completed,
+   * or its root task ended: for a companion the Director round that dispatched it is closed; for Logox, or a task nobody dispatched, a later
+   * round completed normally. Any lookup failure keeps the round pinned.
+   */
+  private async pinnedStarts(identity: Identity, rounds: readonly Round[]): Promise<Set<number>> {
+    const stopped = rounds.filter(round => round.closed && round.record && round.record.status !== 'completed');
+    const pinned = new Set<number>();
+    if (!stopped.length) return pinned;
+    const {journal} = this.options;
+    let tasks: TaskCheckpoint[];
+    try {tasks = await journal.activeTasks(identity.sessionId);}
+    catch {for (const round of stopped) pinned.add(round.start); return pinned;}
+    const completed = (activityId: string) => rounds.some(round => round.record?.activityId === activityId && round.record.status === 'completed');
+    for (const round of stopped) {
+      const record = round.record!;
+      try {
+        if (tasks.some(task => task.ownerId === identity.ownerId && task.resumeTaskId === record.activityId && completed(task.activityId))) continue;
+        const root = identity.ownerId === 'logox' ? undefined : tasks.find(task => task.activityId === record.activityId)?.rootActivityId;
+        let ended: boolean | undefined;
+        if (root && root !== record.activityId) {
+          const director = await journal.load(identity.sessionId, 'logox');
+          const at = director.findIndex(entry => entry.role === 'user' && entry.activityId === root);
+          if (at >= 0) ended = (await journal.rounds(identity.sessionId, 'logox', director)).some(item => item.start <= at && at < item.end);
+          else {const status = tasks.find(task => task.activityId === root)?.status; ended = status === undefined ? undefined : ['completed', 'failed', 'cancelled'].includes(status);}
+        }
+        ended ??= rounds.some(other => other.record?.status === 'completed' && other.start > round.start);
+        if (!ended) pinned.add(round.start);
+      } catch {pinned.add(round.start);}
+    }
+    return pinned;
+  }
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, routine?: RoundStartFold):
     Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
     signal.throwIfAborted();
     base = this.requestBase(identity, base);
@@ -231,16 +273,15 @@ export class ContextManager {
       for (const round of rounds) {
         if (round.start >= end) break;
         if (candidate.memo && round.end <= candidate.memo.end) continue;
-        const pendingMemory = round.record?.memory?.source === 'runtime';
-        if (!candidate.folded.includes(round.start) || pendingMemory) {emit(round.start, Math.min(round.end, end)); continue;}
+        if (!candidate.folded.includes(round.start)) {emit(round.start, Math.min(round.end, end)); continue;}
         const summary = round.record?.summary ?? summarizeRound(entries.slice(round.start, round.end).map(message), 'failed');
         const memory = round.record?.memory;
         const lines = journal.sourceLines(identity.sessionId, identity.ownerId, round.start, round.end);
         const activityOrdinal = activityIds.indexOf(entries[round.start]?.activityId ?? '') + 1;
         output.push({role: 'assistant', text: formatRoundIndex({
           ordinal: round.record?.ordinal ?? (activityOrdinal || rounds.indexOf(round) + 1),
-          title: memory?.source === 'model' ? memory.title : summary.title,
-          summary: memory?.source === 'model' ? memory.summary : [round.record?.status === 'completed' ? '' : ROUND_MARKERS[round.record?.status ?? 'failed'], 'Legacy record; inspect evidence before relying on its claims.', summary.report].filter(Boolean).join(' '),
+          title: memory && memory.source !== 'legacy' ? memory.title : summary.title,
+          summary: memory && memory.source !== 'legacy' ? memory.summary : [round.record?.status === 'completed' ? '' : ROUND_MARKERS[round.record?.status ?? 'failed'], 'Legacy record; inspect evidence before relying on its claims.', summary.report].filter(Boolean).join(' '),
           start: lines.start, end: lines.end,
         })});
         retain(round.start, round.end, true);
@@ -280,12 +321,41 @@ export class ContextManager {
       }
     }
     const meter = this.meter(identity);
-    const before = meter.estimate(requestFor(state), model);
+    let before = meter.estimate(requestFor(state), model);
+    // Pinned rounds (stopped or failed, root task still open) are folded by no rule except the last resort below the watermark.
+    let pinnedStarts: Set<number> | undefined;
+    const pinned = async () => pinnedStarts ??= await this.pinnedStarts(identity, rounds);
+    const snapshot = (value: ContextState): ContextState => ({...structuredClone(value), ...contextSnapshot(sourceMessages), thinkingCut: entries.length, sourceLength: entries.length, sourceHash: digest(entries)});
+    // The routine fold is mechanical: it only lists closed rounds as folded and never calls the model. A companion's replacement point is the
+    // end of its history (a new task is starting), so it costs no cache; Logox pays only when its cache has expired anyway or the request is at half the high watermark.
+    if (routine && !force) {
+      let due = identity.ownerId !== 'logox';
+      if (!due) {
+        let lifetime: number | undefined;
+        try {lifetime = await this.options.cacheLifetimeMs?.(identity);} catch {lifetime = undefined;}
+        const lastReply = entries.findLast(entry => entry.role === 'assistant')?.time;
+        due = lifetime !== undefined && lastReply !== undefined && (this.options.now?.() ?? Date.now()) - lastReply >= lifetime || before >= marks.high / 2;
+      }
+      const targets = identity.ownerId === 'logox' ? closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds)) : routine.keepLast ? [] : closed;
+      const already = new Set(state.folded), fresh = due ? targets.filter(round => !already.has(round.start)) : [];
+      if (fresh.length) {
+        const held = await pinned();
+        const starts = fresh.filter(round => !held.has(round.start)).map(round => round.start);
+        if (starts.length) {
+          const next = snapshot({...state, folded: [...state.folded, ...starts]});
+          try {
+            await journal.saveContext(next);
+            signal.throwIfAborted();
+            state = next; original = next; meter.invalidate();
+            const after = meter.estimate(requestFor(state), model);
+            if (identity.ownerId === 'logox') this.options.report?.(identity, `[Context] Folded ${starts.length} closed round${starts.length === 1 ? '' : 's'} into index lines (~${before} to ~${after} tokens).`);
+            before = after;
+          } catch (error) {signal.throwIfAborted();}
+        }
+      }
+    }
     let compacted = false, request = requestFor(state);
-    // A task end below the floor keeps the cached view; above the high watermark the normal watermark rules apply.
-    const floored = taskEnd && before < marks.high * (policy.task_end_floor_ratio ?? TASK_END_FLOOR_RATIO);
-    const gated = taskEnd && before < marks.high;
-    if (force && !floored || before >= marks.high) {
+    if (force || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
       this.options.compacting?.(identity, true);
       try {
@@ -303,25 +373,28 @@ export class ContextManager {
             candidate.archives.push({callIndex: pair.callIndex, resultIndex: pair.resultIndex, hash});
           }
         };
+        const fold = (list: readonly Round[]) => {for (const round of list) if (!candidate.folded.includes(round.start)) candidate.folded.push(round.start);};
+        const held = await pinned(), foldable = closed.filter(round => !held.has(round.start));
         await archiveTools(false);
-        for (const round of closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds))) {
-          if (!candidate.folded.includes(round.start)) candidate.folded.push(round.start);
-        }
+        // The recent rounds stay unless that is not enough; `/compact` takes the same ladder.
+        fold(closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds)).filter(round => !held.has(round.start)));
         if (estimateRequest(requestFor(candidate)) > marks.low) {
-          for (const round of closed) if (!candidate.folded.includes(round.start)) candidate.folded.push(round.start);
+          fold(foldable);
           await archiveTools(true);
         }
+        // Last resort before any model call: stopped or failed rounds fold too.
+        if (estimateRequest(requestFor(candidate)) >= marks.high) fold(closed);
         // Summaries are asked at the end of the real conversation so they reuse its cached prefix.
         const fork: Fork = {base, prefix: requestFor(original).messages, model, safety: marks.safety};
-        const folded = estimateRequest(requestFor(candidate));
-        // The newest folded rounds stay as index lines with their ledger ranges; only older history becomes an overview,
-        // unless the lines themselves are what keeps the request over the high watermark.
-        const keepLines = closed.length > (policy.keep_index_lines ?? 20) ? policy.keep_index_lines ?? 20 : folded >= marks.high ? 0 : undefined;
-        if (folded > marks.low && keepLines !== undefined && closed.length > keepLines) {
-          const last = closed.at(-(keepLines + 1))!;
-          if (!candidate.memo || last.end > candidate.memo.end) {
-            const ordinal = last.record?.ordinal ?? rounds.indexOf(last) + 1;
-            const memo = await this.mergeMemo(identity, projected(candidate, last.end), signal, {...fork, instruction: historyForkInstruction(ordinal)});
+        // The one model-written merge: the index lines themselves keep the request over the high watermark, so the oldest lines
+        // (and any earlier overview) become one overview, as many as it takes to get below the low watermark. Its input is only those lines.
+        const lines = closed.filter(round => !candidate.memo || round.end > candidate.memo.end);
+        if (lines.length && estimateRequest(requestFor(candidate)) >= marks.high) {
+          const reserved = 'x'.repeat(Math.min(SUMMARY_TOKENS, Math.floor(marks.low / 4)) * 4);
+          const merged = (end: number) => estimateRequest(requestFor({...candidate, memo: {end, text: reserved}}));
+          if (merged(lines.at(-1)!.end) < marks.high) {
+            const last = lines.find(round => merged(round.end) <= marks.low) ?? lines.at(-1)!;
+            const memo = await this.mergeMemo(identity, projected(candidate, last.end), signal);
             if (memo) {
               candidate.memo = {end: last.end, text: memo};
               if (candidate.working && candidate.working.start < last.end) delete candidate.working;
@@ -342,8 +415,8 @@ export class ContextManager {
         }
         const candidateRequest = requestFor(candidate);
         const after = estimateRequest(candidateRequest), previous = estimateRequest(requestFor(original));
-        if (gated ? after <= previous * (policy.compact_accept_ratio ?? COMPACT_ACCEPT_RATIO) : after < previous ||
-          force && estimateRequest(candidateRequest) < marks.high && JSON.stringify({...candidate, thinkingCut: undefined}) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages), thinkingCut: undefined})) {
+        if (after < previous ||
+          force && after < marks.high && JSON.stringify({...candidate, thinkingCut: undefined}) !== JSON.stringify({...original, ...contextSnapshot(sourceMessages), thinkingCut: undefined})) {
           candidate.sourceLength = entries.length; candidate.sourceHash = digest(entries);
           signal.throwIfAborted();
           await journal.saveContext(candidate);
@@ -351,7 +424,7 @@ export class ContextManager {
           state = candidate; request = candidateRequest; compacted = true; meter.invalidate();
           const trigger = force ? 'history cleanup' : 'automatic';
           this.options.report?.(identity, `[Context] Compacted ~${before} to ~${estimateRequest(request)} tokens (${trigger}; high watermark ${marks.high}; window ${model.window}). Raw ledger retained.`);
-        } else if (force && !gated) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');
+        } else if (force) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');
       } catch (error) {
         signal.throwIfAborted();
         request = requestFor(original);
@@ -388,10 +461,8 @@ export class ContextManager {
       return undefined;
     }
   }
-  private async mergeMemo(identity: Identity, messages: readonly ModelMessage[], signal: AbortSignal, fork?: Fork & {instruction: string}): Promise<string | undefined> {
-    this.options.report?.(identity, '[Context] Summarizing older closed history into an overview.');
-    const forked = fork ? await this.forkSummary(identity, fork, signal) : undefined;
-    if (forked) return forked;
+  private async mergeMemo(identity: Identity, messages: readonly ModelMessage[], signal: AbortSignal): Promise<string | undefined> {
+    this.options.report?.(identity, '[Context] Merging the oldest index lines into an overview.');
     const {model, provider} = this.options.summarizer(identity);
     const system = HISTORY_MEMO_INSTRUCTION + memoryFocusInstruction(this.summaryContract(identity));
     const text = messages.map(value => value.role + ': ' + JSON.stringify(value)).join('\n');

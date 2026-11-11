@@ -134,6 +134,8 @@ name = "local"
 
 OpenAI 不受角色默认值影响：只有在提供商或模型上显式写 `cache_retention = "long"` 才会发送保留字段，Director 默认的 `long` 不会自动开启 OpenAI 的 2.5 倍写入选项。GPT-5.5 及更早的 `gpt-*` 模型发送 `prompt_cache_retention: "24h"`；GPT-5.6 及以后在 Responses 请求里发送 `prompt_cache_options: {"ttl": "12h"}`（写入价 2.5 倍）。其他提供商不受影响。
 
+`cache_ttl_seconds`（正数，单位秒）可选，设置位置与优先级同 `cache_retention`。它告诉 Logox 这个网关的提示缓存大约保留多久，用来判断 Logox 的缓存是否已过期、是否可以免费折叠旧轮次（见[上下文管理](modules/context.md)）。设置了就以它为准。没有设置时，Anthropic 协议按 `cache_retention` 对应的时长计算；OpenAI 和其他服务不公开时长，视为未知，即永不过期，此时只在上下文达到高水位一半或越过水位线时折叠。设得比真实时长长，折叠只会晚一点发生；设得更短，则可能白付一次缓存写入。
+
 ```toml
 [models."anthropic/claude-sonnet-5-5"]
 cache_retention = "long"   # 该模型的所有角色都用 1 小时缓存，除非角色自己覆盖

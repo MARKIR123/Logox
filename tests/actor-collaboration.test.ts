@@ -113,13 +113,13 @@ test('SendMessage 拒绝跨会话身份、未知目标、非成员与超长消�
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
 
-test('收尾复用保存摘要，整理失败保持完成，直接对话仅回传锚点', async () => {
+test('收尾复用保存摘要，开轮折叠失败不影响任务完成，直接对话仅回传锚点', async () => {
   const f = await fixture();
   try {
     const store = new RuntimeStore(); let summary: unknown, handed = 0, anchored = 0;
     const ensemble = new Ensemble('s', store, f.journal, async (_prompt, context) => context.say('【轮次摘要】\n标题：修改完成\n报告：测试通过'), {
-      taskEnd: async (_context, value) => {summary = value; throw new Error('整理失败');},
-      handoff: async result => {handed++; assert.deepEqual(result.summary, summary);},
+      roundStart: async () => {throw new Error('折叠失败');},
+      handoff: async result => {handed++; summary = result.summary;},
       directAnchor: async result => {anchored++; assert.equal('summary' in result, false);},
     });
     const task = ensemble.dispatch('techne', '修改'); await task.done;
@@ -160,12 +160,12 @@ test('SendMessage to an already-completed peer records the message passively wit
   } finally {await rm(f.directory, {recursive: true, force: true});}
 });
 
-test('只有 Director 派发与人类任务结束才触发 taskEnd，协作与唤醒活动不触发', async () => {
+test('只有 Director 派发与人类任务开始才触发 roundStart，协作与唤醒活动不触发', async () => {
   const f = await fixture();
   try {
     const store = new RuntimeStore(), ends: Array<string | undefined> = [];
     const ensemble = new Ensemble('s', store, f.journal, async (_prompt, context) => context.say('【轮次摘要】\n标题：完成\n报告：好'), {
-      taskEnd: async context => {ends.push(context.inputKind);},
+      roundStart: async context => {ends.push(context.inputKind);},
     });
     await ensemble.dispatch('techne', '问题', 'kalon', {inputKind: 'collaboration'}).done;
     await ensemble.dispatch('techne', '唤醒', 'kalon', {inputKind: 'actor'}).done;

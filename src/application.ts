@@ -35,6 +35,7 @@ import {row, rowText, tabContent} from './commands/tab-rows.js';
 import {ContextManager} from './context/manager.js';
 import {createAgent, agentRequestBase, type AgentAssembly} from './kernel/agent.js';
 import {CacheKeeper} from './kernel/cache-keepalive.js';
+import {cacheLifetimeMs, roleCacheRetention} from './providers/cache.js';
 import {certainToWake, openWork} from './actors/facts.js';
 import {asksFor} from './runtime/asks.js';
 import {FALLBACK_CAPABILITIES} from './providers/capabilities.js';
@@ -237,7 +238,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     modelPool,
   });
-  const contexts = new ContextManager({journal, pricing: config, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
+  const contexts = new ContextManager({journal, pricing: config,
+    cacheLifetimeMs: identity => {
+      const selection = taskModels.selection(identity), actor = actors.find(identity.ownerId);
+      return cacheLifetimeMs(registry.configuredSettings(selection.provider, selection.model),
+        {cacheRetention: {role: roleCacheRetention(identity.ownerId), ...(actor?.cacheRetention ? {actor: actor.cacheRetention} : {})}});
+    }, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
     contract: identity => actorServices.contract(identity.ownerId),
     anchors: async identity => identity.ownerId === 'logox'
@@ -527,7 +533,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await actorServices.flush();
       }
     },
-    taskEnd: async context => {await contexts.taskEnd(context, await requestBase(context), context.signal);},
+    roundStart: async (context, info) => {await contexts.roundStart(context, await requestBase(context), context.signal, info);},
     handoff: result => closed ? Promise.resolve() : actorServices.handoff(result),
     directAnchor: async result => {
       const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;
