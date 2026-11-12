@@ -91,7 +91,7 @@ test('stage line is unambiguously the first line of work turns; personas never p
 });
 
 test('brief, scope and ownership rules live in the lowest layer that can enforce them', () => {
-  assert.match(SHARED_EXECUTION_RULES, /never state a figure \(frame rate, timing, size, count\) you did not measure/);
+  assert.match(SHARED_EXECUTION_RULES, /State no figure \(frame rate, timing, size, count\) you did not measure/);
   const companion = collaborationFor('techne');
   assert.match(companion, /Do what the assignment asks and nothing more/);
   assert.match(companion, /outside your `You own` list only after telling their owner/);
@@ -102,15 +102,15 @@ test('brief, scope and ownership rules live in the lowest layer that can enforce
   }
   assert.match(profile('techne', 'execution.md'), /Edit, Never Rewrite/);
   assert.match(profile('aletheia', 'execution.md'), /Behaviour first[\s\S]*Skip what the brief lists as already verified/);
-  assert.match(profile('kalon', 'execution.md'), /Own the Visual Artifacts[\s\S]*review the rendered result/);
+  assert.match(profile('kalon', 'execution.md'), /Artifacts, Not Specs[\s\S]*review the rendered result/);
 });
 
 test('stage rule: short, stated once, rare by design, no priming examples', () => {
   const rule = SHARED_EXECUTION_RULES.slice(SHARED_EXECUTION_RULES.indexOf('## Status line'), SHARED_EXECUTION_RULES.indexOf('## Seeing'));
   assert.match(rule, /When you start a task, and again only when the deliverable you are working on changes/);
-  assert.match(rule, /Most turns have none: a task has two to four in all/);
-  assert.match(rule, /do not deliberate over it/);
-  assert.match(rule, /your history shows your earlier stages the same way, and you declare a new one only by writing this status line/);
+  assert.match(rule, /A task has two to four in all, so most turns have none/);
+  assert.match(rule, /A single tool call, a rephrased label, a fix, a re-check or plain conversation is not a new phase/);
+  assert.match(rule, /The runtime shows the current one on your card, strips it from your text and keeps your earlier stages in your history/);
   assert.doesNotMatch(rule, /UpdateTaskProgress|will not see it/);
   assert.ok(rule.length < 700, 'the rule stays short: ' + rule.length);
   assert.equal(rule.split('⏵').length - 1, 2, 'one format mention plus one example');
@@ -120,7 +120,7 @@ test('stage rule: short, stated once, rare by design, no priming examples', () =
 });
 
 test('final reports separate unverified checks and known risks; verification is incremental in both layers', () => {
-  assert.match(SHARED_EXECUTION_RULES, /a check you did not run or that does not apply is reported as not verified, and risks you found along the way are listed/);
+  assert.match(SHARED_EXECUTION_RULES, /say plainly what is verified, what is inferred and what was not run[\s\S]*list the risks you found along the way/);
   assert.match(collaborationFor('techne'), /Verify incrementally: read the evidence a teammate's report provides or what the assignment says is already verified/);
   assert.doesNotMatch(collaborationFor('logox'), /Verify incrementally/);
   assert.match(profile('logox', 'collaboration.md'), /Accept on the record[\s\S]*check yourself only what the two leave doubtful[\s\S]*say in your answer what you relied on/);

@@ -3,8 +3,6 @@
 ### Working Methods and Protocols
 
 - **Domain**: Core module design and implementation, root-cause bug fixing, safe refactoring, and automated test/regression verification.
-- **Rough Cast First, Rapid Iteration**: When handed a build task, write a minimal runnable baseline (skeleton file) to disk first—never trap an entire implementation inside a massive thought block trying to design it all in your head. Refine incrementally once on disk.
-
 - **Edit, Never Rewrite**: Change an existing large file with targeted `Edit` calls; rewrite it wholesale only when most of it really changes. Build large new artifacts in parts, with the shared contract settled first.
 - **Inspect Before Cutting**: Read upstream/downstream call chains, project conventions, and existing tests before modifying code. Make surgical edits and protect uncommitted working-tree changes. Never touch code you haven't read.
 

@@ -9,6 +9,7 @@ interface Score {
   roots: {finalReports: number; wakes: number; lateWakes: number; lateWakeReports: number; wallMs: number | null; usage: {input: number} | null}[];
   stages: Record<string, {turns: number; withStage: number; share: number | null; distinct: number | null}>;
   roundClosing: Record<string, {rounds: number; same: number; separate: number; silent: number; never: number}>;
+  roundSummaries: Record<string, {rounds: number; model: number; runtime: number; failed: number; interrupted: number; reply: number; modelShare: number | null}>;
   failures: {failedTasks: number; emptyReplyFailures: number; modelErrorEvents: number};
   writes: {refusals: number; savedRecorded: number};
   preview: {serverStarts: number; backgroundStarts: number; portConflicts: number; navigations: {file: number; localHttp: number}};
@@ -82,6 +83,9 @@ async function writeSession(dir: string, withUsage = false): Promise<void> {
     task('wake1', 'logox', {parentActivityId: 'tech', inputKind: 'actor', coordinationWake: true}),
     task('wake2', 'logox', {parentActivityId: 'kal', inputKind: 'actor', coordinationWake: true}),
   ]));
+  const round = (activityId: string, report: string) => ({activityId, start: 0, end: 1, sourceHash: 'h', status: 'completed', summary: {title: 't', report, source: report.startsWith('[') ? 'local' : 'model'}});
+  await writeFile(join(dir, 'director.rounds.json'), JSON.stringify([round(ROOT, 'Dispatched the page.'), round('wake1', '[runtime] The model gave no round summary.'), round('wake2', '[reply] Answered a teammate.')]));
+  await writeFile(join(dir, 'subagents', 'techne.rounds.json'), JSON.stringify([round('tech', 'Built the page.'), round('tech2', '[failed] Ended with an error.'), round('tech3', '[interrupted] Stopped before finishing.')]));
   await writeFile(join(dir, 'events.json'), JSON.stringify([{kind: 'model_error', text: 'Model returned only thinking or an empty reply', time: 1}]));
 }
 
@@ -101,6 +105,10 @@ test('scoreSession computes the workflow metrics of a synthetic session', async 
     assert.deepEqual(score.roundClosing['techne'], {rounds: 1, same: 0, separate: 1, silent: 0, never: 0});
     assert.deepEqual(score.roundClosing['kalon'], {rounds: 1, same: 1, separate: 0, silent: 0, never: 0});
     assert.deepEqual(score.roundClosing['logox'], {rounds: 3, same: 1, separate: 1, silent: 0, never: 1});
+    assert.deepEqual(score.roundSummaries['logox'], {rounds: 3, model: 1, runtime: 1, failed: 0, interrupted: 0, reply: 1, modelShare: 1 / 3});
+    assert.deepEqual(score.roundSummaries['techne'], {rounds: 3, model: 1, runtime: 0, failed: 1, interrupted: 1, reply: 0, modelShare: 1 / 3});
+    assert.deepEqual(score.roundSummaries['total'], {rounds: 6, model: 2, runtime: 1, failed: 1, interrupted: 1, reply: 1, modelShare: 1 / 3});
+    assert.equal(score.roundSummaries['kalon'], undefined, 'an actor without a rounds file is not listed');
     assert.deepEqual([score.failures.failedTasks, score.failures.emptyReplyFailures, score.failures.modelErrorEvents], [1, 1, 1]);
     assert.deepEqual([score.writes.refusals, score.writes.savedRecorded], [1, 1]);
     assert.deepEqual([score.preview.serverStarts, score.preview.backgroundStarts, score.preview.portConflicts, score.preview.navigations.file, score.preview.navigations.localHttp], [2, 1, 1, 1, 0]);

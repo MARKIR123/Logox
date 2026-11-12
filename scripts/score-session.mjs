@@ -26,6 +26,9 @@
 //   Round closing  Per actor activity (round) that has assistant turns: `same` = the `_FinishRound` message itself carries answer
 //                  text; `separate` = answer text sits in another text-only turn (before or after); `silent` = `_FinishRound` with no
 //                  answer text anywhere in the activity; `never` = no `_FinishRound` call.
+//   Round summary  Per actor, from `director.rounds.json` and `subagents/<actor>.rounds.json`: how each closed round's summary was written.
+//                  A report opening with `[runtime]`, `[failed]`, `[interrupted]` or `[reply]` was written by the runtime (counted by that
+//                  marker); any other report was written by the model. Model share = model-written / all rounds, also in total.
 //   Failure        An activity with status `failed` (reason = its error, whitespace-collapsed) plus events.json `model_error` events.
 //   Write refusal  A Write tool result flagged as error that starts with the large-file notice ("Not written: ...").
 //   Saved write    A refusal whose text names a `rejected-writes` path (recorded) and whether that file still exists on disk.
@@ -192,6 +195,21 @@ export function scoreSession(dir, {others = []} = {}) {
     else entry.silent++;
   }
 
+  // 3b. Who wrote each closed round's summary: the model, or the runtime (leading marker of the report).
+  const roundSummaries = {};
+  const summaryFiles = [['logox', join(dir, 'director.rounds.json')]];
+  const subDir = join(dir, 'subagents');
+  if (existsSync(subDir)) for (const file of readdirSync(subDir).sort()) if (file.endsWith('.rounds.json')) summaryFiles.push([file.slice(0, -'.rounds.json'.length), join(subDir, file)]);
+  const newSummary = () => ({rounds: 0, model: 0, runtime: 0, failed: 0, interrupted: 0, reply: 0, modelShare: null});
+  const summaryTotal = newSummary();
+  for (const [actor, file] of summaryFiles) for (const round of readArray(file)) {
+    const report = typeof round?.summary?.report === 'string' ? round.summary.report.trimStart() : '';
+    const marker = /^\[(runtime|failed|interrupted|reply)\]/.exec(report)?.[1] ?? 'model';
+    for (const entry of [roundSummaries[actor] ??= newSummary(), summaryTotal]) {entry.rounds++; entry[marker]++;}
+  }
+  for (const entry of [...Object.values(roundSummaries), summaryTotal]) entry.modelShare = rate(entry.model, entry.rounds);
+  roundSummaries.total = summaryTotal;
+
   // 4. Failures: failed tasks by reason, model_error events, tool errors.
   const reasons = {};
   let emptyReply = 0;
@@ -309,7 +327,7 @@ export function scoreSession(dir, {others = []} = {}) {
   const project = basename(dirname(dirname(dirname(dir)))) === '.logox' ? basename(dirname(dirname(dirname(dirname(dir))))) : id.slice(0, 8);
   return {session: {id, project, label: project, dir, wallMs, actors, others}, roots,
     finalReports: {total: sum(roots.map(root => root.finalReports))},
-    stages, roundClosing: closing, failures, writes, preview, messaging, automa: automaStats, usage, interruptions, missing};
+    stages, roundClosing: closing, roundSummaries, failures, writes, preview, messaging, automa: automaStats, usage, interruptions, missing};
 }
 
 const na = 'n/a';
@@ -343,6 +361,10 @@ export function flatten(score) {
   }
   for (const [actor, entry] of Object.entries(score.roundClosing)) {
     add('Round closing', actor + ' same/separate/silent/never', [entry.same, entry.separate, entry.silent, entry.never].join('/') + ' of ' + entry.rounds);
+  }
+  for (const [actor, entry] of Object.entries(score.roundSummaries)) {
+    add('Round summaries', actor + ' model/runtime/failed/interrupted/reply', [entry.model, entry.runtime, entry.failed, entry.interrupted, entry.reply].join('/') + ' of ' + entry.rounds);
+    add('Round summaries', actor + ' model-written share', pct(entry.modelShare));
   }
   const failures = score.failures;
   add('Failures', 'failed tasks', failures.failedTasks);
