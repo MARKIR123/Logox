@@ -2,6 +2,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {ASK_DEADLOCK_RELEASED, askRecipientEnded} from '../prompts/runtime/recovery.js';
 import {asksFor, type AskBoard} from '../runtime/asks.js';
 import type {RuntimeStore} from '../runtime/store.js';
+import {isDirector} from './director.js';
 
 const POLL_MS = 1000;
 const ACTIVE = new Set<string>(['queued', 'running', 'waiting_input', 'paused']);
@@ -30,7 +31,7 @@ export class PeerWait {
     this.board = asksFor(env.store);
   }
 
-  private get asks() { return this.env.ownerId === 'logox' ? [] : this.board.awaited(this.env.activityId); }
+  private get asks() { return isDirector(this.env.ownerId) ? [] : this.board.awaited(this.env.activityId); }
 
   get pending(): boolean { return this.asks.length > 0; }
 
@@ -44,7 +45,7 @@ export class PeerWait {
     const notices = this.released.splice(0);
     const active = this.teammates();
     for (const ask of this.asks) {
-      if (ask.ended || ask.to !== 'logox' && !active.some(activity => activity.ownerId === ask.to)) {
+      if (ask.ended || !isDirector(ask.to) && !active.some(activity => activity.ownerId === ask.to)) {
         this.board.close(ask.id);
         notices.push({id: ask.id, text: askRecipientEnded(ask.to)});
       }

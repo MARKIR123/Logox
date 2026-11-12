@@ -28,7 +28,7 @@ categories:
 | Improve an MCP or Playwright error hint (`mcp` and direct `mcp__<server>__<tool>` calls) | `src/extensions/diagnostic.ts:diagnoseMcp` | `diagnostics.ts:diagnoseToolError` (maps `mcp__*` names onto the `mcp` handler) |
 | Change what a repeated `ListActors` call returns | `coordination/ListActorsTool/ListActorsTool.ts:executeListActors` | `ListActorsTool.ts:rosterFingerprint`, `coordination/ListActorsTool/prompt.ts` |
 | Change what a message means (`inform`, `ask`, `reply`) | `coordination/SendMessageTool/SendMessageTool.ts:sendMessageSchema` | `src/actors/collaboration.ts`, `src/runtime/asks.ts:AskBoard`, `src/kernel/peer-wait.ts:PeerWait` |
-| Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/agent.ts`, `src/context/round-memory.ts` |
+| Hidden round-closing metadata | `protocol/_FinishRoundTool/_FinishRoundTool.ts` | `src/kernel/reply.ts`, `src/context/round-memory.ts` |
 | Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
 | Trace an Automa dispatch (stateless parallel workers) | `index.ts:Tools.runAutoma()` | `orchestration/AutomaTool/AutomaTool.ts:executeAutomaDispatch()`, `tool-models.ts:ToolModelStorage` (`/model automa`) |
 | Change what a worker may touch, or when a dispatch is refused | `orchestration/AutomaTool/grant.ts:planDispatch()` | `index.ts:Tools.workerDenial()`, `grant.ts:pathDenial()`, `grant.ts:normalizeWrite()`, `orchestration/AutomaTool/paths.ts:canonicalPath()` |
