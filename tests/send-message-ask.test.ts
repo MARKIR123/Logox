@@ -128,9 +128,11 @@ test('a working recipient is reminded once, and an inform does not close the que
     f.board.open({sessionId: 's', from: 'techne', fromActivityId: 'asker', to: 'kalon', label: 'Art ready?'});
     const task = f.ensemble.dispatch('kalon', 'Draw', 'direct');
     await task.done;
-    const reminders = f.requests.at(-1)!.messages.filter(message => message.role === 'context' && /You still owe techne/.test(message.text));
-    assert.equal(reminders.length, 1);
-    assert.match(reminders[0]!.role === 'context' ? reminders[0]!.text : '', /If you cannot answer yet, carry on/);
+    // The nudge is a transient note: it rides on exactly one request and is gone once the model has answered it.
+    const reminded = f.requests.filter(request => said(request, /You still owe techne/));
+    assert.equal(reminded.length, 1);
+    assert.ok(said(reminded[0]!, /If you cannot answer yet, carry on/));
+    assert.ok(!said(f.requests.at(-1)!, /You still owe techne/), 'the nudge does not stay in context');
     assert.ok(!said(f.requests.at(-1)!, /Do not finish yet/), 'it replied, so closing was not stopped');
   } finally { await f.cleanup(); }
 });

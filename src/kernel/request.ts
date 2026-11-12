@@ -99,7 +99,7 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
   }
   for (const ask of run.asks.owed(context.sessionId, context.ownerId)) {
-    if (state.owedSeen(ask.id) === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('task-state', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
+    if (state.owedSeen(ask.id) === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('recovery', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
   }
   if (state.recovery) await appendUpdate(createRuntimeContextMessage('recovery', state.recovery));
   if (state.closing) await appendUpdate(createRuntimeContextMessage('finalizer', FINISH_ROUND_FOLLOW_UP));

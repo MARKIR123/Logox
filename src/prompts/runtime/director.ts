@@ -2,17 +2,17 @@ export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what righ
 /** Opens every ledger entry that wakes or reaches the Director from coordination, so it is never read as the human speaking. */
 export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
 export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}
-export const DIRECTOR_COORDINATION_WAKE = 'Process pending coordination events for Director-owned work. Human instructions take precedence. Inspect delivered evidence, preserve existing effects and report only supported conclusions; receipt is not acceptance.';
-export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below and followed by the runtime record of what that actor changed and ran). Read each account against its record, check what the two leave doubtful, and continue the original task; execution completion is not acceptance.';
+export const DIRECTOR_COORDINATION_WAKE = 'Process the coordination events below for Director-owned work. Human instructions take precedence. Decide from the delivered evidence and keep effects that already happened; receiving a report is not accepting it.';
+export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below and followed by the runtime record of what that actor changed and ran). Read each account against its record, check what the two leave doubtful, and continue the original task.';
 /** One line of the facts snapshot while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */
 export function reportProgress(reported: readonly string[], running: readonly string[], total: number, waitsForHuman: boolean): string {
   return 'Reported ' + reported.length + '/' + total + (running.length ? '; still running: ' + running.join(', ') : '') +
     (waitsForHuman ? '; held until the human speaks again' : '');
 }
-export const DIRECTOR_FAILURE = 'An Actor task ended abnormally. Inspect preserved results before deciding to repair, resume, reassign or take over. Do not replay completed effects or bypass denied permissions.';
+export const DIRECTOR_FAILURE = 'An Actor task ended abnormally. Inspect what it left before deciding to repair, resume, reassign or take over. Denied permissions stay denied.';
 export const DIRECTOR_RECOVERY_EXHAUSTED = 'The same failure has exhausted its recovery budget. Briefly report the cause, preserved work and the decision needed from the human. Do not run tools or dispatch more work for this exhausted recovery.';
-export const DIRECTOR_EXECUTION_REVIEW = 'Automatic output recovery ended without sufficient delivery. Inspect the recorded work, narrow the remaining step or adjust ownership. Use resumeTask for the original failed activity when continuing; do not create a duplicate goal or replay successful tools.';
-export const DIRECTOR_STREAM_REVIEW = 'Output recovery reached its limit. Preserve valid text and tool results; decide from actual evidence. Incomplete tool batches did not execute. Do not repeat the same truncation, increase output allowance or replay completed effects.';
+export const DIRECTOR_EXECUTION_REVIEW = 'The actor delivered nothing and automatic recovery gave up. Inspect the recorded work, then narrow the remaining step or change its owner. To continue, use resumeTask on the original activity instead of dispatching the goal again.';
+export const DIRECTOR_STREAM_REVIEW = 'The actor output was cut off repeatedly and recovery gave up. Its complete text and tool results are valid; tool batches that were cut off did not run. Continue with smaller steps instead of the same long output.';
 export const DIRECTOR_USER_STOP = 'The human stopped this Actor task. Do not automatically retry, reassign or take over.';
 export const DIRECTOR_RESUME_ADVICE = 'Prefer resuming the original Actor activity with resumeTask: ';
 export const DIRECTOR_PAUSED_BATCH = 'Dependent work remains paused in batch ';
