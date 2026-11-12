@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
-import {AUTOMA_STREAK, REPEAT_LIMIT} from '../src/kernel/tool-pacing.js';
+import {AUTOMA_STREAK} from '../src/kernel/tool-pacing.js';
 import {AUTOMA_STREAK_NOTE} from '../src/prompts/runtime/recovery.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
@@ -66,14 +66,6 @@ test('on an append-only protocol recovery notes stay in history', async () => {
     assert.equal(notes(f.requests[1]!).length, 1);
     for (const request of f.requests.slice(2)) assert.equal(notes(request).length, 1, 'never removed');
     for (let index = 1; index < f.requests.length; index++) assert.ok(prefixOf(f.requests[index - 1]!, f.requests[index]!), 'request ' + index + ' keeps the earlier bytes');
-  } finally { await f.cleanup(); }
-});
-
-test('the wait instruction is a recovery note on the closing request', async () => {
-  const f = await run([...Array.from({length: REPEAT_LIMIT + 1}, (_, index) => glob('p' + index)), reply('Waiting.', [finish])], {companion: true});
-  try {
-    assert.equal(f.activity?.status, 'completed', f.activity?.detail);
-    assert.equal(notes(f.requests.at(-1)!, 'tools are withdrawn').length, 1);
   } finally { await f.cleanup(); }
 });
 

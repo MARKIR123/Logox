@@ -1,4 +1,7 @@
 export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
+/** Opens every ledger entry that wakes or reaches the Director from coordination, so it is never read as the human speaking. */
+export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
+export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}
 export const DIRECTOR_COORDINATION_WAKE = 'Process pending coordination events for Director-owned work. Human instructions take precedence. Inspect delivered evidence, preserve existing effects and report only supported conclusions; receipt is not acceptance.';
 export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below). Check the evidence and continue the original task; execution completion is not acceptance.';
 /** One line of the facts snapshot while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */

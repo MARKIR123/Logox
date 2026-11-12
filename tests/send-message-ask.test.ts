@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
-import {REPEAT_LIMIT} from '../src/kernel/tool-pacing.js';
 import {PeerWait} from '../src/kernel/peer-wait.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {Collaboration} from '../src/actors/collaboration.js';
@@ -194,26 +193,6 @@ test('the Director can ask and end its round: it never parks', async () => {
     assert.equal(f.status(task.activityId), 'completed');
     assert.ok(!said(f.requests[1]!, /The reply wakes you/), 'the sent ask result carries no runtime note');
     assert.equal(f.board.owed('s', 'techne').length, 1, 'Techne still owes the answer');
-  } finally { await f.cleanup(); }
-});
-
-test('a polling companion loses its tools, keeps its task, and gets them back when a teammate finishes', async () => {
-  const f = await fixture((request, index) => {
-    if (said(request, /Your tools are back/)) return closing('Rig finished.');
-    return said(request, /work tools are withdrawn/) ? closing('Waiting on Kalon.') : tools(call('p' + index, 'Glob', {pattern: '*'}));
-  });
-  try {
-    f.peer('kalon');
-    const task = f.ensemble.dispatch('techne', 'Build', 'direct');
-    while (!f.requests.some(request => said(request, /work tools are withdrawn/))) await delay(10);
-    assert.equal(f.requests.length, REPEAT_LIMIT + 2);
-    await delay(1200);
-    assert.equal(f.requests.length, REPEAT_LIMIT + 2, 'no requests while parked');
-    assert.equal(f.status(task.activityId), 'running');
-    f.store.activities.update('s', 'kalon', {status: 'completed'});
-    await task.done;
-    assert.equal(f.status(task.activityId), 'completed');
-    assert.ok(f.requests.at(-1)!.tools.some(tool => tool.name === 'Glob'), 'its tools came back');
   } finally { await f.cleanup(); }
 });
 

@@ -14,7 +14,7 @@ import {Journal} from '../src/store/journal.js';
 import {loadConfig} from '../src/config/config.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {actorSchema} from '../src/tools/orchestration/ActorTool/ActorTool.js';
-import {ACTOR_DESCRIPTION} from '../src/tools/orchestration/ActorTool/prompt.js';
+import {ACTOR_DESCRIPTION, dispatchedResult, endedBatchResult, resumedBatchResult} from '../src/tools/orchestration/ActorTool/prompt.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {renderBrief, BRIEF_LABELS} from '../src/tools/orchestration/ActorTool/brief.js';
 
@@ -190,4 +190,22 @@ test('any activity an actor runs for the Director, including a peer-message wake
     assert.match(rows, /Check the inline copy/);
     assert.match(rows, /Running/);
   } finally {release.resolve(); await f.close();}
+});
+
+test('the dispatch result carries the waiting contract and the description no longer promises tool withdrawal', {timeout: 8000}, async () => {
+  assert.doesNotMatch(ACTOR_DESCRIPTION, /withdraw|Companions keep running|busy-poll/i);
+  assert.match(ACTOR_DESCRIPTION, /run asynchronously, and their reports wake you automatically/);
+  let result = '';
+  const f = await fixture(async (prompt, context, services) => {
+    if (prompt === 'start') result = (await services.execute(call([{ownerId: 'techne', prompt: 'Build'}, {ownerId: 'kalon', prompt: 'Draw'}]), context)).text;
+    else context.say('done');
+  });
+  try {
+    await f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    const batch = f.store.activities.list().find(activity => activity.ownerId === 'techne')!.batchId!;
+    assert.equal(result, dispatchedResult('techne, kalon', batch));
+    assert.equal(result, 'Dispatched to techne, kalon (Batch ' + batch + '). They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.');
+    assert.match(resumedBatchResult('b1'), /^Resumed batch b1: its paused tasks are queued again. They start and work in the background/);
+    assert.doesNotMatch(endedBatchResult('b1'), /wake you/);
+  } finally {await f.close();}
 });

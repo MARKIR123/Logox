@@ -95,7 +95,8 @@ export class DeliveryQueue {
         const human = first.kind === 'human_steer';
         const source = group.length === 1 ? first.source : 'coordination';
         const kind = human ? 'human' : group.every(item => item.inputKind === first.inputKind) ? first.inputKind : 'actor';
-        const text = human ? first.text : (group.some(item => item.kind === 'report') ? DIRECTOR_RESULTS_READY + '\n\n' : '') + group.map(item => `[Event ${item.id}; ${item.kind}; source ${item.source}; activity ${item.sourceActivityId ?? 'unspecified'}; root ${item.rootActivityId ?? 'unspecified'}]\n${item.text}`).join('\n\n');
+        const body = (group.some(item => item.kind === 'report') ? DIRECTOR_RESULTS_READY + '\n\n' : '') + group.map(item => `[Event ${item.id}; ${item.kind}; source ${item.source}; activity ${item.sourceActivityId ?? 'unspecified'}; root ${item.rootActivityId ?? 'unspecified'}]\n${item.text}`).join('\n\n');
+        const text = human ? first.text : body;
         // The ledger stores exactly what the model saw (notice included) so resume reproduces it; the timeline strips the notice with `steeredText()`.
         const modelText = human ? steeredModelText(text) : text;
         await this.history.append({version: 1, sessionId: this.sessionId, ownerId, activityId, source, inputKind: kind,

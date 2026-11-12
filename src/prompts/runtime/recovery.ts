@@ -8,12 +8,6 @@ export interface FailedToolReport {
   readonly error: string;
 }
 
-/** Sent when a waiting Director's observation tools are withdrawn; it can only close the round now. */
-export const DIRECTOR_WAIT_INSTRUCTION = 'You kept re-checking while companions are running, so your work tools are withdrawn for this round. Reply with one short line saying what you are waiting for and end the round. This does not stop the companions: their reports wake you automatically and your tools return then.';
-
-/** Sent when a polling companion's tools are withdrawn; its task stays open and resumes when something changes. */
-export const COMPANION_WAIT_INSTRUCTION = 'You kept re-checking while teammates are running, so your work tools are withdrawn for now. Reply with one short line saying what you are waiting for and end the round. Your task stays open: you resume with your tools as soon as a teammate finishes or a message reaches you.';
-
 /** Sent to the asker chosen to break a cycle of actors waiting on each other. */
 export const ASK_DEADLOCK_RELEASED = 'You and the teammate you asked are waiting on each other, so your question was closed to break the deadlock. Do not wait for that answer. Answer what you have been asked with type "reply", stating what you assumed, then continue.';
 
@@ -51,6 +45,3 @@ export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerI
       : 'Previous output reached token limits. Continue the current step from the break point using existing text; do not replan or regenerate delivered content.';
   return next;
 }
-
-/** Result for a tool call made while the caller's tools are withdrawn; the call is not executed. */
-export const TOOLS_WITHDRAWN_RESULT = 'Your tools are withdrawn until a teammate finishes or a message arrives, so this call was not executed. Reply with one short line saying what you are waiting for.';

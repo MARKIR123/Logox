@@ -16,7 +16,7 @@ import {waitForSnapshot} from './runtime-fixture.js';
 import {waitFor} from './wait-for.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {Tools} from '../src/tools/tools.js';
-import {DIRECTOR_RESULTS_READY} from '../src/prompts/runtime/director.js';
+import {DIRECTOR_AUTOMATED_EVENT, DIRECTOR_RESULTS_READY} from '../src/prompts/runtime/director.js';
 
 function gate() {let resolve!: () => void; const promise = new Promise<void>(done => {resolve = done;}); return {promise, resolve};}
 const dispatch = (owners: string[]) => ({id: 'assign', name: 'Actor', arguments: JSON.stringify({tasks: owners.map(ownerId => ({ownerId, prompt: 'child work'}))})});
@@ -480,5 +480,29 @@ test('explicit assistance reaches a busy Director as a priority event without pr
     assert.equal(f.store.activities.list().filter(activity => activity.ownerId === 'logox').length, 1);
     assert.equal(director.signal.aborted, false);
     release.resolve(); await parent.done;
+  } finally {release.resolve(); await f.close();}
+});
+
+test('the Director wake prompt opens with the automated-event line once; delivered reports and human entries do not', {timeout: 10000}, async () => {
+  const release = gate(), wakePrompts: string[] = [], drained: string[] = [];
+  const f = await fixture(async (prompt, context, services) => {
+    if (context.ownerId === 'techne') {await release.promise; context.say('techne full report.'); return;}
+    if (prompt === 'start') {await services.execute(dispatch(['techne']), context); context.say('Dispatched.'); return;}
+    wakePrompts.push(prompt); drained.push(...(await context.drainInbox?.() ?? []).map(message => message.text)); context.say('Handled.');
+  });
+  try {
+    await f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    release.resolve(); await done(f, 'techne'); await allIdle(f.ensemble);
+    assert.equal(wakePrompts.length, 1);
+    assert.ok(wakePrompts[0]!.startsWith(DIRECTOR_AUTOMATED_EVENT + '\n'));
+    assert.equal(count(wakePrompts[0]!, DIRECTOR_AUTOMATED_EVENT), 1);
+    assert.equal(drained.length, 1);
+    assert.equal(count(drained[0]!, DIRECTOR_AUTOMATED_EVENT), 0, 'delivered reports already carry their provenance label');
+    assert.ok(drained[0]!.includes('techne full report.'));
+    const ledger = (await f.journal.loadRaw('s', 'logox')).filter(entry => entry.role === 'user');
+    const human = ledger.filter(entry => entry.inputKind === 'human'), automated = ledger.filter(entry => entry.inputKind !== 'human');
+    assert.equal(human.length, 1); assert.ok(!human[0]!.text.includes(DIRECTOR_AUTOMATED_EVENT));
+    assert.equal(automated.length, 2);
+    assert.equal(automated.filter(entry => entry.text.startsWith(DIRECTOR_AUTOMATED_EVENT)).length, 1, 'only the wake prompt carries the line');
   } finally {release.resolve(); await f.close();}
 });

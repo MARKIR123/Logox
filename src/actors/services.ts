@@ -43,7 +43,8 @@ import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
 import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
-  DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint} from '../prompts/runtime/director.js';
+  DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
+import {dispatchedResult, endedBatchResult, resumedBatchResult} from '../tools/orchestration/ActorTool/prompt.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -293,7 +294,7 @@ export class ActorServices {
             throw new Error('Cannot resume a batch from another task or a batch that does not exist');
           }
           if (group) applyBatch = () => {this.resumableBatches.delete(resumeBatch); this.restartBlockers.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);};
-          if (!tasks.length) {applyBatch?.(); return {text: 'Resumed original batch: ' + resumeBatch, isError: false};}
+          if (!tasks.length) {applyBatch?.(); return {text: applyBatch ? resumedBatchResult(resumeBatch) : endedBatchResult(resumeBatch), isError: false};}
         }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
@@ -319,7 +320,7 @@ export class ActorServices {
         }
         const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
-          text: `Dispatched to ${targets} (Batch ${group.batchId}).`,
+          text: dispatchedResult(targets, group.batchId),
           isError: false,
         };
       }
@@ -475,7 +476,7 @@ export class ActorServices {
       .sort((a, b) => deliveryPriority[a.kind] - deliveryPriority[b.kind]);
     const first = pending[0];
     if (!first) return;
-    const handle = this.options.enqueue('logox', DIRECTOR_COORDINATION_WAKE, first.source,
+    const handle = this.options.enqueue('logox', automatedEvent(DIRECTOR_COORDINATION_WAKE), first.source,
       {...first.origin, rootActivityId: first.rootActivityId ?? first.origin?.rootActivityId ?? first.sourceActivityId,
         inputKind: 'actor', coordinationWake: true, priority: first.kind === 'failure' || first.kind === 'help'});
     this.wakeTask = handle;

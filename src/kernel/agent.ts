@@ -28,7 +28,7 @@ import {asksFor} from '../runtime/asks.js';
 import {roundEffect} from '../runtime/round-scope.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import {textToolCallName} from './text-tool-call.js';
-import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE, TOOLS_WITHDRAWN_RESULT, COMPANION_WAIT_INSTRUCTION, DIRECTOR_WAIT_INSTRUCTION, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
+import {EMPTY_REPLY_REMINDER, TEXT_TOOL_CALL_NOTE, askOwedAtClose, askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {storedMessage} from '../store/journal.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
@@ -143,7 +143,7 @@ const DRAFT_CHARS_STEP = 1024, DRAFT_MS_STEP = 250;
 const ASK_CLOSE_REMINDERS = 2;
 /** Model requests an actor may work with an unanswered question before its single working reminder. */
 const ASK_WORK_REMINDER_AFTER = 4;
-/** Consecutive tool batches refused (withdrawn or restricted tools) before the runtime ends the exchange itself. */
+/** Consecutive tool batches refused (restricted tools) before the runtime ends the exchange itself. */
 const REFUSED_BATCH_LIMIT = 2;
 
 export function createAgent(options: AgentOptions): ActorExecutor<string> {
@@ -204,8 +204,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         activity.sessionId === context.sessionId && activity.kind === 'actor' && ['queued', 'running', 'waiting_input'].includes(activity.status));
       /** What ending this activity means for the round: it closes it, leaves it open (Director with dispatched work still open) or is no round (a teammate's message woke an idle actor). */
       const effect = () => roundEffect(options.store.getSnapshot().activities, context.sessionId, context.ownerId, inputKind(context));
-      const teammatesRunning = () => options.store.getSnapshot().activities.some(activity => activity.sessionId === context.sessionId && activity.kind === 'actor' &&
-        activity.ownerId !== context.ownerId && ['queued', 'running', 'waiting_input'].includes(activity.status));
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
         signal: context.signal, hasPendingInbox: () => context.hasPendingInbox?.() ?? false});
       const owedSeen = new Map<string, number>();
@@ -232,7 +230,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const incoming = await (closing && context.closeInbox ? context.closeInbox() : context.drainInbox?.()) ?? [];
         if (!incoming.length) return false;
         messages.push(...incoming);
-        pacing.reset();
         closeReminders = 0;
         const humanInputs = context.humanInputs?.();
         if (humanInputs) userRequests.splice(0, userRequests.length, ...[...new Set(humanInputs)].slice(-8).map(text => ({role: 'user' as const, text})));
@@ -264,7 +261,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         await drainInbox();
         const waitNotices = wait.take();
         if (waitNotices.length) {
-          pacing.reset();
           closeReminders = 0;
           closing = false; finalText = ''; recovery = ''; recoveringKind = undefined;
           context.acceptRoundMemory?.(null);
@@ -285,9 +281,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           }
           iteration = 0;
         }
-        // Withdrawn tools stay in the request (the cache prefix starts with the tool list); calls to them are answered with an error instead.
-        const withdrawn = pacing.withdrawn && !owesReply();
-        const refusal = withdrawn ? TOOLS_WITHDRAWN_RESULT : instruction.refuseTools;
+        // Refused tools stay in the request (the cache prefix starts with the tool list); calls to them are answered with an error instead.
+        const refusal = instruction.refuseTools;
         const definitions = instruction.tools;
         const visionEnabled = typeof options.supportsVision === 'function' ? options.supportsVision() : (options.supportsVision ?? true);
         const appendOnly = assembly.capabilities.appendOnlyHistory === true;
@@ -489,7 +484,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         }
         if (closing) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
         // A call serialized as plain text executed nothing: it is not a delivery, and the card shows a short note instead of the dump.
-        const textCall = turn.stop === 'complete' && !turn.message.toolCalls?.length && !closing && !withdrawn && !!textToolCallName(turn.message.text, definitions);
+        const textCall = turn.stop === 'complete' && !turn.message.toolCalls?.length && !closing && !!textToolCallName(turn.message.text, definitions);
         if (textCall && textId) options.store.updateMessage(textId, {text: TEXT_TOOL_CALL_NOTE, role: 'notice'});
         if (storedText && !textId && !closing) {
           if (steps.get(thinkingId).state === 'running') steps.finish(thinkingId, 'completed');
@@ -689,7 +684,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
                       return result;
                     }
                     const note = pacing.observe(call, result, {
-                      waiting: directorWaiting() ? 'director' : context.ownerId !== 'logox' && teammatesRunning() ? 'companion' : undefined,
+                      directorWaiting: directorWaiting(),
                       automaOffered: instruction.tools.some(tool => tool.name === AUTOMA_TOOL_NAME)});
                     steps.finish(id, context.signal.aborted ? 'cancelled' : result.isError ? 'failed' : 'completed', call.name + '\n' + result.text,
                       result.isError ? result.disposition ?? 'error' : undefined);
@@ -747,20 +742,9 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           refusedBatches = refusal && !truncated ? refusedBatches + 1 : 0;
           if (refusedBatches >= REFUSED_BATCH_LIMIT) {
             refusedBatches = 0;
-            if (withdrawn && wait.pending) {
-              context.report('Waiting', wait.describe());
-              await wait.park();
-              continue requestLoop;
-            }
             if (await drainInbox(true)) continue requestLoop;
             context.signal.throwIfAborted();
-            if (withdrawn) {outcome = 'completed'; return;}
             throw new ExecutionRecoveryError('no_delivery', 'stop');
-          }
-          if (pacing.withdrawn && !owesReply()) {
-            recovery = context.ownerId === 'logox' ? DIRECTOR_WAIT_INSTRUCTION : COMPANION_WAIT_INSTRUCTION;
-            recoveringKind = undefined;
-            if (context.ownerId !== 'logox' && !wait.pending) wait.watchAnyTeammate();
           }
           continue;
         }

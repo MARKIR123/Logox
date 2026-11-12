@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
-import {AUTOMA_STREAK, REPEAT_LIMIT, ToolPacing} from '../src/kernel/tool-pacing.js';
+import {AUTOMA_STREAK, ToolPacing} from '../src/kernel/tool-pacing.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -39,27 +39,20 @@ async function director(respond: (request: ModelRequest, index: number) => Model
 const toolNames = (request: ModelRequest) => request.tools.map(tool => tool.name);
 const toolTexts = (request: ModelRequest) => request.messages.filter(message => message.role === 'tool').map(message => message.text);
 
-const withdrawnNote = (request: ModelRequest) => request.messages.some(message => message.role === 'context' && message.text.includes('tools are withdrawn'));
+const polls = 9;
+const untouched = (request: ModelRequest) => !request.messages.some(message => message.role === 'context' && message.kind === 'recovery');
 
-test('a Director re-checking while a companion runs keeps its tool list but cannot use it, and closes the round', async () => {
-  const f = await director((request, index) => !withdrawnNote(request) ? glob('poll-' + index) : index === REPEAT_LIMIT + 2 ? glob('late') : reply('Waiting on Techne.', [finish]));
+test('a Director that keeps re-reading while a companion runs is left alone: tools run, no note is injected', async () => {
+  const f = await director((_request, index) => index <= polls ? glob('poll-' + index) : reply('Waiting on Techne.', [finish]));
   try {
     assert.equal(f.activity?.status, 'completed', f.activity?.detail);
-    assert.equal(f.requests.length, REPEAT_LIMIT + 3, 'one first look, the repeats, one refused call, then the closing request');
-    for (const request of f.requests) assert.deepEqual(request.tools, f.requests[0]!.tools, 'withdrawal never changes the cache prefix');
-    assert.ok(toolNames(f.requests[0]!).includes('Glob'));
-    assert.ok(toolTexts(f.requests.at(-1)!).some(text => text.includes('withdrawn until a teammate finishes or a message arrives')));
-    assert.ok(!toolTexts(f.requests.at(-1)!).some(text => text.includes('[Runtime]')), 'a repeated look carries no runtime note');
-    assert.ok(f.requests.at(-1)!.messages.some(message => message.role === 'context' && message.text.includes('tools are withdrawn')));
-  } finally { await f.cleanup(); }
-});
-
-test('a Director that keeps calling withdrawn tools is ended by the runtime after two refused batches', async () => {
-  const f = await director((_request, index) => glob('poll-' + index));
-  try {
-    assert.equal(f.activity?.status, 'completed', f.activity?.detail);
-    assert.equal(f.requests.length, REPEAT_LIMIT + 3, 'one first look, the repeats, then exactly two refused batches');
-    for (const request of f.requests) assert.deepEqual(request.tools, f.requests[0]!.tools);
+    assert.equal(f.requests.length, polls + 1, 'every look is answered, then the round closes');
+    for (const request of f.requests) {
+      assert.deepEqual(request.tools, f.requests[0]!.tools);
+      assert.ok(untouched(request), 'no runtime note');
+      assert.ok(!toolTexts(request).some(text => /withdrawn|not executed|\[Runtime\]/i.test(text)), 'every result is the real one');
+    }
+    assert.equal(toolTexts(f.requests.at(-1)!).length, polls);
   } finally { await f.cleanup(); }
 });
 
@@ -95,30 +88,10 @@ test('with no companion running, repeated calls and an empty reply keep their ol
   } finally { await f.cleanup(); }
 });
 
-test('pacing counts only identical observations, and new input clears the count', () => {
-  const pacing = new ToolPacing();
-  const waiting = {waiting: 'director' as const, automaOffered: true};
-  const call = (pattern: string) => ({id: pattern, name: 'Glob', arguments: JSON.stringify({pattern})});
-  const ok = (text: string) => ({text, isError: false});
-  assert.equal(pacing.observe(call('*'), ok('a'), waiting), undefined);
-  assert.equal(pacing.observe(call('*'), ok('a,b'), waiting), undefined, 'a changed result is news');
-  assert.equal(pacing.observe(call('*.js'), ok('a'), waiting), undefined, 'other arguments are a new look');
-  assert.equal(pacing.observe(call('*'), {text: 'a', isError: true}, waiting), undefined, 'errors do not count');
-  assert.equal(pacing.observe({id: 'x', name: 'Actor', arguments: '{}'}, ok('a'), waiting), undefined);
-  pacing.observe(call('*'), ok('a'), waiting);
-  pacing.observe(call('*'), ok('a'), waiting);
-  assert.equal(pacing.withdrawn, false);
-  pacing.observe(call('*'), ok('a'), waiting);
-  assert.equal(pacing.withdrawn, true);
-  pacing.reset();
-  assert.equal(pacing.withdrawn, false);
-  assert.equal(pacing.observe(call('*'), ok('a'), waiting), undefined, 'the same look after new input is not a repeat');
-});
-
 test('a long read-only streak reminds about Automa once, only when it is offered and not while waiting', () => {
   const read = (index: number) => ({id: String(index), name: 'Read', arguments: JSON.stringify({file_path: index + '.ts'})});
   const ok = {text: 'x', isError: false};
-  const working = {waiting: undefined, automaOffered: true};
+  const working = {directorWaiting: false, automaOffered: true};
   const pacing = new ToolPacing();
   const notes = Array.from({length: AUTOMA_STREAK * 3}, (_, index) => pacing.observe(read(index), ok, working)).map(note => note ? 1 : 0);
   assert.equal(notes.indexOf(1), AUTOMA_STREAK - 1);
@@ -129,5 +102,13 @@ test('a long read-only streak reminds about Automa once, only when it is offered
     if (index % (AUTOMA_STREAK - 2) === 0) broken.observe({id: 'e', name: 'Edit', arguments: '{}'}, ok, working);
   }
   const absent = new ToolPacing();
-  for (let index = 0; index < AUTOMA_STREAK * 2; index++) assert.equal(absent.observe(read(index), ok, {waiting: undefined, automaOffered: false}), undefined);
+  for (let index = 0; index < AUTOMA_STREAK * 2; index++) assert.equal(absent.observe(read(index), ok, {directorWaiting: false, automaOffered: false}), undefined);
+});
+
+test('a waiting Director is never reminded about Automa, and errors do not count', () => {
+  const read = (index: number) => ({id: String(index), name: 'Read', arguments: JSON.stringify({file_path: index + '.ts'})});
+  const waiting = new ToolPacing();
+  for (let index = 0; index < AUTOMA_STREAK * 2; index++) assert.equal(waiting.observe(read(index), {text: 'x', isError: false}, {directorWaiting: true, automaOffered: true}), undefined);
+  const failing = new ToolPacing();
+  for (let index = 0; index < AUTOMA_STREAK * 2; index++) assert.equal(failing.observe(read(index), {text: 'x', isError: true}, {directorWaiting: false, automaOffered: true}), undefined);
 });
