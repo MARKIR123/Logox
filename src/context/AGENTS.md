@@ -13,7 +13,7 @@
 | Understand a closed round's stored form | `contracts.ts:roundSchema` | `../store/journal.ts:Journal.finishRecord()` |
 | Change the compact index line | `round-memory.ts:formatRoundIndex()` | `../prompts/charter.ts:ROUND_SUMMARY_CONTRACT` |
 | Change what `_FinishRound` carries | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundSchema` | `round-memory.ts:normalizeFinishRound()`, `round-memory.ts:extractRoundMemory()` |
-| Change a runtime-written round body or its marker | `round-memory.ts:runtimeRoundSummary()` | `round-memory.ts:ROUND_MARKERS`, `../store/journal.ts:Journal.finishRecord()` |
+| Change a runtime-written round body or its marker | `round-memory.ts:runtimeRoundSummary()` | `round-memory.ts:ledgerFacts()` (also feeds `../actors/runtime-record.ts:buildRuntimeRecord()`), `round-memory.ts:ROUND_MARKERS`, `../store/journal.ts:Journal.finishRecord()` |
 | Change hidden-pair replay | `round-memory.ts:omitInternalToolPairs()` | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundPolicy` |
 | Change role memory focus | `contracts.ts:memoryFocusInstruction()` | `src/actors/profiles/<id>/compression.md` |
 | Keep discovery or environment across compaction | `continuity.ts:retainRuntimeContext()` | `contracts.ts:contextStateSchema`, `../tools/discovery.ts` |

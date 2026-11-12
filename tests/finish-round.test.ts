@@ -182,7 +182,7 @@ test('only formal Director dispatch produces an independent full report', async 
     const formal = f.handed[0] as TaskResult<string> & {delivery?: {text: string}};
     assert.equal(formal?.delivery?.text, report);
     assert.ok(formal.summary.report.length <= 2000);
-    assert.match(JSON.stringify(f.requests[0]!.messages), /Director assignment[\s\S]*When you finish this assignment[\s\S]*no rigid template headings required/);
+    assert.match(JSON.stringify(f.requests[0]!.messages), /Director assignment[\s\S]*When you finish this assignment[\s\S]*in plain prose without template headings/);
     assert.doesNotMatch(f.requests[0]!.system, /When you finish this assignment/);
     const direct = f.ensemble.dispatch('techne', 'Discuss', 'direct', {inputKind: 'human'});
     await direct.done;

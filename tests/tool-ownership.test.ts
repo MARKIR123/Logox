@@ -17,13 +17,14 @@ const context = (ownerId: string, activityId = ownerId + '-act'): ActorContext =
   report() {}, say() {}, async record() {}, async ask() {return {status: 'cancelled', reason: 'Unused'};}, async permission() {return false;}});
 const call = (name: string, args: unknown) => ({id: 'c', name, arguments: JSON.stringify(args)});
 
-test('Actor schema accepts files and rejects bad types', () => {
-  const ok = actorSchema.parse({tasks: [{ownerId: 'techne', prompt: 'Build', files: ['index.html', 'src/**/*.js']}]});
-  assert.deepEqual(ok.tasks[0]?.files, ['index.html', 'src/**/*.js']);
+test('Actor schema accepts owns, rejects bad types and the retired files alias', () => {
+  const ok = actorSchema.parse({tasks: [{ownerId: 'techne', prompt: 'Build', owns: ['index.html', 'src/**/*.js']}]});
+  assert.deepEqual(ok.tasks[0]?.owns, ['index.html', 'src/**/*.js']);
   assert.ok(actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build'}]}).success);
-  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: 'index.html'}]}).success);
-  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: [1]}]}).success);
-  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: ['']}]}).success);
+  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', owns: 'index.html'}]}).success);
+  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', owns: [1]}]}).success);
+  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', owns: ['']}]}).success);
+  assert.ok(!actorSchema.safeParse({tasks: [{ownerId: 'techne', prompt: 'Build', files: ['index.html']}]}).success);
   assert.match(ACTOR_DESCRIPTION, /`owns`/);
   assert.ok(schemas.Actor);
 });

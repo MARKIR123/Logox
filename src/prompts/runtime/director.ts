@@ -3,7 +3,7 @@ export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what righ
 export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
 export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}
 export const DIRECTOR_COORDINATION_WAKE = 'Process pending coordination events for Director-owned work. Human instructions take precedence. Inspect delivered evidence, preserve existing effects and report only supported conclusions; receipt is not acceptance.';
-export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below). Check the evidence and continue the original task; execution completion is not acceptance.';
+export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below and followed by the runtime record of what that actor changed and ran). Read each account against its record, check what the two leave doubtful, and continue the original task; execution completion is not acceptance.';
 /** One line of the facts snapshot while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */
 export function reportProgress(reported: readonly string[], running: readonly string[], total: number, waitsForHuman: boolean): string {
   return 'Reported ' + reported.length + '/' + total + (running.length ? '; still running: ' + running.join(', ') : '') +
@@ -29,3 +29,14 @@ export function directorResumeAdvice(target: {ownerId: string; activityId: strin
 }
 /** Replaces `DIRECTOR_RECOVERY_EXHAUSTED` in a deferred failure once the human has written again. */
 export const DIRECTOR_RECOVERY_LIFTED = 'This failure had exhausted its automatic recovery budget; the human has written since, so the budget is reset and the human message takes precedence. Follow it, and resume or reassign work only as it directs.';
+
+/** Labels of the runtime record appended to a report or failure for Director-dispatched work; the runtime writes it from the ledger, never the actor. */
+export const RUNTIME_RECORD_LABELS = Object.freeze({
+  header: (actor: string) => `[Runtime record of this activity: recorded by the runtime, not written by ${actor}]`,
+  changed: 'Changed: ',
+  none: 'none',
+  outside: 'Outside owns: ',
+  commands: 'Commands: ',
+  closedBy: 'Round closed by: ',
+  acceptance: 'Acceptance, as you wrote it:',
+});

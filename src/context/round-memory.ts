@@ -41,13 +41,12 @@ const MARKER_PHRASES = Object.freeze({
 } as const);
 const COMMAND_TOKENS = 40, MAX_FILES = 6;
 
-/** A summary the runtime writes from the round's ledger entries: changed files, the last Shell command with its exit status, and for a completed round the opening of the delivered answer. A completed `reply` is marked `[reply]` instead of `[runtime]`. */
-export function runtimeRoundSummary(messages: readonly ModelMessage[], status: RoundStatus, reply = false): string {
-  const kind = reply && status === 'completed' ? 'reply' : status;
+/** What the ledger shows a closed stretch of work did: files changed by successful `Edit`/`Write` calls (first-touch order) and every foreground `Shell` run that reported an exit code. Shared by the round summary and the Director's runtime record. */
+export function ledgerFacts(messages: readonly ModelMessage[]): {files: string[]; commands: Array<{text: string; exit: string}>} {
   const files: string[] = [];
+  const commands: Array<{text: string; exit: string}> = [];
   const results = new Map<string, Extract<ModelMessage, {role: 'tool'}>>();
   for (const message of messages) if (message.role === 'tool') results.set(message.callId, message);
-  let command: {text: string; exit: string} | undefined;
   for (const message of messages) {
     if (message.role !== 'assistant' || message.contextExcluded || message.toolsExcluded) continue;
     for (const call of message.toolCalls ?? []) {
@@ -58,10 +57,18 @@ export function runtimeRoundSummary(messages: readonly ModelMessage[], status: R
       if ((name === 'Edit' || name === 'Write') && typeof args.file_path === 'string' && !files.includes(args.file_path)) files.push(args.file_path);
       if (name === 'Shell' && typeof args.command === 'string' && args.run_in_background !== true) {
         const exit = /^Exit code:\s*(-?\d+)/i.exec(result.text)?.[1];
-        if (exit !== undefined) command = {text: truncateToTokens(args.command.replace(/\s+/g, ' '), COMMAND_TOKENS), exit};
+        if (exit !== undefined) commands.push({text: truncateToTokens(args.command.replace(/\s+/g, ' '), COMMAND_TOKENS), exit});
       }
     }
   }
+  return {files, commands};
+}
+
+/** A summary the runtime writes from the round's ledger entries: changed files, the last Shell command with its exit status, and for a completed round the opening of the delivered answer. A completed `reply` is marked `[reply]` instead of `[runtime]`. */
+export function runtimeRoundSummary(messages: readonly ModelMessage[], status: RoundStatus, reply = false): string {
+  const kind = reply && status === 'completed' ? 'reply' : status;
+  const {files, commands} = ledgerFacts(messages);
+  const command = commands.at(-1);
   const facts = [
     files.length ? 'Changed ' + files.slice(0, MAX_FILES).join(', ') + (files.length > MAX_FILES ? ` and ${files.length - MAX_FILES} more` : '') + '.' : '',
     command ? `Last command "${command.text}" exit ${command.exit}.` : '',

@@ -7,6 +7,7 @@ import {
   collaborationFor,
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
+import {ACTOR_DESCRIPTION} from '../src/tools/orchestration/ActorTool/prompt.js';
 import {createRuntimeContextMessage} from '../src/runtime/context-updates.js';
 import {EMPTY_REPLY_REMINDER} from '../src/prompts/runtime/recovery.js';
 
@@ -79,10 +80,12 @@ const profile = (id: string, file: string) => readFileSync(new URL('../src/actor
 test('stage line is unambiguously the first line of work turns; personas never put the flourish on line one', () => {
   assert.match(SHARED_EXECUTION_RULES, /begin your text with one line[\s\S]*before any greeting/);
   assert.equal(SHARED_EXECUTION_RULES.split('begin your text with one line').length - 1, 1);
+  assert.match(SHARED_EXECUTION_RULES, /It is rare, under six words and physical only[\s\S]*inline after the first sentence of a conversational reply, and never in work turns, task reports or tool payloads/);
+  assert.match(SHARED_EXECUTION_RULES, /Plain voice: no filler openers or closers[\s\S]*no mechanical First\/Second\/Finally scaffolding/);
   for (const id of ['logox', 'techne', 'kalon', 'aletheia']) {
     const persona = profile(id, 'persona.md');
-    const rule = persona.split('\n').find(line => line.includes('Micro-Actions'))!;
-    assert.match(rule, /never as the first line of a message, and never in work turns, task reports or tool payloads/, id);
+    assert.match(persona, /Micro-Actions/, id);
+    assert.doesNotMatch(persona, /Default Blank|under six words|never as the first line/, id + ': shared desk-action limits live in the charter');
     assert.doesNotMatch(persona, /["“]（/, id + ': examples must not open with the flourish');
   }
 });
@@ -90,11 +93,11 @@ test('stage line is unambiguously the first line of work turns; personas never p
 test('brief, scope and ownership rules live in the lowest layer that can enforce them', () => {
   assert.match(SHARED_EXECUTION_RULES, /never state a figure \(frame rate, timing, size, count\) you did not measure/);
   const companion = collaborationFor('techne');
-  assert.match(companion, /Do what the brief asks and nothing more/);
+  assert.match(companion, /Do what the assignment asks and nothing more/);
   assert.match(companion, /outside your `You own` list only after telling their owner/);
-  assert.doesNotMatch(collaborationFor('logox'), /Do what the brief asks/);
+  assert.doesNotMatch(collaborationFor('logox'), /Do what the assignment asks/);
   const director = profile('logox', 'collaboration.md');
-  for (const needle of ['artifact ownership', '`after`', '`interfaces`', '`verified`', 'do not call `ReadActor`', 'Add no features the user did not ask for', 'states only what tools measured']) {
+  for (const needle of ['Split by artifact', 'no file-count or build-attempt quotas', 'Add no features the user did not ask for', 'Accept on the record', 'runtime record']) {
     assert.ok(director.includes(needle), needle);
   }
   assert.match(profile('techne', 'execution.md'), /Edit, Never Rewrite/);
@@ -118,19 +121,21 @@ test('stage rule: short, stated once, rare by design, no priming examples', () =
 
 test('final reports separate unverified checks and known risks; verification is incremental in both layers', () => {
   assert.match(SHARED_EXECUTION_RULES, /a check you did not run or that does not apply is reported as not verified, and risks you found along the way are listed/);
-  assert.match(collaborationFor('techne'), /Verify incrementally: read the evidence a teammate's report or the brief's `verified` list already provides/);
+  assert.match(collaborationFor('techne'), /Verify incrementally: read the evidence a teammate's report provides or what the assignment says is already verified/);
   assert.doesNotMatch(collaborationFor('logox'), /Verify incrementally/);
-  assert.match(profile('logox', 'collaboration.md'), /Verify incrementally: read the evidence in each report first[\s\S]*which teammate evidence you relied on/);
+  assert.match(profile('logox', 'collaboration.md'), /Accept on the record[\s\S]*check yourself only what the two leave doubtful[\s\S]*say in your answer what you relied on/);
 });
 
 test('the empty-reply reminder is one static constant', () => {
   assert.equal(EMPTY_REPLY_REMINDER, 'Your previous reply was empty. Continue the task: call a tool or give your answer.');
 });
 
-test('Director declares dependent work with after, spot-checks reported evidence and gets reports together', () => {
+test('Director sets after for dependent work and accepts reports against the runtime record', () => {
   const director = profile('logox', 'collaboration.md');
-  assert.ok(director.includes("Reports from dispatched work arrive together once all of it has ended, or earlier with any urgent message; declare work that depends on another actor's result with `after` at dispatch instead of waiting to relay it."));
-  assert.ok(director.includes('spot-check once (open the page, try one interaction) instead of re-running them'));
+  assert.ok(director.includes('The wake already carries the full reports.'));
+  assert.ok(director.includes('Read the account against the record'));
+  assert.ok(director.includes('you close the round once, when you accept the reports'));
+  assert.match(ACTOR_DESCRIPTION, /set `after` to that actor id or activity id: the runtime starts it only when that work has ended and hands it the report/);
 });
 
 test('peer replies use type reply, help is for decisions, and the answer and _FinishRound share one reply', () => {

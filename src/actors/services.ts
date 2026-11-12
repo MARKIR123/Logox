@@ -11,7 +11,9 @@ import type {ActorDefinition} from './definitions.js';
 import {builtinActors} from './builtins.js';
 import {Collaboration} from './collaboration.js';
 import type {Resources} from '../resources/manager.js';
-import type {Journal} from '../store/journal.js';
+import {storedMessage, type Journal} from '../store/journal.js';
+import {dispatchNotes} from '../tools/orchestration/ActorTool/notes.js';
+import {buildRuntimeRecord} from './runtime-record.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
@@ -235,7 +237,7 @@ export class ActorServices {
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
         const resumed = new Set<string>(), roots = new Set<string>();
         for (const task of tasks) {
-          const explicitTitle = (task.title ?? task.description ?? task.goal)?.replace(/\s+/g, ' ').trim().slice(0, 120);
+          const explicitTitle = task.title?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
           if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
           if (task.resumeTask) {
@@ -272,15 +274,16 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
-        const grouped = new Map<string, {prompts: string[]; files: Set<string>; after: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
+        const grouped = new Map<string, {prompts: string[]; files: Set<string>; acceptance: string[]; after: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), after: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), acceptance: [], after: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
           const brief = renderBrief(task);
           group.prompts.push(brief ? task.prompt + '\n\n' + brief : task.prompt);
-          for (const file of [...task.owns ?? [], ...task.files ?? []]) group.files.add(file);
+          for (const file of task.owns ?? []) group.files.add(file);
+          for (const item of task.acceptance ?? []) if (!group.acceptance.includes(item)) group.acceptance.push(item);
           for (const ref of task.after ?? []) group.after.add(ref);
           grouped.set(task.ownerId, group);
         }
@@ -305,7 +308,7 @@ export class ActorServices {
         const handles = orderByDependency(grouped).map(([owner, task]) => {
           const after = this.resolveAfter(owner, task.after, dispatched);
           const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
-            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(after.length ? {after} : {})};
+            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {})};
           const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth);
@@ -320,7 +323,7 @@ export class ActorServices {
         }
         const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
-          text: dispatchedResult(targets, group.batchId),
+          text: dispatchedResult(targets, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd())),
           isError: false,
         };
       }
@@ -537,7 +540,9 @@ export class ActorServices {
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
     const [cause, ...diagnostics] = (executionError?.message ?? (result.error instanceof ProviderError ? formatFailureDetail(result.error) : undefined))?.split('\n') ?? [];
     const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' + (diagnostics.length ? '\n' + diagnostics.join('\n') : '') : '';
-    const report = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
+    const body = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
+    const record = result.ownerId === 'logox' ? '' : await this.runtimeRecord(result.ownerId, result.activityId, origin);
+    const report = record ? body + '\n\n' + record : body;
     if (result.stopReason === 'shutdown') {this.closeHandoff(result.activityId); return;}
     const userStopped = result.stopReason === 'user' || this.stoppedActors.delete(result.activityId);
     const failed = result.status !== 'completed';
@@ -576,6 +581,21 @@ export class ActorServices {
       deferredUntilHuman: !!(deferred || noClaim), ...(!failed && !userStopped && !deferred && result.ownerId !== 'logox' ? {hold: 'root' as const} : {}), origin: {parentActivityId: result.activityId, rootActivityId,
         dispatchDepth: group?.depth ?? this.depths.get(result.activityId) ?? origin.dispatchDepth ?? 0,
         authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}), outage);
+  }
+  /** The runtime's own account of an activity for the Director, built from the ledger; a missing ledger yields no block rather than a failed handoff. */
+  private async runtimeRecord(ownerId: string, activityId: string, origin: TaskOrigin): Promise<string> {
+    try {
+      const sessionId = this.options.sessionId;
+      const entries = await this.options.journal.load(sessionId, ownerId);
+      const round = (await this.options.journal.rounds(sessionId, ownerId, entries)).find(record => record.activityId === activityId);
+      const source = this.origins.get(activityId) ?? origin;
+      const memory = round?.memory, model = memory?.source;
+      return buildRuntimeRecord({actor: ownerId, cwd: this.options.projectDir ?? process.cwd(),
+        messages: entries.filter(entry => entry.activityId === activityId).map(storedMessage),
+        ownedFiles: source.ownedFiles, acceptance: source.acceptance,
+        roundKnown: model === 'model' || model === 'runtime',
+        marker: model === 'runtime' ? /^\[[a-z]+\]/.exec(memory!.summary)?.[0] : undefined});
+    } catch {return '';}
   }
   async settled(activityId: string, status: RoundStatus) {
     this.ended.add(activityId);

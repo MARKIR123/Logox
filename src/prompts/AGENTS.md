@@ -13,7 +13,7 @@
 | Change shared execution, status-line, vision or round-memory text | `charter.ts:SHARED_EXECUTION_RULES` | `src/actors/profiles/<id>/execution.md`, `src/actors/profiles/<id>/compression.md` |
 | Change peer messaging etiquette | `collaboration/common.ts` | `collaboration/index.ts:TEAM_COLLABORATION`, `src/actors/profiles/<id>/collaboration.md` |
 | Change rules for every non-Director actor | `collaboration/companion.ts:COMPANION_COLLABORATION` | `collaboration/index.ts:collaborationFor()` |
-| Change the formal task-report contract | `collaboration/reporting.ts:TASK_REPORT_CONTRACT` | `../context/round-memory.ts:TaskDelivery` |
+| Change the formal task-report contract | `collaboration/reporting.ts:TASK_REPORT_CONTRACT` | `../context/round-memory.ts:TaskDelivery`, `runtime/director.ts:RUNTIME_RECORD_LABELS` |
 | Change Director wake-up or recovery wording | `runtime/director.ts` | `runtime/recovery.ts`, `../actors/services.ts` |
 | Change the live environment or restriction text | `runtime/environment.ts` | `../runtime/context-updates.ts`, `../application.ts` |
 | Change history summarization instructions | `compaction.ts:HISTORY_MEMO_INSTRUCTION` | `../context/manager.ts:mergeMemo()` |

@@ -369,6 +369,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(resumeTaskId ? {resumeTaskId} : {}),
       ...(taskTitle ? {taskTitle} : {}),
       ...(origin.ownedFiles?.length ? {ownedFiles: [...origin.ownedFiles]} : {}),
+      ...(origin.acceptance?.length ? {acceptance: [...origin.acceptance]} : {}),
       ...(origin.after?.length ? {after: [...origin.after]} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),

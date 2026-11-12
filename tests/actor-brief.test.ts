@@ -38,13 +38,13 @@ async function fixture(execute: (prompt: string, context: ActorContext, services
     requireIdle() {}, approve: async () => false, enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     pauseBatch: id => ensemble.pauseBatch(id), resumeBatch: id => ensemble.resumeBatch(id), coordinationPath: join(directory, 'coordination.json')});
   await services.recover();
-  return {ensemble, services, store, async close() {await ensemble.close(); await services.flush(); await rm(directory, {recursive: true, force: true});}};
+  return {ensemble, services, store, journal, async close() {await ensemble.close(); await services.flush(); await rm(directory, {recursive: true, force: true});}};
 }
-test('Actor schema accepts the structured brief fields and rejects malformed ones', () => {
-  const ok = parse({deliverables: ['art.svg'], owns: ['src/**'], interfaces: 'ids: #wheel, #crank; size 800x600', acceptance: ['renders'], verified: ['unit tests'], after: ['kalon']});
+test('Actor schema accepts the brief fields it keeps and rejects malformed or removed ones', () => {
+  const ok = parse({owns: ['src/**'], acceptance: ['renders'], after: ['kalon']});
   assert.ok(ok.success);
   assert.ok(parse({}).success, 'every brief field is optional');
-  for (const bad of [{deliverables: 'art.svg'}, {owns: ['']}, {interfaces: ''}, {acceptance: [1]}, {verified: 'x'}, {after: 'kalon'}, {after: ['']}, {after: Array(9).fill('a')}, {unknown: 1}]) {
+  for (const bad of [{deliverables: ['art.svg']}, {interfaces: 'ids'}, {verified: ['x']}, {files: ['a']}, {goal: 'x'}, {owns: ['']}, {acceptance: [1]}, {after: 'kalon'}, {after: ['']}, {after: Array(9).fill('a')}, {unknown: 1}]) {
     assert.ok(!parse(bad).success, JSON.stringify(bad));
   }
   assert.match(ACTOR_DESCRIPTION, /`after`/);
@@ -52,10 +52,10 @@ test('Actor schema accepts the structured brief fields and rejects malformed one
 
 test('renderBrief renders a compact labelled block and nothing for a bare task', () => {
   assert.equal(renderBrief({}), '');
-  const block = renderBrief({deliverables: ['logo.svg'], owns: ['assets/**'], files: ['assets/**', 'a.css'], interfaces: 'ids: #a', acceptance: ['opens in browser'], verified: ['lint']});
+  const block = renderBrief({owns: ['assets/**', 'assets/**', 'a.css'], acceptance: ['opens in browser']});
   assert.ok(block.startsWith('Brief\n'));
   for (const label of Object.values(BRIEF_LABELS)) assert.ok(block.includes(label + ':'), label);
-  assert.equal(block.match(/assets\/\*\*/g)?.length, 1, 'owns and legacy files merge without duplicates');
+  assert.equal(block.match(/assets\/\*\*/g)?.length, 1, 'repeated owns collapse');
   assert.match(block, /- a\.css/);
 });
 
@@ -79,7 +79,7 @@ test('after holds the dependent task as waiting and releases it with the depende
   const prompts: Record<string, string> = {};
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === 'start') await services.execute(call([
-      {ownerId: 'techne', prompt: 'Wire the animation', after: ['kalon'], interfaces: 'ids: #wheel'},
+      {ownerId: 'techne', prompt: 'Wire the animation', after: ['kalon']},
       {ownerId: 'kalon', prompt: 'Draw the wheel'}]), context);
     else {
       prompts[context.ownerId] = prompt;
@@ -98,7 +98,7 @@ test('after holds the dependent task as waiting and releases it with the depende
     await waitForSnapshot(f.store, snapshot => snapshot.activities.some(activity => activity.ownerId === 'techne' && activity.status === 'completed'));
     assert.match(prompts.techne!, /^Reports from the work this task was waiting for:/);
     assert.match(prompts.techne!, /Wheel drawn with ids #wheel and #crank\./);
-    assert.match(prompts.techne!, /Wire the animation[\s\S]*Interfaces \(shared contract\):\nids: #wheel/);
+    assert.match(prompts.techne!, /Wire the animation$/);
   } finally {kalonRelease.resolve(); await f.close();}
 });
 
@@ -194,7 +194,7 @@ test('any activity an actor runs for the Director, including a peer-message wake
 
 test('the dispatch result carries the waiting contract and the description no longer promises tool withdrawal', {timeout: 8000}, async () => {
   assert.doesNotMatch(ACTOR_DESCRIPTION, /withdraw|Companions keep running|busy-poll/i);
-  assert.match(ACTOR_DESCRIPTION, /run asynchronously, and their reports wake you automatically/);
+  assert.match(ACTOR_DESCRIPTION, /Tasks without `after` run in parallel/);
   let result = '';
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === 'start') result = (await services.execute(call([{ownerId: 'techne', prompt: 'Build'}, {ownerId: 'kalon', prompt: 'Draw'}]), context)).text;
@@ -203,9 +203,38 @@ test('the dispatch result carries the waiting contract and the description no lo
   try {
     await f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
     const batch = f.store.activities.list().find(activity => activity.ownerId === 'techne')!.batchId!;
-    assert.equal(result, dispatchedResult('techne, kalon', batch));
-    assert.equal(result, 'Dispatched to techne, kalon (Batch ' + batch + '). They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.');
+    const NL = String.fromCharCode(10);
+    const notes = ['techne', 'kalon'].map(actor => NL + 'Note: ' + actor + ' has no `owns`, so teammates are not told which files it is changing.').join('');
+    assert.equal(result.startsWith(dispatchedResult('techne, kalon', batch)), true);
+    assert.equal(result, 'Dispatched to techne, kalon (Batch ' + batch + '). They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.' + notes);
     assert.match(resumedBatchResult('b1'), /^Resumed batch b1: its paused tasks are queued again. They start and work in the background/);
     assert.doesNotMatch(endedBatchResult('b1'), /wake you/);
+  } finally {await f.close();}
+});
+
+test('the report that reaches the Director carries the runtime record, while the companion ledger stays clean', {timeout: 8000}, async () => {
+  const f = await fixture(async (prompt, context, services) => {
+    if (prompt === 'start') {
+      await services.execute(call([{ownerId: 'techne', prompt: 'Build the page', owns: ['index.html'], acceptance: ['loads without console errors']}]), context);
+      return;
+    }
+    await context.record({role: 'assistant', text: '', toolCalls: [
+      {id: 'e1', name: 'Edit', arguments: JSON.stringify({file_path: 'index.html'})},
+      {id: 'e2', name: 'Write', arguments: JSON.stringify({file_path: 'notes.md'})},
+      {id: 's1', name: 'Shell', arguments: JSON.stringify({command: 'npm test'})}]});
+    await context.record({role: 'tool', callId: 'e1', name: 'Edit', text: 'ok', isError: false});
+    await context.record({role: 'tool', callId: 'e2', name: 'Write', text: 'ok', isError: false});
+    await context.record({role: 'tool', callId: 's1', name: 'Shell', text: 'Exit code: 0\nok', isError: false});
+    context.say('I built the page.');
+  });
+  try {
+    await f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    await waitForSnapshot(f.store, snapshot => snapshot.activities.some(activity => activity.ownerId === 'techne' && activity.status === 'completed'));
+    await waitForSnapshot(f.store, () => f.services.deliveries.snapshot().some(item => item.kind === 'report'));
+    const report = f.services.deliveries.snapshot().find(item => item.kind === 'report')!;
+    assert.match(report.text, /\n\n\[Runtime record of this activity: recorded by the runtime, not written by techne\]\nChanged: index\.html, notes\.md\nOutside owns: notes\.md\nCommands: "npm test" exit 0\n/);
+    assert.match(report.text, /Acceptance, as you wrote it:\n- loads without console errors$/);
+    const ledger = await f.journal.load('s', 'techne');
+    assert.ok(!ledger.some(entry => entry.text.includes('Runtime record of this activity')));
   } finally {await f.close();}
 });
