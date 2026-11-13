@@ -1,6 +1,6 @@
 import type {ModelRequest, ModelTurn} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
-import {STAGE_HISTORY_LIMIT, type Step} from '../runtime/contracts.js';
+import type {Step} from '../runtime/contracts.js';
 import {TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
 import {isTextToolCall} from './turn-outcome.js';
 import type {ModelTurnResult} from './model-turn.js';
@@ -14,23 +14,29 @@ import type {TurnOutcome} from './turn-outcome.js';
 import type {ReadyRequest} from './request.js';
 import type {AgentRun} from './run.js';
 
-/** Shows a received turn in the timeline and bookkeeping (usage, keep-alive, stage line, text-call note), ending its thinking step. Returns the turn as the ledger will hold it. */
+/** Shows a received turn in the timeline and bookkeeping (usage, keep-alive, status line, text-call note), ending its thinking step. Returns the turn as the ledger will hold it. */
 export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<ModelTurnResult, {kind: 'turn'}>): {turn: ModelTurn; thinkingStep: Step} {
-  const {options, state, steps, stages} = run;
+  const {options, state, steps, narration} = run;
   const {request, thinkingId, textId, usedProvider, requestedAt} = got;
   const {prepared} = ready;
   let turn = got.turn;
-  // The timeline message keeps the raw `⏵` line: stage.ts reads it to title the next tool group and strips it from prose.
-  const storedText = turn.message.text;
+  // The timeline message keeps the raw `⏵` line while the reply streams (the activity reads it as that reply's own status line); the ledger text never does.
+  let storedText = turn.message.text;
   state.turnMetered(prepared ? options.context?.turnUsage(turn, prepared.model) : undefined);
   if (prepared && usedProvider) void options.keepAlive?.arm(run.context, {request, provider: usedProvider, model: prepared.model.identity, startedAt: requestedAt, usage: turn.usage});
   const extracted = extractNarration(turn.message.text);
   if (extracted) {
-    // The ledger text drops the stage line; the `stage` field keeps it for later audits.
-    turn = {...turn, message: {...turn.message, text: extracted.cleanText, stage: extracted.narration}};
-    stages.push(extracted.narration);
-    if (stages.length > STAGE_HISTORY_LIMIT) stages.splice(0, stages.length - STAGE_HISTORY_LIMIT);
-    const next = {label: extracted.narration, stageHistory: [...stages]};
+    // A reply that is only the status line (no business tool call, no other text; a closing `_FinishRound` does not count as work) is the answer itself:
+    // it keeps the line's words as its visible text instead of reading as empty. Otherwise the ledger text drops the line and the `stage` field keeps it for later audits.
+    const onlyLine = !extracted.cleanText.trim() && (turn.message.toolCalls ?? []).every(call => isFinishRound(call.name));
+    const text = onlyLine ? extracted.narration : extracted.cleanText;
+    turn = {...turn, message: {...turn.message, text, stage: extracted.narration}};
+    if (onlyLine) {
+      storedText = text;
+      if (textId) options.store.updateMessage(textId, {text});
+    }
+    narration.latest = extracted.narration;
+    const next = {label: extracted.narration};
     void run.context.saveProgress?.(next);
     options.store.activities.update(run.context.sessionId, run.context.activityId, {progress: next});
   }
@@ -63,7 +69,7 @@ export interface Reply {
 
 /** Handles one classified reply. Statement order is part of the contract: ledger writes, store updates and requests happen in this order. */
 export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply): Promise<Next> {
-  const {options, state, steps, stages, persist, drainInbox, holdClose, recoverOutput, directorWaiting} = run;
+  const {options, state, steps, narration, persist, drainInbox, holdClose, recoverOutput, directorWaiting} = run;
   const {ready, request, turn, thinkingId, thinkingStep} = reply;
   const {prepared} = ready;
   const reasoningOf = () => turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
@@ -91,7 +97,7 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       const onlyFinalizer = kind.only;
       // Arguments are accepted leniently in one place; the call is rewritten to the accepted form so the ledger holds what the runtime used.
       const finishCall = calls.find(call => isFinishRound(call.name));
-      const accepted = finishCall && !truncated ? normalizeFinishRound(finishCall.arguments, stages.at(-1) ?? run.context.taskTitle ?? '') : undefined;
+      const accepted = finishCall && !truncated ? normalizeFinishRound(finishCall.arguments, narration.latest ?? run.context.taskTitle ?? '') : undefined;
       if (finishCall && accepted) calls[calls.indexOf(finishCall)] = {...finishCall, arguments: JSON.stringify(accepted)};
       if (!closing && turn.message.text.trim()) state.answerDelivered(turn.message.text);
       const allowed = ready.base.tools.some(tool => isFinishRound(tool.name));

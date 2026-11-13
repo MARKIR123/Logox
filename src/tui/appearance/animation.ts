@@ -24,3 +24,11 @@ export function swarmElapsed(ms: number): string {
   const s = Math.max(0, ms) / 1000;
   return (s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + 'm' + String(Math.floor(s % 60)).padStart(2, '0') + 's').padEnd(SWARM_TIME_WIDTH).slice(0, SWARM_TIME_WIDTH);
 }
+
+/** A card subtitle's clock stays blank until the work has run this long, so quick calls do not flash a time. */
+export const SUBTITLE_CLOCK_AFTER_MS = 1000;
+/** ` · ` plus the padded elapsed slot: the live clock after a card subtitle never changes the row's length. */
+export const SUBTITLE_CLOCK_WIDTH = 3 + SWARM_TIME_WIDTH;
+export function subtitleClock(ms: number): string {
+  return ms < SUBTITLE_CLOCK_AFTER_MS ? ' '.repeat(SUBTITLE_CLOCK_WIDTH) : ' · ' + swarmElapsed(ms);
+}

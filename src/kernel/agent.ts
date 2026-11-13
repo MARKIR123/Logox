@@ -125,7 +125,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('Read-only concurrency must be 1-8');
   return async (prompt, context) => {
     if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
-    const stages: string[] = [...(context.progress && 'stageHistory' in context.progress ? context.progress.stageHistory ?? [] : [])];
+    const narration: {latest?: string | undefined} = {latest: context.progress && 'label' in context.progress ? context.progress.label : undefined};
     const steps = new Steps(options.store, context);
     const root = context.rootActivityId ?? context.activityId;
     let localRecovery = localRecoveries.get(context.sessionId);
@@ -150,7 +150,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
         signal: context.signal, hasPendingInbox: () => run.context.hasPendingInbox?.() ?? false});
       const run: AgentRun = {
-        options, messages, steps, state, stages, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(),
+        options, messages, steps, state, narration, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(),
         context: {...context, reviewMessages: () => [...userRequests, ...messages.filter(message => message.role === 'assistant')]},
         persist: async (message, step) => {
           const usage = state.takeUsage(message);

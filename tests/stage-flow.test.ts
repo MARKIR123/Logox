@@ -31,11 +31,12 @@ function fixture() {
   return {store, steps, first, second, tool, now: () => now};
 }
 
-test('Actor labels stay on the card while legacy stage snapshots create no body headings', () => {
+test('the card shows the live state, never the label of a legacy stage snapshot, and legacy snapshots create no body headings', () => {
   const f = fixture();
   for (const view of ['logox', 'techne']) {
     const rows = buildStageRows(f.store.getSnapshot(), 's', view, 99, {a: true}, null);
-    assert.match(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/);
+    assert.match(rows.find(row => row.messageId === 'a')!.text, /完成鹈鹕骑车动画 · Thinking/, 'a request is generating: the thinking state');
+    assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/, 'the legacy active-stage label is no longer a subtitle');
     assert.ok(!rows.some(row => /\d\/\d/.test(row.text)));
     assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
     assert.equal(rows.filter(row => /^[·▸▾] Thinking|^[▸▾] Thought/.test(row.text) && row.messageId === f.first).length, 1, 'one live thinking row, no per-request rows');
@@ -121,7 +122,7 @@ test('empty reasoning can show a separate recovery note without changing origina
   assert.ok(copied.length > 0);
 });
 
-test('live label changes affect only the actor card and disappear on every terminal outcome', async () => {
+test('progress labels never draw on the card; the live state appears only while running and disappears on every terminal outcome', async () => {
   for (const status of ['completed', 'failed', 'cancelled'] as const) {
     const store = new RuntimeStore();
     store.activities.create({sessionId: 's', activityId: 'a', ownerId: 'techne', kind: 'actor', title: 'Animation task', status: 'running', stage: 'Working', detail: ''});
@@ -135,7 +136,8 @@ test('live label changes affect only the actor card and disappear on every termi
     steps.thinking();
     for (const view of ['logox', 'techne']) {
       const rows = buildStageRows(store.getSnapshot(), 's', view, 99, {a: true}, null);
-      assert.match(rows.find(row => row.messageId === 'a')!.text, /Comparing screenshots/);
+      assert.match(rows.find(row => row.messageId === 'a')!.text, /Animation task · Thinking/);
+      assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /Comparing screenshots/, 'a progress label is not the subtitle');
       assert.ok(!rows.some(row => row.messageId.endsWith('-stage')));
       assert.ok(!rows.some(row => row.messageId === initial));
       assert.equal(steps.get(initial).stage, undefined);
@@ -143,7 +145,7 @@ test('live label changes affect only the actor card and disappear on every termi
     steps.close(status);
     store.activities.update('s', 'a', {status, summary: {title: 'Report delivered', report: 'Verification remains separate.', source: 'model'}});
     const rows = buildStageRows(store.getSnapshot(), 's', 'logox', 99, {}, null);
-    assert.ok(!rows.some(row => row.text.includes('Comparing screenshots')));
+    assert.ok(!rows.some(row => row.text.includes('Comparing screenshots') || row.text.includes('Thinking ·')));
     assert.deepEqual(store.activities.get('s', 'a')?.progress, {label: 'Comparing screenshots'}, 'History is not rewritten as accepted/completed');
   }
 });

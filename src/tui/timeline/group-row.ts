@@ -3,7 +3,7 @@ import {palette} from '../appearance/theme.js';
 import type {ActivityVerbs} from '../appearance/actor-style.js';
 import {clipLine} from '../terminal/text.js';
 import type {Message, Step} from '../../runtime/contracts.js';
-import type {StageLine, ToolGroup, ToolGroupCategory} from './tool-groups.js';
+import type {ToolGroup, ToolGroupCategory} from './tool-groups.js';
 import {insetFrame, type createBuilder, type FrameWrap, type SceneRow, type SceneSegment} from './scene.js';
 
 /** A running tool row stays on screen at least this long so fast calls do not flicker. */
@@ -174,12 +174,4 @@ export function pushToolGroupCard(builder: ReturnType<typeof createBuilder>, gro
       }
     },
   });
-}
-
-/**
- * A `⏵` stage as its own row: the intent sentence in the normal foreground, upright, no marker, wrapping like prose.
- * It sits exactly where the stage changed, so progress reads intent sentence, its tools, the next intent sentence, its tools.
- */
-export function pushStageLine(builder: ReturnType<typeof createBuilder>, line: StageLine, railColor: string, frame?: FrameWrap): void {
-  builder.pushProse(line.id, line.stage, railColor, 'body', frame, undefined, palette.fg);
 }

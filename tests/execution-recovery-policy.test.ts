@@ -166,7 +166,8 @@ test('application continuation retains Actor labels and root identity without to
       if (requests.length === 1) return {stop: 'tools', message: {role: 'assistant', text: '⏵ Building the runnable baseline', toolCalls: [{id: 'plan',
         name: 'glob', arguments: JSON.stringify({pattern: '*.logox-none'})}]}};
       if (allowedContinue) {
-        assert.ok(request.messages.some(message => message.role === 'assistant' && message.text === '⏵ Building the runnable baseline'));
+        assert.ok(request.messages.some(message => message.role === 'assistant' && message.toolCalls?.some(call => call.name === 'glob')), 'the earlier tool turn is still in history');
+        assert.ok(!request.messages.some(message => message.role === 'assistant' && message.text.includes('⏵')), 'the status line is not fed back into history');
         assert.ok(request.messages.every(message => message.role !== 'assistant' || !!message.text || !!message.toolCalls?.length));
         return {stop: 'complete', message: {role: 'assistant', text: '已有阶段和工具结果已核对，当前步骤可以继续。'}};
       }
@@ -179,7 +180,7 @@ test('application continuation retains Actor labels and root identity without to
   };
   try {
     await app.ensemble.dispatch('techne', '建立可运行页面', 'logox', {inputKind: 'director', authorization: ['建立可运行页面']}).done; await idle();
-    assert.equal(requests.length, 4, 'One stage-declaring tool turn, two Actor no-delivery turns and one Director recovery turn');
+    assert.equal(requests.length, 4, 'One status-line tool turn, two Actor no-delivery turns and one Director recovery turn');
     const tasks = app.store.getSnapshot().activities;
     const actor = tasks.find(task => task.ownerId === 'techne')!;
     assert.equal(actor.status, 'failed'); assert.equal(actor.progress && 'label' in actor.progress ? actor.progress.label : undefined, 'Building the runnable baseline');

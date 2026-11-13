@@ -15,7 +15,7 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     memoryOnly: z.literal(true).optional(),
     /** The text is a tool call the provider returned as plain text: it executed nothing and is never a delivery (kept in history so the model can reissue it). */
     textToolCall: z.literal(true).optional(),
-    /** The `⏵` stage this turn declared (observability only; the text keeps no stage line). */
+    /** The `⏵` status line this turn began with (observability only; the ledger text keeps no status line, except a reply that was only that line). Older ledgers carry it too. */
     stage: z.string().optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),

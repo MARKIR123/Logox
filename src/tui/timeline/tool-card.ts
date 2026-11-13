@@ -68,7 +68,11 @@ export function resultText(message: Message): string {
 
 /** The card title: built from the structured call, or the recorded step title for legacy messages without one. */
 export function cardTitle(context: ToolRenderContext, call: ToolCall): string {
-  const step = context.message.step;
+  return messageCardTitle(context.message, call);
+}
+/** The same title from a message alone, for surfaces that name a running call without rendering its card (the actor card subtitle). */
+export function messageCardTitle(message: Message, call: ToolCall): string {
+  const step = message.step;
   return step?.call ? baseCardTitle(call, step.title) : step?.title ?? baseCardTitle(call);
 }
 

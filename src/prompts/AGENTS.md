@@ -47,6 +47,7 @@
 - **Report mode follows Director dispatch provenance**, not text claiming it. Enforced by `tests/finish-round.test.ts`.
 - **Tools & Skills is a discovery location only**: native parameter schemas are not system prose, and guidelines never mix into skill discovery. Enforced by `tests/prompt-composition.test.ts`, `tests/prompt-disclosure-integration.test.ts`.
 - **Prompt text and tool descriptions are English**; user guideline contents stay user-authored. *Unenforced*.
+- **The status line is a request, never a requirement**: `charter.ts:SHARED_EXECUTION_RULES` ("## Status line") asks for one `⏵ <what you are doing>` first line per reply and nothing else restates it (no phase counts, no history promise). The card never depends on compliance and nothing reminds or retries on a missing line. Enforced by `tests/prompts.test.ts`.
 
 ## 5. Dependencies
 - **Depends on**: nothing except the import-free leaf `src/runtime/director-id.ts` (`isDirector()`); this is otherwise a leaf of pure constants and one composer.

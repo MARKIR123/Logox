@@ -82,10 +82,10 @@ test('activity labels execute through Agent, remain self-reports and restore wit
     const handle = f.app.ensemble.dispatch('logox', '读取并核对事实'); await handle.done;
     const activity = f.app.store.activities.get('task-flow', handle.activityId)!;
     assert.equal(activity.status, 'completed');
-    assert.deepEqual(activity.progress, {label: 'Preparing the report', stageHistory: ['Reading facts', 'Preparing the report']});
+    assert.deepEqual(activity.progress, {label: 'Preparing the report'}, 'the latest label only: no stage history is written any more');
     assert.equal(f.requests.length, 5);
     const seen = f.requests[4]!.messages.filter(message => message.role === 'assistant').map(message => message.text);
-    assert.deepEqual(seen, ['⏵ Reading facts', '⏵ Preparing the report'], 'the model sees each stage once, as the ⏵ line it wrote');
+    assert.deepEqual(seen, ['', ''], 'the model is not shown its earlier status lines');
     const history = await f.app.journal.load('task-flow', 'logox');
     assert.ok(history.every(entry => entry.step?.stage === undefined));
     await f.app.close();

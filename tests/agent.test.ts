@@ -429,7 +429,7 @@ test('正式应用提供商命令统一选择，运行中拒绝切换', async ()
   } finally {await f.cleanup();}
 });
 
-test('stage lines stay out of the ledger text but are kept in a stage field and the progress history', async () => {
+test('status lines stay out of the ledger text but are kept in a stage field; no stage history is written any more', async () => {
   const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
   const f = await fixture(scripted([staged('⏵ Understanding the brief\nLooking around.', 'g1'), staged('⏵ Building the page', 'g2'), assistant('done')]));
   try {
@@ -440,9 +440,10 @@ test('stage lines stay out of the ledger text but are kept in a stage field and 
     assert.deepEqual(entries.map(entry => entry.message?.role === 'assistant' ? entry.message.stage : 'x'), ['Understanding the brief', 'Building the page', undefined]);
     assert.equal(entries[0]!.text, 'Looking around.');
     const progress = f.app.store.activities.get('test', handle.activityId)?.progress;
-    assert.deepEqual(progress && 'stageHistory' in progress ? progress.stageHistory : undefined, ['Understanding the brief', 'Building the page']);
+    assert.deepEqual(progress && 'stageHistory' in progress ? progress.stageHistory : undefined, undefined, 'the stage history is gone from live progress');
+    assert.equal(progress && 'label' in progress ? progress.label : undefined, 'Building the page', 'the label (latest line) stays for peers');
     const saved = (await f.app.journal.tasks('test')).find(task => task.activityId === handle.activityId)?.progress;
-    assert.deepEqual(saved && 'stageHistory' in saved ? saved.stageHistory : undefined, ['Understanding the brief', 'Building the page']);
+    assert.deepEqual(saved && 'stageHistory' in saved ? saved.stageHistory : undefined, undefined);
   } finally {await f.cleanup();}
 });
 
@@ -468,7 +469,7 @@ test('repeated empty replies still end in a failed task after the reminder and t
   } finally {await f.cleanup();}
 });
 
-test('the model sees its own stage as a "⏵ " first line, once per change and never as a ### heading', async () => {
+test('earlier status lines are never fed back into the model history', async () => {
   const staged = (text: string, id: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [{id, name: 'glob', arguments: JSON.stringify({pattern: '*.nothing'})}]}, stop: 'tools'});
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
@@ -482,7 +483,8 @@ test('the model sees its own stage as a "⏵ " first line, once per change and n
     await f.app.ensemble.dispatch('techne', 'build').done;
     const last = seen.at(-1)!;
     const texts = last.messages.filter(message => message.role === 'assistant').map(message => message.text);
-    assert.deepEqual(texts, ['⏵ Understanding the brief\nLooking around.', 'Still looking.', '⏵ Building the page']);
+    assert.deepEqual(texts, ['Looking around.', 'Still looking.', ''], 'the ledger text carries no status line and history adds none');
+    assert.ok(!JSON.stringify(last.messages).includes('⏵'), 'no status line reaches the model');
     assert.ok(!JSON.stringify(last.messages).includes('###'), 'no heading stage reaches the model');
     // The same history renders identically on the next request: earlier messages never change.
     const earlier = seen.at(-2)!.messages.filter(message => message.role === 'assistant').map(message => message.text);

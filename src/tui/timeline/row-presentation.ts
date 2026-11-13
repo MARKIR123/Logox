@@ -1,7 +1,7 @@
 import stringWidth from 'string-width';
 import type {Step} from '../../runtime/contracts.js';
 import {stepElapsed} from '../../runtime/steps.js';
-import {stepIcon, thinkingDuration, stepStatus, swarmElapsed} from '../appearance/animation.js';
+import {stepIcon, thinkingDuration, stepStatus, subtitleClock, swarmElapsed} from '../appearance/animation.js';
 import {mixHex, quietRail} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SceneRow, SceneSegment} from './scene.js';
@@ -67,8 +67,9 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
   if (!animation) return row;
   const running = animation.step?.state === 'running';
   const activeActor = Boolean(animation.active);
+  const clocked = animation.clockStart !== undefined;
   if (!running && !activeActor) return row;
-  if (!motion && !running) return row;
+  if (!motion && !running && !clocked) return row;
 
   const animNow = Math.floor(now / 100) * 100;
   const cached = decoratedCache.get(raw);
@@ -95,6 +96,7 @@ export function decorateRow(raw: Row, now: number, motion = true): SceneRow {
     if (running && cell?.key.endsWith(':status') && cell.offset < status.length)
       segment = {...segment, text: status[cell.offset] ?? segment.text};
     if (running && animation.step && /:swarm_icon$/.test(cell?.key ?? '') && cell?.offset === 0) segment = {...segment, text: stepIcon(animation.step, now, motion, animation.frames), color: actorColor};
+    if (clocked && cell?.key.endsWith(':subtitle_time')) segment = {...segment, text: subtitleClock(now - animation.clockStart!)[cell.offset] ?? ' '};
     if (running && animation.step && /:swarm_time$/.test(cell?.key ?? '')) segment = {...segment, text: swarmElapsed(stepElapsed(animation.step, now))[cell?.offset ?? 0] ?? ' '};
     if (isWorking && cell?.key.endsWith(':icon') && cell.offset === 0) {
       if (!activeActor || !animation.open) {

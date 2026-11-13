@@ -21,7 +21,7 @@ import type {StatusbarId, StatusbarPreferences} from '../config/statusbar-prefer
 import {statusbarText, statusbarLayout, usedPercent, type WidgetRegion} from './status/statusbar.js';
 import {computeActivePills, calculatePillsWidth, ActorPills, FAILED_PILL_MS, type ActivePillItem} from './status/actor-pills.js';
 import {footerHints, notificationSegments, pillDetail, widgetCommand, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './status/notification-line.js';
-import {extractNarration} from '../runtime/narration.js';
+import {liveStatus, liveStatusLine} from './timeline/live-status.js';
 import {findLatestActorRowIndex} from './timeline/actor-location.js';
 import {extractStatusBarSlice} from './status/statusbar.js';
 import {MouseHost, type MouseSubscriber} from './terminal/mouse.js';
@@ -489,8 +489,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     const stage = pill.state === 'question' ? 'Awaiting your answer' : pill.state === 'approval' ? 'Awaiting approval' : pill.state === 'paused' ? 'Paused'
       : pill.state === 'queued' ? (activity?.stage.startsWith('Waiting on ') ? activity.stage : 'Queued')
       : pill.state === 'failed' ? (activity?.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() || 'Failed')
-      : (own.findLast(message => message.role === 'assistant' && !message.kind && extractNarration(message.text))?.text
-        ? extractNarration(own.findLast(message => message.role === 'assistant' && !message.kind && extractNarration(message.text))!.text)?.narration : undefined) ?? activity?.stage ?? 'Working';
+      : liveStatusLine(liveStatus(own)) ?? activity?.stage ?? 'Working';
     const first = own.find(message => message.time !== undefined)?.time;
     const reading = getStatus?.(pill.ownerId), percent = reading ? usedPercent(reading) : undefined;
     return pillDetail({symbol: roles[pill.ownerId]?.symbol ?? '◈', name: roles[pill.ownerId]?.name ?? pill.ownerId, color: roles[pill.ownerId]?.color,

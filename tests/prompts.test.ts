@@ -77,9 +77,9 @@ test('runtime facts remain typed messages rather than rewriting the system promp
 
 const profile = (id: string, file: string) => readFileSync(new URL('../src/actors/profiles/' + id + '/' + file, import.meta.url), 'utf8');
 
-test('stage line is unambiguously the first line of work turns; personas never put the flourish on line one', () => {
-  assert.match(SHARED_EXECUTION_RULES, /begin your text with one line[\s\S]*before any greeting/);
-  assert.equal(SHARED_EXECUTION_RULES.split('begin your text with one line').length - 1, 1);
+test('the status line is unambiguously the first line of each reply; personas never put the flourish on line one', () => {
+  assert.match(SHARED_EXECUTION_RULES, /begin your reply with one line[\s\S]*before anything else/);
+  assert.equal(SHARED_EXECUTION_RULES.split('begin your reply with one line').length - 1, 1);
   assert.match(SHARED_EXECUTION_RULES, /It is rare, under six words and physical only[\s\S]*inline after the first sentence of a conversational reply, and never in work turns, task reports or tool payloads/);
   assert.match(SHARED_EXECUTION_RULES, /Plain voice: no filler openers or closers[\s\S]*no mechanical First\/Second\/Finally scaffolding/);
   for (const id of ['logox', 'techne', 'kalon', 'aletheia']) {
@@ -105,14 +105,11 @@ test('brief, scope and ownership rules live in the lowest layer that can enforce
   assert.match(profile('kalon', 'execution.md'), /Artifacts, Not Specs[\s\S]*review the rendered result/);
 });
 
-test('stage rule: short, stated once, rare by design, no priming examples', () => {
+test('status line rule: one line per reply, short, stated once, nothing about phases or history', () => {
   const rule = SHARED_EXECUTION_RULES.slice(SHARED_EXECUTION_RULES.indexOf('## Status line'), SHARED_EXECUTION_RULES.indexOf('## Seeing'));
-  assert.match(rule, /When you start a task, and again only when the deliverable you are working on changes/);
-  assert.match(rule, /A task has two to four in all, so most turns have none/);
-  assert.match(rule, /A single tool call, a rephrased label, a fix, a re-check or plain conversation is not a new phase/);
-  assert.match(rule, /The runtime shows the current one on your card, strips it from your text and keeps your earlier stages in your history/);
-  assert.doesNotMatch(rule, /UpdateTaskProgress|will not see it/);
-  assert.ok(rule.length < 700, 'the rule stays short: ' + rule.length);
+  assert.ok(rule.includes('The user sees one status line on your card. At the start of each step, begin your reply with one line `⏵ <what you are doing>` (20 words max, before anything else), then continue on the next line, for example `⏵ Fixing the wheel alignment in pelican-bike.html`. One per reply. The runtime shows it on your card and strips it from your text.'), 'the contract text is verbatim');
+  assert.doesNotMatch(rule, /phase|two to four|deliverable|earlier stages|history|UpdateTaskProgress|will not see it/);
+  assert.ok(rule.length < 450, 'the rule stays short: ' + rule.length);
   assert.equal(rule.split('⏵').length - 1, 2, 'one format mention plus one example');
   assert.doesNotMatch(rule, /Good, one task|Bad, the same/);
   const everywhere = [collaborationFor('logox'), collaborationFor('techne'), ...['logox', 'techne', 'kalon', 'aletheia'].flatMap(id => ['persona.md', 'execution.md', 'collaboration.md'].map(f => profile(id, f)))].join('\n');

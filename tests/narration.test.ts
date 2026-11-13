@@ -45,7 +45,7 @@ test('extractNarration strips trailing punctuation from narration and cleans exc
   assert.equal(extracted.cleanText, '修复代码已提交。');
 });
 
-test('agent loop extracts ⏵ narration into activity progress and keeps the stage line in the stored message (root cause: it used to be stripped, so the timeline never saw it)', async () => {
+test('agent loop extracts ⏵ narration into the activity label and keeps the status line in the stored message while the reply streams', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-narration-test-'));
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const turns: ModelTurn[] = [
@@ -70,11 +70,11 @@ test('agent loop extracts ⏵ narration into activity progress and keeps the sta
     await task.done;
     const activity = app.store.getSnapshot().activities.find(a => a.activityId === task.activityId)!;
     assert.equal(activity.status, 'completed');
-    assert.deepEqual(activity.progress, {label: '正在检索项目结构', stageHistory: ['正在检索项目结构']});
+    assert.deepEqual(activity.progress, {label: '正在检索项目结构'}, 'the label is kept for peers; no stage history is written any more');
 
     const msg = app.store.getSnapshot().messages.find(m => m.activityId === task.activityId && m.role === 'assistant' && !m.kind);
     assert.ok(msg);
-    assert.equal(msg.text, '⏵ 正在检索项目结构\n已为您找到核心文件。', 'the stored message keeps its stage line for stage.ts and tool-groups.ts');
+    assert.equal(msg.text, '⏵ 正在检索项目结构\n已为您找到核心文件。', 'the stored message keeps its status line for the card');
     assert.equal(stripNarration(msg.text), '已为您找到核心文件。');
     const rows = buildStageRows(app.store.getSnapshot(), 's', 'logox', 100, {}, null).map(row => row.displayText ?? row.text);
     assert.ok(rows.some(row => row.includes('已为您找到核心文件。')));
@@ -86,18 +86,104 @@ test('agent loop extracts ⏵ narration into activity progress and keeps the sta
 });
 
 
-test('withStageLines renders ⏵ lines once per change, never ### headings, and is stable for a given prefix', async () => {
-  const {withStageLines} = await import('../src/runtime/narration.js');
-  const history = [
-    {role: 'user' as const, text: 'go'},
-    {role: 'assistant' as const, text: 'Looking.', stage: 'Understanding'},
-    {role: 'assistant' as const, text: 'More.', stage: 'Understanding'},
-    {role: 'assistant' as const, text: '', stage: 'Building'},
-    {role: 'assistant' as const, text: '⏵ Legacy leak\nBody.'},
-  ];
-  const out = withStageLines(history);
-  assert.deepEqual(out.map(m => m.text), ['go', '⏵ Understanding\nLooking.', 'More.', '⏵ Building', '⏵ Legacy leak\nBody.']);
-  assert.ok(!JSON.stringify(out).includes('###'));
-  assert.deepEqual(withStageLines(history.slice(0, 3)).map(m => m.text), out.slice(0, 3).map(m => m.text));
-  assert.equal(history[1]!.text, 'Looking.', 'input is not mutated');
+test('extraction: the ⏵ must open the first line; mid-prose and later lines never count', () => {
+  assert.equal(extractNarration('Fixing it ⏵ now'), null);
+  assert.equal(extractNarration('Intro line\n⏵ Fixing the wheel'), null, 'only the first line of the reply');
+  assert.equal(extractNarration('   ⏵ Fixing the wheel')?.narration, 'Fixing the wheel');
+  assert.equal(extractNarration('\n\n⏵ Fixing the wheel\nbody')?.cleanText, 'body');
+});
+
+test('extraction: the text stops at the line end or the first sentence end and the rest stays in the reply', () => {
+  const sentence = extractNarration('⏵ Fixing the wheel alignment in pelican-bike.html. Then I will check the frame\nBody line');
+  assert.equal(sentence?.narration, 'Fixing the wheel alignment in pelican-bike.html', 'a dot inside a file name is not a sentence end');
+  assert.equal(sentence?.cleanText, 'Then I will check the frame\nBody line');
+  const cjk = extractNarration('⏵ 修复车轮对齐。随后检查车架\n正文');
+  assert.equal(cjk?.narration, '修复车轮对齐');
+  assert.equal(cjk?.cleanText, '随后检查车架\n正文');
+  assert.equal(extractNarration('⏵ Reading config!\nBody')?.narration, 'Reading config');
+});
+
+test('extraction: the cap counts CJK and emoji as two columns and trailing punctuation is trimmed', async () => {
+  const {NARRATION_MAX_WIDTH} = await import('../src/runtime/narration.js');
+  const stringWidth = (await import('string-width')).default;
+  const long = '修'.repeat(80);
+  const cut = extractNarration('⏵ ' + long)!.narration;
+  assert.ok(stringWidth(cut) <= NARRATION_MAX_WIDTH && stringWidth(cut) >= NARRATION_MAX_WIDTH - 1, 'width ' + stringWidth(cut));
+  assert.equal(cut, '修'.repeat(NARRATION_MAX_WIDTH / 2), 'two columns per character');
+  const emoji = extractNarration('⏵ ' + '🚀'.repeat(80))!.narration;
+  assert.ok(stringWidth(emoji) <= NARRATION_MAX_WIDTH);
+  assert.equal(extractNarration('⏵ Checking, then; ...')?.narration, 'Checking, then');
+  assert.equal(extractNarration('⏵ 检查配置、')?.narration, '检查配置');
+});
+
+test('extraction: an empty line is no narration and the text stays as written', () => {
+  for (const text of ['⏵', '⏵   ', '⏵ ...', '⏵ 。\nbody', '']) {
+    assert.equal(extractNarration(text), null, JSON.stringify(text));
+    assert.equal(stripNarration(text), text);
+  }
+});
+
+test('extraction reads assistant text only: a reasoning message never feeds the card', async () => {
+  const {liveStatus} = await import('../src/tui/timeline/live-status.js');
+  const reasoning = {id: 'r', sessionId: 's', ownerId: 'techne', role: 'assistant' as const, kind: 'thinking' as const, text: '⏵ Planning in thought',
+    step: {title: 'Thinking', state: 'running' as const, elapsedMs: 0, runningSince: 1000, groupId: 'g'}};
+  const status = liveStatus([reasoning]);
+  assert.equal(status?.narration, undefined);
+  assert.equal(status?.activity, 'Thinking');
+});
+
+test('a reply that is only the ⏵ line keeps its words as visible text; with a tool call the line stays out of the text', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-narration-only-'));
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const provider: Provider = {
+    async respond(_req, onDelta) {
+      onDelta({kind: 'text', text: '⏵ Wrapping up the review'});
+      return {message: {role: 'assistant', text: '⏵ Wrapping up the review'}, stop: 'complete'};
+    },
+  };
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 's', config, provider});
+  try {
+    const task = app.ensemble.dispatch('logox', 'review', 'direct');
+    await task.done;
+    const msg = app.store.getSnapshot().messages.find(m => m.activityId === task.activityId && m.role === 'assistant' && !m.kind)!;
+    assert.equal(msg.text, 'Wrapping up the review', 'the turn is not rendered empty');
+    const rows = buildStageRows(app.store.getSnapshot(), 's', 'logox', 100, {}, null).map(row => row.displayText ?? row.text);
+    assert.ok(rows.some(row => row.includes('Wrapping up the review')));
+    assert.ok(!rows.some(row => row.includes('⏵')));
+  } finally {
+    await app.close();
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+
+test('request assembly never injects earlier status lines into the history', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-narration-history-'));
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  const seen: string[][] = [];
+  let calls = 0;
+  const provider: Provider = {
+    async respond(request, onDelta) {
+      seen.push(request.messages.filter(message => message.role === 'assistant').map(message => message.text));
+      calls++;
+      if (calls === 1) {
+        const text = '⏵ Looking at the config\nChecking.';
+        onDelta({kind: 'text', text});
+        return {message: {role: 'assistant', text, toolCalls: [{id: 'c1', name: 'Glob', arguments: JSON.stringify({pattern: '*.json'})}]}, stop: 'tools'};
+      }
+      onDelta({kind: 'text', text: 'Done.'});
+      return {message: {role: 'assistant', text: 'Done.'}, stop: 'complete'};
+    },
+  };
+  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 's', config, provider});
+  try {
+    const task = app.ensemble.dispatch('logox', 'look', 'direct');
+    await task.done;
+    assert.ok(seen.length >= 2);
+    const history = seen.slice(1).flat().join('\n');
+    assert.ok(history.includes('Checking.'), 'the model sees its own text');
+    assert.ok(!history.includes('⏵'), 'and no status line: it is not fed back');
+  } finally {
+    await app.close();
+    await rm(cwd, {recursive: true, force: true});
+  }
 });

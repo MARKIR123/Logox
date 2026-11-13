@@ -132,7 +132,7 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
       const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
       const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
       const step = steps.finish(thinkingId, run.context.signal.aborted ? 'cancelled' : 'failed');
-      // The store keeps the raw `⏵` line for the timeline; the ledger never does.
+      // The store keeps the raw `⏵` line while the reply streams; the ledger never does.
       const partial = extractNarration(text);
       await run.persist({role: 'assistant', text: partial ? partial.cleanText : text, ...(partial ? {stage: partial.narration} : {}), ...(reasoning ? {reasoning} : {}), ...(state.closing ? {memoryOnly: true as const} : {})}, step);
       if (state.closing && !run.context.signal.aborted) {

@@ -32,7 +32,8 @@ test('a report with no delivering message closes the card after the transcript',
 test('every row of an actor card hangs off the same col-0 rail', () => {
   const rows = card('Done.', 'model', ['⏵ Building the page\nFirst.', '⏵ Checking the page', 'Done.']);
   const body = rows.filter(row => row.messageId !== 'a' && /First\.|Checking the page|Done\./.test(row.text));
-  assert.equal(body.length, 3);
+  assert.equal(body.length, 2, 'a status line is not a row any more: only First. and Done. draw');
+  assert.ok(!rows.some(row => /Checking the page|⏵/.test(row.text)));
   assert.equal(new Set(body.map(row => row.gutterCols)).size, 1, 'one indent for every prose row');
   assert.ok(body.every(row => row.prefixSegments?.some(segment => segment.text.includes('│'))), 'each row carries the rail');
 });

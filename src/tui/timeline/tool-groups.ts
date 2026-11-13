@@ -1,5 +1,5 @@
 import type {Message} from '../../runtime/contracts.js';
-import {extractNarration, stripNarration} from '../../runtime/narration.js';
+import {stripNarration} from '../../runtime/narration.js';
 import {classifyShellCommand, shellExecutable} from '../../tools/ShellTool/classify.js';
 import {shellWords} from '../../permissions/shell.js';
 import type {ToolCall} from '../../runtime/messages.js';
@@ -19,11 +19,9 @@ export interface ToolGroup {
   readonly running: boolean;
   readonly active?: {readonly label: string; readonly elapsedMs: number};
 }
-/** A `⏵` stage: one prose row (the intent) drawn exactly where the stage changed, between the rows and groups around it. */
-export interface StageLine {readonly type: 'stage'; readonly id: string; readonly stage: string}
 /** Consecutive Edit calls (and Write overwrites) of one actor on one file with nothing between them: one `Edit(a.css) ×4` row. */
 export interface EditRun {readonly type: 'edits'; readonly id: string; readonly path: string; readonly messages: readonly Message[]}
-export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup | StageLine | EditRun;
+export type TimelineItem = {readonly type: 'message'; readonly message: Message} | ToolGroup | EditRun;
 
 const categoryOrder: readonly ToolGroupCategory[] = ['search', 'read', 'list', 'browse', 'command'];
 
@@ -205,7 +203,7 @@ function mergeEdits(items: readonly TimelineItem[]): TimelineItem[] {
   return result;
 }
 
-export function groupToolMessages(messages: readonly Message[], options: {stages?: boolean} = {}): TimelineItem[] {
+export function groupToolMessages(messages: readonly Message[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const now = Date.now();
   let calls: Message[] = [];   // collapsible calls plus absorbed neutral messages, in order
@@ -227,8 +225,7 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
 
   for (const message of messages) {
     if ((message.role as string) === 'context') continue;
-    const narration = options.stages && message.role === 'assistant' && !message.kind ? extractNarration(message.text)?.narration : undefined;
-    if (!narration && isNeutral(message)) {
+    if (isNeutral(message)) {
       if (callCount > 0) pending.push(message); else emit(message);
       continue;
     }
@@ -248,8 +245,6 @@ export function groupToolMessages(messages: readonly Message[], options: {stages
       continue;
     }
     flush();
-    // A stage is its own row where it changed (the narration message itself draws only its remaining prose, if any).
-    if (narration) items.push({type: 'stage', id: message.id + '-stage', stage: narration});
     emit(message);
   }
   flush();

@@ -1,6 +1,7 @@
 import {DIRECTOR_ID, isDirector} from '../../../runtime/director-id.js';
 import {basename} from 'node:path';
-import {type Activity, type Interaction, type Message, currentTaskProgress} from '../../../runtime/contracts.js';
+import type {Activity, Interaction, Message} from '../../../runtime/contracts.js';
+import type {LiveStatus} from '../../../tui/timeline/live-status.js';
 import type {ThinkingRequest} from '../../../tui/timeline/thinking-groups.js';
 import {type ActorStyles} from '../../../tui/appearance/actor-style.js';
 import type {ToolFrame} from '../../ui-types.js';
@@ -13,7 +14,7 @@ import type {ToolUI} from '../../ui-types.js';
 import {callLabel, createToolUI, hiddenToolUI} from '../../../tui/timeline/tool-ui.js';
 import {stripNarration} from '../../../runtime/narration.js';
 import {groupToolMessages} from '../../../tui/timeline/tool-groups.js';
-import {pushStageLine, pushToolGroupCard} from '../../../tui/timeline/group-row.js';
+import {pushToolGroupCard} from '../../../tui/timeline/group-row.js';
 
 export interface ActorActivityContext {
   builder: ReturnType<typeof createBuilder>;
@@ -22,6 +23,8 @@ export interface ActorActivityContext {
   /** Rail of the surrounding surface (Director accent in the main timeline). */
   railColor?: string | undefined;
   title: string;
+  /** What the running card is doing now (the current reply's `⏵` line, the running tool or the thinking state), drawn after `title`. */
+  live?: LiveStatus | undefined;
   status: string;
   active: boolean;
   open: boolean;
@@ -56,7 +59,7 @@ export function renderActivity(context: ActorActivityContext): void {
   const roleColor = ownerColor(activity.ownerId, roles);
 
   appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles,
-    task: context.title, status: context.status, active: context.active, open: context.open, railColor: color,
+    task: context.title, ...(context.live ? {subtitle: context.live} : {}), status: context.status, active: context.active, open: context.open, railColor: color,
     ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: context.stop} : {}),
     renderBody(frame, _color, _action, outer) {
       const actorTreeFrame = insetRailFrame(outer, roleColor);
@@ -97,7 +100,7 @@ export function renderActivity(context: ActorActivityContext): void {
         if (!context.detailed || message.role === 'user' || (message.role === 'system' && ['failed', 'cancelled'].includes(activity.status))) return false;
         if ((message.role as string) === 'context') return false;
         return !(message.role === 'assistant' && !message.kind && (!message.text || !message.text.trim()));
-      }), {stages: true});
+      }));
 
       for (let i = 0; i < renderableItems.length; i++) {
         const item = renderableItems[i]!;
@@ -112,17 +115,12 @@ export function renderActivity(context: ActorActivityContext): void {
           continue;
         }
 
-        if (item.type === 'stage') {
-          // The model's `⏵` line is its own prose row between the rows around it; the outer rail keeps the surface colour.
-          pushStageLine(builder, item, color, actorTreeFrame);
-          continue;
-        }
         if (item.type === 'edits') {
           context.renderMessage(item.messages[0]!, actorTreeFrame, item.messages);
           continue;
         }
         const message = item.message;
-        if (message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()) continue; // stage marker only; it labels the next group
+        if (message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()) continue; // a status line only: it shows on the card, never as a row
         if (message.inputKind === 'collaboration_interrupt' || message.inputKind === 'collaboration') {
           const isInterrupt = message.inputKind === 'collaboration_interrupt';
           const {rawSender, senderLabel, summary, cleanBody, lines} = parseIncomingCollaboration(message, roles);

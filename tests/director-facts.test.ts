@@ -261,7 +261,8 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
     assert.ok(act);
     assert.equal(act.taskTitle, 'Audit theme contrast');
 
-    store.activities.update('s', runningContext.activityId, {progress: {label: 'Checking statusbar tokens'}});
+    store.message('s', 'techne', 'assistant', '', {activityId: runningContext.activityId, kind: 'thinking', step: {title: 'Thinking', state: 'completed', elapsedMs: 10, groupId: 'g1'}});
+    store.message('s', 'techne', 'assistant', '⏵ Checking statusbar tokens\nWorking.', {activityId: runningContext.activityId});
 
     const runningRows = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {[runningContext.activityId]: false}, null)
       .map(row => row.text).join('\n');

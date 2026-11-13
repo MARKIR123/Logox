@@ -22,7 +22,7 @@
 //   Wake           A Director activity under a root other than the root itself, started by an actor report (inputKind `actor` or
 //                  coordinationWake). Late wake: a wake whose first ledger record (task time when it has none)
 //                  is after the first final report of that root.
-//   Stage share    Assistant turns of an actor with a stage (`message.stage` or a `⏵` line in the text) divided by all its assistant turns.
+//   Status line share    Assistant turns of an actor that began with a status line (since the per-reply contract this is a compliance rate; earlier builds asked for two to four per task): a stage (`message.stage` or a `⏵` line in the text) divided by all its assistant turns.
 //   Round closing  Per actor activity (round) that has assistant turns: `same` = the `_FinishRound` message itself carries answer
 //                  text; `separate` = answer text sits in another text-only turn (before or after); `silent` = `_FinishRound` with no
 //                  answer text anywhere in the activity; `never` = no `_FinishRound` call.
@@ -365,8 +365,8 @@ export function flatten(score) {
     add('Final reports', tag + ' wall time', duration(root.wallMs));
   }
   for (const [actor, entry] of Object.entries(score.stages)) {
-    add('Stage lines', actor + ' stage share', entry.share === null ? na : pct(entry.share) + ' (' + entry.withStage + '/' + entry.turns + ')');
-    add('Stage lines', actor + ' distinct stages', num(entry.distinct));
+    add('Status lines', actor + ' status line share', entry.share === null ? na : pct(entry.share) + ' (' + entry.withStage + '/' + entry.turns + ')');
+    add('Status lines', actor + ' distinct lines', num(entry.distinct));
   }
   for (const [actor, entry] of Object.entries(score.roundClosing)) {
     add('Round closing', actor + ' same/separate/silent/never', [entry.same, entry.separate, entry.silent, entry.never].join('/') + ' of ' + entry.rounds);

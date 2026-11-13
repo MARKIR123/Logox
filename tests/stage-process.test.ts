@@ -107,40 +107,35 @@ test('tool-group titles are italic while their tool rows stay upright', () => {
   assert.ok(!child.segments!.some(s => s.italic), 'individual tool rows stay upright');
 });
 
-// --- Stage rows ---
+// --- Status lines ---
 
-test('stage rows are plain prose rows interleaved where the stage changed, never inside group titles', () => {
+test('status lines draw no rows: no heading between groups, nothing merged away, never inside a group title', () => {
   for (const owner of ['logox', 'techne'] as const) {
     const f = fixture(owner);
     f.stage('Mapping the current layout');
     f.call('Read', {file_path: 'a.ts'}); f.call('Grep', {pattern: 'p'});
     f.stage('Applying the fix to the stylesheet');
+    f.call('Read', {file_path: 'b.ts'});
     f.call('Edit', {file_path: 'a.css', old_string: 'a', new_string: 'b'});
     f.stage('Checking that everything still passes');
     f.call('Shell', {command: 'npm test'}); f.call('Shell', {command: 'ls'});
-    const rows = f.rows(100), lines = rows.map(plain);
-    const at = (re: RegExp) => lines.findIndex(line => re.test(line));
-    const order = [at(/^Mapping the current layout$/), at(/^▸ .* 1 file/), at(/^Applying the fix to the stylesheet$/), at(/^▮ Edit/), at(/^Checking that everything still passes$/), at(/^▸ .* 1 directory/)];
-    assert.ok(order.every(index => index >= 0), owner + '\n' + lines.join('\n'));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b), owner + ' interleaved in order');
-    for (const index of [order[0]!, order[2]!, order[4]!]) {
-      const row = rows[index]!;
-      assert.equal(row.color, palette.fg, 'normal foreground');
-      assert.ok(row.tone !== 'direction' && !row.segments?.some(s => s.italic), 'upright');
-      assert.ok(!/[⏵◈⊞✧]/.test(row.text), 'no marker and no glyph');
-    }
-    assert.ok(rows.filter(r => /^▸ /.test(plain(r))).every(r => !/Mapping|Applying|Checking/.test(text(r))), 'no intent in any group title');
-    const wide = f.rows(30).filter(r => r.messageId.endsWith('-stage'));
-    assert.ok(wide.length >= 3 && wide.every(r => stringWidth(text(r)) <= 30), 'stages wrap like prose');
+    const rows = f.rows(100).filter(row => !row.railGlyph), lines = rows.map(plain); // the speaker header may still name the latest line
+    assert.ok(!lines.some(line => /^\s*(?:Mapping the current layout|Applying the fix to the stylesheet|Checking that everything still passes)\s*$|⏵/.test(line)), owner + ' no stage row:\n' + lines.join('\n'));
+    assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
+    const groups = lines.filter(line => /^▸ (?!Task from)/.test(line));
+    assert.equal(groups.length, 2, owner + ' reads across the first two lines fold into one group, the shell calls into another: ' + groups.join('|'));
+    assert.match(groups[0]!, /1 pattern · .*2 files/, 'the read group spans the status line: Read, Grep and Read together');
+    const order = [lines.findIndex(line => /^▸ .*(file|pattern)/.test(line)), lines.findIndex(line => /^▮ Edit/.test(line)), lines.findIndex((line, index) => index > 0 && /^▸ .*(command|directory)/.test(line))];
+    assert.ok(order.every(index => index >= 0) && order[0]! < order[1]! && order[1]! < order[2]!, owner + ' order\n' + lines.join('\n'));
   }
 });
 
-test('the live header activity and the card subtitle still use the current stage', () => {
+test('the live header uses the latest status line; the card shows it with the running tool', () => {
   const f = fixture('techne');
   f.stage('Tracing the pedal phase');
   f.call('Shell', {command: 'sleep 9'}, {run: true});
   const lines = f.rows().map(text);
-  assert.ok(lines.some(line => /Rig · Tracing the pedal phase/.test(line)), 'card subtitle: ' + lines.join('|'));
+  assert.ok(lines.some(line => /Rig · Tracing the pedal phase · Shell\(sleep 9\)/.test(line)), 'card subtitle: ' + lines.join('|'));
   assert.ok(lines.some(line => /Logox .*Waiting on Techne/.test(line)));
   const g = fixture();
   g.stage('Verifying the build');
@@ -172,7 +167,7 @@ test('consecutive edits of one file fold into one summed row; expanded it shows 
   assert.match(cut[0]!.text, /^… \d+ more (lines|hunks)$/);
 });
 
-test('a merged edit row is red with the failed edit’s reason; other files, other rows and stages break the merge', () => {
+test('a merged edit row is red with the failed edit’s reason; other files and other rows break the merge, a status line does not', () => {
   const f = fixture('techne');
   const a = f.call('Edit', {file_path: 'a.css', old_string: 'x', new_string: 'y'});
   f.call('Edit', {file_path: 'a.css', old_string: 'zzz', new_string: 'y'}, {fail: true, reason: 'Error: old_string not found in a.css'});
@@ -188,8 +183,8 @@ test('a merged edit row is red with the failed edit’s reason; other files, oth
   const mark = merged.segments!.find(s => s.selectionKey === a + ':icon')!;
   assert.equal(mark.color, palette.error, 'red mark');
   const edits = rows.filter(row => /Edit\(/.test(text(row)));
-  assert.equal(edits.length, 4, 'a.css ×3, b.css, b.css after the Read, b.css after the stage: ' + edits.map(text).join('|'));
-  assert.equal(edits.filter(row => /×\d/.test(text(row))).length, 1);
+  assert.equal(edits.length, 3, 'a.css ×3, b.css, then b.css ×2 across the status line: ' + edits.map(text).join('|'));
+  assert.equal(edits.filter(row => /×\d/.test(text(row))).length, 2);
 });
 
 test('a Write that overwrote a known file folds into the surrounding edits of that file', () => {
@@ -220,7 +215,7 @@ test('the outer rail always keeps the round speaker colour next to an open actor
   const start = rows.findIndex(row => /^⊞ Techne/.test(plain(row)));
   assert.ok(start > 0, rows.map(text).join('\n'));
   const inner = rows.slice(start).filter(row => row.railColor !== undefined && row.gutterCols > 0 && !row.messageId.startsWith('spacer'));
-  assert.ok(inner.length > 10);
+  assert.ok(inner.length > 6);
   for (const row of inner) {
     assert.equal(row.railColor, palette.accent, 'Logox rail for: ' + text(row));
     const cell = railCell(row);

@@ -6,7 +6,6 @@ import {ProviderError} from '../providers/http.js';
 import {roleCacheRetention} from '../providers/cache.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
-import {withStageLines} from '../runtime/narration.js';
 import {askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {FINISH_ROUND_FOLLOW_UP} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import type {AgentAssembly, AgentRequestBase} from './agent.js';
@@ -120,9 +119,9 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
     .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
   // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
-  let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: withStageLines(projected.messages).map(message =>
+  let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)
-      ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled, messages: withStageLines(projected.messages)};
+      ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled, messages: projected.messages};
   const dumpDir = options.requestDumpDir?.(context);
   const fingerprintFile = options.requestFingerprintFile?.(context);
   request = {...request, cacheKey: promptCacheKey(context.sessionId, context.ownerId),

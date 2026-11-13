@@ -1,5 +1,5 @@
 import {DIRECTOR_ID, isDirector} from '../../runtime/director-id.js';
-import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
+import {type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
 import {isOutageWake} from '../../runtime/outage.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
 import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
@@ -23,9 +23,10 @@ import {themeRevision} from '../../config/theme-palette.js';
 import {uiSettings} from '../../config/ui-settings.js';
 import {userLabelRevision} from '../../config/user-profile.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
-import {groupToolMessages, type EditRun, type StageLine, type ToolGroup} from './tool-groups.js';
+import {groupToolMessages, type EditRun, type ToolGroup} from './tool-groups.js';
+import {draftingLabel, liveStatus, type LiveStatus} from './live-status.js';
 import {renderEditRun} from '../../tools/EditTool/UI.js';
-import {pushStageLine, pushToolGroupCard} from './group-row.js';
+import {pushToolGroupCard} from './group-row.js';
 
 /** Opens each thought in a thinking body (Claude Code's thinking marker); continuation rows hang under the text. */
 const THOUGHT_MARK = '∴ ';
@@ -40,17 +41,23 @@ function isTimelineError(message: Message): boolean {
   return message.role === 'system' && !message.activityId && message.systemPresentation === 'timeline' &&
     (message.systemEventKind === 'command_error' || message.systemEventKind === 'model_error');
 }
-/** `<main title> · <subtitle>`: while running the subtitle is a temporary state (`override`) or else the current `⏵` stage; once finished it keeps the last stage. Never a tool title. */
-function activityTitle(activity: RuntimeSnapshot['activities'][number], activityMessages?: readonly Message[], override?: string): string {
+/**
+ * `<main title> · <subtitle>` for the card's static part. While the activity holds a temporary state (`override`: awaiting approval, retry, compaction)
+ * that state is the subtitle; otherwise the live subtitle (`liveStatus`: the current reply's `⏵` line and what is running) is drawn after it by the card itself.
+ * A finished card shows its main title only: a status line belongs to the reply that wrote it and never outlives it.
+ */
+function activityTitle(activity: RuntimeSnapshot['activities'][number], override?: string): string {
   const reason = activity.status === 'failed' ? activity.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() : '';
   if (reason) return reason;
   const running = ['running', 'waiting_input', 'paused'].includes(activity.status);
   const mainTitle = activity.taskTitle?.trim();
-  const narrated = activityMessages?.findLast(m => m.role === 'assistant' && !m.kind && extractNarration(m.text))?.text;
-  const subTitle = (running ? override : undefined) || (narrated ? extractNarration(narrated)?.narration : undefined) ||
-    (running ? currentTaskProgress(activity.progress)?.label?.trim() : undefined);
+  const subTitle = running ? override : undefined;
   if (mainTitle && subTitle && subTitle !== mainTitle) return `${mainTitle} · ${subTitle}`;
-  return mainTitle || (running ? subTitle : undefined) || activity.summary?.title || activity.title;
+  return mainTitle || subTitle || activity.summary?.title || activity.title;
+}
+/** The live subtitle of a running card with no temporary state; undefined otherwise. */
+function activityLive(activity: RuntimeSnapshot['activities'][number], activityMessages: readonly Message[] | undefined, override?: string): LiveStatus | undefined {
+  return activity.status === 'running' && !override ? liveStatus(activityMessages ?? []) : undefined;
 }
 /** The retry counter the agent loop reports as `Connection interrupted. Retrying (1/5)...`. */
 function retryLabel(detail: string): string {
@@ -71,7 +78,7 @@ const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof p
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (isDirector(view) || message.ownerId === view) &&
     isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(isDirector(message.ownerId) && message.role === 'user' && inputKind(message) === 'actor'));
-  // Narration-only messages are never drawn, but they still mark stage changes for tool grouping.
+  // Narration-only messages are never drawn.
   const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
   const grouped = new Map<string, Message[]>();
@@ -80,7 +87,7 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
     group.push(message); grouped.set(message.activityId, group);
   }
   const thinking = thinkingRequests(messages);
-  // Actor cards also receive narration-only messages so a `⏵` stage can label the next tool group.
+  // Actor cards also receive narration-only messages: the card reads the current reply's status line from them.
   const staged = new Map<string, Message[]>();
   for (const message of candidates) if (message.activityId) {
     const group = staged.get(message.activityId) ?? [];
@@ -267,39 +274,28 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // An actor card draws once, at its activity's first message, so only that message splits a run; later ones draw nothing here.
   const groupAt = new Map<string, ToolGroup>();
   const absorbed = new Set<string>();
-  const stageAt = new Map<string, StageLine[]>(); // `⏵` stages, keyed by the first drawn message they precede
   const editRuns = new Map<string, EditRun>(); // merged same-file edits, keyed by the first edit's message id
   const editAbsorbed = new Set<string>();
   {
-    const drawn = new Set(messages.map(message => message.id));
     let run: Message[] = [];
     const drawnCards = new Set<string>();
-    const flushRun = (boundary?: string) => {
-      let waiting: StageLine[] = [];
-      const attach = (id: string) => {
-        if (!waiting.length) return;
-        stageAt.set(id, [...stageAt.get(id) ?? [], ...waiting]); waiting = [];
-      };
-      for (const item of groupToolMessages(run, {stages: true})) {
-        if (item.type === 'stage') waiting.push(item);
-        else if (item.type === 'group') {
-          attach(item.messages[0]!.id);
+    const flushRun = () => {
+      for (const item of groupToolMessages(run)) {
+        if (item.type === 'group') {
           groupAt.set(item.messages[0]!.id, item);
           for (const member of item.messages.slice(1)) absorbed.add(member.id);
         } else if (item.type === 'edits') {
-          attach(item.messages[0]!.id);
           editRuns.set(item.messages[0]!.id, item);
           for (const member of item.messages.slice(1)) editAbsorbed.add(member.id);
-        } else if (drawn.has(item.message.id)) attach(item.message.id);
+        }
       }
-      if (boundary) attach(boundary); // a stage right before an actor card
       run = [];
     };
     for (const message of candidates) {
       if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor' || !isDirector(view)) { run.push(message); continue; }
       if (drawnCards.has(message.activityId)) continue;
       drawnCards.add(message.activityId);
-      flushRun(message.id);
+      flushRun();
     }
     flushRun();
   }
@@ -332,12 +328,6 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', '))};
     }
     return intent ? {label: intent} : undefined;
-  };
-  /** `Writing Edit(file.svg) · 14.2k chars`: what a request is doing while a tool call's arguments stream in. */
-  const draftingLabel = (drafting: NonNullable<Step['drafting']>): string => {
-    const file = drafting.target?.split(/[\\/]/).filter(Boolean).at(-1);
-    const chars = drafting.chars < 1000 ? String(drafting.chars) : (drafting.chars / 1000).toFixed(drafting.chars < 100_000 ? 1 : 0) + 'k';
-    return `Writing ${drafting.tool}${file ? '(' + file + ')' : ''} · ${chars} chars`;
   };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
@@ -457,7 +447,6 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         if (message.kind === 'thinking') current.thinking.push(message);
       }
     }
-    if (!humanLike && !systemLike) for (const line of stageAt.get(message.id) ?? []) pushStageLine(builder, line, railFor(message.ownerId));
     if (editAbsorbed.has(message.id)) continue;
     if ((!actor || !isDirector(view)) && (absorbed.has(message.id) || groupAt.has(message.id))) {
       const group = groupAt.get(message.id);
@@ -477,7 +466,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (seen.has(activity.activityId)) continue;
       seen.add(activity.activityId);
       if (gapBefore(true)) builder.pushBlank(viewColor);
-      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId), temporaryState(activity.ownerId, activity.activityId)?.label), status: activityStatus(activity),
+      const override = temporaryState(activity.ownerId, activity.activityId)?.label;
+      const live = activityLive(activity, staged.get(activity.activityId), override);
+      getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
         messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [], renderThinking,
         thinking, originalPrompt: actorGoal(activity), detailed: true, renderMessage: body, renderInteraction: interaction});
@@ -488,7 +479,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (!isDirector(view) && activity.status === 'completed') {
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
-        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId), temporaryState(activity.ownerId, activity.activityId)?.label), status: activityStatus(activity),
+        const override = temporaryState(activity.ownerId, activity.activityId)?.label;
+        const live = activityLive(activity, staged.get(activity.activityId), override);
+        getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
           messages: staged.get(activity.activityId) ?? [], pending: [], renderThinking, thinking, originalPrompt: actorGoal(activity),
           detailed: false, renderMessage: body, renderInteraction: interaction});

@@ -136,22 +136,32 @@ test('an actor window header follows the same rules for that actor', () => {
   assert.equal(header().trim(), 'Kalon · Sketching the wing');
 });
 
-test('actor card subtitle: current stage, temporary states override it, a tool title never appears, the last stage stays when done', () => {
+test('actor card subtitle: layer 1 from events, the reply\'s own ⏵ line on top, temporary states override, nothing stale after the end', () => {
   const store = new RuntimeStore();
   store.activities.create({sessionId: 's', activityId: 'main', ownerId: 'logox', kind: 'director', title: 'Main', status: 'running', stage: 'x', detail: ''});
   store.message('s', 'user', 'user', 'Go.', {activityId: 'main', inputKind: 'human'});
   store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor', title: 'Rig', taskTitle: 'Rig the pedals', status: 'running', stage: 'x', detail: ''});
   store.message('s', 'kalon', 'user', 'Rig it.', {activityId: 'k', inputKind: 'director', source: 'logox'});
   const steps = new Steps(store, {sessionId: 's', activityId: 'k', ownerId: 'kalon'});
-  const card = () => buildStageRows(store.getSnapshot(), 's', 'logox', 130, {}, null).find(row => row.messageId === 'k')!.text;
+  const card = (width = 130) => buildStageRows(store.getSnapshot(), 's', 'logox', width, {}, null).find(row => row.messageId === 'k')!.text.replace(/\s+/g, ' ').trim();
+  // Layer 1, no narration: the running tool's own card title.
   const id = steps.tool({id: 'x', name: 'Shell', arguments: JSON.stringify({command: 'sleep 99'})}); steps.start(id);
-  assert.match(card(), /Kalon · Rig the pedals(?! ·)/, 'no stage: the main title alone');
-  assert.ok(!/sleep|Shell/.test(card()));
+  assert.match(card(), /Kalon · Rig the pedals · Shell\(sleep 99\)/);
+  // Several tools of one batch: the first running one and a count.
+  const second = steps.tool({id: 'y', name: 'Read', arguments: JSON.stringify({file_path: 'a.ts'})}); steps.start(second);
+  assert.match(card(), /Rig the pedals · Shell\(sleep 99\) \+1/);
+  steps.finish(second, 'completed', 'Read\nok');
+  // Layer 2: the reply's own line comes first, the running tool after it.
   store.message('s', 'kalon', 'assistant', '⏵ Tracing the pedal phase', {activityId: 'k'});
-  assert.match(card(), /Kalon · Rig the pedals · Tracing the pedal phase/);
-  assert.ok(!/sleep|Shell/.test(card()));
+  assert.match(card(), /Kalon · Rig the pedals · Tracing the pedal phase · Shell\(sleep 99\)/);
+  // A narrow card clips the narration first and keeps the running tool.
+  const narrow = card(66);
+  assert.match(narrow, /Rig the pedals · Shell/);
+  assert.ok(!/Tracing the pedal phase/.test(narrow), 'the narration is the part that gives way: ' + narrow);
+  // Temporary states replace the whole live part.
   const question = ask(store, 'k', 'kalon');
   assert.match(card(), /Rig the pedals · Awaiting your answer/);
+  assert.ok(!/Shell|Tracing/.test(card()));
   store.interactions.cancel(question.requestId);
   const permission = approve(store, 'k', 'kalon');
   assert.match(card(), /Rig the pedals · Awaiting approval/);
@@ -161,7 +171,32 @@ test('actor card subtitle: current stage, temporary states override it, a tool t
   store.activities.update('s', 'k', {phase: 'compacting'});
   assert.match(card(), /Rig the pedals · Compacting context/);
   store.activities.update('s', 'k', {phase: 'tool'});
-  assert.match(card(), /Rig the pedals · Tracing the pedal phase/, 'the stage returns');
-  steps.finish(id, 'completed', 'Shell\nok'); store.activities.update('s', 'k', {status: 'completed'});
-  assert.match(card(), /Rig the pedals · Tracing the pedal phase/, 'the last stage stays after the actor finishes');
+  assert.match(card(), /Rig the pedals · Tracing the pedal phase · Shell\(sleep 99\)/, 'the live subtitle returns');
+  // The tool ends: the reply's line alone, never a stale tool.
+  steps.finish(id, 'completed', 'Shell\nok');
+  assert.match(card(), /Rig the pedals · Tracing the pedal phase Running/);
+  // The next request opens with no line of its own: back to layer 1, the thinking state.
+  const next = steps.thinking();
+  assert.match(card(), /Rig the pedals · Thinking Running/);
+  steps.finish(next, 'completed');
+  // A reply that wrote no line keeps layer 1 only.
+  store.message('s', 'kalon', 'assistant', 'Plain reply.', {activityId: 'k'});
+  assert.ok(!/Tracing/.test(card()));
+  steps.close('completed'); store.activities.update('s', 'k', {status: 'completed'});
+  assert.match(card(), /Kalon · Rig the pedals\s+Completed/, 'an ended card shows its main title only');
+  assert.ok(!/Tracing|Thinking|Shell/.test(card()));
+});
+
+test('the card clock stays blank under a second, then ticks from the row animation without rebuilding rows', () => {
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'main', ownerId: 'logox', kind: 'director', title: 'Main', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'user', 'user', 'Go.', {activityId: 'main', inputKind: 'human'});
+  store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor', title: 'Rig', taskTitle: 'Rig the pedals', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'kalon', 'user', 'Rig it.', {activityId: 'k', inputKind: 'director', source: 'logox'});
+  const steps = new Steps(store, {sessionId: 's', activityId: 'k', ownerId: 'kalon'}, () => Date.now() - 400);
+  steps.thinking();
+  const row = buildStageRows(store.getSnapshot(), 's', 'logox', 120, {}, null).find(r => r.messageId === 'k')!;
+  const clock = (now: number) => decorateRow(row, now).displayText!.replace(/\s+/g, ' ');
+  assert.match(clock(Date.now()), /Rig the pedals · Thinking Running/, 'under a second: no time');
+  assert.match(clock(Date.now() + 12_000), /Rig the pedals · Thinking · 12\.\ds Running/, 'the same row shows the live time later');
 });

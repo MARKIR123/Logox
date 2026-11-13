@@ -136,12 +136,14 @@ test('Actor 卡片主副标题联动：运行中渲染 Main Title · SubTitle，
     kind: 'actor',
     title: 'Techne · 构建匠人',
     taskTitle: 'Refactor collaboration roster',
-    progress: {label: 'Wiring active peer snapshot'},
     status: 'running',
     stage: '处理中',
     detail: 'Wire activeEnsembleRoster into ActorServices.facts',
   });
   store.message('s', 'techne', 'user', 'Wire activeEnsembleRoster into ActorServices.facts', {activityId: 'a-title'});
+  // The current reply (it began after the latest request opened) wrote a status line: that is the subtitle. Progress labels are not.
+  store.message('s', 'techne', 'assistant', '', {activityId: 'a-title', kind: 'thinking', step: {title: 'Thinking', state: 'completed', elapsedMs: 10, groupId: 'g1'}});
+  store.message('s', 'techne', 'assistant', '⏵ Wiring active peer snapshot\nWorking.', {activityId: 'a-title'});
 
   const runningClosed = buildStageRows(store.getSnapshot(), 's', 'logox', 100, {'a-title': false}, null).map(row => row.text).join('\n');
   assert.match(runningClosed, /Refactor collaboration roster · Wiring active peer snapshot/);

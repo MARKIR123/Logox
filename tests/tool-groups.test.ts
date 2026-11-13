@@ -16,7 +16,7 @@ const shell = (command: string, step?: Partial<NonNullable<Message['step']>>) =>
 const msg = (role: Message['role'], text: string, extra: Partial<Message> = {}): Message =>
   ({id: `m${++counter}`, sessionId: 's', ownerId: 'logox', role, text, ...extra});
 const thinking = (text = 'hmm') => msg('assistant', text, {kind: 'thinking'});
-const shape = (items: ReturnType<typeof groupToolMessages>) => items.map(item => item.type === 'group' ? `G${item.messages.length}` : item.type === 'stage' ? 'S' : item.type === 'edits' ? `E${item.messages.length}` : 'M');
+const shape = (items: ReturnType<typeof groupToolMessages>) => items.map(item => item.type === 'group' ? `G${item.messages.length}` : item.type === 'edits' ? `E${item.messages.length}` : 'M');
 
 test('categorizeToolMessage covers the collapsible tools', () => {
   assert.equal(categorizeToolMessage(read('a.ts')), 'read');
@@ -124,14 +124,10 @@ test('empty or narration-only assistant text does not break; real text does', ()
   assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '⏵ Scanning\nReal words'), read('b')])), ['M', 'M', 'M']);
 });
 
-test('stage option: a narration message flushes and becomes its own stage item where it changed', () => {
+test('a narration-only message never splits a group: the status line lives on the card, not in the rows', () => {
   const stage = msg('assistant', '⏵ Mapping the repo');
-  const items = groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')], {stages: true});
-  assert.deepEqual(shape(items), ['G2', 'S', 'M', 'G2']);
-  assert.deepEqual(items[1], {type: 'stage', id: stage.id + '-stage', stage: 'Mapping the repo'});
-  assert.ok(items.every(item => item.type !== 'group' || !('stage' in item)), 'groups never carry the stage');
-  const without = groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')]);
-  assert.deepEqual(shape(without), ['G5']);
+  assert.deepEqual(shape(groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')])), ['G5']);
+  assert.ok(groupToolMessages([stage]).every(item => item.type !== ('stage' as string)), 'no stage items exist any more');
 });
 
 test('running group exposes the active label and shell comments win', () => {
@@ -154,12 +150,8 @@ test('group id is stable and derived from the first message', () => {
   assert.equal(g!.id, first.id + '-group');
 });
 
-test('stages: no group of one; a stage stays its own item before whatever follows', () => {
-  const single = groupToolMessages([msg('assistant', '⏵ Checking colors'), read('a')], {stages: true});
-  assert.deepEqual(shape(single), ['S', 'M', 'M'], 'a lone call is never a group, the stage is its own row');
-  const edit = tool('Edit', {file_path: 'a.ts'});
-  const lone = groupToolMessages([msg('assistant', '⏵ Fixing phase'), edit], {stages: true});
-  assert.deepEqual(lone.map(item => item.type), ['stage', 'message', 'message']);
+test('a lone call after a narration-only message is never a group', () => {
+  assert.deepEqual(shape(groupToolMessages([msg('assistant', '⏵ Checking colors'), read('a')])), ['M', 'M']);
 });
 
 test('consecutive edits of one file by one owner fold into one edits item; other rows, files or owners break it', () => {
@@ -171,5 +163,6 @@ test('consecutive edits of one file by one owner fold into one edits item; other
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('b.css'), edit('b.css')])), ['M', 'E2']);
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('a.css', 'techne')])), ['M', 'M'], 'another owner never merges');
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), read('x'), edit('a.css')])), ['M', 'M', 'M']);
-  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next'), edit('a.css')], {stages: true})), ['M', 'S', 'M', 'M'], 'a stage breaks the run');
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next'), edit('a.css')])), ['E2', 'M'], 'a status line draws nothing and does not break the run (it trails the merged row)');
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next\nReal words'), edit('a.css')])), ['M', 'M', 'M'], 'visible prose does');
 });

@@ -12,7 +12,7 @@ import {cast} from '../../actors/ensemble.js';
 import {type Row} from './viewport.js';
 import type {ContentCell} from './selection.js';
 import {layoutMarkdown} from './markdown.js';
-import {stepStatus, stepIcon, thinkingDuration, swarmElapsed} from '../appearance/animation.js';
+import {stepStatus, stepIcon, thinkingDuration, swarmElapsed, subtitleClock} from '../appearance/animation.js';
 
 /** Separator between row parts; always its own muted segment. */
 export const SEPARATOR = ' · ';
@@ -60,7 +60,7 @@ export interface SceneRow extends Row {
   readonly segments?: readonly SceneSegment[];
   readonly action?: SceneAction;
   readonly hits?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction}[];
-  readonly animation?: {readonly step?: Step; readonly thinking?: boolean; readonly highlighted?: boolean; readonly actorBg?: string; readonly actorColor?: string; readonly active?: boolean; readonly open?: boolean; readonly frames?: readonly string[] | undefined};
+  readonly animation?: {readonly step?: Step; readonly thinking?: boolean; readonly highlighted?: boolean; readonly actorBg?: string; readonly actorColor?: string; readonly active?: boolean; readonly open?: boolean; readonly frames?: readonly string[] | undefined; readonly clockStart?: number | undefined};
   readonly controls?: readonly {readonly startCol: number; readonly endCol: number; readonly action: SceneAction; readonly disabled?: boolean}[];
 }
 
@@ -147,7 +147,7 @@ export interface RowBuilder {
     parentFrame?: FrameWrap,
     action?: SceneAction,
   ): void;
-  pushCardHeader(id: string, label: readonly SceneSegment[], title: string, status: string, frame: FrameWrap, railColor: string, action: SceneAction, statusTint?: string, textTint?: string, textBold?: boolean): void;
+  pushCardHeader(id: string, label: readonly SceneSegment[], title: string, status: string, frame: FrameWrap, railColor: string, action: SceneAction, statusTint?: string, textTint?: string, textBold?: boolean, titleTail?: readonly SceneSegment[]): void;
   pushOrdinaryCard(opts: {
     id: string;
     kind: string;
@@ -365,13 +365,13 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     pushFramedLine(id, railColor, [segment], pf, action);
   };
 
-  const pushCardHeader: RowBuilder['pushCardHeader'] = (id, label, title, status, frame, railColor, action, statusTint = palette.muted, textTint = palette.fg, textBold = false) => {
+  const pushCardHeader: RowBuilder['pushCardHeader'] = (id, label, title, status, frame, railColor, action, statusTint = palette.muted, textTint = palette.fg, textBold = false, titleTail = []) => {
     label = label.map((segment, index) => ({...segment, selectionKey: segment.selectionKey ?? (id + ':label:' + index), selectionOffset: 0}));
     const titleSegment = {text: title, color: textTint, bold: textBold, selectionKey: id + ':title', selectionOffset: 0};
     const statusSegment = {text: status, color: statusTint, selectionKey: id + ':status', selectionOffset: 0};
     const labelW = label.reduce((sum, s) => sum + stringWidth(s.text), 0);
     const statusW = stringWidth(status);
-    const titleW = stringWidth(title);
+    const titleW = stringWidth(title) + titleTail.reduce((sum, piece) => sum + stringWidth(piece.text), 0);
     const separator = title ? ' · ' : '';
     const used = labelW + stringWidth(separator) + titleW;
     if (used + statusW + (status ? 1 : 0) <= frame.innerWidth) {
@@ -379,6 +379,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         ...label,
         {text: separator, color: palette.muted},
         titleSegment,
+        ...titleTail,
         {text: ' '.repeat(Math.max(0, frame.innerWidth - used - statusW))},
         statusSegment,
       ], frame, action);
@@ -393,7 +394,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       pushFramedLine(id, railColor, header, frame, action);
       if (status) pushFramedLine(id + '-status', railColor, [statusSegment], frame, action);
     }
-    if (title) pushFramedLine(id + '-task', railColor, [titleSegment], frame, action);
+    if (title) pushFramedLine(id + '-task', railColor, [titleSegment, ...titleTail], frame, action);
   };
 
   const pushOrdinaryCard: RowBuilder['pushOrdinaryCard'] = opts => {
@@ -557,6 +558,29 @@ export function hoveredCardAt(row: SceneRow | undefined, x: number): string | nu
   return row?.hover && x >= row.hover.startCol && x < row.hover.endCol ? row.hover.foldId : null;
 }
 
+/**
+ * The text after `Name · ` on an actor card: `<main title> · <narration> · <running now>` plus a fixed-width clock slot.
+ * A narrow card clips the narration first (and drops it when almost nothing is left), then the running text; the main title is never clipped here.
+ * `room` is the width left for the whole title and clock; the slot is only reserved when something is timed.
+ */
+function actorSubtitle(task: string, subtitle: {readonly narration?: string | undefined; readonly activity?: string | undefined; readonly clockStart?: number | undefined} | undefined, room: number): {title: string; clock: string} {
+  if (!subtitle || (!subtitle.narration && !subtitle.activity)) return {title: task, clock: ''};
+  const clock = subtitle.activity && subtitle.clockStart !== undefined ? subtitleClock(Date.now() - subtitle.clockStart) : '';
+  const sep = ' · ';
+  const used = (parts: readonly (string | undefined)[]) => { const kept = parts.filter((part): part is string => Boolean(part)); return kept.reduce((sum, part) => sum + stringWidth(part), 0) + stringWidth(sep) * Math.max(0, kept.length - 1); };
+  const fit = (text: string, others: readonly (string | undefined)[]): string | undefined => {
+    const left = room - stringWidth(clock) - used(others) - (others.some(Boolean) ? stringWidth(sep) : 0);
+    if (stringWidth(text) <= left) return text;
+    return left >= NARRATION_MIN_COLUMNS ? clipLine(text, left - 1).trimEnd() + '…' : undefined;
+  };
+  let narration = subtitle.narration, activity = subtitle.activity;
+  if (narration) narration = fit(narration, [task, activity]);
+  if (activity) activity = fit(activity, [task, narration]) ?? activity;
+  return {title: [task, narration, activity].filter((part): part is string => Boolean(part)).join(sep), clock};
+}
+/** A clipped narration keeps at least this many columns, otherwise it is left out. */
+const NARRATION_MIN_COLUMNS = 8;
+
 export function appendActorCard(
   builder: RowBuilder,
   opts: {
@@ -568,6 +592,8 @@ export function appendActorCard(
     open: boolean;
     railColor: string;
     active?: boolean;
+    /** The live subtitle after `task`: the model's own `⏵` line (clipped first on a narrow card), what is running now, and its live clock. */
+    subtitle?: {readonly narration?: string | undefined; readonly activity?: string | undefined; readonly clockStart?: number | undefined};
     stop?: {readonly disabled: boolean; readonly focused: boolean; readonly hovered: boolean};
     /** `frame` is inset two columns under the symbol; `outer` starts right after the surface rail, where the inner `│` rail of an open card runs. */
     renderBody(frame: FrameWrap, actorColor: string, bodyAction: SceneAction, outer: FrameWrap): void;
@@ -585,20 +611,23 @@ export function appendActorCard(
   const headFrame: FrameWrap = cardBg ? {...outerFrame, bg: cardBg, depth: 1} : outerFrame;
   const frame: FrameWrap = {...insetFrame(outerFrame, cardBg), ...(cardBg ? {depth: 1} : {})};
   const action: SceneAction = {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
+  const statusText = shortStatus + (opts.stop ? opts.stop.disabled ? ' · Stopping…' : ' · ■ Stop' : '') + ' ' + (opts.open ? '▾' : '▸');
+  const live = actorSubtitle(opts.task, opts.subtitle, headFrame.innerWidth - stringWidth(role.symbol + ' ' + role.name) - stringWidth(statusText) - 4);
   builder.pushCardHeader(
     opts.id,
     [
       {text: role.symbol, color: role.color, bold: true, selectionKey: opts.id + ':icon'},
       {text: ' ' + role.name, color: role.color, bold: true, selectionKey: opts.id + ':name'},
     ],
-    opts.task,
-    shortStatus + (opts.stop ? opts.stop.disabled ? ' · Stopping…' : ' · ■ Stop' : '') + ' ' + (opts.open ? '▾' : '▸'),
+    live.title,
+    statusText,
     headFrame,
     opts.railColor,
     action,
     statusColor(shortStatus, role.color),
     bright ? role.color : palette.fg,
     false,
+    live.clock ? [{text: live.clock, color: bright ? role.color : palette.fg, selectionKey: opts.id + ':subtitle_time', selectionOffset: 0}] : [],
   );
   if (opts.stop) {
     const label = opts.stop.disabled ? 'Stopping…' : '■ Stop';
@@ -635,6 +664,7 @@ export function appendActorCard(
         ...(isCardOuter && cardBg ? {actorBg: cardBg} : {}),
         actorColor: role.color,
         active: isCardOuter ? (opts.active ?? false) : (row.animation?.active ?? false),
+        ...(isHeader && live.clock && opts.subtitle?.clockStart !== undefined ? {clockStart: opts.subtitle.clockStart} : {}),
         open: opts.open,
         frames: role.thinkingAnimation,
       },
