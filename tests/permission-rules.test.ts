@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, rm, writeFile, mkdir} from 'node:fs/promises';
+import {mkdtemp, readFile, realpath, rm, writeFile, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DEFAULT_PERMISSION_MODE, PermissionEngine, type PermissionTarget} from '../src/permissions/engine.js';
@@ -14,8 +14,9 @@ import type {ActorContext, PermissionAnswer} from '../src/actors/ensemble.js';
 async function fixture(mode: 'default' | 'auto' | 'creative' = 'auto') {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-rules-')), userFile = join(cwd, 'home', '.logox', 'user-permissions.json');
   await mkdir(join(cwd, 'home', '.logox'), {recursive: true});
-  const make = () => new PermissionEngine(cwd, mode, undefined, userFile);
-  return {cwd, userFile, engine: make(), make, cleanup: () => rm(cwd, {recursive: true, force: true})};
+  const modeFile = join(cwd, 'home', '.logox', 'permission-mode.json');
+  const make = () => new PermissionEngine(cwd, mode, undefined, userFile, modeFile);
+  return {cwd, userFile, modeFile, engine: make(), make, cleanup: () => rm(cwd, {recursive: true, force: true})};
 }
 const shell = (command: string, extra: Partial<PermissionTarget> = {}): PermissionTarget => ({tool: 'shell', command, paths: [], risky: false, ...extra});
 const write = (path: string, risky = false, danger?: string): PermissionTarget => ({tool: 'write', paths: [path], risky, effect: 'write', ...danger ? {danger} : {}});
@@ -32,6 +33,38 @@ test('默认模式解析：新安装与未保存模式为 auto，显式保存的
     const fresh = f.make(); await fresh.load(); assert.equal(fresh.mode, 'auto');
     await f.engine.setMode('default');
     const restored = f.make(); await restored.load(); assert.equal(restored.mode, 'default', '显式保存的模式优先');
+  } finally {await f.cleanup();}
+});
+
+test('权限模式是用户级选择：用户文件 > 旧项目文件 > 配置，且不再写项目文件', async () => {
+  const f = await fixture('creative');
+  try {
+    const project = join(f.cwd, '.logox', 'permissions.json');
+    await mkdir(join(f.cwd, '.logox'), {recursive: true});
+    // Nothing remembered: the configured mode stands.
+    const first = f.make(); await first.load(); assert.equal(first.mode, 'creative');
+    // A mode saved by an older version in this project is used while no user-level mode exists.
+    await writeFile(project, JSON.stringify({root: await realpath(f.cwd), mode: 'default', rules: []}));
+    const legacy = f.make(); await legacy.load(); assert.equal(legacy.mode, 'default', '旧项目文件在没有用户值时生效');
+    // Choosing a mode writes the user file only; the legacy field stays as it was.
+    await legacy.setMode('auto');
+    assert.deepEqual(JSON.parse(await readFile(f.modeFile, 'utf8')), {version: 1, mode: 'auto'});
+    assert.equal(JSON.parse(await readFile(project, 'utf8')).mode, 'default', '项目文件的 mode 不再被写入');
+    await legacy.add({scope: 'project', decision: 'allow', tool: 'shell', pattern: 'npm test'});
+    assert.equal(JSON.parse(await readFile(project, 'utf8')).mode, 'default', '改规则也不碰旧 mode');
+    // The user value now wins over the legacy field and over the configured mode.
+    const second = f.make(); await second.load(); assert.equal(second.mode, 'auto');
+    // Another project (a different root) starts with the same mode.
+    const other = await mkdtemp(join(tmpdir(), 'logox-rules-other-'));
+    try {
+      const shared = new PermissionEngine(other, 'default', undefined, f.userFile, f.modeFile); await shared.load();
+      assert.equal(shared.mode, 'auto');
+      await shared.setMode('creative');
+      const back = f.make(); await back.load(); assert.equal(back.mode, 'creative', '另一个项目的切换在下次启动时对本项目生效');
+    } finally {await rm(other, {recursive: true, force: true});}
+    // An unreadable mode file does not stop startup; configured mode (or legacy) applies.
+    await writeFile(f.modeFile, '{broken');
+    const broken = f.make(); await broken.load(); assert.equal(broken.mode, 'default');
   } finally {await f.cleanup();}
 });
 

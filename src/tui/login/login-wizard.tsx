@@ -23,7 +23,7 @@ export function LoginWizardPanel({flow, state, width, height, y}: {
   const initialDraft = flow.wizardDraft();
   const panel: PanelQuestion = {question: question.question, header: question.title, inputLabel: 'Input',
     ...(question.detail !== undefined ? {detail: question.detail} : {}),
-    ...(question.options ? {options: question.options.map(({label, description}) => ({label, description}))} : {}),
+    ...(question.options ? {options: question.options.map(({label, description, badge}) => ({label, description, ...(badge ? {badge} : {})}))} : {}),
     ...(question.secret !== undefined ? {secret: question.secret} : {}),
     ...(question.multiSelect !== undefined ? {multiSelect: question.multiSelect} : {}),
     ...(question.hideCustomInput !== undefined ? {hideCustomInput: question.hideCustomInput} : {}),

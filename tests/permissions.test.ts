@@ -45,9 +45,9 @@ async function fixture() {
 
     async ask() {return {status: 'cancelled', reason: '测试取消'};}};
 
-  const permissions = new PermissionEngine(cwd, 'default'), tools = new Tools(cwd, undefined, permissions);
+  const modeFile = join(cwd, 'mode', 'permission-mode.json'), permissions = new PermissionEngine(cwd, 'default', undefined, undefined, modeFile), tools = new Tools(cwd, undefined, permissions);
 
-  return {cwd, tools, permissions, context, controller, messages, requests, async close() {await rm(cwd, {recursive: true, force: true});}};
+  return {cwd, modeFile, tools, permissions, context, controller, messages, requests, async close() {await rm(cwd, {recursive: true, force: true});}};
 
 }
 
@@ -137,7 +137,7 @@ test('项目规则持久、撤销、项目身份隔离与保存失败不生效',
 
     await f.permissions.setMode('creative');
 
-    const loaded = new PermissionEngine(f.cwd); await loaded.load(); assert.equal(loaded.mode, 'creative');
+    const loaded = new PermissionEngine(f.cwd, 'default', undefined, undefined, f.modeFile); await loaded.load(); assert.equal(loaded.mode, 'creative');
 
     assert.equal(loaded.snapshot()[0]?.id, rule.id);
 

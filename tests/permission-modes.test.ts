@@ -25,12 +25,12 @@ const call = (name: string, args: unknown) => ({id: 'tool', name, arguments: JSO
 const turn = (decision: 'allow' | 'danger' = 'allow'): ModelTurn => ({stop: 'complete', message: {role: 'assistant', text: JSON.stringify({decision, reason: '已核对具体目标和授权'})}, usage: {input: 20, output: 5}});
 async function fixture(mode: 'default' | 'auto' | 'creative' = 'auto') {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-modes-'));
-  const engine = new PermissionEngine(cwd, mode), tools = new Tools(cwd, undefined, engine), controller = new AbortController();
+  const modeFile = join(cwd, 'mode', 'permission-mode.json'), engine = new PermissionEngine(cwd, mode, undefined, undefined, modeFile), tools = new Tools(cwd, undefined, engine), controller = new AbortController();
   const requests: string[] = [], messages: ModelMessage[] = [{role: 'user', text: '在当前项目完成指定任务'}];
   const context: ActorContext = {sessionId: 'session', activityId: 'task', ownerId: 'logox', history: [], signal: controller.signal,
     reviewMessages: () => messages, say() {}, report() {}, record: async () => {},
     permission: async request => {requests.push(request.tool); return false;}, ask: async () => ({status: 'cancelled', reason: 'fixture'})};
-  return {cwd, engine, tools, controller, context, requests, messages, cleanup: () => rm(cwd, {recursive: true, force: true})};
+  return {cwd, modeFile, engine, tools, controller, context, requests, messages, cleanup: () => rm(cwd, {recursive: true, force: true})};
 }
 
 test('三档矩阵：只读与常规编辑快路、解释器/管道不按名称判危险，deny覆盖全部模式', async () => {
@@ -59,7 +59,7 @@ test('三档矩阵：只读与常规编辑快路、解释器/管道不按名称�
     assert.equal(evaluate('git status; curl https://example.com'), 'review');
     f.engine.mode = 'default';
     assert.equal(evaluate('node script.js'), 'ask');
-    await f.engine.setMode('auto'); const restored = new PermissionEngine(f.cwd); await restored.load(); assert.equal(restored.mode, 'auto');
+    await f.engine.setMode('auto'); const restored = new PermissionEngine(f.cwd, 'default', undefined, undefined, f.modeFile); await restored.load(); assert.equal(restored.mode, 'auto');
   } finally {await f.cleanup();}
 });
 
@@ -128,7 +128,7 @@ test('审批错误只自动重试一次，暂停入口切creative后重新裁决
     assert.equal(await guard.authorize({tool: 'unknown', paths: [], risky: false}, {}, context), true);
     assert.equal(reviews, 2); assert.equal(questions, 1); assert.equal(f.engine.mode, 'creative');
     assert.equal(guard.snapshot()[0]?.decision, 'paused');
-    const restored = new PermissionEngine(f.cwd); await restored.load(); assert.equal(restored.mode, 'creative');
+    const restored = new PermissionEngine(f.cwd, 'default', undefined, undefined, f.modeFile); await restored.load(); assert.equal(restored.mode, 'creative');
   } finally {await f.cleanup();}
 });
 

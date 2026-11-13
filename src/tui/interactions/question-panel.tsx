@@ -8,12 +8,15 @@ import {useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 import {toggleColor, toggleMarker} from '../components/toggle-marker.js';
 import {graphemes, insert, erase, move, moveToLineEdge, type Draft} from '../input/editor.js';
 
+/** A status badge right-aligned on the option's first row; each segment is drawn in the colour of its tone. */
+export interface PanelBadgeSegment {readonly text: string; readonly tone: 'success' | 'warning' | 'dim'}
+export interface PanelOption {readonly label: string; readonly description?: string; readonly badge?: readonly PanelBadgeSegment[]}
 export interface PanelQuestion {
   readonly question: string;
   readonly header?: string;
   readonly detail?: string;
   readonly link?: string;
-  readonly options?: readonly {readonly label: string; readonly description?: string}[];
+  readonly options?: readonly PanelOption[];
   readonly multiSelect?: boolean;
   readonly hideCustomInput?: boolean;
   readonly defaultSelected?: readonly string[];
@@ -64,6 +67,24 @@ export interface QuestionRowsInput {
 function row(text: string, color: string, action?: QuestionRow['action']): QuestionRow {
   return {segments: [{text, color}], ...(action === undefined ? {} : {action})};
 }
+const badgeColors = {success: () => palette.success, warning: () => palette.warning, dim: () => palette.muted} as const;
+/**
+ * The first row of an option with a badge: the name on the left (clipped before the badge ever is), the badge flush right.
+ * On a narrow row the origin part of the badge goes first, then the badge itself is clipped.
+ */
+function badgedRow(option: PanelOption, marker: string, color: string, width: number, action: number): QuestionRow {
+  let badge: Segment[] = option.badge!.map(part => ({text: safeText(part.text), color: badgeColors[part.tone]()}));
+  const measure = (parts: readonly Segment[]) => parts.reduce((sum, part) => sum + stringWidth(part.text), 0);
+  const room = Math.max(1, width - stringWidth(marker) - 2);
+  if (measure(badge) > room && badge.length > 2) badge = badge.slice(2);
+  if (measure(badge) > room) {
+    const last = badge.at(-1)!;
+    badge = [{...last, text: clipLine(last.text, Math.max(1, room))}];
+  }
+  const nameWidth = Math.max(1, width - stringWidth(marker) - measure(badge) - 1);
+  const name = clipLine(option.label, nameWidth);
+  return {segments: [{text: marker + name + ' '.repeat(Math.max(0, nameWidth - stringWidth(name))) + ' ', color}, ...badge], action};
+}
 function wrapped(text: string, width: number): string[] {
   return wrapAnsi(safeText(text), Math.max(1, width), {hard: true, trim: false}).split('\n');
 }
@@ -91,7 +112,8 @@ export function buildQuestionRows(input: QuestionRowsInput): {rows: QuestionRow[
     const color = toggleColor(checked.includes(index), active);
     const marker = `${active ? '❯' : ' '} ${toggleMarker(checked.includes(index))} `;
     return {
-      label: wrapped(option.label, Math.max(1, width - 6)).map((line, at) => row(clipLine((at ? '      ' : marker) + line, width), color, index)),
+      label: option.badge?.length ? [badgedRow(option, marker, color, width, index)]
+        : wrapped(option.label, Math.max(1, width - 6)).map((line, at) => row(clipLine((at ? '      ' : marker) + line, width), color, index)),
       detail: option.description ? wrapped(option.description, Math.max(1, width - 6)).map(line => row(clipLine('      ' + line, width), color, index)) : [],
     };
   });

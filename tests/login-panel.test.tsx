@@ -40,9 +40,9 @@ test('real /login: every step owns input, optional key submits empty, batch navi
   const f = await fixture();
   try {
     await f.key('Keep chat draft'); await f.begin();
-    assert.match(f.screen(), /Add a new provider/); assert.match(f.screen(), /Edit an existing provider/);
-    await f.key('\r'); assert.match(f.screen(), /Built-in provider/); assert.match(f.screen(), /Account sign-in/);
-    await f.key('\x1b[B'); await f.key('\r'); assert.match(f.screen(), /Enter a route name/);
+    assert.match(f.screen(), /Choose a sign-in method/); assert.match(f.screen(), /Sign in with a URL and an API key/);
+    await f.key('\r'); assert.match(f.screen(), /Choose a provider/); assert.match(f.screen(), /built-in/);
+    await f.key('\x1b[B', '\x1b[B', '\x1b[B'); assert.match(f.screen(), /Custom endpoint/); await f.key('\r'); assert.match(f.screen(), /Enter a route name/);
     await f.key('local-', 'fixture', '\r'); assert.match(f.screen(), /Enter the API key/);
     assert.match(f.screen(), /Input:/); assert.doesNotMatch(f.screen(), /My view/);
     await f.key('\r'); assert.match(f.screen(), /base URL or port/); assert.match(f.screen(), /Question 1\/2/);
@@ -68,7 +68,7 @@ test('real /login: every step owns input, optional key submits empty, batch navi
 test('real /login: masked input stays out of snapshots and runtime, fold restores both drafts', {timeout: 15000}, async () => {
   const f = await fixture();
   try {
-    await f.key('Chat draft'); await f.begin(); await f.key('\r'); await f.key('\x1b[B'); await f.key('\r');
+    await f.key('Chat draft'); await f.begin(); await f.key('\r'); await f.key('\x1b[B', '\x1b[B', '\x1b[B'); await f.key('\r');
     await f.key('secret-route', '\r'); await f.key('fixture-', 'secret');
     assert.ok(!f.output.text.includes('fixture-secret'));
     assert.ok(!JSON.stringify(f.app.authentication.getSnapshot()).includes('fixture-secret'));

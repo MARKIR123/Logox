@@ -533,21 +533,44 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await flushRender(instance);
   };
   try {
-    await act(async () => {await app.submit('/login deepseek');});await phase('key');
-    assert.ok(/Log In deepseek/.test(output.text));
-    assert.equal(app.authentication.getSnapshot()?.provider, 'deepseek');
+    // The wizard question on screen, read from the flow (the screen keeps earlier frames).
+    const asking = async (expected: string) => {
+      await act(async () => {
+        for (let i = 0; i < 200; i++) {
+          const wizard = app.authentication.getSnapshot()?.wizard;
+          if (wizard?.questions[wizard.index]?.question === expected) break;
+          await delay(15);
+        }
+      });
+      const wizard = app.authentication.getSnapshot()?.wizard;
+      assert.equal(wizard?.questions[wizard.index]?.question, expected);
+      await flushRender(instance);
+    };
+    // `/login deepseek` jumps to the add flow of the not-yet-set-up template: URL (pre-filled, Enter keeps it), then the masked key.
+    // The wizard runs until it is answered, so the command is not awaited here.
+    let login!: Promise<void>;
+    await act(async () => {login = app.submit('/login deepseek'); await delay(30);});
+    await phase('wizard');
+    await asking('Choose the base URL');
+    await key('\r');await asking('Enter the API key');
     await key('\x1b[200~synthetic-ui-secret\x1b[201~');
     assert.ok(!output.text.includes('synthetic-ui-secret'));
     assert.ok(output.text.includes('•'));
-    await key('\r');await phase(null);
+    await key('\r');await asking('Select the models to enable');
+    await key('\r');await asking('Write this provider configuration?');
+    await key('\r');await phase(null);await act(async () => {await login;});
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!JSON.stringify(app.store.getSnapshot()).includes('synthetic-ui-secret'));
     assert.deepEqual(submissions, []);
     await key('ordinary-draft');
-    await act(async () => {await app.submit('/login deepseek');});await phase('key');
+    // Now set up: `/login deepseek` opens its edit menu, and API key is the first field.
+    await act(async () => {login = app.submit('/login deepseek'); await delay(30);});
+    await phase('wizard');
+    await asking('Choose one field to edit');
+    await key('\r');await asking('Enter the API key');
     output.columns = 32;output.rows = 12;
     await act(async () => {output.emit('resize');});await flushRender(instance);
-    await key('cancelled-secret');await key('\x1b');await phase(null);
+    await key('cancelled-secret');await key('\x1b');await phase(null);await act(async () => {await login;});
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!output.text.includes('cancelled-secret'));
     await key('\r');assert.deepEqual(submissions, ['ordinary-draft']);

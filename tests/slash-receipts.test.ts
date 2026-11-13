@@ -168,7 +168,7 @@ test('repeated picker and login cancellation preserves status, performs no model
     assert.equal(f.app.authentication.getSnapshot(), null);
     assert.equal(lastReceipt(f).systemPresentation, 'silent');
   }
-  await f.app.submit('/login receipt');
+  await f.app.authentication.begin('receipt');
   assert.equal(f.app.authentication.getSnapshot()?.phase, 'key');
   f.app.authentication.cancel();
   f.app.authentication.cancel();
@@ -291,7 +291,7 @@ test('local save and login errors remain in their owning form and retain only si
   assert.equal(lastReceipt(f).systemPresentation, 'silent');
   f.app.surfaces.cancel();
   await rm(f.options.statusbarPath, {recursive: true});
-  await f.app.submit('/login receipt');
+  await f.app.authentication.begin('receipt');
   await f.app.authentication.submit('');
   const login = f.app.authentication.getSnapshot();
   assert.ok(login?.phase === 'key' && login.error);
@@ -311,8 +311,8 @@ test('local save and login errors remain in their owning form and retain only si
 test('wizard notification severity is explicit: recoverable discovery failure is status but fatal duplicate route is timeline', async () => withFixture(async f => {
   f.network.failModels = true;
   const discovery = f.app.submit('/login');
-  await answerWizard(f, 'Manage providers', ['add']);
-  await answerWizard(f, 'Choose a provider source', ['url']);
+  await answerWizard(f, 'Choose a sign-in method', ['key']);
+  await answerWizard(f, 'Choose a provider', ['__custom']);
   await answerWizard(f, 'Enter a route name', [], 'new-receipt');
   await answerWizard(f, 'Enter the API key', [], '');
   await answerWizard(f, 'Enter the base URL or port', [], 'https://new-receipt.invalid/v1');
@@ -325,8 +325,8 @@ test('wizard notification severity is explicit: recoverable discovery failure is
   await discovery;
   f.network.failModels = false;
   const duplicate = f.app.submit('/login');
-  await answerWizard(f, 'Manage providers', ['add']);
-  await answerWizard(f, 'Choose a provider source', ['url']);
+  await answerWizard(f, 'Choose a sign-in method', ['key']);
+  await answerWizard(f, 'Choose a provider', ['__custom']);
   await answerWizard(f, 'Enter a route name', [], 'receipt');
   await duplicate;
   const fatal = lastReceipt(f);

@@ -5,7 +5,7 @@ import {ModelPool} from '../src/providers/model-pool.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {accountTemplateNames, loadConfig, presets, templateNames, type Config} from '../src/config/config.js';
+import {accountTemplateNames, loadConfig, modelSettings, presets, templateNames, type Config} from '../src/config/config.js';
 import {accountProviders} from '../src/providers/login.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import {CustomProviderStorage} from '../src/providers/custom-storage.js';
@@ -37,9 +37,10 @@ test('a template nobody set up is not a provider, but stays a template', async (
   try {
     await f.registry.syncCustom();
     assert.deepEqual(f.registry.names(), ['deepseek'], 'only the selected provider is listed');
-    for (const name of ['openai', 'anthropic', 'antigravity', 'openai-compatible']) assert.ok(!f.registry.names().includes(name), name);
+    for (const name of ['openai', 'anthropic', 'antigravity']) assert.ok(!f.registry.names().includes(name), name);
     assert.deepEqual(f.registry.templateNames(), templateNames());
-    assert.ok(f.registry.templateNames().includes('antigravity'));
+    assert.ok(!f.registry.templateNames().includes('antigravity'), 'the local proxy is a known endpoint, not a listed template');
+    assert.ok(presets.antigravity, 'its endpoint knowledge stays');
     // Without the environment variable the template is absent; with it, zero-setup use keeps working.
     const withEnvironment = new ProviderRegistry(f.config, {ANTHROPIC_API_KEY: 'present'}, undefined, f.auth, f.store);
     assert.ok(withEnvironment.names().includes('anthropic'));
@@ -62,21 +63,43 @@ test('reconciliation writes a record for a template credential and leaves an unk
   } finally {await f.done();}
 });
 
-test('a catalog record takes endpoint and protocol from the template, a plain record keeps its own', async () => {
+test('a record owns its endpoint, template-based or not; the template supplies only the key variable and official-URL routing', async () => {
   const f = await fixture();
   try {
-    await f.store.save({name: 'deepseek', base_url: 'https://stale.invalid/v1', kind: 'anthropic', catalog: true, models: ['m1'], default_model: 'm1'});
+    await f.store.save({name: 'deepseek', base_url: 'https://mirror.invalid/v1', kind: 'anthropic', catalog: true, models: ['m1'], default_model: 'm1'});
     await f.store.save({name: 'openai', base_url: 'https://stale.invalid/v1', kind: 'openai_compat', api: 'responses'});
+    await f.store.save({name: 'antigravity', base_url: presets.antigravity!.base_url, kind: 'openai_compat', catalog: true});
     await f.store.save({name: 'retired-template', base_url: 'https://retired.invalid/v1', kind: 'anthropic', catalog: true});
     await f.registry.syncCustom();
     const catalog = f.registry.configuredSettings('deepseek');
-    assert.equal(catalog.baseUrl, presets.deepseek!.base_url);
-    assert.equal(catalog.kind, 'openai_compat');
+    assert.equal(catalog.baseUrl, 'https://mirror.invalid/v1', 'the stored URL wins over the template URL');
+    assert.equal(catalog.kind, 'anthropic', 'the stored protocol wins over the template protocol');
+    assert.equal(catalog.providerKind, 'anthropic');
     assert.deepEqual(await f.registry.modelsFor('deepseek', signal()), ['m1']);
-    assert.equal(f.registry.configuredSettings('openai', 'fixture').baseUrl, 'https://stale.invalid/v1', 'without catalog the stored URL stands');
+    assert.equal(f.registry.configuredSettings('openai', 'fixture').baseUrl, 'https://stale.invalid/v1');
     const retired = f.registry.configuredSettings('retired-template', 'fixture');
-    assert.equal(retired.baseUrl, 'https://retired.invalid/v1', 'a catalog record whose name is no longer a template is plain');
+    assert.equal(retired.baseUrl, 'https://retired.invalid/v1');
     assert.equal(retired.kind, 'anthropic');
+    // model_kinds of a template apply while the record keeps the official URL, and stop applying once the URL is changed.
+    assert.equal(f.registry.configuredSettings('antigravity', 'claude-sonnet-5').kind, 'anthropic');
+    await f.store.save({name: 'antigravity', base_url: 'http://127.0.0.1:9999/v1', kind: 'openai_compat', catalog: true});
+    await f.registry.syncCustom();
+    assert.equal(f.registry.configuredSettings('antigravity', 'claude-sonnet-5').kind, 'openai_compat', 'a changed URL is no longer the official endpoint');
+  } finally {await f.done();}
+});
+
+test('the removed openai-compatible template is a silent alias of openai in config', async () => {
+  const f = await fixture();
+  try {
+    assert.ok(!templateNames().includes('openai-compatible'));
+    const legacy = await loadConfig(f.root, {provider: {name: 'openai-compatible', model: 'gpt-5.5'}, models: {'openai-compatible/gpt-5.5': {context_window: 123456}}}, {}, f.root, f.root);
+    assert.equal(legacy.provider.name, 'openai');
+    assert.equal(legacy.models['openai/gpt-5.5']?.context_window, 123456);
+    assert.equal(modelSettings(legacy, {}).baseUrl, presets.openai!.base_url);
+    const custom = await loadConfig(f.root, {provider: {name: 'openai-compatible', model: 'x', base_url: 'https://own.invalid/v1'}}, {}, f.root, f.root);
+    assert.equal(custom.provider.name, 'openai-compatible', 'a provider with its own address is not an alias');
+    assert.equal((await loadConfig(f.root, {}, {}, f.root, f.root)).provider.name, 'openai', 'the fresh-install default is openai');
+    assert.equal(modelSettings({...legacy, provider: {...legacy.provider, name: 'openai-compatible'}}, {}).baseUrl, presets.openai!.base_url, 'a stale binding still resolves');
   } finally {await f.done();}
 });
 
@@ -102,11 +125,14 @@ test('account sign-in is a template property', () => {
   assert.ok(accountTemplateNames().includes('openai') && !accountTemplateNames().includes('anthropic'));
 });
 
-test('/login Add lists every template and marks the ones already set up', async () => {
+test('/login opens one list: every template first, own providers after, Custom endpoint last, with state badges', async () => {
   const f = await fixture();
   try {
     await f.store.save({name: 'deepseek', base_url: presets.deepseek!.base_url, kind: 'openai_compat', catalog: true});
-    const app = await createApplication({cwd: f.root, config: f.config, resourceOptions: {home: f.root, boundary: f.root}, env: {}, authPath: join(f.root, 'auth.json'),
+    await f.store.save({name: 'my-gateway', base_url: 'https://gateway.invalid/v1', kind: 'openai_compat'});
+    await f.store.save({name: 'antigravity', base_url: presets.antigravity!.base_url, kind: 'openai_compat', catalog: true});
+    await f.auth.save('deepseek', 'fixture-key', signal());
+    const app = await createApplication({cwd: f.root, config: f.config, resourceOptions: {home: f.root, boundary: f.root}, env: {ANTHROPIC_API_KEY: 'from-environment'}, authPath: join(f.root, 'auth.json'),
       provider: {respond: async () => {throw new Error('Must not invoke model');}}});
     try {
       const submitted = app.submit('/login');
@@ -115,11 +141,21 @@ test('/login Add lists every template and marks the ones already set up', async 
         throw new Error('Missing local question');
       };
       let view = await wait();
-      for (const id of ['add', 'api']) {app.authentication.answerWizard({selected: [id]}); view = await wait(view.key);}
+      assert.deepEqual(view.questions[0]!.options!.map(option => option.id), ['key', 'account']);
+      app.authentication.answerWizard({selected: ['key']}); view = await wait(view.key);
       const options = view.questions[0]!.options!;
-      assert.deepEqual(options.map(option => option.id), templateNames());
-      assert.equal(options.find(option => option.id === 'deepseek')!.description, 'Already set up');
-      assert.equal(options.find(option => option.id === 'anthropic')!.description, '');
+      assert.deepEqual(options.map(option => option.id).slice(0, templateNames().length), templateNames());
+      assert.deepEqual(options.map(option => option.id).slice(templateNames().length).sort(), ['__custom', 'antigravity', 'my-gateway']);
+      assert.equal(options.at(-1)!.id, '__custom');
+      assert.ok(!templateNames().includes('antigravity'));
+      const badge = (id: string) => options.find(option => option.id === id)!.badge!.map(part => part.text).join('');
+      assert.equal(badge('deepseek'), 'built-in · ✓ signed in');
+      assert.equal(badge('anthropic'), 'built-in · ✓ env key');
+      assert.equal(badge('openai'), 'built-in');
+      assert.equal(badge('my-gateway'), 'custom');
+      assert.equal(badge('antigravity'), 'custom · ✓ local', 'an existing local proxy record is a custom provider');
+      assert.equal(options.find(option => option.id === 'deepseek')!.description, presets.deepseek!.description);
+      assert.equal(options.find(option => option.id === 'my-gateway')!.description, 'https://gateway.invalid/v1');
       app.authentication.cancel(); await submitted;
     } finally {await app.close();}
   } finally {await f.done();}
@@ -137,10 +173,8 @@ test('saving a key for an environment-only template through Edit creates its pro
         throw new Error('Missing local question');
       };
       let view = await wait();
-      app.authentication.answerWizard({selected: ['edit']}); view = await wait(view.key);
-      const listed = view.questions[0]!.options!.find(option => option.id === 'anthropic');
-      assert.equal(listed?.description, 'Built-in, not set up yet', 'an environment-only template is listed with the not-set-up label');
-      assert.ok(!view.questions[0]!.options!.some(option => option.id === 'openai'), 'a template with nothing behind it is not listed');
+      app.authentication.answerWizard({selected: ['key']}); view = await wait(view.key);
+      assert.equal(view.questions[0]!.options!.find(option => option.id === 'anthropic')!.badge!.map(part => part.text).join(''), 'built-in · ✓ env key');
       for (const id of ['anthropic', 'key']) {app.authentication.answerWizard({selected: [id]}); view = await wait(view.key);}
       app.authentication.answerWizard({selected: [], custom: 'fixture-key'}); await submitted;
       const record = await new CustomProviderStorage(join(f.root, '.logox', 'custom-providers.json')).get('anthropic');

@@ -74,7 +74,7 @@ const schema = z.object({
   provider: z.object({
     context_window: capacitySchema.shape.context_window, max_output_tokens: capacitySchema.shape.max_output_tokens, max_images: capacitySchema.shape.max_images,
     thinking_effort: effortSchema.default('auto'),
-    name: z.string().default('openai-compatible'), model: z.string().default(''),
+    name: z.string().default('openai'), model: z.string().default(''),
     base_url: z.string().url().optional(), api_key_env: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
     tool_discovery: toolDiscoverySchema.optional(),
@@ -87,7 +87,7 @@ const schema = z.object({
     temperature: z.number().min(0).max(2).default(0.2),
     max_tokens: z.number().int().positive().default(16384),
     timeout: z.number().positive().default(600),
-  }).default({thinking_effort: 'auto', name: 'openai-compatible', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
+  }).default({thinking_effort: 'auto', name: 'openai', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
   automa: z.object({
     max_parallel: z.number().int().min(1).max(8).default(4),
   }).default({max_parallel: 4}),
@@ -139,16 +139,22 @@ export interface ModelSettings {
  * A template is not a provider by itself; it becomes one when the user saves a record for it (`catalog: true` in the provider store).
  * `account` marks templates that support browser account sign-in (OAuth) in addition to an API key.
  */
-export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>; account?: boolean}> = {
-  'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
-  deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
-  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', account: true},
+export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>; account?: boolean; description: string; listed?: false}> = {
+  deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY', description: 'DeepSeek official API'},
+  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', account: true, description: 'OpenAI API or ChatGPT account'},
+  // A user's local proxy, not a built-in provider: `listed: false` keeps its endpoint knowledge (default URL, the Claude routing below) without offering it as a template.
   // The local proxy serves Claude over the native Messages endpoint too; its OpenAI view of Claude intermittently mislabels the answer as reasoning.
-  antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1', model_kinds: {'claude-*': 'anthropic'}},
-  anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY'},
+  antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1', model_kinds: {'claude-*': 'anthropic'}, description: 'Local Antigravity proxy on port 8045', listed: false},
+  anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY', description: 'Anthropic Claude API'},
 };
-/** Every template name, whether or not the user set it up. */
-export function templateNames(): string[] {return Object.keys(presets);}
+/**
+ * Names that older configs and saved selections may still use for a template. They are never listed; they resolve to the template's endpoint values
+ * (`openai-compatible` was a duplicate of `openai`). A provider the user defined under such a name (with its own `base_url` or a `[providers.<name>]` entry) is not an alias.
+ */
+export const legacyTemplateNames: Record<string, string> = {'openai-compatible': 'openai'};
+function templateName(name: string, defined: boolean): string {return !defined && Object.hasOwn(legacyTemplateNames, name) ? legacyTemplateNames[name]! : name;}
+/** Every listed template name, whether or not the user set it up. Entries with `listed: false` are known endpoints only (see `presets`). */
+export function templateNames(): string[] {return Object.entries(presets).filter(([, template]) => template.listed !== false).map(([name]) => name);}
 /** Templates that support account sign-in. */
 export function accountTemplateNames(): string[] {return Object.entries(presets).filter(([, template]) => template.account).map(([name]) => name);}
 function pathKey(path: string): string {return process.platform === 'win32' ? path.toLowerCase() : path;}
@@ -231,24 +237,35 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
     cursor[path.at(-1)!] = ['name', 'model', 'base_url', 'api_key_env', 'kind', 'default_model', 'auth_file', 'auth_provider'].includes(path.at(-1)!) ? value : /^(true|false)$/.test(value) ? value === 'true' : /^\d+(\.\d+)?$/.test(value) ? Number(value) : value;
     environment = merge(environment, update);
   }
-  return schema.parse(merge(merge(raw, environment), overrides));
+  return withLegacyNames(schema.parse(merge(merge(raw, environment), overrides)));
+}
+/** Resolves a legacy template name in the selection (and its declared `[models]` keys) to the template it duplicated; silent, never listed. */
+function withLegacyNames(config: Config): Config {
+  const name = config.provider.name;
+  const alias = templateName(name, Boolean(config.provider.base_url || config.providers[name]));
+  const models = Object.fromEntries(Object.entries(config.models).map(([key, value]) => {
+    const [provider] = key.split('/', 1);
+    return provider !== undefined && Object.hasOwn(legacyTemplateNames, provider) && !config.providers[provider] ? [legacyTemplateNames[provider] + key.slice(provider.length), value] : [key, value];
+  }));
+  return {...config, models: {...models, ...config.models}, provider: alias === name ? config.provider : {...config.provider, name: alias}};
 }
 export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.env): ModelSettings {
-  const selected = config.providers[config.provider.name] ?? presets[config.provider.name];
-  if (!selected && !config.provider.base_url) throw new Error('Unknown provider: ' + config.provider.name);
   const provider = config.provider;
+  const template = templateName(provider.name, Boolean(provider.base_url || config.providers[provider.name]));
+  const selected = config.providers[provider.name] ?? presets[template];
+  if (!selected && !provider.base_url) throw new Error('Unknown provider: ' + provider.name);
   const baseUrl = provider.base_url ?? selected!.base_url;
   const keyEnv = provider.api_key_env ?? selected?.api_key_env;
   const url = new URL(baseUrl);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Model URL must be an HTTP(S) address without credentials');
   const model = provider.model || (selected && 'default_model' in selected ? selected.default_model ?? '' : '');
   const declared = config.models[provider.name + '/' + model];
-  const official = baseUrl.replace(/\/$/, '') === presets[provider.name]?.base_url.replace(/\/$/, '');
+  const official = baseUrl.replace(/\/$/, '') === presets[template]?.base_url.replace(/\/$/, '');
   const cleanModel = model.toLowerCase();
   const cleanProvider = provider.name.toLowerCase();
   const providerKind = provider.kind ?? selected?.kind ?? 'openai_compat';
   // Explicit `[provider] kind` pins the whole provider; otherwise the first matching `model_kinds` pattern routes this model. Preset routes apply only to the preset's own endpoint.
-  const routes = provider.kind ? undefined : provider.model_kinds ?? config.providers[provider.name]?.model_kinds ?? (official ? presets[provider.name]?.model_kinds : undefined);
+  const routes = provider.kind ? undefined : provider.model_kinds ?? config.providers[provider.name]?.model_kinds ?? (official ? presets[template]?.model_kinds : undefined);
   const kind = routes ? Object.entries(routes).find(([pattern]) => matchesModelPattern(pattern, model))?.[1] ?? providerKind : providerKind;
   const toolDiscovery = declared?.tool_discovery ?? provider.tool_discovery ?? config.providers[provider.name]?.tool_discovery ?? 'auto';
   if (toolDiscovery === 'anthropic' && kind !== 'anthropic') throw new Error('Anthropic tool discovery requires the Anthropic message protocol.');
@@ -258,7 +275,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : (official && provider.name === 'anthropic' || kind !== providerKind && kind === 'anthropic') && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
     : (provider.name === 'anthropic' || cleanModel.includes('claude')) && kind === 'anthropic' ? 'anthropic-budget'
     : (cleanProvider === 'deepseek' || cleanModel.includes('deepseek') || cleanModel.includes('reasoner') || cleanModel.includes('r1')) && kind === 'openai_compat' ? 'deepseek'
-    : (cleanProvider === 'openai' || cleanProvider === 'openai-compatible') && isOpenAiReasoningModel(model) ? 'reasoning-effort'
+    : template === 'openai' && isOpenAiReasoningModel(model) ? 'reasoning-effort'
     : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');

@@ -22,7 +22,7 @@
 | Change the /ensemble page (tabs, parameters, tools and skills trees, prompts, `e`) | `panels/ensemble-layout.ts:ensembleLayout`, `panels/ensemble-layout.ts:stepEnsemble` | `panels/ensemble-page.tsx`, `src/commands/ensemble-model.ts:buildEnsemble`, `src/commands/editor.ts:resolveEditor` |
 | Change selectors, management pages or query results | `panels/` | `panels/command-result.tsx`, `src/commands/surfaces.ts:CommandSurfaces`, `src/application-commands.ts:createCommandTabsFor()` |
 | Change question layout or answer interaction | `interactions/question-panel.tsx` | `interactions/production-question.tsx`; `app.tsx` owns runtime keyboard handling |
-| Change login forms | `login/login.tsx`, `login/login-wizard.tsx` | `src/providers/login-wizard.ts` |
+| Change login forms | `login/login.tsx`, `login/login-wizard.tsx` | `src/providers/login-wizard.ts`, `interactions/question-panel.tsx:buildQuestionRows` (option status badges) |
 | Change statusbar layout, modules, priorities or the context gauge | `status/statusbar.ts:statusbarLayout`, `status/statusbar-editor.tsx` | `src/config/statusbar-preferences.ts`, `src/context/breakdown.ts` |
 | Change the notification line (row 2): notices, hover details, key hints | `status/notification-line.ts` | `app.tsx` (`footerNote`, `hoveredWidget`), `src/tui/status/statusbar.ts:WidgetRegion` |
 | Change Actor pills, their states or navigation | `status/actor-pills.tsx:computeActivePills` | `timeline/actor-location.ts` |

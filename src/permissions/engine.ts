@@ -25,6 +25,7 @@ export type PermissionScope = z.infer<typeof permissionScopeSchema>;
 export type PermissionDecision = z.infer<typeof permissionDecisionSchema>;
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export type NewPermissionRule = Omit<PermissionRule, 'id' | 'hits' | 'lastHit'>;
+const modeFileSchema = z.strictObject({version: z.literal(1), mode: permissionModeSchema});
 const userFileSchema = z.strictObject({version: z.literal(1), rules: z.array(permissionRuleSchema)});
 export interface PermissionTarget {tool: string; paths: readonly string[]; risky: boolean; command?: string; effect?: 'read' | 'write' | 'unknown'; danger?: string}
 function globMatch(pattern: string, value: string): boolean {
@@ -49,12 +50,18 @@ export class PermissionEngine {
   private readonly pendingHits = new Map<string, {hits: number; lastHit: number}>();
   private statsTimer: NodeJS.Timeout | undefined;
   private readonly userStore?: StateFile<z.infer<typeof userFileSchema>>;
+  private readonly modeStore?: StateFile<z.infer<typeof modeFileSchema>>;
   subscribe(listener: () => void): () => void {this.listeners.add(listener); return () => {this.listeners.delete(listener);};}
   private changed(): void {for (const listener of this.listeners) listener();}
   setScratchpadDir(dir: string): void {this.scratchpadDir = dir;}
-  /** `userFile` is the user-global rule file (`~/.logox/permissions.json`); without it the user scope is unavailable, so tests never touch the real home. */
-  constructor(readonly root: string, public mode: PermissionMode = DEFAULT_PERMISSION_MODE, private readonly file = join(root, '.logox', 'permissions.json'), userFile?: string) {
+  /**
+   * `userFile` is the user-global rule file (`~/.logox/user-permissions.json`); without it the user scope is unavailable, so tests never touch the real home.
+   * `modeFile` (`~/.logox/permission-mode.json`) remembers the mode the user chose, shared by every project; without it a chosen mode lasts for this engine only.
+   * `mode` is the configured mode, used when nothing was remembered.
+   */
+  constructor(readonly root: string, public mode: PermissionMode = DEFAULT_PERMISSION_MODE, private readonly file = join(root, '.logox', 'permissions.json'), userFile?: string, modeFile?: string) {
     if (userFile) this.userStore = new StateFile(userFile, userFileSchema);
+    if (modeFile) this.modeStore = new StateFile(modeFile, modeFileSchema);
   }
   get userScopeAvailable(): boolean {return this.userStore !== undefined;}
   private async readProject() {
@@ -84,7 +91,10 @@ export class PermissionEngine {
   async load(): Promise<void> {
     const saved = await this.readProject(), user = await this.readUser();
     this.rules = [...this.of('session'), ...saved?.rules ?? [], ...user];
-    if (saved?.mode) this.mode = saved.mode;
+    // Remembered mode, highest first: the user-level file, then a mode an older version saved in this project's rule file (read only; never written again), then the configured mode.
+    const remembered = await this.modeStore?.read().catch(() => undefined);
+    if (remembered) this.mode = remembered.mode;
+    else if (saved?.mode) this.mode = saved.mode;
   }
   snapshot(): readonly PermissionRule[] {return this.rules.map(rule => ({...rule}));}
   /** Identity of the authorization state; hit statistics are deliberately excluded so counting never invalidates a pending approval. */
@@ -112,7 +122,7 @@ export class PermissionEngine {
     });
   }
   /** Changes the rules of one scope. Persistent scopes re-read their file under its lock; `quiet` skips listeners (statistics are not an authorization change). */
-  private mutate(scope: PermissionScope, change: (rules: PermissionRule[]) => PermissionRule[], options: {mode?: PermissionMode; quiet?: boolean} = {}): Promise<void> {
+  private mutate(scope: PermissionScope, change: (rules: PermissionRule[]) => PermissionRule[], options: {quiet?: boolean} = {}): Promise<void> {
     const operation = this.queue.then(async () => {
       if (scope === 'session') {this.put('session', change(this.of('session')));}
       else if (scope === 'user') {
@@ -132,8 +142,9 @@ export class PermissionEngine {
           const saved = await this.readProject();
           const applied = new Map<string, number>();
           const next = change(this.drain(saved?.rules ?? [], applied));
-          const nextMode = options.mode ?? saved?.mode;
-          if (options.mode !== undefined || JSON.stringify(next) !== JSON.stringify(saved?.rules ?? [])) {
+          // A mode an older version saved here is carried along untouched; this file never receives a new one.
+          const nextMode = saved?.mode;
+          if (JSON.stringify(next) !== JSON.stringify(saved?.rules ?? [])) {
             const temporary = this.file + '.' + randomUUID() + '.tmp';
             try {
               await writeFile(temporary, JSON.stringify({root: await realpath(this.root), ...nextMode ? {mode: nextMode} : {}, rules: next}, null, 2) + '\n', {flag: 'wx', mode: 0o600});
@@ -141,7 +152,6 @@ export class PermissionEngine {
             } finally {await rm(temporary, {force: true});}
           }
           this.put('project', this.settle(applied, next));
-          if (options.mode) this.mode = options.mode;
         });
       }
       if (!options.quiet) this.changed();
@@ -163,8 +173,16 @@ export class PermissionEngine {
     });
     return result;
   }
+  /** Switches the mode and remembers it in the user-level mode file, so every project starts with it from now on. */
   async setMode(mode: PermissionMode): Promise<void> {
-    await this.mutate('project', rules => rules, {mode: permissionModeSchema.parse(mode)});
+    const next = permissionModeSchema.parse(mode);
+    const operation = this.queue.then(async () => {
+      await this.modeStore?.save({version: 1, mode: next});
+      this.mode = next;
+      this.changed();
+    });
+    this.queue = operation.catch(() => {});
+    await operation;
   }
   clearSession(): void {this.put('session', []);}
   async revoke(id: string): Promise<void> {

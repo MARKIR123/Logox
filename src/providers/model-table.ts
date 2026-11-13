@@ -84,7 +84,7 @@ export class ModelTable {
   catalogNames(): string[] {return [...this.catalogs.keys()];}
   /** Ids a catalog lists, sorted; used as an offline model list. */
   modelIds(catalog: string): string[] {return [...(this.catalogs.get(catalog)?.byId.values() ?? [])].map(model => model.id).sort();}
-  /** Catalogs a LOGOX provider maps to, most specific first: declared mirror, same name, base-URL host, then openai-compatible aliases. */
+  /** Catalogs a LOGOX provider maps to, most specific first: declared mirror, same name, base-URL host, then the OpenAI catalogs for OpenAI. */
   catalogsFor(provider: string, options: ResolveOptions = {}): string[] {
     const found: string[] = [];
     const add = (name: string | undefined) => {if (name && this.catalogs.has(name) && !found.includes(name)) found.push(name);};
@@ -94,7 +94,7 @@ export class ModelTable {
     const host = hostOf(options.baseUrl);
     const byHost = host ? HOST_CATALOGS.find(([pattern]) => pattern.test(host))?.[1] : undefined;
     const lower = provider.toLowerCase();
-    if (lower === 'openai' || lower === 'openai-compatible') {
+    if (lower === 'openai') {
       if (options.oauth) add('openai-codex');
       add('openai'); add('openai-codex');
     }

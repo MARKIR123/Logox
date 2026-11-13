@@ -44,7 +44,7 @@ test('命令和模型错误保存为系统历史，环境变化合并为下一�
   const cwd = await mkdtemp(join(tmpdir(), 'logox-environment-history-'));
   const seen: ModelRequest[] = [];
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'first'},
-    models: Object.fromEntries(['first', 'second', 'final', 'next', 'latest'].map(model => ['openai-compatible/' + model, {context_window: 131072}]))}, {}, cwd, cwd);
+    models: Object.fromEntries(['first', 'second', 'final', 'next', 'latest'].map(model => ['openai/' + model, {context_window: 131072}]))}, {}, cwd, cwd);
   const options = {cwd, config, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'),
     provider: {async respond(request: ModelRequest) {
       seen.push(request);

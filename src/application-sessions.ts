@@ -40,7 +40,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const owners = async (id: string) => [...new Set([...actors.list().map(actor => actor.id), ...(await journal.tasks(id)).map(task => task.ownerId)])];
   let current: Awaited<ReturnType<typeof createSession>>;
   const preferences = new StateFile(join(manager.directory, 'model-preferences.json'), preferenceSchema);
-  const permissions = new PermissionEngine(cwd, config.permissions.mode, undefined, join(home, '.logox', 'user-permissions.json'));
+  const permissions = new PermissionEngine(cwd, config.permissions.mode, undefined, join(home, '.logox', 'user-permissions.json'), join(home, '.logox', 'permission-mode.json'));
   await permissions.load();
   const earlyNotices: string[] = [];
   const diagnose = (text: string) => {if (current) current.systemNotice(text); else earlyNotices.push(text);};

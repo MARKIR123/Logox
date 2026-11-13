@@ -17,7 +17,7 @@ import type {Provider, ModelRequest} from '../src/runtime/messages.js';
 type Application = Awaited<ReturnType<typeof createApplication>>;
 async function fixture(provider: Provider = {async respond(_request, delta) {delta({kind: 'text', text: '已完成'}); return {message: {role: 'assistant', text: '已完成'}, stop: 'complete'};}}) {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-session-')));
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, context: {keep_recent_rounds: 0}, models: {'openai-compatible/retained-model': {context_window: 131072}}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, context: {keep_recent_rounds: 0}, models: {'openai/retained-model': {context_window: 131072}}}, {}, cwd, cwd);
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, "auth.json"), sessionId: 'first', config, provider});
   return {app, cwd, config, provider, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }

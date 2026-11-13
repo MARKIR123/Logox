@@ -68,15 +68,18 @@ function readStoredModelsForProvider(name: string): string[] {
 }
 
 type ProviderEntry = Config['providers'][string];
-/** The config entry a stored record stands for. A `catalog` record of a known template takes endpoint, protocol and routing from the template, so a corrected official URL reaches existing users. */
+/**
+ * The config entry a stored record stands for. The record owns its endpoint: `base_url`, `kind` and `api` are exactly what it stores,
+ * template-based or not. A template only supplies what the record does not store (the key variable); `model_kinds` routing of a template
+ * applies through `modelSettings()` only while the URL is still the template's official one.
+ */
 function recordEntry(record: CustomProviderRecord, existing: ProviderEntry | undefined): ProviderEntry {
   const template = record.catalog && Object.hasOwn(presets, record.name) ? presets[record.name] : undefined;
-  const kind = template?.kind ?? record.kind;
+  const kind = record.kind;
   return {
     ...existing,
     kind,
-    base_url: template?.base_url ?? record.base_url,
-    ...(template?.model_kinds ? {model_kinds: template.model_kinds} : {}),
+    base_url: record.base_url,
     ...(template?.api_key_env && !existing?.api_key_env ? {api_key_env: template.api_key_env} : {}),
     default_model: record.default_model ?? existing?.default_model,
     api: record.api ?? (kind === 'anthropic' ? undefined : existing?.api),
@@ -247,8 +250,7 @@ export class ProviderRegistry {
     const table = hit && hit.confidence !== 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
     const guessed = hit?.confidence === 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
     const base = modelCapacities[name + '/' + settings.model]
-      ?? modelCapacities['openai/' + settings.model]
-      ?? modelCapacities['openai-compatible/' + settings.model];
+      ?? modelCapacities['openai/' + settings.model];
     const isAntigravity = name === 'antigravity' || settings.baseUrl.includes('8045');
     const cleanModel = settings.model.toLowerCase();
     const isReasoning = isOpenAiReasoningModel(cleanModel);

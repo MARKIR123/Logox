@@ -68,9 +68,21 @@ test('/login 保存后重建应用直接认证，密钥不进入舞台或会话'
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'test-cloud', model: 'test'}, providers: {'test-cloud': {base_url: 'http://127.0.0.1:' + address.port, api_key_env: 'LOGIN_TEST_KEY'}}}, {}, cwd, cwd);
   let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, authPath, config, sessionId: 'first'});
   try {
-    await app.submit('/login test-cloud');
-    assert.equal(app.authentication.getSnapshot()?.phase, 'key');
-    await app.authentication.submit('synthetic-persistent-key');
+    // A configured provider is set up, so `/login test-cloud` opens its edit menu in the wizard; the API key field saves the key.
+    const login = app.submit('/login test-cloud');
+    const asking = async (question: string) => {
+      for (let i = 0; i < 400; i++) {
+        const wizard = app.authentication.getSnapshot()?.wizard;
+        if (wizard?.questions[wizard.index]?.question === question) return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      throw new Error('Missing wizard question: ' + question);
+    };
+    await asking('Choose one field to edit');
+    app.authentication.answerWizard({selected: ['key']});
+    await asking('Enter the API key');
+    app.authentication.answerWizard({selected: [], custom: 'synthetic-persistent-key'});
+    await login;
     await app.submit('/check-provider');
     assert.ok(!JSON.stringify(app.store.getSnapshot()).includes('synthetic-persistent-key'));
     assert.deepEqual(await app.journal.load('first', 'logox'), []);

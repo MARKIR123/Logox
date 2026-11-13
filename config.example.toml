@@ -1,7 +1,7 @@
 # Copy selected sections to ~/.logox/config.toml or .logox/config.toml.
 # Use /login for credentials and /model for an available model ID.
 [provider]
-name = "openai-compatible"
+name = "openai"
 model = ""
 temperature = 0.2
 thinking_effort = "auto"

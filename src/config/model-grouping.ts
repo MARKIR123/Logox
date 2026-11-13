@@ -69,7 +69,7 @@ export function detectEffortLevels(modelId: string, provider: string): readonly 
   }
 
   // 3. OpenAI Reasoning models (o1~o4, gpt-5*, gpt-6*, sol, luna, astra, terra, codex, daybreak, etc.)
-  if (cleanProvider === 'openai' || cleanProvider === 'openai-compatible' || isOpenAiReasoningModel(cleanModel)) {
+  if (cleanProvider === 'openai' || isOpenAiReasoningModel(cleanModel)) {
     if (isOpenAiReasoningModel(cleanModel)) {
       return STANDARD_THINKING_LEVELS;
     }
