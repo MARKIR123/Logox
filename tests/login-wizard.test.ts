@@ -31,11 +31,12 @@ const template = (name: string, extra: Partial<WizardProviderRow> = {}): WizardP
   baseUrl: 'https://' + name + '.invalid/v1', kind: 'openai_compat', description: name + ' description', ...extra});
 const own = (name: string, extra: Partial<WizardProviderRow> = {}): WizardProviderRow => ({name, custom: true, saved: true,
   baseUrl: 'http://127.0.0.1:9000/v1', kind: 'openai_compat', ...extra});
-/** The default list: unset deepseek / openai (account) / antigravity (keyless), and one saved custom provider. */
+/** The default list: unset deepseek / openai (API key) / openai-auth (account only) / antigravity, and one saved custom provider. */
 const rowList: readonly WizardProviderRow[] = [
   template('deepseek', {baseUrl: 'https://api.deepseek.com'}),
-  template('openai', {baseUrl: 'https://api.openai.com/v1', account: true}),
-  template('antigravity', {baseUrl: 'http://127.0.0.1:8045/v1', keyless: true}),
+  template('openai', {baseUrl: 'https://api.openai.com/v1', accountSibling: 'openai-auth'}),
+  template('openai-auth', {baseUrl: 'https://api.openai.com/v1', account: true}),
+  template('antigravity', {baseUrl: 'http://127.0.0.1:8045/v1'}),
   own('local-proxy', {models: ['old-model']}),
 ];
 /** deepseek as a provider the user has set up (a record and a stored key). */
@@ -66,8 +67,9 @@ function deps(ask: LoginWizardDeps['ask'], overrides: Partial<LoginWizardDeps> =
 test('one provider list: templates, then own providers and bare credentials, then Custom endpoint; each entry carries origin, state and a description', async () => {
   const rows = [
     template('deepseek', {saved: true, state: 'signed-in', description: 'DeepSeek official API'}),
-    template('openai', {account: true, state: 'env-key', description: 'OpenAI API or ChatGPT account'}),
-    template('antigravity', {keyless: true, saved: true, state: 'local', description: 'Local Antigravity proxy on port 8045'}),
+    template('openai', {accountSibling: 'openai-auth', state: 'env-key', description: 'OpenAI API (pay-as-you-go)'}),
+    template('openai-auth', {account: true, description: 'ChatGPT account (subscription)'}),
+    template('antigravity', {saved: true, state: 'local', description: 'Local Antigravity proxy on port 8045'}),
     template('anthropic', {description: 'Anthropic Claude API'}),
     own('gateway', {state: 'signed-in'}), own('plain'), {name: 'orphan', custom: true, saved: true} satisfies WizardProviderRow,
   ];
@@ -77,7 +79,7 @@ test('one provider list: templates, then own providers and bare credentials, the
   assert.deepEqual(questions[0]!.options?.map(option => [option.id, option.label, option.description]), [
     ['key', 'API key', 'Sign in with a URL and an API key'], ['account', 'Account sign-in', 'Authorize in the browser with a provider account']]);
   const options = questions[1]!.options!;
-  assert.deepEqual(options.map(option => option.id), ['deepseek', 'openai', 'antigravity', 'anthropic', 'gateway', 'plain', 'orphan', '__custom']);
+  assert.deepEqual(options.map(option => option.id), ['deepseek', 'openai', 'antigravity', 'anthropic', 'gateway', 'plain', 'orphan', '__custom'], 'the account-only openai-auth has no API-key flow and is not listed here');
   assert.equal(options.at(-1)!.label, 'Custom endpoint');
   assert.equal(options.at(-1)!.description, 'Any OpenAI- or Anthropic-compatible URL with an API key');
   const badge = (id: string) => options.find(option => option.id === id)!.badge!.map(part => part.text).join('');
@@ -87,9 +89,9 @@ test('one provider list: templates, then own providers and bare credentials, the
   assert.deepEqual(tones('deepseek'), ['dim', 'dim', 'success'], 'only the check-marked state is coloured');
   assert.deepEqual(tones('anthropic'), ['dim']);
   assert.deepEqual(tones('orphan'), ['warning']);
-  assert.deepEqual(options.map(option => option.description), ['DeepSeek official API', 'OpenAI API or ChatGPT account', 'Local Antigravity proxy on port 8045',
+  assert.deepEqual(options.map(option => option.description), ['DeepSeek official API', 'OpenAI API (pay-as-you-go)', 'Local Antigravity proxy on port 8045',
     'Anthropic Claude API', 'http://127.0.0.1:9000/v1', 'http://127.0.0.1:9000/v1', 'Saved credential without an endpoint', 'Any OpenAI- or Anthropic-compatible URL with an API key']);
-  assert.deepEqual(badgeOf(rows[3]!), [{text: 'built-in', tone: 'dim'}]);
+  assert.deepEqual(badgeOf(rows[4]!), [{text: 'built-in', tone: 'dim'}]);
 });
 test('Custom endpoint follows route → masked key → connection → models → confirmation', async () => {
   const {ask, questions} = keyed(['__custom', 'my-proxy', '', '8045', 'responses', 'fixture-model', 'write']);
@@ -135,25 +137,21 @@ test('an unset template keeps its URL on Enter and stores a URL the user typed i
   assert.ok(typedDeps.calls.some(call => call.startsWith('custom:') && call.includes('"base_url":"https://mirror.invalid/v1"') && call.includes('"catalog":true')));
 });
 const accountRow = (state?: WizardProviderRow['state'], extra: Partial<WizardProviderRow> = {}) =>
-  template('openai', {account: true, baseUrl: 'https://api.openai.com/v1', description: 'OpenAI API or ChatGPT account', ...state ? {saved: true, state} : {}, ...extra});
+  template('openai-auth', {account: true, baseUrl: 'https://api.openai.com/v1', description: 'ChatGPT account (subscription)', ...state ? {saved: true, state} : {}, ...extra});
+const keyRow = (state?: WizardProviderRow['state'], extra: Partial<WizardProviderRow> = {}) =>
+  template('openai', {accountSibling: 'openai-auth', baseUrl: 'https://api.openai.com/v1', description: 'OpenAI API (pay-as-you-go)', ...state ? {saved: true, state} : {}, ...extra});
 const badgeText = (option: {badge?: readonly {text: string}[]} | undefined) => option?.badge?.map(part => part.text).join('');
 
-test('Account sign-in lists the templates that support it; ✓ account shows only here, and an unset one starts the browser flow', async () => {
-  const rows = [template('deepseek'), accountRow(), template('future', {account: true})];
-  const account = scripted(['account', 'openai']), accountDeps = deps(account.ask, {rows: async () => rows});
+test('Account sign-in lists the account templates; ✓ account shows only here, and an unset one starts the browser flow', async () => {
+  const rows = [template('deepseek'), keyRow(), accountRow(), template('future', {account: true})];
+  const account = scripted(['account', 'openai-auth']), accountDeps = deps(account.ask, {rows: async () => rows});
   assert.equal(await runLoginWizard(accountDeps.deps), 'signed-in');
-  assert.deepEqual(account.questions[1]!.options?.map(option => option.id), ['openai', 'future'], 'derived from the account property, no Custom endpoint');
-  assert.equal(account.questions[1]!.options?.[0]?.description, 'OpenAI API or ChatGPT account');
-  assert.deepEqual(accountDeps.calls, ['oauth:openai'], 'no confirmation when nothing is replaced');
-  // Each credential state, as shown in the account list and in the API key list.
-  const states: [WizardProviderRow['state'], string, string][] = [
-    [undefined, 'built-in', 'built-in'], ['account', 'built-in · ✓ account', 'built-in'], ['signed-in', 'built-in', 'built-in · ✓ signed in'],
-    ['env-key', 'built-in', 'built-in · ✓ env key']];
-  for (const [state, inAccountList, inKeyList] of states) {
+  assert.deepEqual(account.questions[1]!.options?.map(option => option.id), ['openai-auth', 'future'], 'derived from the account property, no Custom endpoint');
+  assert.equal(account.questions[1]!.options?.[0]?.description, 'ChatGPT account (subscription)');
+  assert.deepEqual(accountDeps.calls, ['oauth:openai-auth']);
+  for (const [state, expected] of [[undefined, 'built-in'], ['account', 'built-in · ✓ account']] as const) {
     const inAccount = scripted(['account', null]); await runLoginWizard(deps(inAccount.ask, {rows: async () => [accountRow(state)]}).deps);
-    assert.equal(badgeText(inAccount.questions[1]!.options![0]), inAccountList, 'account list, state ' + state);
-    const inKey = scripted(['key', null]); await runLoginWizard(deps(inKey.ask, {rows: async () => [accountRow(state)]}).deps);
-    assert.equal(badgeText(inKey.questions[1]!.options![0]), inKeyList, 'API key list, state ' + state);
+    assert.equal(badgeText(inAccount.questions[1]!.options![0]), expected, 'account list, state ' + state);
   }
   const none = scripted(['account']), noneDeps = deps(none.ask, {rows: async () => [template('deepseek')]});
   assert.equal(await runLoginWizard(noneDeps.deps), 'failed');
@@ -161,44 +159,67 @@ test('Account sign-in lists the templates that support it; ✓ account shows onl
   const cancelled = scripted(['account', null]), cancelledDeps = deps(cancelled.ask, {rows: async () => rows});
   assert.equal(await runLoginWizard(cancelledDeps.deps), 'cancelled'); assert.deepEqual(cancelledDeps.calls, [], 'cancelling never starts a login');
 });
+test('the API key list shows each key state, and an account-signed sibling is a hint in the info tone, never a state of the entry', async () => {
+  const listed = async (rows: readonly WizardProviderRow[]) => {
+    const script = scripted(['key', null]); await runLoginWizard(deps(script.ask, {rows: async () => rows}).deps);
+    return script.questions[1]!.options!;
+  };
+  for (const [state, expected] of [[undefined, 'built-in'], ['signed-in', 'built-in · ✓ signed in'], ['env-key', 'built-in · ✓ env key']] as const) {
+    const options = await listed([keyRow(state)]);
+    assert.equal(badgeText(options[0]), expected, 'state ' + state);
+  }
+  const hinted = await listed([keyRow(), accountRow('account')]);
+  assert.deepEqual(hinted.map(option => option.id), ['openai', '__custom'], 'the account provider itself is not in this list');
+  assert.equal(badgeText(hinted[0]), 'built-in · account signed in');
+  assert.deepEqual(hinted[0]!.badge!.map(part => part.tone), ['dim', 'dim', 'info'], 'neither success nor warning');
+  assert.equal(badgeText((await listed([keyRow('signed-in'), accountRow('account')]))[0]), 'built-in · ✓ signed in', 'its own key wins over the hint');
+  assert.equal(badgeText((await listed([keyRow('env-key'), accountRow('account')]))[0]), 'built-in · ✓ env key');
+  assert.equal(badgeText((await listed([keyRow(), accountRow()]))[0]), 'built-in', 'a sibling that is not signed in adds nothing');
+  assert.equal(badgeText((await listed([template('deepseek'), accountRow('account')]))[0]), 'built-in', 'only a template that names the sibling gets the hint');
+});
 test('a provider signed in by account opens an account menu: sign in again, models, delete with the in-use confirmation', async () => {
   const rows = async () => [accountRow('account', {models: ['gpt-old']})];
-  const menuProbe = scripted(['account', 'openai', null]);
+  const menuProbe = scripted(['account', 'openai-auth', null]);
   await runLoginWizard(deps(menuProbe.ask, {rows}).deps);
   assert.deepEqual(menuProbe.questions[2]!.options?.map(option => option.id), ['signin', 'models', 'delete'], 'no API key, Base URL or Wire protocol here');
-  const again = scripted(['account', 'openai', 'signin']), againDeps = deps(again.ask, {rows});
-  assert.equal(await runLoginWizard(againDeps.deps), 'signed-in'); assert.deepEqual(againDeps.calls, ['oauth:openai']);
-  const models = scripted(['account', 'openai', 'models', 'gpt-new']), modelsDeps = deps(models.ask, {rows});
+  const again = scripted(['account', 'openai-auth', 'signin']), againDeps = deps(again.ask, {rows});
+  assert.equal(await runLoginWizard(againDeps.deps), 'signed-in'); assert.deepEqual(againDeps.calls, ['oauth:openai-auth']);
+  const models = scripted(['account', 'openai-auth', 'models', 'gpt-new']), modelsDeps = deps(models.ask, {rows});
   assert.equal(await runLoginWizard(modelsDeps.deps), 'updated');
-  assert.ok(modelsDeps.calls.some(call => call.startsWith('custom:') && call.includes('"name":"openai"') && call.includes('gpt-new') && call.includes('"catalog":true')));
-  const removal = scripted(['account', 'openai', 'delete', 'delete']), removalDeps = deps(removal.ask, {rows, users: async () => ['session', 'techne']});
+  assert.ok(modelsDeps.calls.some(call => call.startsWith('custom:') && call.includes('"name":"openai-auth"') && call.includes('gpt-new') && call.includes('"catalog":true')));
+  const removal = scripted(['account', 'openai-auth', 'delete', 'delete']), removalDeps = deps(removal.ask, {rows, users: async () => ['session', 'techne']});
   assert.equal(await runLoginWizard(removalDeps.deps), 'deleted');
   assert.match(removal.questions[3]!.detail ?? '', /^In use by: session, techne\./);
-  assert.deepEqual(removalDeps.calls, ['remove:openai']);
+  assert.deepEqual(removalDeps.calls, ['remove:openai-auth']);
 });
-test('signing in by account over a saved API key asks first and says it replaces the key', async () => {
-  const rows = async () => [accountRow('signed-in')];
-  const yes = scripted(['account', 'openai', 'continue']), yesDeps = deps(yes.ask, {rows});
-  assert.equal(await runLoginWizard(yesDeps.deps), 'signed-in');
-  assert.equal(yes.questions[2]!.detail, 'Replaces the saved API key');
-  assert.deepEqual(yesDeps.calls, ['oauth:openai']);
-  const no = scripted(['account', 'openai', 'cancel']), noDeps = deps(no.ask, {rows});
-  assert.equal(await runLoginWizard(noDeps.deps), 'cancelled');
-  assert.deepEqual(noDeps.calls, [], 'declining never opens the browser');
-  const env = scripted(['account', 'openai']), envDeps = deps(env.ask, {rows: async () => [accountRow('env-key')]});
-  assert.equal(await runLoginWizard(envDeps.deps), 'signed-in');
-  assert.equal(env.questions.length, 2, 'an environment key is not replaced, so there is nothing to confirm');
-});
-test('a provider signed in by account is not set up for API keys: saving a key replaces the login and the confirmation says so', async () => {
-  const rows = async () => [accountRow('account', {baseUrl: 'https://api.openai.com/v1'})];
+test('API key and account providers are independent: nothing is replaced, so neither sign-in asks for a confirmation', async () => {
+  const account = scripted(['account', 'openai-auth']), accountDeps = deps(account.ask, {rows: async () => [keyRow('signed-in'), accountRow()]});
+  assert.equal(await runLoginWizard(accountDeps.deps), 'signed-in');
+  assert.equal(account.questions.length, 2); assert.deepEqual(accountDeps.calls, ['oauth:openai-auth']);
+  const rows = async () => [keyRow(), accountRow('account')];
   const script = keyed(['openai', 'default', 'fixture-key', '', 'write']), fixture = deps(script.ask, {rows});
   assert.equal(await runLoginWizard(fixture.deps), 'added');
   assert.match(script.questions[1]!.question, /base URL/, 'the normal add flow, not an edit menu');
-  assert.match(script.questions[4]!.detail ?? '', /Replaces the account sign-in$/);
+  assert.doesNotMatch(script.questions[4]!.detail ?? '', /Replaces/);
   assert.ok(fixture.calls.includes('key:openai:fixture-key'));
-  const plain = keyed(['deepseek', 'default', 'fixture-key', '', 'write']), plainDeps = deps(plain.ask);
-  await runLoginWizard(plainDeps.deps);
-  assert.doesNotMatch(plain.questions[4]!.detail ?? '', /Replaces/, 'nothing is replaced for an ordinary add');
+  assert.ok(fixture.calls.some(call => call.startsWith('custom:') && call.includes('"name":"openai"')));
+  assert.ok(!fixture.calls.some(call => call.includes('openai-auth')));
+});
+test('/login openai goes to the API key flow and /login openai-auth to the account flow, whichever of the two is signed in', async () => {
+  const rows = async () => [keyRow(), accountRow('account')];
+  const key = scripted(['default', 'fixture-key', '', 'write']), keyDeps = deps(key.ask, {rows});
+  assert.equal(await runLoginWizard(keyDeps.deps, 'openai'), 'added');
+  assert.match(key.questions[0]!.question, /base URL/);
+  const signedIn = scripted(['signin']), signedInDeps = deps(signedIn.ask, {rows});
+  assert.equal(await runLoginWizard(signedInDeps.deps, 'openai-auth'), 'signed-in');
+  assert.deepEqual(signedIn.questions[0]!.options?.map(option => option.id), ['signin', 'models', 'delete']);
+  assert.deepEqual(signedInDeps.calls, ['oauth:openai-auth']);
+  const fresh = scripted([]), freshDeps = deps(fresh.ask, {rows: async () => [keyRow('signed-in'), accountRow()]});
+  assert.equal(await runLoginWizard(freshDeps.deps, 'openai-auth'), 'signed-in', 'not signed in: straight to the browser');
+  assert.equal(fresh.questions.length, 0); assert.deepEqual(freshDeps.calls, ['oauth:openai-auth']);
+  const edit = scripted([null]);
+  await runLoginWizard(deps(edit.ask, {rows: async () => [keyRow('signed-in'), accountRow('account')]}).deps, 'openai');
+  assert.deepEqual(edit.questions[0]!.options?.map(option => option.id), ['key', 'url', 'protocol', 'models', 'delete'], 'openai with its own key is edited as an API-key provider');
 });
 test('/login <name> jumps to that provider: the key flow of an unset template, the edit menu of a set-up one', async () => {
   const unset = scripted(['default', 'fixture-key', '', 'write']), unsetDeps = deps(unset.ask);
@@ -211,15 +232,7 @@ test('/login <name> jumps to that provider: the key flow of an unset template, t
   await runLoginWizard(deps(unknown.ask).deps, 'nothing-like-it');
   assert.equal(unknown.questions[0]!.question, 'Choose a sign-in method', 'an unknown name falls back to the wizard root');
 });
-test('a keyless template is added with an empty key and keeps its template endpoint', async () => {
-  const keylessRows = async () => [template('lan-demo', {baseUrl: 'http://127.0.0.1:8045/v1', keyless: true}), template('deepseek')];
-  const {ask, questions} = keyed(['lan-demo', '', '', '', 'write']);
-  const {deps: input, calls} = deps(ask, {rows: keylessRows});
-  assert.equal(await runLoginWizard(input), 'added');
-  assert.equal(questions[2]!.allowEmpty, true);
-  assert.equal(questions[2]!.secret, true);
-  assert.ok(calls.some(call => call.startsWith('custom:') && call.includes('"catalog":true') && call.includes('http://127.0.0.1:8045/v1')));
-  assert.ok(!calls.some(call => call.startsWith('key:')));
+test('a built-in template needs a key; keyless endpoints are custom ones', async () => {
   const needsKey = keyed(['deepseek', '', '']);
   assert.equal(await runLoginWizard(deps(needsKey.ask).deps), 'cancelled', 'a template that needs a key still requires one');
 });
@@ -228,11 +241,11 @@ test('selecting a provider that is set up shows its edit menu, which never offer
   await runLoginWizard(deps(setUp.ask, {rows: async () => deepseekSetUp()}).deps);
   assert.deepEqual(setUp.questions[1]!.options?.map(option => option.id), ['key', 'url', 'protocol', 'models', 'delete']);
   const openai = keyed(['openai', null]);
-  await runLoginWizard(deps(openai.ask, {rows: async () => [template('openai', {account: true, saved: true, state: 'account'})]}).deps);
-  assert.deepEqual(openai.questions[1]!.options?.map(option => option.id), ['default'], 'signed in by account counts as not set up for API keys: the add flow, not an edit menu');
+  await runLoginWizard(deps(openai.ask, {rows: async () => [keyRow(), accountRow('account')]}).deps);
+  assert.deepEqual(openai.questions[1]!.options?.map(option => option.id), ['default'], 'openai without its own key is the add flow even when the account is signed in');
   const signedKey = keyed(['openai', null]);
-  await runLoginWizard(deps(signedKey.ask, {rows: async () => [template('openai', {account: true, saved: true, state: 'signed-in'})]}).deps);
-  assert.deepEqual(signedKey.questions[1]!.options?.map(option => option.id), ['key', 'url', 'protocol', 'models', 'delete'], 'an account-capable template with a saved key has no Account sign-in item here');
+  await runLoginWizard(deps(signedKey.ask, {rows: async () => [keyRow('signed-in')]}).deps);
+  assert.deepEqual(signedKey.questions[1]!.options?.map(option => option.id), ['key', 'url', 'protocol', 'models', 'delete']);
   const custom = keyed(['local-proxy', null]);
   await runLoginWizard(deps(custom.ask).deps);
   assert.deepEqual(custom.questions[1]!.options?.map(option => option.id), ['key', 'url', 'protocol', 'models', 'delete']);
@@ -291,29 +304,28 @@ test('account login waits for OAuth completion and never opens a key/method ques
   const auth = new AuthStorage(join(cwd, 'auth.json'));
   const token = deferred<OAuthToken>();
   const phases: string[] = [];
-  const flow = new LoginFlow(auth, () => ['openai'], () => {}, new CustomProviderStorage(join(cwd, 'custom.json')),
-    async () => {throw new Error('Network must not be used');}, undefined,
-    async () => {throw new Error('External import must not be scanned');},
+  const flow = new LoginFlow(auth, () => {},
+    async () => {throw new Error('Network must not be used');},
     async () => ({authUrl: 'https://example.invalid/auth', waitForToken: () => token.promise, cancel: () => token.reject(new Error('cancelled'))}));
   flow.subscribe(() => {const state = flow.getSnapshot(); if (state) phases.push(state.phase);});
   try {
     let settled = false;
-    const result = flow.browserLogin('openai').then(result => {settled = true; return result;});
+    const result = flow.browserLogin('openai-auth').then(result => {settled = true; return result;});
     for (let i = 0; i < 100 && !flow.getSnapshot()?.oauthUrl; i++) await delay(1);
     assert.equal(settled, false); assert.equal(flow.getSnapshot()?.phase, 'oauth');
-    assert.ok(!phases.includes('method')); assert.ok(!phases.includes('key'));
+    assert.deepEqual([...new Set(phases)], ['oauth']);
     token.resolve({access_token: 'fixture-token'});
-    assert.equal(await result, 'done'); assert.equal((await auth.credential('openai'))?.type, 'oauth');
+    assert.equal(await result, 'done'); assert.equal((await auth.credential('openai-auth'))?.type, 'oauth');
   } finally {await flow.close(); await rm(cwd, {recursive: true, force: true});}
 });
 test('cancelling pending OAuth never reopens the old method selector', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-oauth-cancel-'));
   const token = deferred<OAuthToken>();
-  const flow = new LoginFlow(new AuthStorage(join(cwd, 'auth.json')), () => ['openai'], () => {}, new CustomProviderStorage(join(cwd, 'custom.json')),
-    async () => {throw new Error('No network');}, undefined, async () => [],
+  const flow = new LoginFlow(new AuthStorage(join(cwd, 'auth.json')), () => {},
+    async () => {throw new Error('No network');},
     async () => ({authUrl: 'https://example.invalid/auth', waitForToken: () => token.promise, cancel: () => {}}));
   try {
-    const result = flow.browserLogin('openai');
+    const result = flow.browserLogin('openai-auth');
     for (let i = 0; i < 100 && !flow.getSnapshot()?.oauthUrl; i++) await delay(1);
     flow.cancel();
     let nextSettled = false;

@@ -1,9 +1,8 @@
 import {expandPortOrUrl, type CustomProviderKind} from './login.js';
-import type {ImportedCredential} from './credential-import.js';
 import {groupModelFamilies} from '../config/model-grouping.js';
 
-/** One piece of an option's status badge; only the `success` and `warning` pieces are coloured, `dim` stays quiet. */
-export interface WizardBadgeSegment {readonly text: string; readonly tone: 'success' | 'warning' | 'dim'}
+/** One piece of an option's status badge; `success`, `warning` and `info` (a reminder, not a state) are coloured, `dim` stays quiet. */
+export interface WizardBadgeSegment {readonly text: string; readonly tone: 'success' | 'warning' | 'info' | 'dim'}
 export interface WizardOption {
   readonly id: string;
   readonly label: string;
@@ -35,10 +34,10 @@ export interface WizardProviderRow {
   readonly api?: 'completions' | 'responses' | undefined;
   readonly models?: readonly string[] | undefined;
   readonly accountSignedIn?: boolean | undefined;
-  /** Template property: the provider supports browser account sign-in. */
+  /** Template property: an account-only provider (browser sign-in, no API key). */
   readonly account?: boolean | undefined;
-  /** Template property: the endpoint needs no API key (a local server). */
-  readonly keyless?: boolean | undefined;
+  /** Template property: the account provider of the same vendor, named by an API-key template. */
+  readonly accountSibling?: string | undefined;
   /** Template property: one short phrase shown under the name. */
   readonly description?: string | undefined;
   /** Where the credential comes from: a stored key or sign-in, only the template's environment variable, or a keyless local endpoint that has a record. */
@@ -68,8 +67,6 @@ export interface LoginWizardDeps {
   readonly removeCustom: (name: string) => Promise<void>;
   readonly browserLogin: (provider: string) => Promise<'done' | 'unsupported' | 'cancelled'>;
   readonly signOut?: (provider: string) => Promise<void>;
-  readonly importable?: () => readonly ImportedCredential[];
-  readonly applyImport?: (credential: ImportedCredential) => Promise<void>;
 }
 export type LoginWizardOutcome = 'added' | 'updated' | 'deleted' | 'imported' | 'signed-in' | 'signed-out' | 'cancelled' | 'failed';
 
@@ -81,20 +78,23 @@ const CUSTOM_DESCRIPTION = 'Any OpenAI- or Anthropic-compatible URL with an API 
 const stateLabels = {'signed-in': '✓ signed in', account: '✓ account', 'env-key': '✓ env key', local: '✓ local'} as const;
 /**
  * `built-in` or `custom`, then the credential state in the success tone; an orphan credential is flagged instead.
- * One provider name holds one credential, so each list shows only its own kind: `✓ account` in the account list,
- * `✓ signed in` / `✓ env key` / `✓ local` in the API key list (where an account login counts as not set up).
+ * An API-key provider never shows an account state and an account provider never an API key state. An API-key entry without its own
+ * credential whose template names a signed-in account sibling reads `account signed in` in the info tone: a reminder that the vendor is
+ * already usable through the account, not a state of this entry.
  */
-export function badgeOf(row: WizardProviderRow, list: 'key' | 'account' = 'key'): readonly WizardBadgeSegment[] {
+export function badgeOf(row: WizardProviderRow, list: 'key' | 'account' = 'key', rows: readonly WizardProviderRow[] = []): readonly WizardBadgeSegment[] {
   if (!row.baseUrl) return [{text: 'credential only', tone: 'warning'}];
   const origin: WizardBadgeSegment = {text: row.custom ? 'custom' : 'built-in', tone: 'dim'};
   const state = list === 'account' ? (row.state === 'account' ? row.state : undefined) : (row.state === 'account' ? undefined : row.state);
-  return state ? [origin, {text: ' · ', tone: 'dim'}, {text: stateLabels[state], tone: 'success'}] : [origin];
+  if (state) return [origin, {text: ' · ', tone: 'dim'}, {text: stateLabels[state], tone: 'success'}];
+  const sibling = list === 'key' && row.accountSibling ? rows.find(item => item.name === row.accountSibling) : undefined;
+  return sibling?.state === 'account' ? [origin, {text: ' · ', tone: 'dim'}, {text: 'account signed in', tone: 'info'}] : [origin];
 }
 function describe(row: WizardProviderRow): string {
   return !row.baseUrl ? 'Saved credential without an endpoint' : row.custom ? row.baseUrl : row.description ?? row.baseUrl;
 }
-/** A provider set up for API-key use: a record, a stored key, a config entry, or the template's key variable. An account login does not count. */
-const isSetUp = (row: WizardProviderRow): boolean => row.state !== 'account' && (row.saved || row.state !== undefined);
+/** A provider that is set up: a record, a stored credential, a config entry, or the template's key variable. */
+const isSetUp = (row: WizardProviderRow): boolean => row.saved || row.state !== undefined;
 const menu = (question: string, options: readonly WizardOption[]): WizardQuestion =>
   ({title: 'Providers', question, options, hideCustomInput: true});
 const field = (question: string, extra: Partial<WizardQuestion> = {}): WizardQuestion =>
@@ -186,9 +186,9 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     });
     return unique(expanded);
   };
-  const confirm = async (record: WizardProviderRecord, hasKey: boolean, note?: string): Promise<boolean> => {
+  const confirm = async (record: WizardProviderRecord, hasKey: boolean): Promise<boolean> => {
     const answer = await ask({...menu('Write this provider configuration?', [option('write', 'Write and enable'), option('cancel', 'Cancel')]),
-      detail: [record.name, record.base_url, protocol(record), record.models?.join(', ') || 'Whole catalog', hasKey ? 'API key supplied' : 'No new API key', ...note ? [note] : []].join(' · ')});
+      detail: [record.name, record.base_url, protocol(record), record.models?.join(', ') || 'Whole catalog', hasKey ? 'API key supplied' : 'No new API key'].join(' · ')});
     return answer?.value === 'write';
   };
   const oauth = async (name: string): Promise<LoginWizardOutcome> => {
@@ -199,7 +199,7 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     return 'failed';
   };
   /** Persists a chosen record, confirming first; shared by the template add flow and the custom endpoint flow. */
-  const finishAdd = async (record: WizardProviderRecord, key: string, note?: string): Promise<LoginWizardOutcome> => {
+  const finishAdd = async (record: WizardProviderRecord, key: string): Promise<LoginWizardOutcome> => {
     // An explicit empty key means anonymous discovery for this new route.
     // Undefined is reserved for edits, where the host resolves an existing credential.
     const models = await chooseModels(record, key);
@@ -208,7 +208,7 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     if (models.length > 0 && !record.default_model) {
       record.default_model = models[0];
     }
-    if (!await confirm(record, Boolean(key), note)) return 'cancelled';
+    if (!await confirm(record, Boolean(key))) return 'cancelled';
     await save(record, key);
     return 'added';
   };
@@ -235,12 +235,10 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     const endpoint = await ask(field('Choose the base URL', {options: [option('default', 'Use default endpoint', record.base_url)], allowEmpty: true}));
     if (!endpoint) return 'cancelled';
     if (endpoint.value && endpoint.value !== 'default') record.base_url = expandPortOrUrl(endpoint.value);
-    const credential = await ask(row.keyless
-      ? field('Enter the API key', {secret: true, allowEmpty: true, detail: 'Optional for endpoints that do not require authentication.'})
-      : field('Enter the API key', {secret: true}));
-    if (!credential || (!row.keyless && !credential.value.trim())) return 'cancelled';
-    // One provider name holds one credential: a key saved here replaces an account login.
-    return finishAdd(record, credential.value.trim(), row.state === 'account' ? 'Replaces the account sign-in' : undefined);
+    // Every listed API-key template needs a key; keyless endpoints are custom ones (`addCustom`).
+    const credential = await ask(field('Enter the API key', {secret: true}));
+    if (!credential || !credential.value.trim()) return 'cancelled';
+    return finishAdd(record, credential.value.trim());
   };
   const remove = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
     const users = await deps.users?.(row.name) ?? [];
@@ -305,9 +303,12 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
       const action = await ask(menu('Choose one field to edit', [option('delete', 'Delete provider')]));
       return action?.value === 'delete' ? remove(row) : 'cancelled';
     }
+    // An account provider has no API-key flow: signed in it opens its account menu, otherwise it starts the browser sign-in.
+    if (row.account) return row.state === 'account' ? editAccount(row) : oauth(row.name);
     return isSetUp(row) ? edit(row) : addTemplate(row);
   };
-  const entry = (list: 'key' | 'account') => (row: WizardProviderRow) => option(row.name, row.name, describe(row), badgeOf(row, list));
+  const entry = (list: 'key' | 'account', rows: readonly WizardProviderRow[]) => (row: WizardProviderRow) =>
+    option(row.name, row.name, describe(row), badgeOf(row, list, rows));
   try {
     const rows = await deps.rows();
     // `/login <name>` jumps straight to that provider's key flow or edit menu.
@@ -323,19 +324,12 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
         deps.notify('Account sign-in is not supported for this provider.', 'error');
         return 'failed';
       }
-      const account = await ask(menu('Choose an account provider', accounts.map(entry('account'))));
+      const account = await ask(menu('Choose an account provider', accounts.map(entry('account', rows))));
       const row = accounts.find(row => row.name === account?.value);
-      if (!row) return 'cancelled';
-      if (row.state === 'account') return await editAccount(row);
-      if (row.state === 'signed-in') {
-        // One provider name holds one credential: signing in by account replaces the saved key.
-        const replace = await ask({...menu('Sign in with this account?', [option('continue', 'Sign in'), option('cancel', 'Cancel')]), detail: 'Replaces the saved API key'});
-        if (replace?.value !== 'continue') return 'cancelled';
-      }
-      return await oauth(row.name);
+      return row ? await open(row) : 'cancelled';
     }
-    // One list: every template, then the user's own providers, then the entry that starts a custom endpoint.
-    const chosen = await ask(menu('Choose a provider', [...rows.map(entry('key')), option(CUSTOM_ENTRY, 'Custom endpoint', CUSTOM_DESCRIPTION)]));
+    // One list: every API-key template, then the user's own providers, then the entry that starts a custom endpoint.
+    const chosen = await ask(menu('Choose a provider', [...rows.filter(row => !row.account).map(entry('key', rows)), option(CUSTOM_ENTRY, 'Custom endpoint', CUSTOM_DESCRIPTION)]));
     if (!chosen) return 'cancelled';
     if (chosen.value === CUSTOM_ENTRY) return await addCustom();
     const row = rows.find(row => row.name === chosen.value);

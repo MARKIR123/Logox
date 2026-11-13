@@ -9,6 +9,7 @@ import {loadConfig} from './config/config.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {AuthStorage} from './providers/auth.js';
 import {CustomProviderStorage} from './providers/custom-storage.js';
+import {migrateOpenAiAccount} from './providers/account-migration.js';
 import {Journal} from './store/journal.js';
 import {SessionManager, type SessionLease} from './store/sessions.js';
 import {Tools} from './tools/tools.js';
@@ -26,12 +27,14 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const recent = options.sessionId === undefined ? await manager.recent() : undefined;
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
   if (!sessionId) throw new Error('No session to resume');
-  const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
   const home = options.resourceOptions?.home ?? homedir();
-  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher,
-    new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json')),
-    new CustomProviderStorage(join(home, '.logox', 'custom-providers.json')));
+  const auth = new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json')), customStorage = new CustomProviderStorage(join(home, '.logox', 'custom-providers.json'));
+  // Before the config reads the saved selection: the account sign-in used to live under the provider `openai`.
+  const migration = await migrateOpenAiAccount({auth, customStorage, home, project: cwd}).catch(() => undefined);
+  const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
+  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher, auth, customStorage);
   await registry.syncCustom();
+  if (migration?.status === 'migrated' && registry.selection().provider === 'openai') registry.select('openai-auth', config.provider.model);
   const journal = new Journal(join(manager.directory, 'sessions'));
   if (options.resourceOptions?.home && resolve(home) !== resolve(homedir())) await seedActorProfiles(home);
   else await assertActorProfiles(home);
@@ -44,6 +47,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   await permissions.load();
   const earlyNotices: string[] = [];
   const diagnose = (text: string) => {if (current) current.systemNotice(text); else earlyNotices.push(text);};
+  if (migration?.notice) earlyNotices.push(migration.notice);
   const usage = new UsageLedger(join(manager.directory, 'usage'), diagnose);
   const approveExtension: ExtensionApproval = options.approveExtension ?? ((request, context) => tools.authorizeExtension({
     id: request.callId, name: 'mcp:' + request.server + ':' + request.tool, arguments: JSON.stringify(request.arguments),

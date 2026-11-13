@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {z} from 'zod';
 import type {ModelCapacity} from '../context/contracts.js';
 import type {Provider} from '../runtime/messages.js';
-import {modelSettings, presets, templateNames, type Config, type ModelSettings} from '../config/config.js';
+import {modelSettings, presets, providerFamily, templateNames, type Config, type ModelSettings} from '../config/config.js';
 import {resolveProviderCapabilities} from './capabilities.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
@@ -210,11 +210,12 @@ export class ProviderRegistry {
   private async settingsFor(name: string, requireAuth: boolean): Promise<ModelSettings> {
     const config = this.configFor(name), settings = modelSettings(config, this.env), provider = config.provider;
     const learned = this.capabilities.get(JSON.stringify([name, settings.model]));
-    const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[name + '/' + settings.model] : undefined;
+    const builtin = settings.baseUrl.replace(/\/$/, '') === presets[name]?.base_url.replace(/\/$/, '') ? modelCapacities[providerFamily(name) + '/' + settings.model] : undefined;
     settings.maxTokens = Math.min(settings.maxTokens, config.provider.max_output_tokens ?? config.models[name + '/' + settings.model]?.max_output_tokens ?? learned?.maxOutput ?? builtin?.maxOutput ?? Infinity);
     const cred = await this.auth.credential(name);
     if (cred?.type === 'oauth') this.oauthProviders.add(name);
-    if (cred?.type === 'oauth' && (name === 'openai' || name.toLowerCase().includes('openai'))) {
+    // The stored credential type decides; the only OAuth login Logox ships is the ChatGPT account (`oauth.ts`), so no provider name is consulted.
+    if (cred?.type === 'oauth') {
       const expires = cred.expires_at ?? cred.expires ?? 0;
       if (expires && Date.now() >= expires - 180_000) {
         try {
@@ -234,11 +235,12 @@ export class ProviderRegistry {
     const file = provider.auth_file ?? config.providers[name]?.auth_file;
     if (!settings.key && file) settings.key = await storedKey(file, provider.auth_provider ?? config.providers[name]?.auth_provider ?? name, this.env);
     const keyEnv = provider.api_key_env ?? selected?.api_key_env;
+    if (requireAuth && !settings.key && presets[name]?.account && !keyEnv && !file) throw new ProviderError('Provider ' + name + ' is not logged in; use /login to sign in with your account', false, 'authentication');
     if (requireAuth && !settings.key && (keyEnv || file)) throw new ProviderError('Provider ' + name + ' is not logged in; use /login, set ' + (keyEnv ?? 'api_key_env') + ', or check auth_file', false, 'authentication');
     return settings;
   }
   /** Built-in table lookup for a provider/model honouring `[catalogs.<provider>]` gateway mapping; `oauth` prefers the subscription catalog. */
-  tableHit(name: string, model: string, baseUrl?: string, oauth = this.oauthProviders.has(name)): Resolution | undefined {
+  tableHit(name: string, model: string, baseUrl?: string, oauth = this.oauthProviders.has(name) || Boolean(presets[name]?.account)): Resolution | undefined {
     return modelTable.resolve(name, model, {catalogs: this.config.catalogs, baseUrl: baseUrl ?? this.configFor(name).providers[name]?.base_url ?? presets[name]?.base_url, oauth});
   }
   capacity(name = this.config.provider.name, model?: string): ModelCapacity {
@@ -249,7 +251,7 @@ export class ProviderRegistry {
     const hit = this.tableHit(name, settings.model, settings.baseUrl);
     const table = hit && hit.confidence !== 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
     const guessed = hit?.confidence === 'inferred' ? {window: hit.model.window, maxOutput: hit.model.maxOutput} : undefined;
-    const base = modelCapacities[name + '/' + settings.model]
+    const base = modelCapacities[providerFamily(name) + '/' + settings.model]
       ?? modelCapacities['openai/' + settings.model];
     const isAntigravity = name === 'antigravity' || settings.baseUrl.includes('8045');
     const cleanModel = settings.model.toLowerCase();
@@ -387,7 +389,7 @@ export class ProviderRegistry {
     const settings = await this.settings();
     const isOAuth = (await this.auth.credential(this.config.provider.name))?.type === 'oauth';
     let checkModel = settings.model;
-    if (this.config.provider.name === 'openai' && isOAuth) {
+    if (isOAuth) {
       if (!checkModel || checkModel.includes('gpt-4') || checkModel.includes('o3-mini')) {
         checkModel = 'gpt-6.1-sol';
       }

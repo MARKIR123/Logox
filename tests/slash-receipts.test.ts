@@ -168,10 +168,6 @@ test('repeated picker and login cancellation preserves status, performs no model
     assert.equal(f.app.authentication.getSnapshot(), null);
     assert.equal(lastReceipt(f).systemPresentation, 'silent');
   }
-  await f.app.authentication.begin('receipt');
-  assert.equal(f.app.authentication.getSnapshot()?.phase, 'key');
-  f.app.authentication.cancel();
-  f.app.authentication.cancel();
   assert.deepEqual(f.app.status('logox').model, before.model);
   assert.equal(f.app.status('logox').effort, before.effort);
   assertEmptyTimeline(f);
@@ -291,20 +287,12 @@ test('local save and login errors remain in their owning form and retain only si
   assert.equal(lastReceipt(f).systemPresentation, 'silent');
   f.app.surfaces.cancel();
   await rm(f.options.statusbarPath, {recursive: true});
-  await f.app.authentication.begin('receipt');
-  await f.app.authentication.submit('');
-  const login = f.app.authentication.getSnapshot();
-  assert.ok(login?.phase === 'key' && login.error);
-  assert.equal(lastReceipt(f).text, login.error);
-  assert.equal(lastReceipt(f).systemEventKind, 'command_error');
-  assert.equal(lastReceipt(f).systemPresentation, 'silent');
-  f.app.authentication.cancel();
   assertEmptyTimeline(f);
   assert.equal(f.requests.length, 0);
   await f.app.persistSession();
   await f.app.close();
   const errors = (await f.app.journal.systemEvents(f.app.sessionId)).filter(event => event.kind === 'command_error');
-  assert.equal(errors.length, 2);
+  assert.equal(errors.length, 1);
   assert.ok(errors.every(event => event.presentation === 'silent'));
 }));
 
@@ -350,6 +338,10 @@ test('unknown commands throw with explicit timeline errors, old events survive, 
   assert.equal(oldMessage.systemReplay, true);
   assert.equal(Object.hasOwn(oldMessage, 'systemPresentation'), false);
   assert.equal(isTimelineMessage(oldMessage), true);
+  // `/login <unknown name>` no longer opens a key panel: it is an explicit timeline error and leaves no login form open.
+  await assert.rejects(f.app.submit('/login no-such-provider'), /Unknown provider 'no-such-provider'/);
+  assert.equal(lastReceipt(f).systemEventKind, 'command_error');
+  assert.equal(f.app.authentication.getSnapshot(), null);
   await assert.rejects(f.app.submit('/unknown-receipt-command'), /Unknown command/);
   const error = lastReceipt(f);
   assert.equal(error.systemEventKind, 'command_error');

@@ -94,7 +94,8 @@ export class ModelTable {
     const host = hostOf(options.baseUrl);
     const byHost = host ? HOST_CATALOGS.find(([pattern]) => pattern.test(host))?.[1] : undefined;
     const lower = provider.toLowerCase();
-    if (lower === 'openai') {
+    // OpenAI's own endpoint maps to the OpenAI catalogs whatever the provider is called (`openai`, the account provider `openai-auth`); a subscription login prefers the ChatGPT catalog.
+    if (lower === 'openai' || byHost === 'openai') {
       if (options.oauth) add('openai-codex');
       add('openai'); add('openai-codex');
     }
@@ -168,7 +169,7 @@ export function isSubscriptionProvider(provider: string, options: ResolveOptions
   const declared = options.catalogs?.[provider]?.subscription;
   if (declared !== undefined) return declared;
   const first = modelTable.catalogsFor(provider, options)[0];
-  return Boolean(first && modelTable.data.providers[first]?.subscription) || Boolean(options.oauth && /^openai(-compatible)?$/i.test(provider));
+  return Boolean(first && modelTable.data.providers[first]?.subscription) || Boolean(options.oauth && modelTable.catalogsFor(provider, options).includes('openai-codex'));
 }
 /** Built-in list price (USD per 1M tokens) for a provider/model, honouring gateway catalog mapping; user `[models."p/m".prices]` is applied by the caller. */
 export function tablePrice(provider: string, model: string, options: ResolveOptions = {}): TablePrice | undefined {return modelTable.price(provider, model, options);}

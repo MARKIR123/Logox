@@ -6,7 +6,6 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {accountTemplateNames, loadConfig, modelSettings, presets, templateNames, type Config} from '../src/config/config.js';
-import {accountProviders} from '../src/providers/login.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import {CustomProviderStorage} from '../src/providers/custom-storage.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
@@ -121,8 +120,15 @@ test('a keyless template gets a record on request and is removed with its creden
 
 test('account sign-in is a template property', () => {
   assert.deepEqual(accountTemplateNames(), Object.keys(presets).filter(name => presets[name]!.account));
-  assert.deepEqual([...accountProviders], accountTemplateNames());
-  assert.ok(accountTemplateNames().includes('openai') && !accountTemplateNames().includes('anthropic'));
+  assert.deepEqual(accountTemplateNames(), ['openai-auth']);
+  assert.ok(!accountTemplateNames().includes('openai') && !accountTemplateNames().includes('anthropic'));
+  assert.equal(presets['openai-auth']!.api_key_env, undefined, 'an account-only template has no API-key variable');
+  assert.equal(presets['openai-auth']!.description, 'ChatGPT account (subscription)');
+  assert.equal(presets['openai-auth']!.base_url, presets.openai!.base_url, 'the account provider uses the OpenAI endpoint');
+  assert.ok(templateNames().includes('openai-auth'));
+  // An API-key template names its account sibling by template, and that sibling must be an account template.
+  for (const [name, template] of Object.entries(presets)) if (template.accountSibling) assert.ok(presets[template.accountSibling]?.account, name);
+  assert.equal(presets.openai!.accountSibling, 'openai-auth');
 });
 
 test('/login opens one list: every template first, own providers after, Custom endpoint last, with state badges', async () => {
@@ -144,14 +150,16 @@ test('/login opens one list: every template first, own providers after, Custom e
       assert.deepEqual(view.questions[0]!.options!.map(option => option.id), ['key', 'account']);
       app.authentication.answerWizard({selected: ['key']}); view = await wait(view.key);
       const options = view.questions[0]!.options!;
-      assert.deepEqual(options.map(option => option.id).slice(0, templateNames().length), templateNames());
-      assert.deepEqual(options.map(option => option.id).slice(templateNames().length).sort(), ['__custom', 'antigravity', 'my-gateway']);
+      const keyTemplates = templateNames().filter(name => !presets[name]!.account);
+      assert.deepEqual(options.map(option => option.id).slice(0, keyTemplates.length), keyTemplates, 'account-only templates are not in the API key list');
+      assert.deepEqual(options.map(option => option.id).slice(keyTemplates.length).sort(), ['__custom', 'antigravity', 'my-gateway']);
       assert.equal(options.at(-1)!.id, '__custom');
       assert.ok(!templateNames().includes('antigravity'));
       const badge = (id: string) => options.find(option => option.id === id)!.badge!.map(part => part.text).join('');
       assert.equal(badge('deepseek'), 'built-in · ✓ signed in');
       assert.equal(badge('anthropic'), 'built-in · ✓ env key');
       assert.equal(badge('openai'), 'built-in');
+      assert.ok(!options.some(option => option.id === 'openai-auth'));
       assert.equal(badge('my-gateway'), 'custom');
       assert.equal(badge('antigravity'), 'custom · ✓ local', 'an existing local proxy record is a custom provider');
       assert.equal(options.find(option => option.id === 'deepseek')!.description, presets.deepseek!.description);

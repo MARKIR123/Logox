@@ -277,7 +277,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     surfaceError = key;
     if (error && changed) notice(error, 'command_error', current?.ownerId ?? commandOwner, undefined, {presentation: 'silent'});
   });
-  const authentication = new LoginFlow(registry.auth, () => registry.loginNames(), async provider => {
+  const authentication = new LoginFlow(registry.auth, async provider => {
     const owner = loginOwner;
     // A saved key or finished account sign-in always belongs to a provider record.
     await registry.ensureTemplateRecord(provider).catch(() => {});
@@ -285,7 +285,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     catch {notice('API key saved; model preference was not updated. The current model is unchanged.', 'command_error', owner);}
     await modelPool.syncProvider(provider).catch(() => {});
     receipt('API key saved for ' + provider + '.', 'status', undefined, owner);
-  }, registry.customStorage, (input, init) => registry.fetcher(input, init), name => removeProvider(name, loginOwner));
+  }, (input, init) => registry.fetcher(input, init));
   /** Who relies on a model of one provider: the session selection, actor default models and the dedicated Automa model. */
   const providerUsers = (name: string): {session: boolean; actors: string[]; automa: boolean} => ({
     session: settings.provider === name && Boolean(settings.model),
@@ -344,7 +344,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         saved: stored.includes(name) || Boolean(record) || Boolean(config.providers[name]),
         accountSignedIn: account.has(name),
         ...(template?.account ? {account: true} : {}),
-        ...(template && !template.api_key_env ? {keyless: true} : {}),
+        ...(template?.accountSibling ? {accountSibling: template.accountSibling} : {}),
         ...(template ? {description: template.description} : {}),
         ...(baseUrl ? {baseUrl} : {}),
         kind: record?.kind ?? config.providers[name]?.kind ?? template?.kind,
@@ -1446,8 +1446,8 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');
         loginOwner = source;
         const target = text.startsWith('/login ') ? text.slice(7).trim() : '';
-        // A known provider jumps to its key flow or edit menu in the wizard; anything else keeps the quick login panel.
-        if (target && !(await wizardRows()).some(row => row.name === target)) {await authentication.begin(target); return;}
+        // A known provider jumps to its key flow, account flow or edit menu in the wizard; any other name is an error.
+        if (target && !(await wizardRows()).some(row => row.name === target)) throw new Error("Unknown provider '" + target + "'. Run /login to choose a provider or add a custom endpoint.");
         const outcome = await loginWizard(source, target || undefined);
         if (outcome === 'cancelled') {
           if (text === '/setup') markOnboardingSkipped(ONBOARDING_VERSION, homeDir);

@@ -275,7 +275,7 @@ test('cancel and back-navigation still work below the minimum editing height', a
 test('provider preview follows custom-add order and writes only after confirmation', async () => {
   const asked: (readonly PanelQuestion[])[] = [], changes: PreviewProviderChange[] = [];
   const script: readonly QuestionSelection[][] = [
-    [{selected: ['Add a new provider']}], [{selected: ['Custom API endpoint']}], [{selected: [], custom: 'my-gateway'}],
+    [{selected: ['API key']}], [{selected: ['Custom endpoint']}], [{selected: [], custom: 'my-gateway'}],
     [{selected: [], custom: 'private-fixture-key'}], [{selected: [], custom: 'http://127.0.0.1:8045/v1'}, {selected: ['openai-responses']}],
     [{selected: ['demo-model-a'], custom: 'other-a other-b,other-c'}], [{selected: ['Write and enable']}],
   ];
@@ -295,7 +295,7 @@ test('provider preview follows custom-add order and writes only after confirmati
 
 test('provider deletion requires its own confirmation and cancellation creates no effects', async () => {
   const answers: QuestionSelection[][] = [
-    [{selected: ['Edit an existing provider']}], [{selected: ['local-gateway']}], [{selected: ['Delete provider']}], [{selected: ['Cancel']}],
+    [{selected: ['API key']}], [{selected: ['local-gateway']}], [{selected: ['Delete provider']}], [{selected: ['Cancel']}],
   ];
   const changes: PreviewProviderChange[] = [];
   await runProviderPreview({ask: async () => answers.shift() ?? null, commit: value => {changes.push(value);}});
@@ -307,27 +307,48 @@ test('targeted edit ignores blank and unchanged values', async () => {
     ['API key', {selected: [], custom: ''}], ['Base URL', {selected: [], custom: ''}],
     ['Wire protocol', {selected: ['openai-completions']}], ['Model list', {selected: ['demo-model-a']}], ['Model list', {selected: []}],
   ] satisfies [string, QuestionSelection][]) {
-    const answers: QuestionSelection[][] = [[{selected: ['Edit an existing provider']}], [{selected: ['local-gateway']}], [{selected: [field]}], [value]];
+    const answers: QuestionSelection[][] = [[{selected: ['API key']}], [{selected: ['local-gateway']}], [{selected: [field]}], [value]];
     const changes: PreviewProviderChange[] = [];
     await runProviderPreview({ask: async () => answers.shift() ?? null, commit: change => {changes.push(change);}});
     assert.deepEqual(changes, [], field);
   }
 });
 
-test('built-in Add permits an unrestricted catalog', async () => {
-  const answers: QuestionSelection[][] = [[{selected: ['Add a new provider']}], [{selected: ['Built-in provider']}],
-    [{selected: ['deepseek']}], [{selected: [], custom: 'fake-key'}], [{selected: ['Use default endpoint']}],
-    [{selected: []}], [{selected: ['Write and enable']}]];
-  const changes: PreviewProviderChange[] = [];
-  await runProviderPreview({ask: async () => answers.shift() ?? null, commit: change => {changes.push(change);}});
+test('built-in Add asks the URL before the key, permits an unrestricted catalog, and only a set-up provider opens an edit menu', async () => {
+  const answers: QuestionSelection[][] = [[{selected: ['API key']}], [{selected: ['anthropic']}], [{selected: ['Use default endpoint']}],
+    [{selected: [], custom: 'fake-key'}], [{selected: []}], [{selected: ['Write and enable']}]];
+  const asked: string[] = [], changes: PreviewProviderChange[] = [];
+  await runProviderPreview({ask: async questions => {asked.push(questions[0]!.question); return answers.shift() ?? null;}, commit: change => {changes.push(change);}});
+  assert.deepEqual(asked.slice(0, 4), ['Choose a sign-in method', 'Choose a provider', 'Choose the base URL', 'Enter the API key']);
   assert.deepEqual(changes[0]?.models, []);
-  const editAnswers: QuestionSelection[][] = [[{selected: ['Edit an existing provider']}], [{selected: ['deepseek']}],
+  assert.equal(changes[0]?.route, 'anthropic');
+  const editAnswers: QuestionSelection[][] = [[{selected: ['API key']}], [{selected: ['deepseek']}],
     [{selected: ['Model list']}], [{selected: []}]];
   await runProviderPreview({ask: async questions => {
     if (questions[0]?.multiSelect) assert.equal(questions[0].allowEmpty, true, 'Catalog model edits can restore the whole catalog');
     return editAnswers.shift() ?? null;
   }, commit: change => {changes.push(change);}});
   assert.deepEqual(changes[1]?.models, []);
+});
+
+test('the provider list carries the info-toned account hint on openai only, and the account list holds only account providers', async () => {
+  const lists: (readonly PanelQuestion[])[] = [];
+  const text = (question: PanelQuestion, route: string) => question.options!.find(option => option.label === route)!.badge!.map(part => part.text).join('');
+  await runProviderPreview({ask: async questions => {lists.push(questions); return lists.length === 1 ? [{selected: ['API key']}] : null;}, commit: () => {}});
+  const list = lists[1]![0]!;
+  assert.deepEqual(list.options!.map(option => option.label), ['deepseek', 'openai', 'anthropic', 'local-gateway', 'Custom endpoint']);
+  assert.equal(text(list, 'deepseek'), 'built-in · ✓ signed in');
+  assert.equal(text(list, 'openai'), 'built-in · account signed in');
+  assert.equal(list.options!.find(option => option.label === 'openai')!.badge!.at(-1)!.tone, 'info');
+  assert.equal(text(list, 'anthropic'), 'built-in');
+  const account: (readonly PanelQuestion[])[] = [];
+  const changes: PreviewProviderChange[] = [];
+  const script: QuestionSelection[][] = [[{selected: ['Account sign-in']}], [{selected: ['openai-auth']}], [{selected: ['Sign in again']}]];
+  await runProviderPreview({ask: async questions => {account.push(questions); return script.shift() ?? null;}, commit: change => {changes.push(change);}});
+  assert.deepEqual(account[1]![0]!.options!.map(option => option.label), ['openai-auth']);
+  assert.equal(text(account[1]![0]!, 'openai-auth'), 'built-in · ✓ account');
+  assert.deepEqual(account[2]![0]!.options!.map(option => option.label), ['Sign in again', 'Model list', 'Delete provider']);
+  assert.deepEqual(changes, [{action: 'signed-in', route: 'openai-auth'}]);
 });
 
 test('login preview shares the panel, masks its key through folding and commits only safe fake metadata', async () => {
@@ -339,7 +360,8 @@ test('login preview shares the panel, masks its key through folding and commits 
   const screen = () => output.lines.join('\n');
   try {
     await instance.waitUntilRenderFlush();
-    await key('\r'); await key('\x1b[B'); await key('\r');
+    await key('\r'); for (let i = 0; i < 4; i++) await key('\x1b[B');
+    await key('\r');
     assert.match(screen(), /Enter a route name/);
     await key('my-gateway'); await key('\r');
     assert.match(screen(), /Enter the API key/);

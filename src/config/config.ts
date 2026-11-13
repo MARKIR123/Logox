@@ -137,11 +137,15 @@ export interface ModelSettings {
 /**
  * Provider templates (kept under the historical name `presets`): a built-in shortcut with a fixed official endpoint and protocol.
  * A template is not a provider by itself; it becomes one when the user saves a record for it (`catalog: true` in the provider store).
- * `account` marks templates that support browser account sign-in (OAuth) in addition to an API key.
+ * `account` marks an account-only template: its credential is a browser account sign-in (OAuth), it has no API-key flow and no `api_key_env`.
+ * `accountSibling` lets an API-key template name the account template for the same vendor (the /login list then reminds the user that the account is signed in).
+ * `family` names the model catalog the template shares with others (capacity table, reasoning protocol); unset means its own name.
  */
-export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>; account?: boolean; description: string; listed?: false}> = {
+export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>; account?: boolean; accountSibling?: string; family?: string; description: string; listed?: false}> = {
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY', description: 'DeepSeek official API'},
-  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', account: true, description: 'OpenAI API or ChatGPT account'},
+  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', accountSibling: 'openai-auth', description: 'OpenAI API (pay-as-you-go)'},
+  // Account-only: ChatGPT OAuth always speaks streaming Responses on this endpoint (decided from the credential at request time, `http.ts:createProvider()`).
+  'openai-auth': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', account: true, family: 'openai', description: 'ChatGPT account (subscription)'},
   // A user's local proxy, not a built-in provider: `listed: false` keeps its endpoint knowledge (default URL, the Claude routing below) without offering it as a template.
   // The local proxy serves Claude over the native Messages endpoint too; its OpenAI view of Claude intermittently mislabels the answer as reasoning.
   antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1', model_kinds: {'claude-*': 'anthropic'}, description: 'Local Antigravity proxy on port 8045', listed: false},
@@ -155,7 +159,9 @@ export const legacyTemplateNames: Record<string, string> = {'openai-compatible':
 function templateName(name: string, defined: boolean): string {return !defined && Object.hasOwn(legacyTemplateNames, name) ? legacyTemplateNames[name]! : name;}
 /** Every listed template name, whether or not the user set it up. Entries with `listed: false` are known endpoints only (see `presets`). */
 export function templateNames(): string[] {return Object.entries(presets).filter(([, template]) => template.listed !== false).map(([name]) => name);}
-/** Templates that support account sign-in. */
+/** Template-declared catalog namespace: `openai-auth` shares the `openai` capacity table and reasoning protocol. */
+export function providerFamily(name: string): string {return Object.hasOwn(presets, name) ? presets[name]!.family ?? name : name;}
+/** Account-only templates (browser sign-in, no API key). */
 export function accountTemplateNames(): string[] {return Object.entries(presets).filter(([, template]) => template.account).map(([name]) => name);}
 function pathKey(path: string): string {return process.platform === 'win32' ? path.toLowerCase() : path;}
 function merge(left: Record<string, unknown>, right: Record<string, unknown>): Record<string, unknown> {
@@ -275,7 +281,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : (official && provider.name === 'anthropic' || kind !== providerKind && kind === 'anthropic') && /^claude-(opus-4-[678]|sonnet-4-6|opus-5|sonnet-5|fable)/i.test(model) ? 'anthropic-adaptive'
     : (provider.name === 'anthropic' || cleanModel.includes('claude')) && kind === 'anthropic' ? 'anthropic-budget'
     : (cleanProvider === 'deepseek' || cleanModel.includes('deepseek') || cleanModel.includes('reasoner') || cleanModel.includes('r1')) && kind === 'openai_compat' ? 'deepseek'
-    : template === 'openai' && isOpenAiReasoningModel(model) ? 'reasoning-effort'
+    : providerFamily(template) === 'openai' && isOpenAiReasoningModel(model) ? 'reasoning-effort'
     : (cleanProvider === 'antigravity' || url.port === '8045' || cleanModel.includes('gemini') || cleanModel.includes('thinking')) && kind === 'openai_compat' ? 'reasoning-effort'
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');

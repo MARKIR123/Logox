@@ -1,7 +1,4 @@
-import {accountTemplateNames} from '../config/config.js';
 import {AuthStorage} from './auth.js';
-import {CustomProviderStorage} from './custom-storage.js';
-import {discoverImportable, type ImportedCredential} from './credential-import.js';
 import {startOpenAiOAuth, type OAuthSession} from './oauth.js';
 import {createHttpTransport} from './transport.js';
 import {formatDetailedError} from './error-format.js';
@@ -35,34 +32,12 @@ export function expandPortOrUrl(input: string): string {
 
 export type CustomProviderKind = 'openai_compat' | 'anthropic';
 
-export interface LoginProviderRow {
-  name: string;
-  saved: boolean;
-  custom?: boolean | undefined;
-  baseUrl?: string | undefined;
-  kind?: CustomProviderKind | undefined;
-  deletable?: boolean | undefined;
-  /** Custom providers open the prefilled edit wizard on Enter. */
-  editable?: boolean | undefined;
-}
-
-/** Templates with a browser-account authorization flow (the `account` template property); oauth.ts currently ships OpenAI only. */
-export const accountProviders: readonly string[] = accountTemplateNames();
-const accountMethods = [{id: 'key', label: 'API Key'}, {id: 'oauth', label: 'Account (Browser authorization)'}] as const;
-
+/** `wizard` is a local form; `oauth` is a browser sign-in in progress (or failed, with `error`). */
 export interface LoginState {
   wizard?: LocalWizardView | undefined;
   collapsed?: boolean | undefined;
-  phase: 'wizard' | 'provider' | 'add' | 'account' | 'method' | 'key' | 'oauth' | 'custom_name' | 'custom_url' | 'custom_kind' | 'custom_key' | 'import' | 'saving';
-  providers: readonly LoginProviderRow[];
+  phase: 'wizard' | 'oauth';
   provider: string;
-  customUrl?: string | undefined;
-  customKind?: CustomProviderKind | undefined;
-  /** True while the custom wizard edits an existing record instead of adding one. */
-  editing?: boolean | undefined;
-  methods?: readonly {id: 'key' | 'oauth'; label: string}[] | undefined;
-  /** Import candidates carry no secret; selecting one copies the value into Logox's own store. */
-  importables?: readonly {id: string; label: string; provider: string; kind: 'api_key' | 'oauth'}[] | undefined;
   oauthUrl?: string | undefined;
   userCode?: string | undefined;
   error: string;
@@ -76,7 +51,6 @@ export class LoginFlow {
   private oauthSession: OAuthSession | undefined;
   private oauthGeneration = 0;
   private oauthAbort: AbortController | undefined;
-  private importCandidates = new Map<string, ImportedCredential>();
   private wizardSequence = 0;
   private wizardBatch: {questions: readonly WizardQuestion[]; index: number;
     answers: (WizardDraft | undefined)[]; drafts: (WizardDraft | undefined)[];
@@ -96,7 +70,7 @@ export class LoginFlow {
   };
   private refreshWizard(): void {
     const batch = this.wizardBatch;
-    this.publish(batch ? {phase: 'wizard', provider: '', providers: [], error: '', collapsed: this.state?.collapsed ?? false,
+    this.publish(batch ? {phase: 'wizard', provider: '', error: '', collapsed: this.state?.collapsed ?? false,
       wizard: {key: this.wizardSequence, index: batch.index, questions: batch.questions, answered: batch.answers.filter(Boolean).length}} : null);
   }
   wizardDraft = (): WizardDraft | undefined => this.wizardBatch?.drafts[this.wizardBatch.index];
@@ -123,239 +97,26 @@ export class LoginFlow {
   toggleWizardFold = (): void => {
     if (this.state?.phase === 'wizard') this.publish({...this.state, collapsed: !this.state.collapsed});
   };
+  /** Starts the browser sign-in of an account provider (`startOAuth`); resolves when it finished or was cancelled. A failure is published as `error` (and surfaced by the host) before the flow closes. */
   async browserLogin(provider: string): Promise<'done' | 'cancelled'> {
-    await this.begin(provider, false, true);
-    if (this.state?.phase !== 'oauth') return 'cancelled';
+    if (this.state || this.wizardBatch) throw new Error('Login already in progress. Complete or cancel first.');
+    this.publish({phase: 'oauth', provider, error: ''});
     const generation = this.oauthGeneration + 1;
     const succeeded = await this.startOAuth();
-    if (!succeeded && generation === this.oauthGeneration && this.getSnapshot()?.phase === 'method') this.cancel();
+    if (!succeeded && generation === this.oauthGeneration && this.getSnapshot()?.phase === 'oauth') this.cancel();
     return succeeded ? 'done' : 'cancelled';
   }
 
   constructor(
     private readonly auth: AuthStorage,
-    private readonly names: () => string[],
     private readonly onSaved: (provider: string) => unknown,
-    private readonly customStorage = new CustomProviderStorage(),
     private readonly fetcher: typeof fetch = createHttpTransport().fetch,
-    private readonly onRemove?: ((name: string) => Promise<void> | void) | undefined,
-    private readonly imports: () => Promise<ImportedCredential[]> = discoverImportable,
     private readonly oauthStart: typeof startOpenAiOAuth = startOpenAiOAuth,
   ) {}
 
   getSnapshot = (): LoginState | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
   private publish(state: LoginState | null): void {this.state = state; for (const listener of this.listeners) listener();}
-
-  async begin(provider?: string, scanImports = provider === undefined, directAccount = false): Promise<void> {
-    if (this.state) throw new Error('Login already in progress. Complete or cancel first.');
-    const names = this.names();
-    if (provider && !names.includes(provider) && provider !== '+ Custom' && provider !== '+ Add') throw new Error('Provider does not support API key login.');
-    const saved = await this.auth.providers();
-    const custom = new Map((await this.customStorage.list().catch(() => [])).map(record => [record.name, record]));
-    const importable = scanImports ? await this.imports().catch(() => []) : [];
-    this.importCandidates = new Map(importable.map(item => [item.id, item]));
-    const providerList: LoginProviderRow[] = [
-      ...names.map(name => {
-        const record = custom.get(name);
-        return {
-          name,
-          saved: saved.includes(name),
-          ...(record ? {custom: true, baseUrl: record.base_url, kind: record.kind, deletable: true, editable: true} : {}),
-        };
-      }),
-      {name: '+ Add', saved: false},
-      ...(importable.length ? [{name: '+ Import', saved: false}] : []),
-    ];
-
-    if (provider && accountProviders.includes(provider)) {
-      this.publish({
-        phase: directAccount ? 'oauth' : 'method',
-        providers: providerList,
-        provider,
-        methods: accountMethods,
-        error: '',
-      });
-      return;
-    }
-
-    if (provider === '+ Custom') {
-      this.publish({
-        phase: 'custom_name',
-        providers: providerList,
-        provider: '',
-        error: '',
-      });
-      return;
-    }
-
-    this.publish({
-      phase: provider ? 'key' : 'provider',
-      providers: providerList,
-      provider: provider ?? '',
-      error: '',
-    });
-  }
-
-  choose(provider: string): void {
-    if (this.state?.phase !== 'provider' || !this.state.providers.some(item => item.name === provider)) return;
-    if (provider === '+ Add') {
-      this.publish({...this.state, phase: 'add', error: ''});
-      return;
-    }
-    const row = this.state.providers.find(item => item.name === provider);
-    if (row?.custom) {
-      this.beginEditCustom(provider);
-      return;
-    }
-    if (provider === '+ Import') {
-      this.publish({
-        ...this.state,
-        phase: 'import',
-        importables: [...this.importCandidates.values()].map(({id, label, provider: owner, kind}) => ({id, label, provider: owner, kind})),
-        error: '',
-      });
-      return;
-    }
-    if (accountProviders.includes(provider)) {
-      this.publish({
-        ...this.state,
-        phase: 'method',
-        provider,
-        methods: accountMethods,
-        error: '',
-      });
-      return;
-    }
-    this.publish({...this.state, phase: 'key', provider, error: ''});
-  }
-
-  /** Pick how a new provider is added: an account login or a custom endpoint URL. */
-  chooseAddMode(mode: 'account' | 'url'): void {
-    const state = this.state;
-    if (!state || state.phase !== 'add') return;
-    if (mode === 'account') {this.publish({...state, phase: 'account', error: ''}); return;}
-    this.publish({...state, phase: 'custom_name', provider: '', customUrl: undefined, customKind: undefined, editing: false, error: ''});
-  }
-
-  /** Add flow: pick a provider that supports account authorization. */
-  chooseAccount(provider: string): void {
-    const state = this.state;
-    if (!state || state.phase !== 'account' || !accountProviders.includes(provider)) return;
-    this.publish({...state, phase: 'method', provider, methods: accountMethods, error: ''});
-  }
-
-  /** Open the wizard prefilled with an existing custom provider record. */
-  private beginEditCustom(name: string): void {
-    const state = this.state;
-    const row = state?.providers.find(item => item.name === name);
-    if (!state || !row?.custom) return;
-    this.publish({...state, phase: 'custom_url', provider: name, customUrl: row.baseUrl, customKind: row.kind, editing: true, error: ''});
-  }
-
-  /** Copy one discovered external credential into Logox's own store. */
-  async chooseImport(id: string): Promise<void> {
-    const state = this.state;
-    if (!state || state.phase !== 'import') return;
-    const candidate = this.importCandidates.get(id);
-    if (!candidate) return;
-    this.publish({...state, phase: 'saving', error: ''});
-    this.saving = (async () => {
-      try {
-        const signal = new AbortController().signal;
-        if (candidate.kind === 'oauth') {
-          await this.auth.saveOAuth(candidate.provider, {
-            access_token: candidate.secret,
-            ...(candidate.accountId ? {account_id: candidate.accountId} : {}),
-          }, signal);
-        } else {
-          await this.auth.save(candidate.provider, candidate.secret, signal);
-        }
-        await this.onSaved(candidate.provider);
-        this.publish(null);
-      } catch (error) {
-        this.publish({...state, phase: 'import', error: formatDetailedError(error, 'Failed to import credential.')});
-      }
-    })();
-    try {await this.saving;} finally {this.saving = undefined;}
-  }
-
-  chooseMethod(method: 'key' | 'oauth'): void {
-    if (this.state?.phase !== 'method') return;
-    if (method === 'key') {
-      this.publish({...this.state, phase: 'key', error: ''});
-      return;
-    }
-    void this.startOAuth();
-  }
-
-  submitCustomName(name: string): void {
-    const trimmed = name.trim();
-    if (!trimmed || !/^[a-z0-9_-]+$/i.test(trimmed)) {
-      this.publish({...this.state!, error: 'Provider name must contain only letters, numbers, dashes, or underscores.'});
-      return;
-    }
-    this.publish({...this.state!, phase: 'custom_url', provider: trimmed, error: ''});
-  }
-
-  submitCustomUrl(urlOrPort: string): void {
-    try {
-      const expanded = expandPortOrUrl(urlOrPort);
-      this.publish({...this.state!, phase: 'custom_kind', customUrl: expanded, error: ''});
-    } catch (error) {
-      this.publish({...this.state!, error: error instanceof Error ? error.message : 'Invalid URL or port number.'});
-    }
-  }
-
-  chooseCustomKind(kind: CustomProviderKind): void {
-    const state = this.state;
-    if (!state || state.phase !== 'custom_kind') return;
-    if (kind !== 'openai_compat' && kind !== 'anthropic') return;
-    this.publish({...state, phase: 'custom_key', customKind: kind, error: ''});
-  }
-
-  /** Remove one custom provider together with its saved credential. */
-  async delete(name: string): Promise<void> {
-    const state = this.state;
-    if (!state || state.phase !== 'provider' || !this.onRemove) return;
-    const target = state.providers.find(item => item.name === name);
-    if (!target?.custom) return;
-    this.publish({...state, error: ''});
-    try {
-      await this.onRemove(name);
-      this.publish({
-        ...state,
-        providers: state.providers.filter(item => item.name !== name),
-        error: '',
-      });
-    } catch (error) {
-      this.publish({...state, error: formatDetailedError(error, 'Failed to remove provider.')});
-    }
-  }
-
-  async submitCustomKey(key: string): Promise<void> {
-    const state = this.state;
-    if (!state || state.phase !== 'custom_key') return;
-    this.publish({...state, phase: 'saving', error: ''});
-    this.saving = (async () => {
-      try {
-        await this.customStorage.save({
-          name: state.provider,
-          base_url: state.customUrl!,
-          kind: state.customKind ?? 'openai_compat',
-        });
-        const trimmedKey = key.trim();
-        if (trimmedKey) {
-          await this.auth.save(state.provider, trimmedKey, new AbortController().signal);
-        }
-        await this.onSaved(state.provider);
-        this.publish(null);
-      } catch (error) {
-        this.publish({...state, phase: 'custom_key', error: formatDetailedError(error, 'Failed to save custom provider.')});
-      }
-    })();
-    try {await this.saving;} finally {this.saving = undefined;}
-  }
 
   private async startOAuth(): Promise<boolean> {
     const state = this.state;
@@ -385,11 +146,7 @@ export class LoginFlow {
         succeeded = true; this.publish(null);
       } catch (error) {
         if (generation !== this.oauthGeneration) return;
-        this.publish({
-          ...state,
-          phase: 'method',
-          error: formatDetailedError(error, 'OAuth login failed.'),
-        });
+        this.publish({...state, phase: 'oauth', error: formatDetailedError(error, 'OAuth login failed.')});
       } finally {
         if (generation === this.oauthGeneration) {this.oauthSession = undefined; this.oauthAbort = undefined;}
       }
@@ -401,32 +158,10 @@ export class LoginFlow {
   cancel(): void {
     const batch = this.wizardBatch;
     if (batch) {this.wizardBatch = undefined; this.publish(null); batch.resolve(null); return;}
-    if (this.state?.phase !== 'saving') {
-      this.oauthGeneration++; this.oauthAbort?.abort();
-      this.oauthSession?.cancel();
-      this.oauthSession = undefined;
-      this.publish(null);
-    }
-  }
-
-  async submit(key: string): Promise<void> {
-    const state = this.state;
-    if (!state) return;
-    if (state.phase === 'custom_name') {this.submitCustomName(key); return;}
-    if (state.phase === 'custom_url') {this.submitCustomUrl(key); return;}
-    if (state.phase === 'custom_key') {await this.submitCustomKey(key); return;}
-    if (state.phase !== 'key') return;
-    this.publish({...state, phase: 'saving', error: ''});
-    this.saving = (async () => {
-      try {
-        await this.auth.save(state.provider, key, new AbortController().signal);
-        await this.onSaved(state.provider);
-        this.publish(null);
-      } catch (error) {
-        this.publish({...state, phase: 'key', error: error instanceof Error ? error.message : 'Failed to save API key.'});
-      }
-    })();
-    try {await this.saving;} finally {this.saving = undefined;}
+    this.oauthGeneration++; this.oauthAbort?.abort();
+    this.oauthSession?.cancel();
+    this.oauthSession = undefined;
+    this.publish(null);
   }
 
   async close(): Promise<void> {

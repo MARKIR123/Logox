@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {AuthStorage} from '../src/providers/auth.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
-import {LoginFlow} from '../src/providers/login.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 
@@ -32,26 +31,6 @@ test('持久认证保留其他提供商，跨实例并发不丢失，拒绝坏�
     assert.equal(await readFile(path, 'utf8'), 'broken private-fixture');
     assert.deepEqual(await readdir(cwd), ['auth.json']);
   } finally {await rm(cwd, {recursive: true, force: true});}
-});
-
-test('登录阶段不保存密钥，取消不落盘，保存失败可以重试', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-flow-'));
-  const auth = new AuthStorage(join(cwd, 'auth.json'));
-  const saved: string[] = [];
-  const flow = new LoginFlow(auth, () => ['deepseek'], name => saved.push(name));
-  const snapshots: string[] = [];
-  const unsubscribe = flow.subscribe(() => snapshots.push(JSON.stringify(flow.getSnapshot())));
-  try {
-    await flow.begin();assert.equal(flow.getSnapshot()?.phase, 'provider');
-    flow.choose('deepseek');flow.cancel();
-    assert.equal(flow.getSnapshot(), null);assert.equal(await auth.key('deepseek'), '');
-    await flow.begin('deepseek');
-    await flow.submit('');assert.equal(flow.getSnapshot()?.phase, 'key');assert.match(flow.getSnapshot()!.error, /valid API key/);
-    await flow.submit('synthetic-key');
-    assert.equal(flow.getSnapshot(), null);assert.deepEqual(saved, ['deepseek']);
-    assert.ok(!snapshots.join('').includes('synthetic-key'));
-    await flow.begin();assert.equal(flow.getSnapshot()?.providers[0]?.saved, true);
-  } finally {unsubscribe();await flow.close();await rm(cwd, {recursive: true, force: true});}
 });
 
 test('/login 保存后重建应用直接认证，密钥不进入舞台或会话', async () => {

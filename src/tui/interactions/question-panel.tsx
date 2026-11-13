@@ -9,7 +9,7 @@ import {toggleColor, toggleMarker} from '../components/toggle-marker.js';
 import {graphemes, insert, erase, move, moveToLineEdge, type Draft} from '../input/editor.js';
 
 /** A status badge right-aligned on the option's first row; each segment is drawn in the colour of its tone. */
-export interface PanelBadgeSegment {readonly text: string; readonly tone: 'success' | 'warning' | 'dim'}
+export interface PanelBadgeSegment {readonly text: string; readonly tone: 'success' | 'warning' | 'info' | 'dim'}
 export interface PanelOption {readonly label: string; readonly description?: string; readonly badge?: readonly PanelBadgeSegment[]}
 export interface PanelQuestion {
   readonly question: string;
@@ -67,7 +67,8 @@ export interface QuestionRowsInput {
 function row(text: string, color: string, action?: QuestionRow['action']): QuestionRow {
   return {segments: [{text, color}], ...(action === undefined ? {} : {action})};
 }
-const badgeColors = {success: () => palette.success, warning: () => palette.warning, dim: () => palette.muted} as const;
+/** `info` is a reminder rather than a state, so it takes the informational link colour (not success, not warning). */
+const badgeColors = {success: () => palette.success, warning: () => palette.warning, info: () => palette.link, dim: () => palette.muted} as const;
 /**
  * The first row of an option with a badge: the name on the left (clipped before the badge ever is), the badge flush right.
  * On a narrow row the origin part of the badge goes first, then the badge itself is clipped.

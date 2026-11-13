@@ -510,13 +510,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         screenRows,
         loginState.phase === 'wizard'
           ? loginFolded ? Math.min(4, screenRows) : Math.max(1, Math.min(24, screenRows - 2))
-          : loginState.phase === 'provider'
-          ? Math.min(8, loginState.providers.length) + 6
-          : loginState.phase === 'method'
-            ? Math.min(6, loginState.methods?.length ?? 2) + 6
-            : loginState.phase === 'oauth'
-              ? 8
-              : 5,
+          : 8,
       )
     : 0;
   const groupedPicker = surface?.kind === 'picker' && new Set(surface.items.map(item => item.group).filter(Boolean)).size > 1;

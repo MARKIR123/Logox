@@ -1,5 +1,6 @@
 # Copy selected sections to ~/.logox/config.toml or .logox/config.toml.
 # Use /login for credentials and /model for an available model ID.
+# Provider names: "openai" is the OpenAI API (API key); "openai-auth" is the ChatGPT account (sign in with /login > Account sign-in).
 [provider]
 name = "openai"
 model = ""

@@ -11,24 +11,28 @@
 /model
 ```
 
-`/login` 打开提供商向导，`/login deepseek` 直接进入指定提供商：没设置过就是它的添加流程，已设置就是它的编辑菜单。向导没有“新增/编辑”之分，根是两种登录方式（各两行）：`API key`（Sign in with a URL and an API key）和 `Account sign-in`（Authorize in the browser with a provider account）。
+`/login` 打开提供商向导，`/login deepseek` 直接进入指定提供商（`/login openai` 是 API key 流程，`/login openai-auth` 是账号流程；名字不在列表里会报错）：没设置过就是它的添加流程，已设置就是它的编辑菜单。向导没有“新增/编辑”之分，根是两种登录方式（各两行）：`API key`（Sign in with a URL and an API key）和 `Account sign-in`（Authorize in the browser with a provider account）。
 
 **API key 列表**：
 
 - **顺序**：全部列出的内置模板（按模板顺序），然后是你自己的提供商（自定义记录、配置文件里声明的提供商，也包括曾经作为模板的本地代理，例如已有记录的 `antigravity`），再然后是没有对应记录的孤立凭据，最后一项固定是 `Custom endpoint`。
-- **每一项两行**：第一行左边是名称，右边靠右对齐一个状态徽标，由“来源 · 状态”组成：来源是 `built-in` 或 `custom`；状态是 `✓ signed in`（已保存 API key）、`✓ env key`（只有模板的环境变量提供密钥）、`✓ local`（有记录的无需密钥的本地端点），尚未设置则只有来源。账号登录的提供商在这张列表里算“未设置”，只显示来源。`✓` 部分用主题的成功色，其余为暗色；孤立凭据显示警告色的 `credential only`。第二行是暗色说明：模板是一句简短描述，自定义提供商是 base URL，`Custom endpoint` 是 “Any OpenAI- or Anthropic-compatible URL with an API key”。终端很窄时先截断名称，再去掉来源，徽标始终可见。鼠标：单击选择，悬停高亮，滚轮滚动。
-- **选没设置过的模板**：直接进入添加流程：地址（模板的官方地址已预填，直接回车即保留，也可以改成自己的地址）、key（只有无需密钥的模板可留空）、模型、确认保存。一个提供商名只有一份凭据：如果它当前是账号登录，保存 key 会替换账号登录，确认框的说明行末尾会写 `Replaces the account sign-in`。
+- **每一项两行**：第一行左边是名称，右边靠右对齐一个状态徽标，由“来源 · 状态”组成：来源是 `built-in` 或 `custom`；状态是 `✓ signed in`（已保存 API key）、`✓ env key`（只有模板的环境变量提供密钥）、`✓ local`（有记录的无需密钥的本地端点），尚未设置则只有来源。账号登录的提供商（`openai-auth`）不在这张列表里。如果 `openai-auth` 已账号登录、而 `openai` 自己没有 key，`openai` 的徽标是 `built-in · account signed in`，其中 `account signed in` 用主题的提示色（`link`，既不是成功色也不是警告色）：它只提醒“OpenAI 已经能通过账号使用”，不是这一项自己的状态；这个提示来自模板的 `accountSibling` 声明，不是写死的 OpenAI 判断。`openai` 有了自己的 key 后徽标恢复为 `built-in · ✓ signed in`。`✓` 部分用主题的成功色，其余为暗色；孤立凭据显示警告色的 `credential only`。第二行是暗色说明：模板是一句简短描述，自定义提供商是 base URL，`Custom endpoint` 是 “Any OpenAI- or Anthropic-compatible URL with an API key”。终端很窄时先截断名称，再去掉来源，徽标始终可见。鼠标：单击选择，悬停高亮，滚轮滚动。
+- **选没设置过的模板**：直接进入添加流程：地址（模板的官方地址已预填，直接回车即保留，也可以改成自己的地址）、key（内置模板都需要 key；无需密钥的端点走 `Custom endpoint`）、模型、确认保存。`openai` 与 `openai-auth` 是两个互相独立的提供商，保存 `openai` 的 key 不会影响账号登录，因此没有任何“替换”确认。
 - **选已设置的提供商（内置或自定义）**：进入它的编辑菜单：`API key`、`Base URL`、`Wire protocol`、`Model list`，以及 `Delete provider`（没有可删内容时不显示，例如只靠环境变量的模板）。每个有记录的提供商都可改地址和协议。删除需再次确认。如果有人在用这家提供商的模型（当前会话、某个角色的默认模型、Automa 的专用模型），确认框会列出 `In use by: session, techne, ...`；确认删除后这些角色或 Automa 的绑定会被清除，不会被悄悄改成别的模型，并发出一条提示列出需要重新指定的角色（用 `/model <角色>`）。没有绑定的角色沿用会话模型；如果会话模型本身在被删的提供商上，会话回到“未选择模型”，需要用 `/model` 重新选。
 - **选孤立凭据**：只能删除。
 - **选 `Custom endpoint`**：路由名、key（可留空）、地址或端口与协议（Chat Completions、Responses 或 Anthropic Messages）、模型、确认保存。路由名不能与列表里已有的重复。本地代理（如 antigravity）也从这里添加。
 
-**Account sign-in 列表**：列出支持账号登录的模板（由模板的 `account` 属性决定，目前只有 `openai`），同样两行并带徽标：账号登录的显示 `built-in · ✓ account`，其余只显示来源。选尚未账号登录的会启动浏览器授权；如果它当前保存着 API key，会先确认一次，说明行写 `Replaces the saved API key`（同一个名字只有一份凭据）。选已账号登录的会进入它的菜单：`Sign in again`（重新授权）、`Model list`、`Delete provider`（同样的使用情况确认），没有 API key、地址或协议项。`✓ account` 只出现在这张列表里，其余状态只出现在 API key 列表里。没有任何模板支持账号登录时提示 “not supported”。
+**Account sign-in 列表**：列出账号专用的模板（由模板的 `account` 属性决定，目前只有 `openai-auth`，说明为 “ChatGPT account (subscription)”），同样两行并带徽标：账号登录的显示 `built-in · ✓ account`，其余只显示来源。选尚未账号登录的会直接启动浏览器授权，没有确认框。选已账号登录的会进入它的菜单：`Sign in again`（重新授权）、`Model list`、`Delete provider`（同样的使用情况确认），没有 API key、地址或协议项。`✓ account` 只出现在这张列表里，其余状态只出现在 API key 列表里。没有任何模板支持账号登录时提示 “not supported”。
 
-**模板与提供商**：模板是内置的快捷方式，只包含名称、固定的官方地址和协议（`openai`、`anthropic`、`deepseek`），本身不是提供商。本地代理 `antigravity` 不再是模板，而是一个用户自己的自定义端点：程序仍认识它的默认地址和 Claude 路由，已有记录照常工作，在列表里显示为 `custom · ✓ local`。提供商是你设置过的东西，每个提供商在 `~/.logox/custom-providers.json` 里有一条记录；模板只负责预填：新增时地址默认取模板的官方地址，之后记录自己拥有地址、协议和 `api`，你可以随时在编辑里修改，启动时不会再用模板覆盖。基于模板的记录带 `catalog: true`，模板只补记录里没存的东西：密钥环境变量，以及仅当记录的地址仍是模板官方地址时才生效的 `model_kinds` 路由。账号登录（OAuth）是提供商的一种凭据类型，哪些模板支持由模板的 `account` 属性决定，目前只有 `openai`。旧的 `openai-compatible` 模板已移除（它与 `openai` 地址和环境变量完全相同）：旧配置或已保存选择里仍写着这个名字（且没有自己的 `base_url`）时，会静默按 `openai` 解析，不会出现在任何列表里；全新安装的默认提供商现在是 `openai`。
+**模板与提供商**：模板是内置的快捷方式，只包含名称、固定的官方地址和协议（`openai`、`openai-auth`、`anthropic`、`deepseek`），本身不是提供商。本地代理 `antigravity` 不再是模板，而是一个用户自己的自定义端点：程序仍认识它的默认地址和 Claude 路由，已有记录照常工作，在列表里显示为 `custom · ✓ local`。提供商是你设置过的东西，每个提供商在 `~/.logox/custom-providers.json` 里有一条记录；模板只负责预填：新增时地址默认取模板的官方地址，之后记录自己拥有地址、协议和 `api`，你可以随时在编辑里修改，启动时不会再用模板覆盖。基于模板的记录带 `catalog: true`，模板只补记录里没存的东西：密钥环境变量，以及仅当记录的地址仍是模板官方地址时才生效的 `model_kinds` 路由。账号登录（OAuth）是提供商的一种凭据类型：账号专用模板由 `account` 属性标出，目前只有 `openai-auth`，它没有 API key 流程也没有密钥环境变量；用账号还是 key 由凭据类型决定，不看提供商名。旧的 `openai-compatible` 模板已移除（它与 `openai` 地址和环境变量完全相同）：旧配置或已保存选择里仍写着这个名字（且没有自己的 `base_url`）时，会静默按 `openai` 解析，不会出现在任何列表里；全新安装的默认提供商现在是 `openai`。
 
 列表中的“提供商”依次包括：已保存的记录、配置文件里声明的 `[providers.<name>]`、已设置对应密钥环境变量的模板（零配置可用），以及当前选中的提供商。没有设置过的模板不会出现在提供商列表、`/model` 和 `--list-providers` 的主列表里，只出现在 `/login` 列表里（以及 `--list-providers` 末尾的 Templates 小节）。保存 key 或完成账号登录时会自动创建记录；启动时，`auth.json` 中名称是模板、却没有记录的凭据会补写一条记录。名称既不是模板、记录也不是配置提供商的凭据不会被自动改动或删除，在列表里显示为 `credential only`（说明 Saved credential without an endpoint），只能删除。删除提供商会同时删除记录和凭据。
 
 保存确认前取消不会写入任何内容。密钥只留在本地表单和认证存储中，不进入工具问答、会话账本或模型上下文。向导不会扫描其他工具的凭据文件。登录期间聊天草稿仍可编辑，但暂时不能提交聊天或其他命令。表单内的按键见[终端操作](UI-SPEC.md)。
+
+**两个 OpenAI 提供商**：`openai` 只用 API key（按量付费），`openai-auth` 只用 ChatGPT 账号登录（订阅）。两者各有自己的记录、凭据、模型列表和模型选择器条目，可以同时设置，角色也可以分别绑定到其中一个，互不替换。
+
+**一次性迁移**：以前账号登录保存在 `openai` 名下。升级后第一次启动时，如果 `auth.json` 里 `openai` 的凭据是账号登录（OAuth），Logox 会把它移到 `openai-auth`：先写入新名字并读回确认，再删除旧的；任何一步失败都保持原样（凭据不会同时消失）。如果 `openai-auth` 已有凭据则不覆盖，两边都保留，迁移跳过。同时改写这些把 `openai` 当作账号提供商的引用：`openai` 的提供商记录（模型与默认模型带过去）、`~/.logox/model-preferences.json` 与当前项目 `.logox/state/model-preferences.json` 里保存的选择、`~/.logox/actor-models.json` 与 `tool-models.json`（角色与 Automa 绑定）、`~/.logox/models-store.json`、`~/.logox/actors/` 与当前项目 `.logox/actors/` 中角色文件的 `defaultModel`。迁移后发一条提示 `OpenAI account sign-in is now the provider openai-auth; your saved model choices were updated.`。`openai` 的凭据是 API key 时不做任何事，重复启动也不会重复执行。会话账本、旧会话的任务模型记录、其他项目的状态和 `config.toml` 里写的 `openai` 不会改：它们仍指向 `openai`，使用时按 `openai` 的正常路径报 “not logged in”（恢复旧会话不会崩溃，也不会悄悄改用账号），用 `/login` 或 `/model` 重新选择即可。
 
 认证保存在 `~/.logox/auth.json`，与项目聊天账本分开。读取优先级是：Logox 保存的认证，其次是指定的密钥环境变量，最后是显式配置的只读认证文件。`auth_file` 支持兼容的 API key 记录和完整的环境变量引用，不支持执行命令取密钥，也不同于 Logox 自己的 OAuth 登录。
 
@@ -77,7 +81,8 @@
 
 | 名称 | 协议 | 默认地址 | 密钥环境变量 |
 |---|---|---|---|
-| `openai` | OpenAI 兼容 / 特定 OAuth 路由 | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `openai` | OpenAI 兼容（按量付费，只用 API key） | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `openai-auth` | ChatGPT 账号登录（订阅，只用浏览器授权，始终走流式 Responses） | `https://api.openai.com/v1` | 无 |
 | `deepseek` | OpenAI 兼容 | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `anthropic` | Anthropic 原生 | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | `antigravity`（不在模板列表，经 `Custom endpoint` 添加；已知端点） | 本地代理：默认 OpenAI 兼容，`claude-*` 模型走 Anthropic 原生 `/v1/messages` | `http://127.0.0.1:8045/v1` | 通常无需配置 |

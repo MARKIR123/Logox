@@ -146,9 +146,9 @@ export async function runQuestionPreview(args: readonly string[] = process.argv.
     const width = Math.max(12, Number(get('--width', '80')) || 80), height = Math.max(6, Number(get('--height', '18')) || 18);
     const questionIndex = scene === 'multi' ? 1 : scene === 'notes' ? 2 : 0;
     const question = scene === 'secret' ? secretSample : scene === 'login'
-      ? {header: 'Providers', question: 'What do you want to do?', hideCustomInput: true, options: [
-        {label: 'Add a new provider', description: 'Built-in catalog or a custom API endpoint'},
-        {label: 'Edit an existing provider', description: 'Change the key, endpoint, protocol, or models — or delete the provider'},
+      ? {header: 'Providers', question: 'Choose a sign-in method', hideCustomInput: true, options: [
+        {label: 'API key', description: 'Sign in with a URL and an API key'},
+        {label: 'Account sign-in', description: 'Authorize in the browser with a provider account'},
       ]} : sampleQuestions[questionIndex]!;
     const output = renderToString(<QuestionPanel question={question} width={width} height={height} position={questionIndex + 1}
       total={scene === 'login' || scene === 'secret' ? 1 : 3} answered={questionIndex}
