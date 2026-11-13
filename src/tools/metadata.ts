@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {z} from 'zod';
 
 export const toolCategorySchema = z.string().min(1).max(160).regex(/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/);
@@ -21,6 +22,8 @@ export const toolMetadataSchema = z.strictObject({
   roles: toolRolesSchema,
   loading: toolLoadingSchema.optional(),
   terminalVisibility: toolTerminalVisibilitySchema,
+  /** Only observes: leaves no partial side effects, so a batch of such calls keeps its valid calls and they count toward the Automa streak. */
+  readOnly: z.boolean().optional(),
   description: z.string().optional(),
 }).transform(meta => ({...meta, loading: meta.loading ?? (meta.category === 'core' ? 'eager' : 'deferred')}));
 export type ToolMetadata = z.infer<typeof toolMetadataSchema>;
@@ -36,8 +39,8 @@ export type UserToolConfig = z.infer<typeof userToolConfigSchema>;
 
 export function isToolAllowedForActor(roles: ToolRoles, actorId: string): boolean {
   if (roles === 'all') return true;
-  if (roles === 'director') return actorId === 'logox';
-  if (roles === 'actors') return actorId !== 'logox';
+  if (roles === 'director') return isDirector(actorId);
+  if (roles === 'actors') return !isDirector(actorId);
   if (Array.isArray(roles)) return roles.includes(actorId);
   return false;
 }

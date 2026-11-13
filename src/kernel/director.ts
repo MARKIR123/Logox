@@ -1,2 +1,2 @@
-/** The Director is the one actor whose id is `logox`. */
-export const isDirector = (ownerId: string): boolean => ownerId === 'logox';
+/** The Director's id lives in the import-free leaf `../runtime/director-id.ts`; re-exported here for kernel callers. */
+export {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';

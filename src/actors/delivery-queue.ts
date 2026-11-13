@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import {deliverySchema, deliveryPriority, type Delivery, type DeliveryInput} from '../runtime/delivery.js';
 import {immutable, type TaskOriginData} from '../runtime/contracts.js';
@@ -69,7 +70,7 @@ export class DeliveryQueue {
         time: input.time ?? Date.now(), status: 'pending'});
       const previous = this.records.find(record => record.id === item.id);
       if (previous) return previous;
-      const prior = item.kind === 'failure' && item.source === 'logox' ? this.records.map(record =>
+      const prior = item.kind === 'failure' && isDirector(item.source) ? this.records.map(record =>
         record.status === 'delivered' && record.recipientActivityId === item.sourceActivityId ? {...record, successorId: item.id} : record) : this.records;
       // Urgent news for an owner that will act on it carries that owner's held reports along in the same write.
       const urgent = !item.deferredUntilHuman && !item.hold && ['failure', 'help', 'human_steer'].includes(item.kind);

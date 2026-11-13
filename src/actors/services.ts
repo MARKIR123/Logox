@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import {z} from 'zod';
 import {stripNarration} from '../runtime/narration.js';
 import {randomUUID} from 'node:crypto';
@@ -132,7 +133,7 @@ export class ActorServices {
       members: () => options.catalog.list().map(a => a.id),
       coordinate: async (callId, message, summary, context) => {
         const root = context.rootActivityId ?? context.activityId;
-        await this.deliveries.enqueue({id: 'help:' + context.activityId + ':' + callId, ownerId: 'logox', source: context.ownerId,
+        await this.deliveries.enqueue({id: 'help:' + context.activityId + ':' + callId, ownerId: DIRECTOR_ID, source: context.ownerId,
           sourceActivityId: context.activityId, rootActivityId: root, kind: 'help', inputKind: 'collaboration',
           text: (summary ? summary + '\n' : '') + message, origin: {rootActivityId: root, parentActivityId: context.activityId,
             authorization: [...context.authorization ?? []], ...(context.recovery ? {recovery: context.recovery} : {})}});
@@ -195,13 +196,13 @@ export class ActorServices {
   facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
     const snapshot = this.options.getSnapshot?.();
     if (!snapshot) return '';
-    if (context.ownerId !== 'logox') return activeEnsembleRoster(snapshot, context);
+    if (!isDirector(context.ownerId)) return activeEnsembleRoster(snapshot, context);
     const facts = directorFacts(snapshot, context, this.deliveries.snapshot());
     return facts ? DIRECTOR_FACTS_HEADER + '\n' + JSON.stringify(facts) : '';
   }
   policy(ownerId: string) {
     const role = this.active.get(ownerId) ?? this.options.catalog.find(ownerId);
-    if (ownerId === 'logox' && role?.id === 'logox') return this.options.config.context;
+    if (isDirector(ownerId) && role?.id === DIRECTOR_ID) return this.options.config.context;
     return contextPolicySchema.parse({...this.options.config.context, ...role?.context});
   }
   contract(ownerId: string): string | undefined {return (this.active.get(ownerId) ?? this.options.catalog.find(ownerId))?.compression;}
@@ -239,7 +240,7 @@ export class ActorServices {
         for (const task of tasks) {
           const explicitTitle = task.title?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
-          if (task.ownerId === 'logox' || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
+          if (isDirector(task.ownerId) || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
           if (task.resumeTask) {
             const previous = saved.find(previous => previous.activityId === task.resumeTask);
             if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
@@ -248,7 +249,7 @@ export class ActorServices {
             if (previous.status !== 'failed' && !restartStopped(previous)) throw new Error('Only failed or restart-interrupted activities can be resumed; current status: ' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
             if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) && !this.restartInterrupted.has(task.resumeTask) &&
-              !this.deliveries.snapshot().some(item => item.ownerId === 'logox' && item.kind === 'failure' && item.sourceActivityId === task.resumeTask) &&
+              !this.deliveries.snapshot().some(item => isDirector(item.ownerId) && item.kind === 'failure' && item.sourceActivityId === task.resumeTask) &&
               !this.deliveries.snapshot().some(item => item.recipientActivityId === context.activityId && item.rootActivityId === root)) {
               throw new Error('The resume target was not handed off to the current task; other root goals cannot be resumed');
             }
@@ -309,7 +310,7 @@ export class ActorServices {
           const after = this.resolveAfter(owner, task.after, dispatched);
           const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
             ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {})};
-          const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), 'logox', childOrigin);
+          const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), DIRECTOR_ID, childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
@@ -336,7 +337,7 @@ export class ActorServices {
       }
       if (canonical === 'ReadActor') {
         const {ownerId, activityId} = readActorSchema.parse(input);
-        const reported = activityId ? this.deliveries.snapshot().find(item => item.ownerId === 'logox' && item.kind === 'report' && item.sourceActivityId === activityId && item.source === ownerId) : undefined;
+        const reported = activityId ? this.deliveries.snapshot().find(item => isDirector(item.ownerId) && item.kind === 'report' && item.sourceActivityId === activityId && item.source === ownerId) : undefined;
         if (reported) return {text: '# Task report: ' + ownerId + ' (' + activityId + ')' + (reported.hold && reported.status === 'pending' ? ' (held, not yet delivered)' : '') + '\n\n' + reported.text, isError: false};
         const entries = await this.options.journal.load(context.sessionId, ownerId);
         const rounds = await this.options.journal.rounds(context.sessionId, ownerId, entries);
@@ -427,7 +428,7 @@ export class ActorServices {
       const exhausted = this.deliveries.snapshot().filter(item => item.status === 'pending' && item.deferredUntilHuman &&
         item.origin?.recovery?.exhausted && !item.origin.recovery.key.startsWith('execution:'));
       this.releaseTask = this.deliveries.releaseDeferred(liftExhaustion).then(() => this.recovery.lift(exhausted.map(item => item.rootActivityId ?? item.origin?.rootActivityId)))
-        .then(() => this.deliveries.release('logox')).then(() => {});
+        .then(() => this.deliveries.release(DIRECTOR_ID)).then(() => {});
     }
     const report = this.recovery.resume(activityId);
     const batches = [...new Set([...this.groups.values()].filter(group => group.paused).map(group => group.batchId))];
@@ -469,17 +470,17 @@ export class ActorServices {
   private armOutage(error: ProviderError): void {this.backoff.arm(error.context?.provider ?? 'the model provider');}
   /** A failure on another provider does not predict the Director's own provider, so it needs no wait. */
   private otherProvider(error: ProviderError): boolean {
-    const director = this.options.modelResolver?.('logox')?.provider, failed = error.context?.provider;
+    const director = this.options.modelResolver?.(DIRECTOR_ID)?.provider, failed = error.context?.provider;
     return !!director && !!failed && director !== failed;
   }
   private wakeDirector(): void {
     if (this.recovery.stopped() || this.wakeTask || this.backoff.waiting) return;
-    if (this.options.canReceiveMessage?.('logox') ?? !!this.options.getActiveTask?.('logox')) return;
-    const pending = [...this.deliveries.pending('logox')].filter(item => !item.deferredUntilHuman)
+    if (this.options.canReceiveMessage?.(DIRECTOR_ID) ?? !!this.options.getActiveTask?.(DIRECTOR_ID)) return;
+    const pending = [...this.deliveries.pending(DIRECTOR_ID)].filter(item => !item.deferredUntilHuman)
       .sort((a, b) => deliveryPriority[a.kind] - deliveryPriority[b.kind]);
     const first = pending[0];
     if (!first) return;
-    const handle = this.options.enqueue('logox', automatedEvent(DIRECTOR_COORDINATION_WAKE), first.source,
+    const handle = this.options.enqueue(DIRECTOR_ID, automatedEvent(DIRECTOR_COORDINATION_WAKE), first.source,
       {...first.origin, rootActivityId: first.rootActivityId ?? first.origin?.rootActivityId ?? first.sourceActivityId,
         inputKind: 'actor', coordinationWake: true, priority: first.kind === 'failure' || first.kind === 'help'});
     this.wakeTask = handle;
@@ -489,7 +490,7 @@ export class ActorServices {
       this.wakeTask = undefined;
       const completed = this.options.getSnapshot?.().activities.find(activity => activity.activityId === handle.activityId)?.status === 'completed';
       if (completed) this.backoff.reset();
-      if (completed || this.deliveries.pending('logox').some(item => !item.deferredUntilHuman && !admitted.has(item.id))) {
+      if (completed || this.deliveries.pending(DIRECTOR_ID).some(item => !item.deferredUntilHuman && !admitted.has(item.id))) {
         try {this.wakeDirector();} catch {this.options.notice?.('Coordination wake-up failed; pending reports remain saved.');}
       }
     });
@@ -500,13 +501,13 @@ export class ActorServices {
    */
   private releaseEndedRoots(reporting?: string): Promise<boolean> {
     const run = this.releasing.then(async () => {
-      const held = this.deliveries.held('logox');
+      const held = this.deliveries.held(DIRECTOR_ID);
       if (!held.length) return false;
       const snapshot = this.options.getSnapshot?.();
       const ended = new Set(this.ended); if (reporting) ended.add(reporting);
       const open = (root: string) => !!snapshot && hasOpenWork(openWork(snapshot, root, this.deliveries.snapshot(), ended));
       const roots = new Set(held.map(item => item.rootActivityId ?? '')); let released = false;
-      for (const root of roots) if (!open(root) && await this.deliveries.release('logox', item => (item.rootActivityId ?? '') === root)) released = true;
+      for (const root of roots) if (!open(root) && await this.deliveries.release(DIRECTOR_ID, item => (item.rootActivityId ?? '') === root)) released = true;
       return released;
     });
     this.releasing = run.then(() => {}, () => {});
@@ -532,22 +533,22 @@ export class ActorServices {
     if (pending) return this.admitHandoff(pending);
     const group = this.groups.get(result.activityId);
     const executionError = result.error instanceof ExecutionRecoveryError ? result.error : undefined;
-    if (result.ownerId === 'logox' && (result.status === 'completed' || (!result.recovery && !executionError))) return;
+    if (isDirector(result.ownerId) && (result.status === 'completed' || (!result.recovery && !executionError))) return;
     const origin = group?.origin ?? this.origins.get(result.activityId) ?? result;
-    if (result.ownerId !== 'logox' && !group && inputKind({...origin, ownerId: result.ownerId, source: result.source}) !== 'director') return;
+    if (!isDirector(result.ownerId) && !group && inputKind({...origin, ownerId: result.ownerId, source: result.source}) !== 'director') return;
     const eventId = 'terminal:' + result.activityId + ':' + result.status;
     if (this.deliveries.snapshot().some(item => item.id === eventId)) {this.closeHandoff(result.activityId); return;}
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
     const [cause, ...diagnostics] = (executionError?.message ?? (result.error instanceof ProviderError ? formatFailureDetail(result.error) : undefined))?.split('\n') ?? [];
     const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' + (diagnostics.length ? '\n' + diagnostics.join('\n') : '') : '';
     const body = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
-    const record = result.ownerId === 'logox' ? '' : await this.runtimeRecord(result.ownerId, result.activityId, origin);
+    const record = isDirector(result.ownerId) ? '' : await this.runtimeRecord(result.ownerId, result.activityId, origin);
     const report = record ? body + '\n\n' + record : body;
     if (result.stopReason === 'shutdown') {this.closeHandoff(result.activityId); return;}
     const userStopped = result.stopReason === 'user' || this.stoppedActors.delete(result.activityId);
     const failed = result.status !== 'completed';
     // A Director wake that failed on a provider outage is not a new failure: its deliveries return to pending and the backoff schedules the next try, without spending recovery budget.
-    if (result.ownerId === 'logox' && failed && !userStopped && isProviderOutage(result.error) &&
+    if (isDirector(result.ownerId) && failed && !userStopped && isProviderOutage(result.error) &&
       (origin.coordinationWake || origin.recovery?.key.startsWith('provider:temporary:'))) {
       this.armOutage(result.error); this.closeHandoff(result.activityId); return;
     }
@@ -563,12 +564,12 @@ export class ActorServices {
       : await this.recovery.next(rootActivityId, result.error, origin.recovery) : inheritedRecovery;
     const noClaim = !!executionError && !recovery;
     if (recovery) {
-      const actorTask = !failed ? undefined : result.ownerId === 'logox' ? origin.recovery?.actorTask
+      const actorTask = !failed ? undefined : isDirector(result.ownerId) ? origin.recovery?.actorTask
         : isProviderOutage(result.error) ? {ownerId: result.ownerId, activityId: result.activityId} : undefined;
       delete recovery.actorTask;
       if (actorTask) recovery.actorTask = actorTask;
     }
-    const outage = failed && !userStopped && !deferred && result.ownerId !== 'logox' && isProviderOutage(result.error) && !this.otherProvider(result.error) ? result.error : undefined;
+    const outage = failed && !userStopped && !deferred && !isDirector(result.ownerId) && isProviderOutage(result.error) && !this.otherProvider(result.error) ? result.error : undefined;
     const instruction = userStopped ? DIRECTOR_USER_STOP
       : executionError ? executionError.kind === 'no_delivery' ? DIRECTOR_EXECUTION_REVIEW : DIRECTOR_STREAM_REVIEW
       : recovery?.exhausted ? DIRECTOR_RECOVERY_EXHAUSTED
@@ -576,9 +577,9 @@ export class ActorServices {
       : failed ? DIRECTOR_FAILURE : '';
     const batches = group?.paused && [...group.remaining].some(id => id !== result.activityId) ? '\n' + DIRECTOR_PAUSED_BATCH + group.batchId + DIRECTOR_PAUSED_BATCH_RULE : '';
     await this.admitHandoff(deliverySchema.parse({id: eventId, sessionId: this.options.sessionId, status: 'pending', time: Date.now(),
-      ownerId: 'logox', source: result.ownerId, sourceActivityId: result.activityId,
+      ownerId: DIRECTOR_ID, source: result.ownerId, sourceActivityId: result.activityId,
       rootActivityId, kind: failed ? 'failure' : 'report', inputKind: 'actor', text: (instruction + batches ? instruction + batches + '\n' : '') + report,
-      deferredUntilHuman: !!(deferred || noClaim), ...(!failed && !userStopped && !deferred && result.ownerId !== 'logox' ? {hold: 'root' as const} : {}), origin: {parentActivityId: result.activityId, rootActivityId,
+      deferredUntilHuman: !!(deferred || noClaim), ...(!failed && !userStopped && !deferred && !isDirector(result.ownerId) ? {hold: 'root' as const} : {}), origin: {parentActivityId: result.activityId, rootActivityId,
         dispatchDepth: group?.depth ?? this.depths.get(result.activityId) ?? origin.dispatchDepth ?? 0,
         authorization: [...origin.authorization ?? []], ...(recovery ? {recovery} : {})}}), outage);
   }
@@ -604,7 +605,7 @@ export class ActorServices {
     const pending = this.pendingHandoffs.get(activityId);
     if (pending) await this.admitHandoff(pending);
     else if (this.groups.has(activityId)) await this.handoff({ownerId: this.definitions.get(activityId)?.id ?? 'actor', activityId,
-      source: 'logox', status, summary: {title: 'Task not handed off normally', report: 'The task ended during queueing or recording; please verify its state.', source: 'local'},
+      source: DIRECTOR_ID, status, summary: {title: 'Task not handed off normally', report: 'The task ended during queueing or recording; please verify its state.', source: 'local'},
       ...(status === 'cancelled' ? {stopReason: 'shutdown'} : {})});
     if (await this.releaseEndedRoots()) this.wakeDirector();
     const definition = this.definitions.get(activityId);

@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {inputKind} from '../runtime/provenance.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import type {RoundStatus} from '../context/contracts.js';
@@ -20,7 +21,7 @@ export function planRestart(tasks: readonly TaskCheckpoint[], isActor: (ownerId:
   for (const task of tasks) {
     if (!['queued', 'running', 'waiting_input', 'paused'].includes(task.status)) continue;
     const kind = inputKind(task), waiting = task.status === 'queued' || task.status === 'paused';
-    if (kind === 'director' && waiting && task.batchId && task.ownerId !== 'logox' && isActor(task.ownerId)) plan.restore.push(task);
+    if (kind === 'director' && waiting && task.batchId && !isDirector(task.ownerId) && isActor(task.ownerId)) plan.restore.push(task);
     else {
       if (kind === 'human' && task.status === 'queued') plan.held.push(task);
       plan.cancel.push(task);

@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import {useContext, useDeferredValue, useEffect, useInsertionEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useStdout, useWindowSize, type DOMElement} from 'ink';
 import stringWidth from 'string-width';
@@ -152,7 +153,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const [editingCustom, setEditingCustom] = useState(false);
   const [cardCursor, setCardCursor] = useState(4); // defaults to main-techne
 
-  const [activeWindow, setActiveWindow] = useState('logox');
+  const [activeWindow, setActiveWindow] = useState(DIRECTOR_ID);
   const [expandHovered, setExpandHovered] = useState(false);
   const [pendingHover, setPendingHover] = useState<{id: string; control: 'send' | 'discard'} | null>(null);
   const [composerMode, setComposerMode] = useState<{sessionId: string; ownerId: string; scrollOffset: number | null} | null>(null);
@@ -239,7 +240,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       if (previous.ids.has(message.id)) continue;
       previous.ids.add(message.id);
       if (message.role === 'system' && message.systemPresentation === 'status' && !message.systemReplay &&
-          message.sessionId === sessionId && (currentView === 'logox' || message.ownerId === currentView)) {
+          message.sessionId === sessionId && (isDirector(currentView) || message.ownerId === currentView)) {
         latest = message.text;
         latestTone = message.systemEventKind === 'command_error' || message.systemEventKind === 'model_error' ? 'error' : message.systemEventKind === 'command_result' ? 'success' : 'info';
       }
@@ -288,14 +289,14 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const pending = snapshot.interactions.filter(request =>
     request.sessionId === sessionId &&
     request.status === 'pending' &&
-    (currentView === 'logox' || request.ownerId === currentView)
+    (isDirector(currentView) || request.ownerId === currentView)
   );
   const request = pending.find(item => item.requestId === selectedRequestId) ?? pending[0];
   const inlineRequest = stage && request || demoScene && request && (request.activityId === scenario?.techne || request.activityId === scenario?.kalon);
   const response = request ? responses[request.requestId] ?? initialResponse(request) : undefined;
   const activities = snapshot.activities.filter(activity =>
     activity.sessionId === sessionId &&
-    (currentView === 'logox' || activity.ownerId === currentView)
+    (isDirector(currentView) || activity.ownerId === currentView)
   );
   const activity = activities.find(item => item.activityId === selectedActivityId) ??
     activities.find(item => item.status === 'waiting_input') ??
@@ -304,7 +305,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
 
   const visibleMessages = useMemo(() => deferredSnapshot.messages.filter(message =>
     message.sessionId === sessionId &&
-    (currentView === 'logox' || message.ownerId === currentView)
+    (isDirector(currentView) || message.ownerId === currentView)
   ), [deferredSnapshot.messages, sessionId, currentView]);
 
   const welcome = !demoScene && !activities.length && !pending.length && !visibleMessages.some(message =>
@@ -337,7 +338,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const selectedSteerTask = selectedActivityId ? activities.find(item => item.activityId === selectedActivityId)
     : liveWindowTasks.length === 1 ? liveWindowTasks[0] : undefined;
   const steerTarget = selectedSteerTask && ['running', 'waiting_input'].includes(selectedSteerTask.status) ? selectedSteerTask : undefined;
-  const own = currentView !== 'logox';
+  const own = !isDirector(currentView);
   const cachedStageStatus = useMemo(() => {
     if (!getStatus) return undefined;
     return getStatus(currentView);
@@ -427,14 +428,14 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
   const activeOwners = useMemo(() => {
-    const live = snapshot.activities.filter(a => a.sessionId === sessionId && ['running', 'waiting_input', 'paused', 'queued'].includes(a.status) && a.ownerId && a.ownerId !== 'logox' && a.kind !== 'anamnesis');
+    const live = snapshot.activities.filter(a => a.sessionId === sessionId && ['running', 'waiting_input', 'paused', 'queued'].includes(a.status) && a.ownerId && !isDirector(a.ownerId) && a.kind !== 'anamnesis');
     return new Set(live.map(a => a.ownerId));
   }, [snapshot.activities, sessionId]);
   // A failed actor keeps its pill briefly; existing failures at mount or session change never count as new.
   const failedSeen = useRef<{sessionId: string; since: Map<string, number>} | null>(null);
   const [pillTick, setPillTick] = useState(0);
   const failedSince = useMemo(() => {
-    const failed = snapshot.activities.filter(a => a.sessionId === sessionId && a.status === 'failed' && a.ownerId !== 'logox' && a.kind !== 'anamnesis');
+    const failed = snapshot.activities.filter(a => a.sessionId === sessionId && a.status === 'failed' && !isDirector(a.ownerId) && a.kind !== 'anamnesis');
     if (failedSeen.current?.sessionId !== sessionId) failedSeen.current = {sessionId, since: new Map(failed.map(a => [a.activityId, 0] as const))};
     for (const a of failed) if (!failedSeen.current.since.has(a.activityId)) failedSeen.current.since.set(a.activityId, Date.now());
     return failedSeen.current.since;
@@ -699,7 +700,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     setComposerMode(null);
     setNotice('');
     const source = delivery.mode === 'steer' ? activities.find(item => item.activityId === delivery.activityId)?.ownerId ?? currentView : currentView;
-    const payload = delivery.mode === 'queue' && !stage && !demoScene && source !== 'logox' && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
+    const payload = delivery.mode === 'queue' && !stage && !demoScene && !isDirector(source) && !/^[@/]/.test(text) ? `@${source} ${text}` : text;
     const revision = draftRevisions.current.get(currentView) ?? 0;
     const history = historyFor(currentView);
     void onSubmit(payload, source, delivery).then(() => {
@@ -938,8 +939,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
             switchView(clickedPill.ownerId);
             lastClickRef.current = {time: 0, key: ''};
           } else {
-            if (currentView !== 'logox') {
-              switchView('logox');
+            if (!isDirector(currentView)) {
+              switchView(DIRECTOR_ID);
             }
             const targetIndex = findLatestActorRowIndex(messageRows, clickedPill.ownerId);
             if (targetIndex >= 0) {
@@ -959,8 +960,8 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
           }
           return;
         }
-        if (currentView !== 'logox') {
-          switchView('logox');
+        if (!isDirector(currentView)) {
+          switchView(DIRECTOR_ID);
           return;
         }
         clearSelection();
@@ -1001,7 +1002,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       clearSelection();
       if (!demoScene && activity && event.y >= timelineHeight && event.y < timelineHeight + activityHeight) {
         const now = Date.now();
-        if (now - lastClickRef.current.time < 350 && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox') {
+        if (now - lastClickRef.current.time < 350 && Object.hasOwn(roles, activity.ownerId) && !isDirector(activity.ownerId)) {
           switchView(activity.ownerId as ActorId);
           lastClickRef.current = {time: 0, key: ''};
         } else {
@@ -1250,7 +1251,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         if (focus === 'question') {setFocus('input'); return;}
         setFocus('question');
         if (inlineRequest) {
-          const id = currentView === 'logox' ? 'main-' + request.ownerId : 'history-' + request.ownerId + '-question';
+          const id = isDirector(currentView) ? 'main-' + request.ownerId : 'history-' + request.ownerId + '-question';
           setScene(prev => ({...prev, folds: {...prev.folds, [id]: true}}));
           const index = messageRows.findIndex(row => row.messageId.startsWith(id));
           if (index >= 0) setAnchor({messageId: '__top__', line: Math.max(0, index - 1)});
@@ -1295,16 +1296,16 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       return;
     }
     if (key.ctrl && input === 'g') {
-      if (stage) {const order = Object.keys(roles); switchView(order[(order.indexOf(currentView) + 1) % order.length] ?? 'logox'); return;}
+      if (stage) {const order = Object.keys(roles); switchView(order[(order.indexOf(currentView) + 1) % order.length] ?? DIRECTOR_ID); return;}
       if (demoScene) {
         const order: ActorId[] = ['logox', 'aletheia', 'techne', 'kalon'];
         const next = order[(order.indexOf(scene.view) + 1) % order.length]!;
         switchView(next);
         return;
       }
-      const target = activity && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox'
+      const target = activity && Object.hasOwn(roles, activity.ownerId) && !isDirector(activity.ownerId)
         ? activity.ownerId as ActorId
-        : currentView === 'logox' ? 'kalon' : 'logox';
+        : isDirector(currentView) ? 'kalon' : DIRECTOR_ID;
       switchView(target);
       return;
     }
@@ -1336,7 +1337,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
         return;
       }
       if (focus === 'question') { setFocus('input'); return; }
-      if (currentView !== 'logox') { switchView('logox'); return; }
+      if (!isDirector(currentView)) { switchView(DIRECTOR_ID); return; }
       if (focus === 'stop') {setFocus('input'); return;}
       if (selection) { clearSelection(); return; }
       const scope = roundScope(snapshot.activities, sessionId);
@@ -1450,10 +1451,10 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       }
       if (stage && key.ctrl) {
         const selected = activities.find(item => item.activityId === foldActivityId(foldIds[cardCursor % Math.max(1, foldIds.length)]));
-        if (selected && Object.hasOwn(roles, selected.ownerId) && selected.ownerId !== 'logox') switchView(selected.ownerId as ActorId);
+        if (selected && Object.hasOwn(roles, selected.ownerId) && !isDirector(selected.ownerId)) switchView(selected.ownerId as ActorId);
         return;
       }
-      if (key.ctrl && activity && Object.hasOwn(roles, activity.ownerId) && activity.ownerId !== 'logox') {
+      if (key.ctrl && activity && Object.hasOwn(roles, activity.ownerId) && !isDirector(activity.ownerId)) {
         switchView(activity.ownerId as ActorId);
         return;
       }

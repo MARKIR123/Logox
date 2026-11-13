@@ -1,3 +1,4 @@
+import {isDirector} from '../../../runtime/director-id.js';
 import {z} from 'zod';
 import type {ToolResult} from '../../types.js';
 
@@ -18,7 +19,7 @@ export function executeCancelActor(
     cancelActivity: (actorId: string, reason?: string) => {success: boolean; message: string};
   },
 ): ToolResult {
-  if (context.caller !== 'logox' && context.caller !== 'director') {
+  if (!isDirector(context.caller) && context.caller !== 'director') {
     return {
       text: 'Permission denied: Only Director Logox has authority to cancel actor execution.',
       isError: true,

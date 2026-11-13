@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import type {ModelSettings} from '../config/config.js';
 import type {ModelRequest} from '../runtime/messages.js';
 
@@ -7,7 +8,7 @@ export const LONG_CACHE_MS = 60 * 60_000;
 
 /** The Director waits for dispatched work for long stretches; every other actor runs tight tool loops where a longer lifetime only adds write cost. */
 export function roleCacheRetention(ownerId: string): CacheRetention {
-  return ownerId === 'logox' ? 'long' : 'short';
+  return isDirector(ownerId) ? 'long' : 'short';
 }
 
 /**

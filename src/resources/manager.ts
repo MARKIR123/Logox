@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import {lstat, open, readdir, realpath, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -121,7 +122,7 @@ export class Resources {
     return Object.freeze(this.value.skills.filter(skill => {
       const explicit = input.skills?.includes(skill.name) || this.assignments.get(skill.name)?.has(input.actorId);
       return explicit || skill.public || skill.actors?.includes(input.actorId)
-        || (input.actorId === 'logox' && skill.actors === undefined);
+        || (isDirector(input.actorId) && skill.actors === undefined);
     }));
   }
   categoriesFor(actorId: string, domainSkills?: readonly SkillResource[]): readonly DomainCategorySignpost[] {
@@ -169,7 +170,7 @@ export class Resources {
 
     return Object.freeze(result.sort((a, b) => a.category.localeCompare(b.category)));
   }
-  promptSections(visibility: SkillVisibility = {actorId: 'logox'}): ResourcePromptSections {
+  promptSections(visibility: SkillVisibility = {actorId: DIRECTOR_ID}): ResourcePromptSections {
     const skills = this.skillsFor(visibility);
     const coreSkills = skills.filter(item => item.level !== 'domain');
     const actorCategories = this.categoriesFor(visibility.actorId, skills.filter(item => item.level === 'domain'));
@@ -187,7 +188,7 @@ export class Resources {
     ].join('\n'));
     return {guidelines: this.value.guidelines, skills: sections.join('\n\n')};
   }
-  prompt(visibility: SkillVisibility = {actorId: 'logox'}): {context: string} {
+  prompt(visibility: SkillVisibility = {actorId: DIRECTOR_ID}): {context: string} {
     const sections = this.promptSections(visibility);
     return {context: [...sections.guidelines.map(item => 'Project Collaboration Guidelines: ' + item.path + '\n' + item.text),
       sections.skills].filter(Boolean).join('\n\n')};

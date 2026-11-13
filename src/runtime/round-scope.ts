@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from './director-id.js';
 import type {Activity} from './contracts.js';
 import {inputKind, type InputKind} from './provenance.js';
 
@@ -22,10 +23,10 @@ export interface RoundScope {
 export function roundScope(activities: readonly Activity[], sessionId: string): RoundScope {
   const mine = activities.filter(item => item.sessionId === sessionId);
   const byId = new Map(mine.map(item => [item.activityId, item]));
-  const director = mine.findLast(item => item.ownerId === 'logox' && isOpenActivity(item) && item.status !== 'paused' && item.status !== 'queued') ??
-    mine.findLast(item => item.ownerId === 'logox' && item.status === 'queued');
-  const userStarted = (item: Activity): boolean => item.ownerId !== 'logox' &&
-    inputKind({ownerId: item.ownerId, ...(item.inputKind ? {inputKind: item.inputKind} : {}), source: item.inputKind ? undefined : 'logox'}) === 'human';
+  const director = mine.findLast(item => isDirector(item.ownerId) && isOpenActivity(item) && item.status !== 'paused' && item.status !== 'queued') ??
+    mine.findLast(item => isDirector(item.ownerId) && item.status === 'queued');
+  const userStarted = (item: Activity): boolean => !isDirector(item.ownerId) &&
+    inputKind({ownerId: item.ownerId, ...(item.inputKind ? {inputKind: item.inputKind} : {}), source: item.inputKind ? undefined : DIRECTOR_ID}) === 'human';
   const fromUser = (item: Activity): boolean => {
     const seen = new Set<string>();
     for (let at: Activity | undefined = item; at && !seen.has(at.activityId); at = byId.get(at.parentActivityId ?? '')) {
@@ -36,7 +37,7 @@ export function roundScope(activities: readonly Activity[], sessionId: string): 
     return root ? userStarted(root) : false;
   };
   const rank = (item: Activity) => item.status === 'running' || item.status === 'waiting_input' ? 1 : 0;
-  const actors = mine.filter(item => item.ownerId !== 'logox' && item.kind === 'actor' && isOpenActivity(item) && !fromUser(item));
+  const actors = mine.filter(item => !isDirector(item.ownerId) && item.kind === 'actor' && isOpenActivity(item) && !fromUser(item));
   return {director, actors: [...actors].sort((a, b) => rank(a) - rank(b))};
 }
 
@@ -49,7 +50,7 @@ export type RoundEffect = 'closes' | 'suspends' | 'aside';
  * own window; an activity a teammate's message started while it was idle is an aside.
  */
 export function roundEffect(activities: readonly Activity[], sessionId: string, ownerId: string, kind: InputKind): RoundEffect {
-  if (ownerId === 'logox') return roundScope(activities, sessionId).actors.length ? 'suspends' : 'closes';
+  if (isDirector(ownerId)) return roundScope(activities, sessionId).actors.length ? 'suspends' : 'closes';
   return kind === 'director' || kind === 'human' ? 'closes' : 'aside';
 }
 

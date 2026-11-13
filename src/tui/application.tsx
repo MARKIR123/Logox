@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {useSyncExternalStore} from 'react';
 import type {createApplication} from '../application.js';
 import {App} from './app.js';
@@ -8,6 +9,6 @@ export function ApplicationStage({application, registerInterrupt}: {application:
   return <App key={session.revision} store={application.store} sessionId={session.sessionId} stage
     authentication={application.authentication} surfaces={application.surfaces} getCommandContext={application.commandContext}
     getActors={() => application.actors.list()}
-    getStatus={application.status} getQueuedCount={owner => application.getInputQueue(owner === 'logox' ? undefined : owner).queued.length} statusbar={application.statusbar} {...(registerInterrupt ? {registerInterrupt} : {})}
+    getStatus={application.status} getQueuedCount={owner => application.getInputQueue(isDirector(owner) ? undefined : owner).queued.length} statusbar={application.statusbar} {...(registerInterrupt ? {registerInterrupt} : {})}
     onSubmit={application.submit} onSendPending={application.sendPendingNow} onDiscardPending={application.discardPending} onDraft={application.noteDraft} onCancel={application.cancel} onCancelTool={application.cancelTool} onClose={application.close}/>;
 }

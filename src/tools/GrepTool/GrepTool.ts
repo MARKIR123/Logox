@@ -263,4 +263,4 @@ export async function executeGrep(
   }
 }
 
-export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Grep', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Regex search in file contents via built-in ripgrep'};
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Grep', category: 'core', roles: 'all', terminalVisibility: 'card', readOnly: true, description: 'Regex search in file contents via built-in ripgrep'};

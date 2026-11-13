@@ -1,3 +1,4 @@
+import {isDirector} from './director-id.js';
 import {randomUUID} from 'node:crypto';
 import type {RuntimeStore} from './store.js';
 
@@ -53,7 +54,7 @@ export class AskBoard {
   endRecipient(sessionId: string, ownerId: string, reachedBy: number): void {
     for (const ask of this.asks) if (ask.sessionId === sessionId && ask.to === ownerId && ask.openedAt <= reachedBy) ask.ended = true;
     // The Director has no task to hold open, so nobody is parked on its questions.
-    this.asks = this.asks.filter(ask => !(ask.ended && ask.from === 'logox'));
+    this.asks = this.asks.filter(ask => !(ask.ended && isDirector(ask.from)));
   }
 
   park(sessionId: string, ownerId: string, activityId: string): void { this.parked.set(sessionId + ':' + ownerId, activityId); }
@@ -72,7 +73,7 @@ export class AskBoard {
       const waits = this.awaited(id);
       return waits.length > 0 && waits.every(ask => {
         const next = this.parked.get(sessionId + ':' + ask.to);
-        return ask.to !== 'logox' && next !== undefined && blocked(next);
+        return !isDirector(ask.to) && next !== undefined && blocked(next);
       });
     };
     return blocked(activityId) ? [...visited] : undefined;

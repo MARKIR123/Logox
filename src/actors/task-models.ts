@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {appendFile, mkdir, readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -59,7 +60,7 @@ export class TaskModels {
   private key(identity: Identity): string {return JSON.stringify([identity.sessionId, identity.ownerId]);}
   async begin(context: ActorContext): Promise<TaskModelScope> {
     const initial = this.idleSelection(context.ownerId);
-    const configured = context.ownerId === 'logox' ? undefined : this.configured(context.ownerId);
+    const configured = isDirector(context.ownerId) ? undefined : this.configured(context.ownerId);
     const state: TaskModelCheckpoint = {version: 1, sessionId: context.sessionId, ownerId: context.ownerId, activityId: context.activityId,
       initial, actual: initial, inherited: !configured, switched: false, phase: 'started'};
     const scope = new TaskModelScope(this.options, context, state);
@@ -69,7 +70,7 @@ export class TaskModels {
   }
   selection(identity: Identity): TaskModelSelection {
     const scope = this.current.get(this.key(identity));
-    if (scope && (identity.ownerId !== 'logox' || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) return scope.selection();
+    if (scope && (!isDirector(identity.ownerId) || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) return scope.selection();
     return this.idleSelection(identity.ownerId);
   }
   /** The model the owner's next task starts with: its configured default (after the unregistered-provider fallback), else the session model. */
@@ -77,7 +78,7 @@ export class TaskModels {
     return selectionSchema.parse(this.configured(ownerId) ?? this.options.registry.selection());
   }
   private configured(ownerId: string): TaskModelSelection | undefined {
-    let configured = ownerId === 'logox' ? undefined : this.options.defaultModel(ownerId);
+    let configured = isDirector(ownerId) ? undefined : this.options.defaultModel(ownerId);
     if (configured && !this.options.registry.names().includes(configured.provider)) {
       const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
       if (fallback) configured = fallback;
@@ -98,7 +99,7 @@ export class TaskModels {
   summarizer(identity: Identity): {model: ModelCapacity; provider: Provider} {
     const override = this.options.summaryModel?.(identity);
     const scope = this.current.get(this.key(identity));
-    if (!override && scope && (identity.ownerId !== 'logox' || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) {
+    if (!override && scope && (!isDirector(identity.ownerId) || !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase))) {
       return {model: scope.model(), provider: scope.provider()};
     }
     const selection = override ?? this.selection(identity);
@@ -131,7 +132,7 @@ export class TaskModelScope {
   }
   async fallback(error: unknown): Promise<boolean> {
     const context = this.context;
-    if (!context || context.ownerId === 'logox' || this.state.inherited || this.state.switched ||
+    if (!context || isDirector(context.ownerId) || this.state.inherited || this.state.switched ||
       !(error instanceof ProviderError) || !['model_missing', 'authentication', 'quota'].includes(error.category)) return false;
     context.signal.throwIfAborted();
     for (;;) {

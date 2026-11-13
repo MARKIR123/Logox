@@ -1,3 +1,4 @@
+import {isDirector} from '../../runtime/director-id.js';
 export type ExecutionRecoveryKind = 'no_delivery' | 'truncated_text' | 'truncated_tools' | 'text_tool_call';
 
 /** Card step note and timeline text for a turn whose tool call came out as plain text. */
@@ -35,7 +36,7 @@ export const AUTOMA_STREAK_NOTE = 'That is several read-only calls in a row. If 
 /** Cross-tool output recovery instructions appended only on retry. */
 export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerId: string, adjustment = false): string {
   const next = kind === 'no_delivery'
-    ? adjustment && ownerId === 'logox'
+    ? adjustment && isDirector(ownerId)
       ? 'Pivot the action plan: narrow the current phase or delegate explicit smaller steps to a suitable actor. Deliver concrete artifacts or complete tool calls first.'
       : EMPTY_REPLY_REMINDER + ' Narrow to the minimum deliverable step, avoid drafting full files in thoughts, and immediately call tools to persist artifacts.'
     : kind === 'text_tool_call'

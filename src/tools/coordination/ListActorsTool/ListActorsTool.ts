@@ -1,3 +1,4 @@
+import {DIRECTOR_ID} from '../../../runtime/director-id.js';
 import {z} from 'zod';
 import type {ToolResult} from '../../types.js';
 import {currentTaskProgress, type ActivityStatus, type RuntimeSnapshot} from '../../../runtime/contracts.js';
@@ -25,10 +26,10 @@ export function executeListActors(_args: ListActorsArgs, context: {
   caller: string; getSnapshot: () => RuntimeSnapshot; roles?: Record<string, {name: string; title?: string}>;
   memo?: ListActorsMemo; now?: () => number;
 }): ToolResult {
-  const isDirector = context.caller === 'logox' || context.caller === 'director';
+  const isDirector = context.caller === DIRECTOR_ID || context.caller === 'director';
   const snapshot = context.getSnapshot();
   const ids = [...new Set([...Object.keys(context.roles ?? DEFAULT_NAMES), ...snapshot.activities.map(activity => activity.ownerId)])]
-    .filter(id => id !== context.caller && !(isDirector && id === 'logox'));
+    .filter(id => id !== context.caller && !(isDirector && id === DIRECTOR_ID));
   const actors: ActorStatusReport[] = ids.map(id => {
     const activities = snapshot.activities.filter(activity => activity.ownerId === id);
     const active = activities.findLast(activity => ['running', 'waiting_input'].includes(activity.status)) ??

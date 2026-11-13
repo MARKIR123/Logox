@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from './runtime/director-id.js';
 import {reloadResources} from './resources/reload.js';
 import {isOutageWake} from './runtime/outage.js';
 import type {ResourceOptions} from './resources/manager.js';
@@ -130,8 +131,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
   const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
-  let commandOwner = 'logox';
-  let loginOwner = 'logox';
+  let commandOwner = DIRECTOR_ID;
+  let loginOwner = DIRECTOR_ID;
   const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = commandOwner, activityId?: string,
     display: NonNullable<Parameters<SystemHistory['emit']>[5]> = {}) => {
     const presentation = display.presentation ?? 'timeline';
@@ -201,9 +202,9 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   void ensureProjectBulletin(cwd);
   const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
-    notice: text => notice(text, 'task_notice', 'logox'),
+    notice: text => notice(text, 'task_notice', DIRECTOR_ID),
     ...(options.outageDelaysMs ? {outageDelaysMs: options.outageDelaysMs} : {}),
-    outageNotice: (text, first) => notice(text, 'task_notice', 'logox', undefined, {presentation: first ? 'timeline' : 'status'}),
+    outageNotice: (text, first) => notice(text, 'task_notice', DIRECTOR_ID, undefined, {presentation: first ? 'timeline' : 'status'}),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     getActiveTask: (owner) => ensemble.getActiveTask(owner),
@@ -226,7 +227,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     authorize: (call, context) => tools.authorizeExtension(call, context, 'read'),
     modelResolver: (actorId: string) => {
       const identity = {sessionId: session, ownerId: actorId};
-      const configured = (actorId === 'logox' ? undefined : actors.modelStorage.get(actorId) ?? actors.find(actorId)?.defaultModel) ?? registry.selection();
+      const configured = (isDirector(actorId) ? undefined : actors.modelStorage.get(actorId) ?? actors.find(actorId)?.defaultModel) ?? registry.selection();
       try {
         const sel = taskModels.selection(identity);
         const th = taskModels.thinking(identity);
@@ -246,8 +247,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     }, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
     contract: identity => actorServices.contract(identity.ownerId),
-    anchors: async identity => identity.ownerId === 'logox'
-      ? (await journal.activeTasks(session)).filter(task => task.source === 'direct' && task.ownerId !== 'logox' &&
+    anchors: async identity => isDirector(identity.ownerId)
+      ? (await journal.activeTasks(session)).filter(task => task.source === 'direct' && !isDirector(task.ownerId) &&
           ['completed', 'failed', 'cancelled'].includes(task.status)).slice(-16).map(task => ({role: 'user',
           text: `[Direct conversation] ${task.ownerId} (${task.activityId}) · ${task.status}. Use ReadActor for details if needed.`})) : [],
     report: (identity, text) => notice(text, 'task_notice', identity.ownerId, identity.activityId),
@@ -425,7 +426,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     return ready;
   }
   // A resumed session shows its totals and context readings before any actor runs.
-  const meterRestore = Promise.all(['logox', ...actors.list().map(item => item.id)].map(async ownerId => {
+  const meterRestore = Promise.all([DIRECTOR_ID, ...actors.list().map(item => item.id)].map(async ownerId => {
     await configureMeter(ownerId);
     await contexts.restoreReading({sessionId: session, ownerId});
   })).then(bumpStatus).catch(() => {});
@@ -450,10 +451,10 @@ export async function createSessionApplication(options: SessionApplicationOption
     enabled: () => config.kernel.cache_keepalive, pricing: config,
     certain: who => {
       const snapshot = store.getSnapshot();
-      if (who.ownerId === 'logox') return certainToWake(openWork(snapshot, who.rootActivityId ?? who.activityId, deliveries.snapshot()));
+      if (isDirector(who.ownerId)) return certainToWake(openWork(snapshot, who.rootActivityId ?? who.activityId, deliveries.snapshot()));
       const asks = asksFor(store);
       return asks.isParked(who.sessionId, who.ownerId) && asks.awaited(who.activityId).some(ask => !ask.ended &&
-        (ask.to === 'logox' || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status))));
+        (isDirector(ask.to) || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status))));
     },
     charge: (who, amount, model) => {void configureMeter(who.ownerId).then(() => contexts.meter(who).chargeUsage(amount, model, 'keepalive'));},
   });
@@ -514,7 +515,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     recoverExecution: (context, kind) => actorServices.recovery.execution(context.rootActivityId ?? context.activityId, kind, context.ownerId),
     executionProgress: (context, fingerprint) => actorServices.recovery.progress(context.rootActivityId ?? context.activityId, fingerprint),
     contextUpdated: (context, update) => {if (update.kind === 'environment-change') notice('Execution environment updated:\n' + update.text, 'environment_change', context.ownerId, context.activityId, {presentation: 'silent'});},
-    executionNotice: (context, text) => {if (context.ownerId === 'logox') notice(text, 'task_notice', context.ownerId, context.activityId);},
+    executionNotice: (context, text) => {if (isDirector(context.ownerId)) notice(text, 'task_notice', context.ownerId, context.activityId);},
     resources, extraTools, extraApprovalHandled: extraTools.map(tool => tool.name),
     executeExtra: observeExtra(extensions.hooks, async (call, context) => {
       if (call.name === 'mcp') return extensions.mcp.execute(call, context);
@@ -527,7 +528,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (context.inputKind !== 'human') return;
       await actorServices.grantExecution(context);
       context.signal.throwIfAborted();
-      if (context.ownerId === 'logox') {
+      if (isDirector(context.ownerId)) {
         const pending = actorServices.resumeDirector(context.activityId);
         if (pending) directorReports.set(context.activityId, pending);
         await actorServices.flush();
@@ -537,7 +538,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     handoff: result => closed ? Promise.resolve() : actorServices.handoff(result),
     directAnchor: async result => {
       const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;
-      notice(text, 'task_notice', 'logox');
+      notice(text, 'task_notice', DIRECTOR_ID);
     },
     settled: async (activityId, status) => {directorReports.delete(activityId); await actorServices.settled(activityId, status);},
   });
@@ -579,7 +580,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await saveEffort(effortSchema.parse(id)); return {message: 'Thinking effort: ' + id + ' (saved)', presentation: 'status'};
       });
   };
-  let pageOwner = 'logox';
+  let pageOwner = DIRECTOR_ID;
   let activeCommandPage = '';
   // Themes are data: shipped JSON plus any `~/.logox/themes/*.json` overlay.
   loadThemePresets(homeDir);
@@ -909,7 +910,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       skills: actor => resources.skillsFor({actorId: actor.id, skills: actor.skills}), snapshot: () => store.getSnapshot(),
       usage: id => actorUsage(statusOptions, id)}, initial);
     surfaces.openEnsemble(data, {
-      model: async id => {const actor = actors.find(id); if (!actor) return; if (actor.id === 'logox') openModels(actor.name); else await actorServices.management.openDefaultModel(actor.id, surfaces);},
+      model: async id => {const actor = actors.find(id); if (!actor) return; if (isDirector(actor.id)) openModels(actor.name); else await actorServices.management.openDefaultModel(actor.id, surfaces);},
       edit: path => openInEditor(path),
     });
   };
@@ -1160,7 +1161,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (activityId && !store.activities.get(session, activityId)) {
       const round = savedRounds.get(activityId), checkpoint = checkpoints.find(task => task.activityId === activityId);
       const savedModel = savedModels.find(item => item.activityId === activityId);
-      store.activities.create({sessionId: session, activityId, ownerId: entry.ownerId, kind: entry.ownerId === 'logox' ? 'director' : 'actor',
+      store.activities.create({sessionId: session, activityId, ownerId: entry.ownerId, kind: isDirector(entry.ownerId) ? 'director' : 'actor',
         title: checkpoint?.taskTitle ?? (entry.text.slice(0, 80) || entry.ownerId), status: round?.status ?? checkpoint?.status ?? 'completed',
         stage: round ? ({completed: 'Completed', failed: 'Failed', cancelled: 'Interrupted'}[round.status] ?? 'Completed')
           : checkpoint ? checkpoint.status === 'completed' ? 'Completed' : checkpoint.status === 'failed' ? 'Failed' : 'Interrupted' : 'History',
@@ -1197,7 +1198,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   for (const task of checkpoints) {
     if (store.activities.get(session, task.activityId) || restoring.has(task.activityId)) continue;
     store.activities.create({sessionId: session, activityId: task.activityId, ownerId: task.ownerId,
-      kind: task.ownerId === 'logox' ? 'director' : 'actor', title: task.taskTitle ?? task.prompt.slice(0, 80),
+      kind: isDirector(task.ownerId) ? 'director' : 'actor', title: task.taskTitle ?? task.prompt.slice(0, 80),
       status: task.status, stage: task.status === 'cancelled' ? 'Interrupted' : 'Checkpoint loaded',
       detail: task.error ? 'Failure reason: ' + task.error : 'Loaded checkpoint from a previous session',
       inputKind: inputKind(task),
@@ -1211,7 +1212,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   }
   const dependencies = restartDependencies(plan.restore, checkpoints);
   ensemble.restoreQueued(plan.restore, dependencies);
-  actorServices.restoreRestart(plan.restore, dependencies.interrupted, checkpoints.filter(task => restartStopped(task) && task.ownerId !== 'logox' && inputKind(task) === 'director').map(task => task.activityId));
+  actorServices.restoreRestart(plan.restore, dependencies.interrupted, checkpoints.filter(task => restartStopped(task) && !isDirector(task.ownerId) && inputKind(task) === 'director').map(task => task.activityId));
   // Held human messages are saved whenever the list changes (one write at a time) and come back marked restored, so they never auto-send.
   let heldRef = store.getSnapshot().pending, heldTail: Promise<void> = Promise.resolve();
   const stopHeld = store.subscribe(() => {
@@ -1222,13 +1223,13 @@ export async function createSessionApplication(options: SessionApplicationOption
     heldTail = heldTail.then(() => journal.saveHeld(session, items)).catch(() => {notice('Held messages could not be saved.', 'command_error');});
   });
   const heldBefore = await journal.loadHeld(session).catch(() => {notice('Held messages could not be restored.', 'command_error'); return [];});
-  for (const task of plan.held) store.addPending({sessionId: session, ownerId: task.ownerId, windowId: task.source === 'direct' ? 'logox' : task.source, text: task.prompt, time: task.time, restored: true});
+  for (const task of plan.held) store.addPending({sessionId: session, ownerId: task.ownerId, windowId: task.source === 'direct' ? DIRECTOR_ID : task.source, text: task.prompt, time: task.time, restored: true});
   for (const item of heldBefore) store.addPending({...item, restored: true});
   const welcomeTitle = 'Session ' + session;
   const welcomeBody = settings.model
     ? `${settings.provider}/${settings.model} · Type /help for assistance`
     : 'Welcome to Logox Ensemble! No model configured yet.\n\nQuick setup:\n  • Run /login to connect providers (DeepSeek, OpenAI, Anthropic, or local)\n  • Or add your API key to .env in your project\n  • Type /doctor to diagnose environment readiness';
-  systems.emit(welcomeTitle + '\n' + welcomeBody, 'task_notice', 'logox', undefined, false, {presentation: 'welcome'});
+  systems.emit(welcomeTitle + '\n' + welcomeBody, 'task_notice', DIRECTOR_ID, undefined, false, {presentation: 'welcome'});
   for (const issue of resources.snapshot().issues) notice('Resource failed to load: ' + issue.path + ' · ' + issue.reason, 'command_error');
   const terminal = new Set(checkpoints.filter(task => ['failed', 'cancelled'].includes(task.status)).map(task => task.activityId));
   const stopSystemUpdates = store.subscribe(() => {
@@ -1263,7 +1264,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     queueMicrotask(() => {
       settling = false;
       if (closed || !store.takePending(next.id)) return;
-      dispatchInput(next.ownerId, next.text, next.ownerId === 'logox' ? next.windowId : 'direct')
+      dispatchInput(next.ownerId, next.text, isDirector(next.ownerId) ? next.windowId : 'direct')
         .catch(error => {notice(error instanceof Error ? error.message : String(error), 'command_error', next.windowId);});
     });
   };
@@ -1274,13 +1275,13 @@ export async function createSessionApplication(options: SessionApplicationOption
     const active = ensemble.getActiveTask(item.ownerId);
     if (!active) {
       if (!item.restored) settlePending();
-      else if (store.takePending(pendingId)) await dispatchInput(item.ownerId, item.text, item.ownerId === 'logox' ? item.windowId : 'direct');
+      else if (store.takePending(pendingId)) await dispatchInput(item.ownerId, item.text, isDirector(item.ownerId) ? item.windowId : 'direct');
       return;
     }
     store.takePending(pendingId);
     if (!await ensemble.injectTaskMessage(item.ownerId, item.text, 'steered', undefined, 'queue',
       {activityId: active.activityId, inputKind: 'human', kind: 'human_steer'})) {
-      await dispatchInput(item.ownerId, item.text, item.ownerId === 'logox' ? item.windowId : 'direct');
+      await dispatchInput(item.ownerId, item.text, isDirector(item.ownerId) ? item.windowId : 'direct');
     }
   };
   /** Takes a pending message back (cancel or edit) and returns its text. */
@@ -1297,7 +1298,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       statusListeners.add(listener);
       return () => {stopStore(); stopPreferences(); statusListeners.delete(listener);};
     },
-    async recordError(error: unknown, owner = 'logox') {
+    async recordError(error: unknown, owner = DIRECTOR_ID) {
       notice(error instanceof Error ? error.message : String(error), 'command_error', owner);
       await systems.flush();
     },
@@ -1309,17 +1310,17 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (shouldOfferOnboarding(onboardingPrefs) && !settings.model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
         void (async () => {
           if (!ensemble.isBusy() && !authentication.getSnapshot()) {
-            loginOwner = 'logox';
+            loginOwner = DIRECTOR_ID;
             // Optional first step: Enter on an empty field or Esc skips it and setup continues.
             const preferred = await askPreferredName(authentication.ask);
             if (preferred) {userName = await saveUserName(homeDir, preferred).catch(() => userName); setUserLabel(userName);}
-            const outcome = await loginWizard('logox');
+            const outcome = await loginWizard(DIRECTOR_ID);
             if (outcome === 'added' || outcome === 'signed-in') {
               markOnboardingDone(ONBOARDING_VERSION, homeDir);
-              receipt('Setup complete! Model preference activated.', 'status', undefined, 'logox');
+              receipt('Setup complete! Model preference activated.', 'status', undefined, DIRECTOR_ID);
             } else if (outcome === 'cancelled') {
               markOnboardingSkipped(ONBOARDING_VERSION, homeDir);
-              notice('Setup skipped — run /setup anytime to re-launch.', 'command_result', 'logox', undefined, {presentation: 'silent'});
+              notice('Setup skipped — run /setup anytime to re-launch.', 'command_result', DIRECTOR_ID, undefined, {presentation: 'silent'});
             }
           }
         })().catch(() => {});
@@ -1343,7 +1344,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     /** Stops one running tool call (its child process) without ending the owner's step; false when the call is not cancellable or already done. */
     cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user');},
     cancel(activityId: string) {if (compactTask?.activityId === activityId) compactTask.controller.abort(); else {
-      const director = store.activities.get(session, activityId)?.ownerId === 'logox';
+      const director = store.activities.get(session, activityId)?.ownerId === DIRECTOR_ID;
       if (director) actorServices.stopDirector(activityId); else actorServices.stopActor(activityId);
       // Stopping Logox leaves its companions running; the interrupt marker names them so the next message can redirect or cancel them.
       const working = director ? workingNames(roundScope(store.getSnapshot().activities, session).actors, id => actors.list().find(item => item.id === id)?.name ?? id) : [];
@@ -1358,7 +1359,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await Promise.allSettled([selectionDone]); await actorServices.flush(); await usage.flush(); await systems.flush(); await heldTail;
       } finally {stopHeld(); stopGitWatch(); await gitStatus.close(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
-    async submit(raw: string, source = 'logox', inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
+    async submit(raw: string, source = DIRECTOR_ID, inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       const text = raw.trim();
       if (!text || closed) return;
       if (permissionTask) throw new Error('Permissions are saving, please wait...');
@@ -1428,11 +1429,11 @@ export async function createSessionApplication(options: SessionApplicationOption
         const targetActor = firstToken ? actors.find(firstToken) : undefined;
 
         if (text === '/model') {
-          if (source !== 'logox' && actors.find(source)) {
+          if (!isDirector(source) && actors.find(source)) {
             await actorServices.management.openDefaultModel(source, surfaces);
             return;
           }
-          openModels(actors.find('logox')?.name ?? 'Logox');
+          openModels(actors.find(DIRECTOR_ID)?.name ?? 'Logox');
           return;
         }
 
@@ -1461,7 +1462,7 @@ export async function createSessionApplication(options: SessionApplicationOption
             receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
             return;
           }
-          if (targetActor.id === 'logox') {
+          if (isDirector(targetActor.id)) {
             openModels(targetActor.name);
             return;
           }
@@ -1530,10 +1531,10 @@ export async function createSessionApplication(options: SessionApplicationOption
         await saveEffort(effort.data); receipt('Thinking effort: ' + effort.data + ' (saved)', 'status', undefined, source); return;
       }
       if (text === '/model') {
-        if (source !== 'logox' && actors.find(source)) {
+        if (!isDirector(source) && actors.find(source)) {
           await actorServices.management.openDefaultModel(source, surfaces); return;
         }
-        openModels(actors.find('logox')?.name ?? 'Logox'); return;
+        openModels(actors.find(DIRECTOR_ID)?.name ?? 'Logox'); return;
       }
       if (text === '/models') {
         const provider = settings.provider;
@@ -1576,7 +1577,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       if (text === '/compact') {
         requireIdle();
         const activityId = randomUUID(), controller = new AbortController();
-        store.activities.create({sessionId: session, activityId, ownerId: source, kind: source === 'logox' ? 'director' : 'actor',
+        store.activities.create({sessionId: session, activityId, ownerId: source, kind: isDirector(source) ? 'director' : 'actor',
           title: 'Compact', status: 'running', stage: 'Compacting context', detail: 'Preserving raw journal without executing tools'});
         const operation = (async () => {
           try {
@@ -1626,7 +1627,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         const expanded = match ? resources.expand(match[1]!, match[2] ?? '') : undefined;
         if (!expanded) throw new Error('Unknown command. Run /help to view available commands.');
         await beginTask();
-        await dispatchInput(source, expanded, source === 'logox' ? source : 'direct'); return;
+        await dispatchInput(source, expanded, isDirector(source) ? source : 'direct'); return;
       }
       const mention = /^@([a-z][a-z0-9_-]*)\s+([\s\S]+)$/.exec(text);
       if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /ensemble to view available members, then dispatch tasks with @<actor> <task>.');
@@ -1637,7 +1638,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         store.addPending({sessionId: session, ownerId: owner, windowId: source, text: mention ? mention[2]! : text});
         return;
       }
-      await dispatchInput(owner, mention ? mention[2]! : text, owner === 'logox' ? source : 'direct');
+      await dispatchInput(owner, mention ? mention[2]! : text, isDirector(owner) ? source : 'direct');
     },
   };
 }

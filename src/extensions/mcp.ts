@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import {Ajv, type ValidateFunction} from 'ajv';
 import {Ajv2020} from 'ajv/dist/2020.js';
 import formats from 'ajv-formats';
@@ -82,7 +83,7 @@ export class Mcp {
   private clientFor(server: string, ownerId?: string, sessionId?: string): McpClient | undefined {
     const base = this.clients.get(server);
     if (!base) return undefined;
-    if (!ownerId || ownerId === 'logox') return base;
+    if (!ownerId || isDirector(ownerId)) return base;
     const key = `${server}:${ownerId}`;
     let scoped = this.clients.get(key);
     if (!scoped) {
@@ -143,7 +144,7 @@ export class Mcp {
       }
       const validator = tool.validator;
       if (args.server === 'playwright') {
-        const owner = context.ownerId ?? 'logox';
+        const owner = context.ownerId ?? DIRECTOR_ID;
         const redirected = scratchOutputArguments(args.arguments, getActorScratchpadDir(this.cwd, context.sessionId, owner));
         if (redirected !== args.arguments) {args.arguments = redirected as typeof args.arguments; await ensureActorScratchpadDir(this.cwd, context.sessionId, owner);}
       }

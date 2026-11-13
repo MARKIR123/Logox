@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {JobGrant} from '../tools/orchestration/AutomaTool/grant.js';
 import {formatFailureDetail} from '../providers/http.js';
 import {stripNarration} from '../runtime/narration.js';
@@ -146,7 +147,7 @@ export class EnsembleRuntime<Id extends string> {
     return [...grouped].map(([ownerId, prompts]) => this.dispatch(ownerId, prompts.join('\n\n')));
   }
 
-  dispatch(ownerId: Id, prompt: string, source: string = 'logox', origin: TaskOrigin = {}): TaskHandle {
+  dispatch(ownerId: Id, prompt: string, source: string = DIRECTOR_ID, origin: TaskOrigin = {}): TaskHandle {
     if (this.closed) throw new Error('Ensemble is closed');
     const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
     if (!/^[a-z][a-z0-9_-]{0,63}$/.test(ownerId) || !member || !prompt.trim() || !/^(?:direct|[a-z][a-z0-9_-]{0,63})$/.test(source)) throw new Error('Invalid actor or task');
@@ -156,12 +157,12 @@ export class EnsembleRuntime<Id extends string> {
     origin = {...origin, rootActivityId: origin.rootActivityId ?? activityId, inputKind: inputKind({ownerId, source, ...origin})};
     const paused = !!origin.batchId && this.pausedBatches.has(origin.batchId);
     this.store.activities.create({
-      sessionId: this.sessionId, activityId, ownerId, kind: ownerId === 'logox' ? 'director' : 'actor',
+      sessionId: this.sessionId, activityId, ownerId, kind: isDirector(ownerId) ? 'director' : 'actor',
       title: origin.taskTitle ?? (member.name + ' · ' + member.title),
       status: paused ? 'paused' : 'queued', stage: this.waitingStage(origin.after) ?? 'Waiting to enter', detail: prompt,
       ...this.identityOrigin(origin),
     });
-    if (!(ownerId === 'logox' && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
+    if (!(isDirector(ownerId) && origin.inputKind === 'actor')) this.store.message(this.sessionId, ownerId, 'user', prompt, {activityId, source, inputKind: origin.inputKind ?? 'unknown'});
     const task = this.enqueue(ownerId, prompt, activityId, source, origin, async task => {
       const progress = origin.resumeTaskId
         ? await this.history.progress?.(this.sessionId, ownerId, origin.resumeTaskId)
@@ -249,7 +250,7 @@ export class EnsembleRuntime<Id extends string> {
     return !!active && !!inbox && !inbox.sealed && !active.controller.signal.aborted;
   }
 
-  async injectTaskMessage(targetOwnerId: string, message: string, source = 'logox', summary?: string, mode: 'interrupt' | 'queue' = 'queue',
+  async injectTaskMessage(targetOwnerId: string, message: string, source = DIRECTOR_ID, summary?: string, mode: 'interrupt' | 'queue' = 'queue',
     delivery: {activityId?: string; inputKind?: InputKind; kind?: DeliveryKind} = {}): Promise<boolean> {
     const active = this.getActiveTask(targetOwnerId);
     const inbox = active && this.inboxes.get(active.activityId);
@@ -274,7 +275,7 @@ export class EnsembleRuntime<Id extends string> {
     return true;
   }
 
-  interruptTask(targetOwnerId: string, message: string, source = 'logox', summary?: string): boolean {
+  interruptTask(targetOwnerId: string, message: string, source = DIRECTOR_ID, summary?: string): boolean {
     const active = this.getActiveTask(targetOwnerId);
     if (!active) return false;
     void this.injectTaskMessage(targetOwnerId, message, source, summary, 'interrupt');
@@ -473,7 +474,7 @@ export class EnsembleRuntime<Id extends string> {
    * round when both descend from the same root task; otherwise it stands alone as a short `[reply]` record. Everything else starts its own round.
    */
   private async joinedRound(ownerId: string, kind: InputKind, origin: TaskOrigin): Promise<string | undefined> {
-    if (ownerId === 'logox') return await this.history.openRound?.(this.sessionId, ownerId);
+    if (isDirector(ownerId)) return await this.history.openRound?.(this.sessionId, ownerId);
     if (roundEffect([], this.sessionId, ownerId, kind) !== 'aside') return undefined;
     return (await this.sameRootRound(ownerId, origin))?.activityId;
   }
@@ -503,7 +504,7 @@ export class EnsembleRuntime<Id extends string> {
       const messages: ModelMessage[] = entries.map(storedMessage);
       const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly && !message.textToolCall), status);
       const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text;
-      if (forDelivery && ownerId !== 'logox' && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
+      if (forDelivery && !isDirector(ownerId) && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
       return summary;
     };
     /** The round this activity continues (Director) or joins (absorbed aside); decided once, when its input is recorded. */
@@ -556,7 +557,7 @@ export class EnsembleRuntime<Id extends string> {
       }
       joined = await this.joinedRound(ownerId, kind, origin);
       const opensRound = roundEffect([], this.sessionId, ownerId, kind) !== 'aside';
-      const keepLast = opensRound && ownerId !== 'logox' && !!await this.sameRootRound(ownerId, origin);
+      const keepLast = opensRound && !isDirector(ownerId) && !!await this.sameRootRound(ownerId, origin);
       await this.history.append({version: 1, ...identity, source, inputKind: origin.inputKind ?? 'unknown', role: 'user', text: prompt, message: {role: 'user', text: prompt}, ...(joined ? {roundId: joined} : {})});
       signal.throwIfAborted();
       const authorization = [...origin.authorization ?? [], ...entries.filter(entry => entry.role === 'user' && inputKind(entry) === 'human').map(entry => entry.text),
@@ -638,10 +639,10 @@ export class EnsembleRuntime<Id extends string> {
       await settle('completed');
       this.controllers.delete(activityId);
       this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: 'Completed', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
-      if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
+      if (!isDirector(ownerId) && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
-        this.store.message(this.sessionId, 'logox', 'notice', `[Notice] ${roleName} (${ownerId}) completed activity ${activityId}.`, {
+        this.store.message(this.sessionId, DIRECTOR_ID, 'notice', `[Notice] ${roleName} (${ownerId}) completed activity ${activityId}.`, {
           activityId,
           source: ownerId,
           inputKind: 'human',
@@ -674,13 +675,13 @@ export class EnsembleRuntime<Id extends string> {
       await settle(status);
       this.controllers.delete(activityId);
       this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? 'Interrupted' : 'Failed', detail, ...(summary ? {summary, title: summary.title} : {})});
-      if (ownerId !== 'logox' && task.stopReason !== 'director_cancel') {
+      if (!isDirector(ownerId) && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
         const noticeText = status === 'cancelled'
           ? `[Notice] ${roleName} (${ownerId}) activity ${activityId} was cancelled (${task.stopReason ?? 'user'}).`
           : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed: ${detail.replace(/\n+/g, ' · ').slice(0, 300)}.`;
-        this.store.message(this.sessionId, 'logox', 'notice', noticeText, {
+        this.store.message(this.sessionId, DIRECTOR_ID, 'notice', noticeText, {
           activityId,
           source: ownerId,
           inputKind: 'human',

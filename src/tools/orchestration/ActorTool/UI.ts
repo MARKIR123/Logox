@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../../../runtime/director-id.js';
 import {basename} from 'node:path';
 import {type Activity, type Interaction, type Message, currentTaskProgress} from '../../../runtime/contracts.js';
 import type {ThinkingRequest} from '../../../tui/timeline/thinking-groups.js';
@@ -65,10 +66,10 @@ export function renderActivity(context: ActorActivityContext): void {
         const goalOpen = context.isOpen ? context.isOpen(goalId) : false;
         const sender = activity.inputKind === 'collaboration' || activity.inputKind === 'collaboration_interrupt'
           ? 'peer'
-          : 'logox';
+          : DIRECTOR_ID;
         const senderRole = roles[sender];
-        const senderLabel = senderRole ? `${senderRole.symbol} ${senderRole.name}` : sender === 'logox' ? '◈ Logox' : sender;
-        const senderColor = senderRole ? senderRole.color : sender === 'logox' ? palette.accent : roleColor;
+        const senderLabel = senderRole ? `${senderRole.symbol} ${senderRole.name}` : isDirector(sender) ? '◈ Logox' : sender;
+        const senderColor = senderRole ? senderRole.color : isDirector(sender) ? palette.accent : roleColor;
         const goalTitle = `Task from ${senderLabel}`;
 
         builder.pushOrdinaryCard({

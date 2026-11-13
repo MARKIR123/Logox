@@ -49,7 +49,7 @@
 - **Prompt text and tool descriptions are English**; user guideline contents stay user-authored. *Unenforced*.
 
 ## 5. Dependencies
-- **Depends on**: nothing; this is a leaf of pure constants and one composer.
+- **Depends on**: nothing except the import-free leaf `src/runtime/director-id.ts` (`isDirector()`); this is otherwise a leaf of pure constants and one composer.
 - **Used by**: `src/kernel/agent.ts` (system composition), `src/application.ts` (restriction and handoff text), `src/actors/services.ts` (Director wake texts), `src/context/contracts.ts` (round-summary and memo instructions), `src/kernel/execution-recovery.ts` (recovery wording).
 
 ## 6. Verification & Gaps

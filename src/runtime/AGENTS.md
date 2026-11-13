@@ -11,7 +11,7 @@
 | Follow one model round trip, stop conditions or `_FinishRound` closure | `src/kernel/agent.ts:createAgent()` | `src/kernel/turn-outcome.ts:classifyTurn()` (what a reply is), `src/kernel/reply.ts:settleReply()` (what happens next), `src/kernel/round-state.ts:RoundState` (the loop flags and their transitions), `src/kernel/execution-recovery.ts:ExecutionRecoveryError`, `src/tools/protocol/_FinishRoundTool/_FinishRoundTool.ts` |
 | Change request assembly (context updates, request-only notes, projection, cache fields) | `src/kernel/request.ts:prepareRequest()` | `src/kernel/request.ts:contextAppender()` |
 | Change the provider call (retries, backoff, streaming display, drafting, partial replies, model fallback) | `src/kernel/model-turn.ts:requestTurn()` | `src/kernel/round-state.ts:RoundState` |
-| Change tool batch validation, grouping, refusal or result storage | `src/kernel/tool-batch.ts:runToolBatch()` | `src/kernel/scratchpad.ts:settleToolResults()`, `src/kernel/tool-pacing.ts:OBSERVATION_TOOLS` |
+| Change tool batch validation, grouping, refusal or result storage | `src/kernel/tool-batch.ts:runToolBatch()` | `src/kernel/scratchpad.ts:settleToolResults()`, `src/tools/catalog.ts:isReadOnlyTool()` (reads the `readOnly` flag in tool metadata) |
 | Change the activity stage label | `contracts.ts:activityProgressSchema` | `contracts.ts:currentTaskProgress()`, `src/kernel/reply.ts:presentTurn()` (stage extraction) |
 | Audit how many `⏵` stages a task emitted | `contracts.ts:activityProgressSchema` (`stageHistory`, last `STAGE_HISTORY_LIMIT`) | the `stage` field of ledger assistant messages (`messages.ts:modelMessageSchema`), `src/kernel/reply.ts:presentTurn()` (stage extraction); observability only, never read back for behavior |
 | Fix step timing, Thinking groups or tool clocks | `steps.ts:Steps` | `contracts.ts:stepSchema`, `steps.ts:stepElapsed()` |
@@ -79,6 +79,7 @@
 - **Outage wakes carry no failure card**: `outage.ts:isOutageWake()` marks a failed Director coordination wake whose recovery key is `provider:temporary:*`; the timeline (`src/tui/timeline/stage.ts`) and the `model_error` emitter in `src/application.ts` skip it because the actors backoff owns that wait (see [`src/actors/AGENTS.md`](../actors/AGENTS.md)). Enforced by `tests/provider-outage.test.ts`.
 
 ## 5. Dependencies
+- **Director id**: `director-id.ts` (`DIRECTOR_ID`, `isDirector()`) is the single import-free leaf for the Director's actor id; any layer, including `src/prompts/`, may import it. Never write the literal `'logox'` for that meaning (`src/kernel/director.ts` re-exports it).
 - **Depends on**: `src/tools/` (`_FinishRoundTool`, `src/tools/ui-format.ts` titles), `src/actors/` (`ActorContext` type), `src/context/` (round memory during `Journal.finish()`), `src/prompts/runtime/` (recovery and scratchpad text), `src/providers/` (`Provider` calls from the loop).
 - **Used by**: `src/actors/` (activities, deliveries, journal checkpoints), `src/tui/` (snapshots and system messages), `src/application.ts` (store, journal, sessions), `src/context/` (journal ledger ranges), `src/permissions/` (scratchpad path check).
 

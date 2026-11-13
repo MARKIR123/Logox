@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {currentTaskProgress, type Activity, type RuntimeSnapshot} from '../runtime/contracts.js';
 import type {Delivery} from '../runtime/delivery.js';
 import {reportProgress} from '../prompts/runtime/director.js';
@@ -58,7 +59,7 @@ export function activeEnsembleRoster(
   context: {ownerId: string; activityId: string; rootActivityId?: string | undefined},
 ): string {
   const peers = snapshot.activities.filter(activity =>
-    activity.ownerId !== 'logox' &&
+    !isDirector(activity.ownerId) &&
     activity.ownerId !== context.ownerId &&
     ['running', 'waiting_input', 'queued'].includes(activity.status)
   );
@@ -80,13 +81,13 @@ export function activeEnsembleRoster(
 }
 export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: string; activityId: string; rootActivityId?: string | undefined},
   deliveries: readonly Delivery[] = []) {
-  if (context.ownerId !== 'logox') return undefined;
+  if (!isDirector(context.ownerId)) return undefined;
   const root = context.rootActivityId ?? context.activityId;
-  const related = new Set(deliveries.filter(item => item.ownerId === 'logox' &&
+  const related = new Set(deliveries.filter(item => isDirector(item.ownerId) &&
     (item.status === 'pending' || item.recipientActivityId === context.activityId)).flatMap(item => item.sourceActivityId ? [item.sourceActivityId] : []));
-  const tasks = snapshot.activities.filter(activity => activity.ownerId !== 'logox' && activity.inputKind === 'director' &&
+  const tasks = snapshot.activities.filter(activity => !isDirector(activity.ownerId) && activity.inputKind === 'director' &&
     (!['completed', 'failed', 'cancelled'].includes(activity.status) || activity.rootActivityId === root || related.has(activity.activityId)));
-  if (!tasks.length && !deliveries.some(item => item.ownerId === 'logox' && item.status === 'pending' && !item.targetActivityId)) return undefined;
+  if (!tasks.length && !deliveries.some(item => isDirector(item.ownerId) && item.status === 'pending' && !item.targetActivityId)) return undefined;
   const rank = (activity: Activity) => ['running', 'waiting_input'].includes(activity.status) ? 0 : ['queued', 'paused'].includes(activity.status) ? 1 : 2;
   tasks.sort((a, b) => rank(a) - rank(b));
   const progress = heldProgress(snapshot, deliveries);
@@ -95,7 +96,7 @@ export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: stri
 const titleCase = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
 /** One line per root whose reports are held back: who has reported and who is still working. Absent when nothing is held. */
 function heldProgress(snapshot: RuntimeSnapshot, deliveries: readonly Delivery[]): string | undefined {
-  const held = deliveries.filter(item => item.ownerId === 'logox' && item.status === 'pending' && item.hold);
+  const held = deliveries.filter(item => isDirector(item.ownerId) && item.status === 'pending' && item.hold);
   const lines = [...new Set(held.map(item => item.rootActivityId ?? ''))].map(root => {
     const work = openWork(snapshot, root, deliveries);
     const reported = held.filter(item => (item.rootActivityId ?? '') === root);
@@ -114,9 +115,9 @@ function heldProgress(snapshot: RuntimeSnapshot, deliveries: readonly Delivery[]
  */
 export function openWork(snapshot: RuntimeSnapshot, root: string, deliveries: readonly Delivery[] = [], exclude: string | ReadonlySet<string> = ''): {activities: Activity[]; deferred: Delivery[]} {
   return {
-    activities: snapshot.activities.filter(activity => activity.ownerId !== 'logox' && activity.activityId !== root && !(typeof exclude === 'string' ? exclude === activity.activityId : exclude.has(activity.activityId)) &&
+    activities: snapshot.activities.filter(activity => !isDirector(activity.ownerId) && activity.activityId !== root && !(typeof exclude === 'string' ? exclude === activity.activityId : exclude.has(activity.activityId)) &&
       (activity.rootActivityId ?? activity.activityId) === root && ['queued', 'running', 'waiting_input'].includes(activity.status)),
-    deferred: deliveries.filter(item => item.ownerId === 'logox' && item.status === 'pending' && item.deferredUntilHuman && item.rootActivityId === root),
+    deferred: deliveries.filter(item => isDirector(item.ownerId) && item.status === 'pending' && item.deferredUntilHuman && item.rootActivityId === root),
   };
 }
 export const hasOpenWork = (work: ReturnType<typeof openWork>): boolean => work.activities.length > 0 || work.deferred.length > 0;

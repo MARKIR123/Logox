@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../../runtime/director-id.js';
 import {currentTaskProgress, type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
 import {isOutageWake} from '../../runtime/outage.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
@@ -68,8 +69,8 @@ const messageLayouts = new WeakMap<Message, Map<string, readonly SceneRow[]>>();
 // immutable messages/activity state, never on viewport, hover or fold state.
 const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof projectMessages>>>();
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
-  const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (view === 'logox' || message.ownerId === view) &&
-    isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(message.ownerId === 'logox' && message.role === 'user' && inputKind(message) === 'actor'));
+  const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (isDirector(view) || message.ownerId === view) &&
+    isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(isDirector(message.ownerId) && message.role === 'user' && inputKind(message) === 'actor'));
   // Narration-only messages are never drawn, but they still mark stage changes for tool grouping.
   const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
@@ -114,10 +115,10 @@ export function stageFoldOpen(snapshot: RuntimeSnapshot, id: string, folds: Read
 export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, view: string, width: number,
   folds: Readonly<Record<string, boolean>>, hovered: string | null,
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
-  const viewColor = view === 'logox' ? palette.accent : ownerColor(view, roles);
+  const viewColor = isDirector(view) ? palette.accent : ownerColor(view, roles);
   const builder = createBuilder(width, hovered, roles, viewColor);
   const {messages, candidates, staged, activities, grouped, thinking, pairs} = messageProjection(snapshot, sessionId, view);
-  const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (view === 'logox' || request.ownerId === view));
+  const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (isDirector(view) || request.ownerId === view));
   const requests = new Map<string, Interaction[]>();
   for (const request of pending) {
     const group = requests.get(request.activityId) ?? [];
@@ -163,7 +164,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const actorColor = railFor(message.ownerId);
     const rail = isUser ? palette.user : isSystem ? palette.system : actorColor;
     // Text accents follow who wrote the text, not the surface: an actor's report keeps its colour in the Director window; briefs keep their author's.
-    const author = message.role === 'assistant' ? message.ownerId : inputKind(message) === 'collaboration' && message.source ? message.source.toLowerCase() : 'logox';
+    const author = message.role === 'assistant' ? message.ownerId : inputKind(message) === 'collaboration' && message.source ? message.source.toLowerCase() : DIRECTOR_ID;
     const accent = isUser || isSystem ? rail : ownerColor(author, roles);
     const systemError = isTimelineError(message);
     const frameKey = (frame ? frame.innerWidth + ':' + (frame.bg ?? '') : '') + '|' + (frame?.surfaceColor ?? viewColor);
@@ -295,7 +296,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       run = [];
     };
     for (const message of candidates) {
-      if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor' || view !== 'logox') { run.push(message); continue; }
+      if (!message.activityId || activities.get(message.activityId)?.kind !== 'actor' || !isDirector(view)) { run.push(message); continue; }
       if (drawnCards.has(message.activityId)) continue;
       drawnCards.add(message.activityId);
       flushRun(message.id);
@@ -319,7 +320,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     // The activity-level check covers the gaps between steps (context compaction, a pending model call) but only for the newest round.
     const live = thinkingNow || !!tool || waiting.length > 0 || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ||
       (finalRound && r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') &&
-        (activities.get(m.activityId)?.kind !== 'actor' || view !== 'logox')));
+        (activities.get(m.activityId)?.kind !== 'actor' || !isDirector(view))));
     // The round's latest `⏵` stage (quiet text once the round is done).
     const stage = candidates.findLast(m => m.ownerId === r.who && m.role === 'assistant' && !m.kind && (m.time ?? 0) >= r.since && (m.time ?? 0) <= until && extractNarration(m.text))?.text;
     const intent = stage ? extractNarration(stage)?.narration.replace(/\s+/g, ' ').trim() : undefined;
@@ -373,7 +374,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const drafting = requests.findLast(entry => entry.request.step.state === 'running' && entry.request.step.drafting)?.request.step.drafting;
     const liveLabel = drafting ? draftingLabel(drafting) : 'Thinking';
     const liveSegments: readonly SceneSegment[] = [{text: liveLabel, italic: true, selectionKey: id + ':title', selectionOffset: 0}];
-    target.pushOrdinaryCard({id, ownerId: ownerId ?? 'logox', kind: live ? 'Thinking' : 'Tool', title: live ? liveLabel : text, expandable: !live, bodyLines: [], open: isOpen,
+    target.pushOrdinaryCard({id, ownerId: ownerId ?? DIRECTOR_ID, kind: live ? 'Thinking' : 'Tool', title: live ? liveLabel : text, expandable: !live, bodyLines: [], open: isOpen,
       railColor: viewColor, ...(frame ? {parentFrame: frame} : {}), ...(runningStep ? {step: runningStep} : {}),
       titleSegments: live ? liveSegments : summary,
       renderBody(inner) {
@@ -445,12 +446,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const actor = activity?.kind === 'actor';
     const source = message.role === 'user' ? inputKind(message) : undefined;
     const collaboration = source === 'collaboration' || source === 'collaboration_interrupt';
-    const humanLike = message.role === 'user' && !collaboration && !(view === 'logox' && actor);
+    const humanLike = message.role === 'user' && !collaboration && !(isDirector(view) && actor);
     const systemLike = !message.kind && (message.role === 'system' || (message.role === 'notice' && (!message.ownerId || message.ownerId === 'system')));
     if (!humanLike && !systemLike) {
-      const who = actor && view === 'logox' ? 'logox' : message.ownerId || view;
+      const who = actor && isDirector(view) ? DIRECTOR_ID : message.ownerId || view;
       const current = ensureRound(who, message);
-      if (actor && activity && view === 'logox') current.actors.set(activity.activityId, activity);
+      if (actor && activity && isDirector(view)) current.actors.set(activity.activityId, activity);
       else {
         current.messages.push(message);
         if (message.kind === 'thinking') current.thinking.push(message);
@@ -458,7 +459,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     if (!humanLike && !systemLike) for (const line of stageAt.get(message.id) ?? []) pushStageLine(builder, line, railFor(message.ownerId));
     if (editAbsorbed.has(message.id)) continue;
-    if ((!actor || view !== 'logox') && (absorbed.has(message.id) || groupAt.has(message.id))) {
+    if ((!actor || !isDirector(view)) && (absorbed.has(message.id) || groupAt.has(message.id))) {
       const group = groupAt.get(message.id);
       if (group) {
         const rail = railFor(message.ownerId);
@@ -472,7 +473,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
       continue;
     }
-    if (view === 'logox' && actor && activity) {
+    if (isDirector(view) && actor && activity) {
       if (seen.has(activity.activityId)) continue;
       seen.add(activity.activityId);
       if (gapBefore(true)) builder.pushBlank(viewColor);
@@ -484,7 +485,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     }
     if (actor && activity && !seen.has(activity.activityId)) {
       seen.add(activity.activityId);
-      if (view !== 'logox' && activity.status === 'completed') {
+      if (!isDirector(view) && activity.status === 'completed') {
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
         getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, staged.get(activity.activityId), temporaryState(activity.ownerId, activity.activityId)?.label), status: activityStatus(activity),
@@ -493,7 +494,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
           detailed: false, renderMessage: body, renderInteraction: interaction});
       }
     }
-    if (actor && activity && view !== 'logox' && message.role === 'system' && ['failed', 'cancelled'].includes(activity.status)) continue;
+    if (actor && activity && !isDirector(view) && message.role === 'system' && ['failed', 'cancelled'].includes(activity.status)) continue;
     if (message.role === 'user') {
       if (collaboration) {
         const match = /^\[(?:Message|Broadcast) from ([^\]·]+?)(?: · ([^\]]+))?\]\r?\n?([\s\S]*)$/u.exec(message.text);
@@ -540,7 +541,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (systemLike) {
         flushRound(message.time);
         builder.pushBlank();
-      } else if (!message.kind && !(view === 'logox' && actor) && gapBefore(false)) builder.pushBlank(viewColor);
+      } else if (!message.kind && !(isDirector(view) && actor) && gapBefore(false)) builder.pushBlank(viewColor);
       body(message);
     }
     if (activity && !actor && grouped.get(activity.activityId)?.at(-1)?.id === message.id) failure(activity.activityId);
@@ -549,7 +550,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   flushRound();
   finalRound = false;
   for (const request of pending.filter(item => !seen.has(item.activityId))) interaction(request);
-  for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (view === 'logox' || item.ownerId === view))) {
+  for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (isDirector(view) || item.ownerId === view))) {
     if (activity.kind === 'anamnesis') {
       builder.pushBlank();
       builder.pushOrdinaryCard({id: activity.activityId, kind: 'Anamnesis', title: activity.stage,

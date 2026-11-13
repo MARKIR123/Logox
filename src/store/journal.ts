@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {appendFile, mkdir, readFile} from 'node:fs/promises';
 import {stripNarration} from '../runtime/narration.js';
 import {createHash, randomUUID} from 'node:crypto';
@@ -303,12 +304,12 @@ export class Journal implements HistoryStore {
     await this.loadRaw(entry.sessionId, entry.ownerId);
     await appendFile(this.path(entry.sessionId, entry.ownerId), JSON.stringify(entry) + '\n', 'utf8');
     try {
-      const isDirector = entry.ownerId === 'logox';
-      const treeDir = isDirector
+      const directorOwned = isDirector(entry.ownerId);
+      const treeDir = directorOwned
         ? join(this.directory, entry.sessionId)
         : join(this.directory, entry.sessionId, 'subagents');
       await mkdir(treeDir, {recursive: true});
-      const treeFile = isDirector
+      const treeFile = directorOwned
         ? join(treeDir, 'director.jsonl')
         : join(treeDir, `${entry.ownerId}.jsonl`);
       await appendFile(treeFile, JSON.stringify(entry) + '\n', 'utf8');
@@ -381,7 +382,7 @@ export class Journal implements HistoryStore {
     const prior = existing.find(record => record.activityId === roundId);
     const ordinal = prior?.ordinal ?? Math.max(earlier.size, ...existing.map(record => record.ordinal ?? 0)) + 1;
     const sourceLines = this.sourceLines(sessionId, ownerId, start, end);
-    const delivery = ownerId !== 'logox' && entries[start]?.inputKind === 'director' && final.trim()
+    const delivery = !isDirector(ownerId) && entries[start]?.inputKind === 'director' && final.trim()
       ? {title: summary.title, text: final} : undefined;
     const record: RoundRecord = {activityId: roundId, start, end, sourceHash: digest(entries.slice(start, end)), status, summary,
       ordinal, memory, sourceLines, ...(delivery ? {delivery} : {})};
@@ -392,12 +393,12 @@ export class Journal implements HistoryStore {
     records.sort((a, b) => a.start - b.start);
     await atomicWrite(await this.statePath(sessionId, ownerId, 'rounds'), Buffer.from(JSON.stringify(records)));
     try {
-      const isDirector = ownerId === 'logox';
-      const treeDir = isDirector
+      const directorOwned = isDirector(ownerId);
+      const treeDir = directorOwned
         ? join(this.directory, sessionId)
         : join(this.directory, sessionId, 'subagents');
       await mkdir(treeDir, {recursive: true});
-      const roundsFile = isDirector
+      const roundsFile = directorOwned
         ? join(treeDir, 'director.rounds.json')
         : join(treeDir, `${ownerId}.rounds.json`);
       await atomicWrite(roundsFile, Buffer.from(JSON.stringify(records, null, 2)));

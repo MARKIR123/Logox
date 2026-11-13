@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {z} from 'zod';
 import {StateFile} from '../config/model-preferences.js';
 import {ProviderError} from '../providers/http.js';
@@ -95,8 +96,8 @@ export class ActorRecovery {
   }
   async execution(root: string, kind: ExecutionRecoveryKind, ownerId: string): Promise<ExecutionRecoveryDecision> {
     const state = this.executionState(root), budget = kind === 'no_delivery' ? state.noDelivery : state.truncation;
-    if (kind === 'no_delivery' && ownerId !== 'logox' && budget.used === 1) return 'handoff';
-    if (budget.used >= 2) return kind !== 'no_delivery' && ownerId !== 'logox' ? 'handoff' : 'stop';
+    if (kind === 'no_delivery' && !isDirector(ownerId) && budget.used === 1) return 'handoff';
+    if (budget.used >= 2) return kind !== 'no_delivery' && !isDirector(ownerId) ? 'handoff' : 'stop';
     budget.used++; budget.total++;
     this.executionEvent(state, 'retry', kind, budget.total);
     await this.persist();

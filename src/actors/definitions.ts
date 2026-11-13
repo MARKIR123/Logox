@@ -1,3 +1,4 @@
+import {DIRECTOR_ID} from '../runtime/director-id.js';
 import {z} from 'zod';
 import {parseDocument, stringify} from 'yaml';
 import {cacheRetentionSchema, contextPolicySchema, RETIRED_CONTEXT_KEYS} from '../config/config.js';
@@ -104,8 +105,8 @@ export function parseActor(text: string): ActorDefinition {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }
   const context = raw.context && typeof raw.context === 'object' && !Array.isArray(raw.context)
-    ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}
-    : raw.context === undefined ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2} : raw.context;
+    ? {keep_recent_rounds: raw.id === DIRECTOR_ID ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}
+    : raw.context === undefined ? {keep_recent_rounds: raw.id === DIRECTOR_ID ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2} : raw.context;
   return immutable(actorDefinitionSchema.parse({...raw, context, prompt: match[2]!.trim()}));
 }
 export function serializeActor(definition: ActorDefinition): string {
@@ -159,8 +160,8 @@ export function parseActorProfile(files: ActorProfileFiles): ActorDefinition {
     for (const field of Object.keys(raw.context)) if (!Object.hasOwn(contextPolicySchema.shape, field)) throw new Error('Unknown context field: ' + field);
   }
   const context = raw.context && typeof raw.context === 'object' && !Array.isArray(raw.context)
-    ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}
-    : raw.context === undefined ? {keep_recent_rounds: raw.id === 'logox' ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2} : raw.context;
+    ? {keep_recent_rounds: raw.id === DIRECTOR_ID ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2, ...raw.context}
+    : raw.context === undefined ? {keep_recent_rounds: raw.id === DIRECTOR_ID ? 2 : 0, keep_recent_tools: raw.id === 'kalon' ? 0 : 2} : raw.context;
   const compression = (files.compression?.trim() || (typeof raw.compression === 'string' ? raw.compression.trim() : ''));
   const prompt = files.persona.trim();
   const execution = files.execution?.trim() || raw.execution;

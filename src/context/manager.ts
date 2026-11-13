@@ -1,3 +1,4 @@
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {ContextPolicy} from '../config/config.js';
 import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall, TurnUsage} from '../runtime/messages.js';
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
@@ -182,12 +183,12 @@ export class ContextManager {
       const record = round.record!;
       try {
         if (tasks.some(task => task.ownerId === identity.ownerId && task.resumeTaskId === record.activityId && completed(task.activityId))) continue;
-        const root = identity.ownerId === 'logox' ? undefined : tasks.find(task => task.activityId === record.activityId)?.rootActivityId;
+        const root = isDirector(identity.ownerId) ? undefined : tasks.find(task => task.activityId === record.activityId)?.rootActivityId;
         let ended: boolean | undefined;
         if (root && root !== record.activityId) {
-          const director = await journal.load(identity.sessionId, 'logox');
+          const director = await journal.load(identity.sessionId, DIRECTOR_ID);
           const at = director.findIndex(entry => entry.role === 'user' && entry.activityId === root);
-          if (at >= 0) ended = (await journal.rounds(identity.sessionId, 'logox', director)).some(item => item.start <= at && at < item.end);
+          if (at >= 0) ended = (await journal.rounds(identity.sessionId, DIRECTOR_ID, director)).some(item => item.start <= at && at < item.end);
           else {const status = tasks.find(task => task.activityId === root)?.status; ended = status === undefined ? undefined : ['completed', 'failed', 'cancelled'].includes(status);}
         }
         ended ??= rounds.some(other => other.record?.status === 'completed' && other.start > round.start);
@@ -329,14 +330,14 @@ export class ContextManager {
     // The routine fold is mechanical: it only lists closed rounds as folded and never calls the model. A companion's replacement point is the
     // end of its history (a new task is starting), so it costs no cache; Logox pays only when its cache has expired anyway or the request is at half the high watermark.
     if (routine && !force) {
-      let due = identity.ownerId !== 'logox';
+      let due = !isDirector(identity.ownerId);
       if (!due) {
         let lifetime: number | undefined;
         try {lifetime = await this.options.cacheLifetimeMs?.(identity);} catch {lifetime = undefined;}
         const lastReply = entries.findLast(entry => entry.role === 'assistant')?.time;
         due = lifetime !== undefined && lastReply !== undefined && (this.options.now?.() ?? Date.now()) - lastReply >= lifetime || before >= marks.high / 2;
       }
-      const targets = identity.ownerId === 'logox' ? closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds)) : routine.keepLast ? [] : closed;
+      const targets = isDirector(identity.ownerId) ? closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds)) : routine.keepLast ? [] : closed;
       const already = new Set(state.folded), fresh = due ? targets.filter(round => !already.has(round.start)) : [];
       if (fresh.length) {
         const held = await pinned();
@@ -348,7 +349,7 @@ export class ContextManager {
             signal.throwIfAborted();
             state = next; original = next; meter.invalidate();
             const after = meter.estimate(requestFor(state), model);
-            if (identity.ownerId === 'logox') this.options.report?.(identity, `[Context] Folded ${starts.length} closed round${starts.length === 1 ? '' : 's'} into index lines (~${before} to ~${after} tokens).`);
+            if (isDirector(identity.ownerId)) this.options.report?.(identity, `[Context] Folded ${starts.length} closed round${starts.length === 1 ? '' : 's'} into index lines (~${before} to ~${after} tokens).`);
             before = after;
           } catch (error) {signal.throwIfAborted();}
         }

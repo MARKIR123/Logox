@@ -1,3 +1,4 @@
+import {DIRECTOR_ID} from './runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import {homedir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -229,7 +230,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       if (await journal.pending(current.sessionId)) throw new Error('Finish the unfinished rewind first');
       requireIdle();
       current.store.clearTimeline(current.sessionId); publish();
-      current.systemNotice('Conversation view cleared. Model context, history and files are unchanged.', 'command_result', 'logox', undefined, {presentation: 'status'});
+      current.systemNotice('Conversation view cleared. Model context, history and files are unchanged.', 'command_result', DIRECTOR_ID, undefined, {presentation: 'status'});
       return true;
     }
     if (text === '/resume') {requireIdle(); await openResume(); return true;}
@@ -307,7 +308,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     sendPendingNow: (id: string) => current.sendPendingNow(id), discardPending: (id: string) => current.discardPending(id),
     cancel: (activityId: string) => current.cancel(activityId),
     cancelTool: (callId: string) => current.cancelTool(callId),
-    async submit(raw: string, source = 'logox', delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
+    async submit(raw: string, source = DIRECTOR_ID, delivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       // Serialize only the entry checks and call start; long tasks stay protected by each module's busy state.
       // The async pending read must not let a later /new overtake the previous setting save.
       const previous = entry;

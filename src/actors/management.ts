@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {readFile} from 'node:fs/promises';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
@@ -55,7 +56,7 @@ export class ActorManagement {
     try {return await readFile(path, 'utf8');} catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error;}
   }
   async saveDefaultModel(id: string, model: ActorModel | undefined, signal: AbortSignal): Promise<string> {
-    if (id === 'logox') throw new Error('Logox uses the current session model; set it with /model');
+    if (isDirector(id)) throw new Error('Logox uses the current session model; set it with /model');
     const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
     if (model) {
       const selected = actorModelSchema.parse(model); model = selected;

@@ -44,7 +44,7 @@ categories:
 ## 3. Common Changes
 ### Add a built-in tool
 1. Create `<tier>/<Name>Tool/` (`core` tools sit directly under `src/tools/`; tiers are `protocol/`, `coordination/`, `orchestration/`). Model it on `GlobTool/`:
-   - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `description`).
+   - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `description`, `readOnly`: set it only for a tool that merely observes, since the kernel reads it through `catalog.ts:isReadOnlyTool()` to keep valid calls of a read-only batch and to count the Automa streak; Read, Glob and Grep carry it).
    - `prompt.ts`: the `<NAME>_DESCRIPTION` string (see `GlobTool/prompt.ts`).
    - `UI.ts`: `export const UI = createToolUI([...])` naming the title parameters (see `GlobTool/UI.ts`).
    - Optional `diagnostic.ts`, registered in `diagnostics.ts:diagnosticHandlers`.

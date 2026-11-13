@@ -68,4 +68,4 @@ export async function executeRead(args: ReadArgs, canonicalPath: string, snapsho
   return {text, isError: false};
 }
 
-export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Read', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Read local file contents and inspect visual images'};
+export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'Read', category: 'core', roles: 'all', terminalVisibility: 'card', readOnly: true, description: 'Read local file contents and inspect visual images'};

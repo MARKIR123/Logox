@@ -1,3 +1,4 @@
+import {isDirector} from './runtime/director-id.js';
 import type {ActorCatalog} from './actors/catalog.js';
 import type {TaskModels} from './actors/task-models.js';
 import type {Config} from './config/config.js';
@@ -35,8 +36,8 @@ export function windowState(store: RuntimeStore, ownerId: string): string {
     return asking?.kind === 'permission' ? 'Awaiting permission' : 'Awaiting answer';
   }
   if (active) return states[active.status];
-  if (ownerId === 'logox') {
-    const busy = new Set(snapshot.activities.filter(activity => activity.ownerId !== 'logox' && activity.kind === 'actor' && live.includes(activity.status)).map(activity => activity.ownerId));
+  if (isDirector(ownerId)) {
+    const busy = new Set(snapshot.activities.filter(activity => !isDirector(activity.ownerId) && activity.kind === 'actor' && live.includes(activity.status)).map(activity => activity.ownerId));
     if (busy.size) return 'Waiting on ' + busy.size + (busy.size === 1 ? ' actor' : ' actors');
   }
   return own[0] ? states[own[0].status] : 'Ready';

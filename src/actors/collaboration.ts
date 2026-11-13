@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import {sendMessageSchema, sendMessageTool} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import type {ActorContext, TaskHandle, TaskOrigin} from './ensemble.js';
@@ -41,16 +42,16 @@ export class Collaboration {
         if (asking) {
           if (isBroadcast) throw new Error('An ask needs one recipient who owes the answer; use inform for `all`.');
           if (to === context.ownerId) throw new Error('You cannot ask yourself.');
-          if (to !== 'logox' && this.options.member(to) && !this.options.getActiveTask?.(to) && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context)) {
+          if (!isDirector(to) && this.options.member(to) && !this.options.getActiveTask?.(to) && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context)) {
             throw new Error(`${to} has not been dispatched, so nobody would answer. Ask Director (logox) instead.`);
           }
           sendInput.message = `[Question for you. Answer with SendMessage type "reply" to ${context.ownerId} once you can, and before you finish.]\n${sendInput.message}`;
         }
-        if (!isBroadcast && to !== 'logox' && !this.options.member(to)) {
+        if (!isBroadcast && !isDirector(to) && !this.options.member(to)) {
           throw new Error('Unknown or unavailable collaboration target: ' + to);
         }
 
-        if (!isBroadcast && to === 'logox' && context.ownerId !== 'logox' && this.options.coordinate) {
+        if (!isBroadcast && isDirector(to) && !isDirector(context.ownerId) && this.options.coordinate) {
           await this.options.coordinate(call.id, sendInput.message, sendInput.summary, context);
           return {role: 'tool' as const, callId: call.id, name: call.name,
             text: 'Assistance request admitted for Director coordination. No in-flight request or process was cancelled.', isError: false};
@@ -58,7 +59,7 @@ export class Collaboration {
         if (isBroadcast) {
           const targets = (this.options.members?.() ?? ['techne', 'kalon', 'aletheia']).filter(id => id !== context.ownerId);
           for (const target of targets) {
-            if (target === 'logox' && this.options.coordinate) {
+            if (isDirector(target) && this.options.coordinate) {
               await this.options.coordinate(call.id + ':broadcast', sendInput.message, sendInput.summary, context);
               continue;
             }
@@ -107,7 +108,7 @@ export class Collaboration {
         }
 
         // Target is off-stage: peers cannot dispatch an off-stage actor without Director
-        const isOffStage = context.ownerId !== 'logox' && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context);
+        const isOffStage = !isDirector(context.ownerId) && this.options.hasOnStageActivity && !this.options.hasOnStageActivity(to, context);
         if (isOffStage) {
           if (this.options.coordinate) {
             await this.options.coordinate(call.id + ':offstage:' + to, sendInput.message, `Peer message to off-stage ${to}: ${sendInput.summary || ''}`, context);
@@ -149,7 +150,7 @@ export class Collaboration {
         context.signal.throwIfAborted();
         await this.options.journal.saveCollaborations(context.sessionId, records);
         context.signal.throwIfAborted();
-        if (!sendInput.wake && !asking && context.ownerId !== 'logox' && this.options.deliverToCompletedPeer) {
+        if (!sendInput.wake && !asking && !isDirector(context.ownerId) && this.options.deliverToCompletedPeer) {
           const deliveredPassive = await this.options.deliverToCompletedPeer(to, sendInput.message, context.ownerId, sendInput.summary, context);
           if (deliveredPassive) {
             return {

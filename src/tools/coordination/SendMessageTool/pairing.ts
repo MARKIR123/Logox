@@ -1,3 +1,4 @@
+import {isDirector} from '../../../runtime/director-id.js';
 import type {Activity, Message} from '../../../runtime/contracts.js';
 import {messageToolCall} from '../../../tui/timeline/tool-ui.js';
 import {callArgs} from '../../ui-format.js';
@@ -36,9 +37,9 @@ export function sendFacts(message: Message): SendFacts | undefined {
  * (Every actor's own window still shows what that actor sent.)
  */
 export function hiddenFromView(message: Message, view: string): boolean {
-  if (view !== 'logox' || !isSend(message)) return false;
+  if (!isDirector(view) || !isSend(message)) return false;
   const facts = sendFacts(message);
-  return Boolean(facts) && facts!.sender !== 'logox' && facts!.to !== 'logox';
+  return Boolean(facts) && !isDirector(facts!.sender) && !isDirector(facts!.to);
 }
 
 /**

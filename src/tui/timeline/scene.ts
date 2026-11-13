@@ -1,3 +1,4 @@
+import {isDirector} from '../../runtime/director-id.js';
 import type {Step} from '../../runtime/contracts.js';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
@@ -66,21 +67,21 @@ export interface SceneRow extends Row {
 function railColorFor(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return palette.user;
   if (who === 'system') return palette.system;
-  if (who === 'logox') return palette.accent;
+  if (isDirector(who)) return palette.accent;
   return ownerColor(who, roles);
 }
 
 function whoName(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return userLabel();
   if (who === 'system') return '';
-  if (who === 'logox') return 'Logox';
+  if (isDirector(who)) return 'Logox';
   if (who === 'anamnesis') return 'Anamnesis';
   return roles[who]?.name ?? who;
 }
 /** The speaker glyph drawn on the rail of a turn header. */
 function whoGlyph(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return '❯';
-  if (who === 'logox') return '◈';
+  if (isDirector(who)) return '◈';
   return roles[who]?.symbol ?? '◇';
 }
 

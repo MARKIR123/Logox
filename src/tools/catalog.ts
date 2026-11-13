@@ -3,6 +3,7 @@ import {schemas, descriptions} from './index.js';
 import {sendMessageTool} from './coordination/SendMessageTool/SendMessageTool.js';
 import type {ToolDefinition} from '../runtime/messages.js';
 import type {ToolMetadataInput, ToolMetadata} from './metadata.js';
+import {canonicalToolName} from './types.js';
 import {metadata as meta0} from './ReadTool/ReadTool.js';
 import {metadata as meta1} from './WriteTool/WriteTool.js';
 import {metadata as meta2} from './EditTool/EditTool.js';
@@ -32,4 +33,12 @@ export function builtinToolRegistrations(): readonly ToolRegistration[] {
     description: descriptions[metadata.name as keyof typeof descriptions],
     parameters: z.toJSONSchema(schemas[metadata.name as keyof typeof schemas], {io: 'input'}),
   }}));
+}
+
+let readOnlyNames: ReadonlySet<string> | undefined;
+
+/** Whether the built-in tool behind `name` (any alias or casing) is flagged `readOnly` in its metadata. */
+export function isReadOnlyTool(name: string): boolean {
+  readOnlyNames ??= new Set(builtinToolRegistrations().filter(item => item.metadata.readOnly).map(item => item.metadata.name.toLowerCase()));
+  return readOnlyNames.has((canonicalToolName(name) ?? name).toLowerCase());
 }

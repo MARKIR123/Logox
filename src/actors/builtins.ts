@@ -1,3 +1,4 @@
+import {isDirector} from '../runtime/director-id.js';
 import {readFileSync} from 'node:fs';
 import {immutable} from '../runtime/contracts.js';
 import {parseActorProfile, type ActorDefinition} from './definitions.js';
@@ -22,7 +23,7 @@ function role(id: string, name: string, title: string, symbol: string, descripti
     ...(cardOpen ? {cardOpen} : {}),
     ...(activityVerbs ? {activityVerbs} : {}),
     ...(automa ? {automa} : {}),
-    context: {keep_recent_rounds: id === 'logox' ? 2 : 0, keep_recent_tools: tools}, skills});
+    context: {keep_recent_rounds: isDirector(id) ? 2 : 0, keep_recent_tools: tools}, skills});
 }
 export const builtinActors: readonly ActorDefinition[] = immutable([
   role('logox', 'Logox', 'Director', '◈', 'Talks with the user, breaks down goals, orchestrates the ensemble, merges results, and handles simple tasks directly.', 2),

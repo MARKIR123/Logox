@@ -1,3 +1,4 @@
+import {isDirector} from '../../runtime/director-id.js';
 import React, {type ReactElement} from 'react';
 import {Box, Text} from 'ink';
 import stringWidth from 'string-width';
@@ -68,7 +69,7 @@ export function computeActivePills(
   // One pill per actor: its most urgent state wins (asking, running, paused, queued, recently failed).
   const owners = new Map<string, {activity: any; state: PillState}>();
   for (const activity of activities) {
-    if (activity.sessionId !== sessionId || !activity.ownerId || activity.ownerId === 'logox' || activity.kind === 'anamnesis') continue;
+    if (activity.sessionId !== sessionId || !activity.ownerId || isDirector(activity.ownerId) || activity.kind === 'anamnesis') continue;
     const state = pillState(activity, options, clock);
     if (!state) continue;
     const known = owners.get(activity.ownerId);

@@ -1,3 +1,4 @@
+import {DIRECTOR_ID} from '../runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import type {RuntimeStore} from '../runtime/store.js';
 import type {SystemEvent, SystemPresentation} from '../runtime/system-events.js';
@@ -10,7 +11,7 @@ export class SystemHistory {
   constructor(private readonly sessionId: string, private readonly store: RuntimeStore,
     private readonly journal: Journal, private readonly isPersistent: () => boolean) {}
   async restore(): Promise<void> {for (const event of await this.journal.systemEvents(this.sessionId)) this.store.system(event, true);}
-  emit(text: string, kind: SystemEvent['kind'] = 'command_result', ownerId = 'logox', activityId?: string, persist = true,
+  emit(text: string, kind: SystemEvent['kind'] = 'command_result', ownerId = DIRECTOR_ID, activityId?: string, persist = true,
     options?: {presentation?: SystemPresentation; title?: string}): void {
     const event: SystemEvent = {version: 1, id: randomUUID(), sessionId: this.sessionId, ownerId, kind, text,
       time: Date.now(), ...(activityId ? {activityId} : {}),

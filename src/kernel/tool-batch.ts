@@ -7,7 +7,7 @@ import {extractDiscoveredToolNames, resolveToolLoad} from '../tools/discovery.js
 import {loadToolsSchema} from '../tools/protocol/LoadToolsTool/LoadToolsTool.js';
 import {diagnoseToolError} from '../tools/diagnostics.js';
 import {toolProgressFingerprint} from './execution-recovery.js';
-import {OBSERVATION_TOOLS} from './tool-pacing.js';
+import {isReadOnlyTool} from '../tools/catalog.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {settleToolResults} from './scratchpad.js';
@@ -49,8 +49,7 @@ export function uniqueCallIds(calls: ToolCall[]): void {
 
 /** A tool that only observes cannot leave partial side effects, so a batch of them keeps its valid calls. */
 function observationOnly(run: AgentRun, call: ToolCall): boolean {
-  const c = (canonicalToolName(call.name) ?? call.name).toLowerCase();
-  return OBSERVATION_TOOLS.has(c) && !run.options.extraTools?.some(tool => tool.name.toLowerCase() === call.name.toLowerCase());
+  return isReadOnlyTool(call.name) && !run.options.extraTools?.some(tool => tool.name.toLowerCase() === call.name.toLowerCase());
 }
 
 /** Availability and argument checks for a complete batch; the message per call id is the reason it cannot run. */
