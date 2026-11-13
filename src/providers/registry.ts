@@ -182,7 +182,8 @@ export class ProviderRegistry {
   }
   thinking(): {effort: ThinkingEffort; levels: readonly ThinkingEffort[]} {
     const settings = modelSettings(this.config, this.env);
-    return {effort: this.config.provider.thinking_effort, levels: settings.thinkingLevels ?? ['auto']};
+    // A model id that names its own level (`...-high`) reports that level, whatever effort the session carries.
+    return {effort: settings.thinkingEffort ?? this.config.provider.thinking_effort, levels: settings.thinkingLevels ?? ['auto']};
   }
   selectEffort(effort: ThinkingEffort): void {
     if (!this.thinking().levels.includes(effort)) throw new ProviderError('The current model does not declare support for this thinking level');

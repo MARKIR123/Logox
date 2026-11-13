@@ -3,7 +3,7 @@ import {homedir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {parse} from 'smol-toml';
 import {z} from 'zod';
-import {effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
+import {effortInName, effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
 import {hooksSchema, mcpServerSchema} from '../extensions/config.js';
 import {defaultPalette, hexColorSchema} from './theme-palette.js';
 import {modelTable, thinkingHint} from '../providers/model-table.js';
@@ -289,7 +289,7 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
   const cacheRetention = declared?.cache_retention ?? provider.cache_retention ?? config.providers[provider.name]?.cache_retention;
   const cacheTtl = declared?.cache_ttl_seconds ?? provider.cache_ttl_seconds ?? config.providers[provider.name]?.cache_ttl_seconds;
   return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, ...(cacheTtl !== undefined ? {cacheTtlMs: Math.round(cacheTtl * 1000)} : {}), api: provider.api ?? config.providers[provider.name]?.api,
-    model, thinkingEffort: provider.thinking_effort,
+    model, thinkingEffort: effortInName(model) ?? provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,
       thinkingLevels: declared?.thinking_levels ?? (

@@ -7,6 +7,15 @@ import {withFileLock} from '../store/file-lock.js';
 export const effortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']);
 export type ThinkingEffort = z.infer<typeof effortSchema>;
 
+/**
+ * The thinking level a model id names itself (`<family>-low|medium|high|max`, `-extra-low` counts as low). Such a model is one fixed level of its family,
+ * so that level is its effort: a separately chosen effort (the session's, inherited by every actor) must not contradict the name.
+ */
+export function effortInName(model: string): ThinkingEffort | undefined {
+  const tier = /-(extra-low|low|medium|high|max)$/.exec(model.toLowerCase())?.[1];
+  return tier === undefined ? undefined : tier === 'extra-low' ? 'low' : tier as ThinkingEffort;
+}
+
 export function isOpenAiReasoningModel(id: string): boolean {
   const clean = id.toLowerCase();
   if (clean.includes('chat-latest') && !clean.includes('gpt-5.2')) return false;

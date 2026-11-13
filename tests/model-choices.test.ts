@@ -34,3 +34,27 @@ test('a choice resolves to its binding: Inherit clears, a family row picks the v
   assert.deepEqual(choices.resolve(JSON.stringify({provider: 'gateway', model: 'alpha-high'})), {provider: 'gateway', model: 'alpha-high'}, 'an exact variant id is accepted');
   assert.equal(choices.resolve(JSON.stringify({provider: 'nowhere', model: 'x'})), null);
 });
+
+test('a model id that names its level decides the effort, whatever effort the session carries', async () => {
+  const {effortInName} = await import('../src/config/model-preferences.js');
+  assert.equal(effortInName('gemini-4-hydrogen-high'), 'high');
+  assert.equal(effortInName('family-extra-low'), 'low');
+  assert.equal(effortInName('family-MAX'), 'max');
+  for (const plain of ['gemini-4-hydrogen', 'claude-thinking', 'family-tiered', 'highland']) assert.equal(effortInName(plain), undefined, plain);
+  const {loadConfig, modelSettings} = await import('../src/config/config.js');
+  const {mkdtemp, rm} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {ProviderRegistry} = await import('../src/providers/registry.js');
+  const {AuthStorage} = await import('../src/providers/auth.js');
+  const {CustomProviderStorage} = await import('../src/providers/custom-storage.js');
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-effort-'));
+  try {
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'gw', model: 'family-low', thinking_effort: 'medium'},
+      providers: {gw: {base_url: 'https://gateway.invalid/v1'}}}, {}, cwd, cwd);
+    assert.equal(modelSettings(config, {}).thinkingEffort, 'low');
+    const registry = new ProviderRegistry(config, {}, async () => {throw new Error('no network');}, new AuthStorage(join(cwd, 'auth.json')), new CustomProviderStorage(join(cwd, 'custom.json')));
+    // An actor bound to the `-high` variant inherits the session's effort field, but its model name wins.
+    assert.equal(registry.candidate('gw', 'family-high').thinking().effort, 'high');
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
