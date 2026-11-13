@@ -45,16 +45,13 @@ export class RoundState {
   /** A model request is about to be sent; the closing follow-up is not a round trip. */
   requestSent(): void {if (!this.closingFollowUp) this.requests++;}
 
-  /** New input was taken into history: owed-reply reminders restart and a pending close is withdrawn. Recovery notes stay. */
+  /** New input was taken into history: owed-reply reminders restart, a pending close is withdrawn, and the reminder about the previous step is dropped because the input supersedes it. */
   newInput(): void {
-    this.ownedReminders = 0;
-    this.closingFollowUp = false; this.answer = '';
-  }
-  /** A wait ended: like new input, and the request-only recovery note is dropped too. */
-  waitEnded(): void {
     this.ownedReminders = 0;
     this.closingFollowUp = false; this.answer = ''; this.note = ''; this.noteKind = undefined;
   }
+  /** A wait ended: the same reset as new input. */
+  waitEnded(): void {this.newInput();}
   /** The actor still owes a reply: that note replaces any recovery note, the reminder count grows and the close is withdrawn. */
   replyOwed(note: string): void {
     this.ownedReminders++;

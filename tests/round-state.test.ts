@@ -13,14 +13,14 @@ function busy(): RoundState {
   return state;
 }
 
-test('newInput withdraws the close and keeps the recovery note and kind', () => {
+test('newInput withdraws the close and drops the recovery note and kind', () => {
   const state = busy();
   assert.equal(state.closing, true);
   state.newInput();
   assert.equal(state.closing, false);
   assert.equal(state.finalText, '');
-  assert.equal(state.recovery, 'note false');
-  assert.equal(state.recoveringKind, 'no_delivery');
+  assert.equal(state.recovery, '');
+  assert.equal(state.recoveringKind, undefined);
 });
 
 test('newInput restarts the owed-reply reminders', () => {
@@ -31,7 +31,7 @@ test('newInput restarts the owed-reply reminders', () => {
   assert.equal(state.mayRemindOwed, true);
 });
 
-test('waitEnded does what newInput does and also drops the recovery note and kind', () => {
+test('waitEnded does what newInput does', () => {
   const state = busy();
   state.waitEnded();
   assert.equal(state.closing, false);
