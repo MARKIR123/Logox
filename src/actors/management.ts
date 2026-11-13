@@ -10,7 +10,7 @@ import {ActorCatalog, assertActorPath} from './catalog.js';
 import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './definitions.js';
 import type {ContextPolicy} from '../config/config.js';
 import {detectEffortLevels} from '../config/model-grouping.js';
-import {effortInName} from '../config/model-preferences.js';
+import {effortInName, modelLabel} from '../config/model-preferences.js';
 import {bindingChoices, type ChoiceModel} from '../commands/model-choices.js';
 
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
@@ -29,15 +29,8 @@ export class ActorManagement {
       const policy = this.policy?.(actor.id) ?? actor.context;
       const resolved = this.modelResolver?.(actor.id);
       const effort = resolved?.effort;
-      // A model id that already names its level (`...-high`) is not followed by a second, repeated level.
-      const named = effortInName(actor.defaultModel?.model ?? resolved?.model ?? '');
-      const effortSuffix = effort && effort !== 'none' && !named ? ' · ' + effort : '';
-      const baseName = actor.defaultModel
-        ? actor.defaultModel.provider + '/' + actor.defaultModel.model
-        : resolved
-          ? resolved.provider + '/' + resolved.model
-          : 'None';
-      const modelWithEffort = baseName + effortSuffix;
+      const shown = actor.defaultModel ?? resolved;
+      const modelWithEffort = shown ? shown.provider + '/' + modelLabel(shown.model, effort) : 'None';
       const modelLine = actor.defaultModel
         ? modelWithEffort
         : 'Inherits session model (' + modelWithEffort + ') (switch via /model ' + actor.id + ')';

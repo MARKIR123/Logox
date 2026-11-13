@@ -2,6 +2,7 @@ import {existsSync} from 'node:fs';
 import {join, relative, resolve} from 'node:path';
 import type {ActorDefinition} from '../actors/definitions.js';
 import type {ContextPolicy} from '../config/config.js';
+import {modelLabel} from '../config/model-preferences.js';
 import {watermarks} from '../context/budget.js';
 import type {SkillResource} from '../resources/manager.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
@@ -130,8 +131,7 @@ export function buildEnsemble(sources: EnsembleSources, initial?: string): Ensem
     const own = snapshot.activities.filter(activity => activity.ownerId === id && activity.kind !== 'anamnesis');
     const calls = snapshot.messages.filter(message => message.ownerId === id && message.kind === 'tool' && message.step?.terminalVisibility !== 'silent' && message.step?.state !== 'queued');
     const usage = sources.usage(id);
-    const effort = status.effort && !['Unsupported', 'Unavailable'].includes(status.effort) ? ' · ' + status.effort : '';
-    const model = status.model ? status.model.model + effort : 'no model';
+    const model = status.model ? modelLabel(status.model.model, status.effort && !['Unsupported', 'Unavailable'].includes(status.effort) ? status.effort : undefined) : 'no model';
     return {id, name: actor.name, title: actor.title, glyph: actor.symbol, color: actor.color, description: actor.description,
       model: {text: model, source: actor.defaultModel ? 'set' : 'follows'},
       context: contextSentence(policy, status.modelInfo?.window ?? status.context?.window),

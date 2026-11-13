@@ -58,3 +58,23 @@ test('a model id that names its level decides the effort, whatever effort the se
     assert.equal(registry.candidate('gw', 'family-high').thinking().effort, 'high');
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
+
+test('a model label shows the family once and the level once', async () => {
+  const {modelLabel} = await import('../src/config/model-preferences.js');
+  assert.equal(modelLabel('claude-opus-5-5-medium', 'medium'), 'claude-opus-5-5 · medium');
+  assert.equal(modelLabel('gemini-4-hydrogen-high', 'low'), 'gemini-4-hydrogen · high', 'the level in the name is the one shown');
+  assert.equal(modelLabel('gpt-5.5', 'high'), 'gpt-5.5 · high');
+  assert.equal(modelLabel('gpt-4o'), 'gpt-4o');
+});
+
+test('the one-hour role default is trusted only on the official Anthropic endpoint; elsewhere it must be configured', async () => {
+  const {anthropicRetention, cacheLifetimeMs, SHORT_CACHE_MS, LONG_CACHE_MS} = await import('../src/providers/cache.js');
+  const director = {cacheRetention: {role: 'long' as const}};
+  assert.equal(anthropicRetention({baseUrl: 'https://api.anthropic.com/v1'}, director), 'long');
+  assert.equal(anthropicRetention({baseUrl: 'http://127.0.0.1:8045/v1'}, director), 'short', 'a proxy is not assumed to keep entries for an hour');
+  assert.equal(anthropicRetention({baseUrl: 'http://127.0.0.1:8045/v1', cacheRetention: 'long'}, director), 'long', 'an explicit setting still asks for it');
+  assert.equal(anthropicRetention({baseUrl: 'http://127.0.0.1:8045/v1'}, {cacheRetention: {role: 'short', actor: 'long'}}), 'long', 'an actor setting is explicit too');
+  assert.equal(cacheLifetimeMs({kind: 'anthropic', baseUrl: 'http://127.0.0.1:8045/v1'}, director), SHORT_CACHE_MS, 'so the keep-alive and the fold-on-expiry work with five minutes');
+  assert.equal(cacheLifetimeMs({kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1'}, director), LONG_CACHE_MS);
+  assert.equal(cacheLifetimeMs({kind: 'anthropic', baseUrl: 'http://127.0.0.1:8045/v1', cacheTtlMs: 120_000}, director), 120_000, 'a configured lifetime always wins');
+});

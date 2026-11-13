@@ -15,6 +15,12 @@ export function effortInName(model: string): ThinkingEffort | undefined {
   const tier = /-(extra-low|low|medium|high|max)$/.exec(model.toLowerCase())?.[1];
   return tier === undefined ? undefined : tier === 'extra-low' ? 'low' : tier as ThinkingEffort;
 }
+/** How a model and its thinking level are shown: `<model> · <level>`. A model id that names its level shows its family once (`claude-x-medium` -> `claude-x · medium`), never the level twice. */
+export function modelLabel(model: string, effort?: string): string {
+  const named = /^(.+)-(extra-low|low|medium|high|max)$/i.exec(model);
+  if (named) return named[1] + ' · ' + named[2]!.toLowerCase();
+  return effort && effort !== 'none' ? model + ' · ' + effort : model;
+}
 
 export function isOpenAiReasoningModel(id: string): boolean {
   const clean = id.toLowerCase();

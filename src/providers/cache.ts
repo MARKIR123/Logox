@@ -5,6 +5,7 @@ import type {ModelRequest} from '../runtime/messages.js';
 export type CacheRetention = 'short' | 'long';
 export const SHORT_CACHE_MS = 5 * 60_000;
 export const LONG_CACHE_MS = 60 * 60_000;
+const OFFICIAL_ANTHROPIC = /^https:\/\/api\.anthropic\.com(\/|$)/i;
 
 /** The Director waits for dispatched work for long stretches; every other actor runs tight tool loops where a longer lifetime only adds write cost. */
 export function roleCacheRetention(ownerId: string): CacheRetention {
@@ -15,8 +16,12 @@ export function roleCacheRetention(ownerId: string): CacheRetention {
  * Anthropic lifetime of one request: the actor's `cache_retention`, then the model or provider `cache_retention`, then the role default.
  * One value per request: the API wants longer lifetimes before shorter ones, so every breakpoint carries the same one.
  */
-export function anthropicRetention(settings: Pick<ModelSettings, 'cacheRetention'>, request: Pick<ModelRequest, 'cacheRetention'>): CacheRetention {
-  return request.cacheRetention?.actor ?? settings.cacheRetention ?? request.cacheRetention?.role ?? 'short';
+export function anthropicRetention(settings: Pick<ModelSettings, 'cacheRetention'> & {readonly baseUrl?: string | undefined}, request: Pick<ModelRequest, 'cacheRetention'>): CacheRetention {
+  // The role default (Director `long`) is a promise only the official endpoint is known to keep. A gateway or proxy that speaks the protocol may
+  // ignore `ttl: "1h"` and drop entries after five minutes; believing in an hour there stops the keep-alive and the fold-on-expiry, so every
+  // Director wake pays a full uncached prompt. Elsewhere the long lifetime must be asked for explicitly (`cache_retention`, or `cache_ttl_seconds`).
+  const role = settings.baseUrl === undefined || OFFICIAL_ANTHROPIC.test(settings.baseUrl) ? request.cacheRetention?.role : undefined;
+  return request.cacheRetention?.actor ?? settings.cacheRetention ?? role ?? 'short';
 }
 /**
  * How long this request's prompt cache entry lives, in milliseconds, or undefined when that is unknown. A `cache_ttl_seconds` the user
@@ -24,7 +29,7 @@ export function anthropicRetention(settings: Pick<ModelSettings, 'cacheRetention
  * on the request (`anthropicRetention`); every other protocol: unknown, because OpenAI and gateways do not disclose theirs. Callers treat
  * undefined as "never expired".
  */
-export function cacheLifetimeMs(settings: Pick<ModelSettings, 'kind' | 'cacheRetention' | 'cacheTtlMs'>, request: Pick<ModelRequest, 'cacheRetention'>): number | undefined {
+export function cacheLifetimeMs(settings: Pick<ModelSettings, 'kind' | 'cacheRetention' | 'cacheTtlMs'> & {readonly baseUrl?: string | undefined}, request: Pick<ModelRequest, 'cacheRetention'>): number | undefined {
   if (settings.cacheTtlMs !== undefined) return settings.cacheTtlMs;
   return settings.kind === 'anthropic' ? anthropicRetention(settings, request) === 'long' ? LONG_CACHE_MS : SHORT_CACHE_MS : undefined;
 }
