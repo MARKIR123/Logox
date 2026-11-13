@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import type {ThinkingEffort} from '../../../config/model-preferences.js';
 
 const inline = z.string().trim().min(1).max(200).regex(/^[^\r\n\t]+$/);
 
@@ -50,7 +51,8 @@ export function chooseStyle(profile: AutomaProfile, requested: string | undefine
   return requested ? {name, note: `Style "${requested}" does not exist (available: ${Object.keys(profile.styles).join(', ')}); used "${name}". You never need to name one.`} : {name};
 }
 
-export interface AutomaModelChoice {readonly provider: string; readonly model: string}
+/** A worker model; `effort` is the dedicated binding's own thinking effort (absent means the session's). */
+export interface AutomaModelChoice {readonly provider: string; readonly model: string; readonly effort?: ThinkingEffort | undefined}
 
 /**
  * The user's `/model automa` choice always wins. Otherwise `preferred` (style, then role) applies when this account has it,

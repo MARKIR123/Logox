@@ -63,7 +63,10 @@ export class ActorManagement {
     if (isDirector(id)) throw new Error('Logox uses the current session model; set it with /model');
     const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
     if (model) {
-      const selected = actorModelSchema.parse(model); model = selected;
+      const parsed = actorModelSchema.parse(model);
+      // A model id that names its level is the level: no separate effort is stored beside it.
+      const {effort, ...plain} = parsed;
+      const selected: ActorModel = effort && !effortInName(parsed.model) ? parsed : plain; model = selected;
       this.modelPool?.loadCacheSync();
       const poolModels = this.modelPool?.snapshot() ?? [];
       const foundInPool = poolModels.some(item => item.provider === selected.provider &&

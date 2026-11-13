@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {effortSchema} from '../config/model-preferences.js';
 import {toolCallSchema} from './messages.js';
 import {inputKindSchema, type InputKind} from './provenance.js';
 import type {SystemEvent, SystemPresentation} from './system-events.js';
@@ -57,7 +58,7 @@ export function currentTaskProgress(progress: TaskProgressSnapshot | undefined):
   return stage ? {label: stage.activeForm, detail: stage.purpose} : undefined;
 }
 export const taskModelSchema = z.strictObject({
-  initial: z.strictObject({provider: id, model: id}), actual: z.strictObject({provider: id, model: id}),
+  initial: z.strictObject({provider: id, model: id, effort: effortSchema.optional()}), actual: z.strictObject({provider: id, model: id, effort: effortSchema.optional()}),
   inherited: z.boolean(), switched: z.boolean(), phase: z.enum(['started', 'confirming', 'ready', 'completed', 'failed', 'cancelled']),
 });
 export const activitySchema = z.strictObject({

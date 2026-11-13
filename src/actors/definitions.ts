@@ -2,13 +2,15 @@ import {DIRECTOR_ID} from '../runtime/director-id.js';
 import {z} from 'zod';
 import {parseDocument, stringify} from 'yaml';
 import {cacheRetentionSchema, contextPolicySchema, RETIRED_CONTEXT_KEYS} from '../config/config.js';
+import {effortSchema} from '../config/model-preferences.js';
 import {immutable} from '../runtime/contracts.js';
 import {automaProfileSchema} from '../tools/orchestration/AutomaTool/preset.js';
 
 export const actorIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).refine(id => !['legacy', 'con', 'prn', 'aux', 'nul', ...Array.from({length: 9}, (_, i) => 'com' + (i + 1)), ...Array.from({length: 9}, (_, i) => 'lpt' + (i + 1))].includes(id));
 const text = (max: number) => z.string().trim().min(1).max(max).refine(value => !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value));
 const inline = (max: number) => text(max).refine(value => !/[\r\n\t]/.test(value));
-export const actorModelSchema = z.strictObject({provider: inline(128), model: inline(256)});
+/** A dedicated model binding. `effort` is optional: absent means the session's thinking effort; a model id that names its own level ignores it. Automa's binding (`tool-models.json`) shares this shape. */
+export const actorModelSchema = z.strictObject({provider: inline(128), model: inline(256), effort: effortSchema.optional()});
 const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   reserve_tokens: contextPolicySchema.shape.reserve_tokens.removeDefault().optional(),
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),

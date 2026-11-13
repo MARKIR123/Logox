@@ -8,8 +8,10 @@ import {ProviderRegistry} from '../providers/registry.js';
 import {ProviderError} from '../providers/http.js';
 import type {ModelCapacity} from '../context/contracts.js';
 import type {Provider} from '../runtime/messages.js';
+import {effortInName, effortSchema} from '../config/model-preferences.js';
 
-const selectionSchema = z.object({provider: z.string().min(1), model: z.string().min(1)});
+/** A model and, for a dedicated binding that sets one, its own thinking effort; no `effort` means the session's. Older checkpoints without it load unchanged. */
+const selectionSchema = z.object({provider: z.string().min(1), model: z.string().min(1), effort: effortSchema.optional()});
 export type TaskModelSelection = z.infer<typeof selectionSchema>;
 const checkpointSchema = z.strictObject({version: z.literal(1), sessionId: z.string(), ownerId: z.string(), activityId: z.string(),
   initial: selectionSchema, actual: selectionSchema, inherited: z.boolean(), switched: z.boolean(),
@@ -17,7 +19,13 @@ const checkpointSchema = z.strictObject({version: z.literal(1), sessionId: z.str
   candidate: selectionSchema.optional(), confirmationId: z.string().optional()});
 export type TaskModelCheckpoint = z.infer<typeof checkpointSchema>;
 type Identity = {sessionId: string; ownerId: string};
+/** Model identity only: the effort is a setting of the binding, not another model. */
 const same = (a: TaskModelSelection, b: TaskModelSelection) => a.provider === b.provider && a.model === b.model;
+/** A model id that names its level keeps that level; the stored `effort` is ignored. */
+const bound = (binding: TaskModelSelection): TaskModelSelection => {
+  const {effort, ...model} = binding;
+  return effort !== undefined && !effortInName(binding.model) ? {...model, effort} : model;
+};
 
 /** Standalone credential-free ledger; the caller supplies the activity set of the currently effective branch; waits are not restored and nothing is replayed automatically. */
 export class TaskModelLedger {
@@ -84,7 +92,7 @@ export class TaskModels {
       const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
       if (fallback) configured = fallback;
     }
-    return configured;
+    return configured && bound(configured);
   }
   model(identity: Identity): ModelCapacity {
     const selection = this.selection(identity);
@@ -95,8 +103,10 @@ export class TaskModels {
     const scope = this.current.get(this.key(identity));
     const selected = this.selection(identity);
     return scope && same(scope.selection(), selected) && !['completed', 'failed', 'cancelled'].includes(scope.snapshot().phase)
-      ? scope.thinking() : this.options.registry.candidate(selected.provider, selected.model).thinking();
+      ? scope.thinking() : this.thinkingOf(selected);
   }
+  /** The thinking effort and levels a selection runs with: its own effort when it carries one, else the session's. */
+  thinkingOf(selection: TaskModelSelection) {return this.options.registry.candidate(selection.provider, selection.model, selection.effort).thinking();}
   summarizer(identity: Identity): {model: ModelCapacity; provider: Provider} {
     const override = this.options.summaryModel?.(identity);
     const scope = this.current.get(this.key(identity));
@@ -104,7 +114,8 @@ export class TaskModels {
       return {model: scope.model(), provider: scope.provider()};
     }
     const selection = override ?? this.selection(identity);
-    const registry = this.options.registry.candidate(selection.provider, selection.model);
+    // A summary override names another model and uses the session's effort; only the actor's own model keeps its bound effort.
+    const registry = this.options.registry.candidate(selection.provider, selection.model, override ? undefined : selection.effort);
     return {model: registry.capacity(), provider: this.options.provider?.(selection, registry.provider()) ?? registry.provider()};
   }
   /** Restores display and later summary identity; does not resume interrupted tasks or reuse unconfirmed candidates. */
@@ -120,7 +131,7 @@ export class TaskModelScope {
   private registry: ProviderRegistry;
   constructor(private readonly options: TaskModelsOptions, private readonly context: ActorContext | undefined,
     private readonly state: TaskModelCheckpoint) {
-    this.registry = options.registry.candidate(state.actual.provider, state.actual.model);
+    this.registry = options.registry.candidate(state.actual.provider, state.actual.model, state.actual.effort);
   }
   selection(): TaskModelSelection {return {...this.state.actual};}
   model(): ModelCapacity {return this.registry.capacity();}
@@ -140,6 +151,7 @@ export class TaskModelScope {
       const candidate = selectionSchema.parse(this.options.registry.selection());
       if (same(candidate, this.state.actual)) {context.report('Model unavailable', 'The current session model is the same as the failed model; the task ends.'); return false;}
       // Check the window before confirming; with no window, do not guess or send a substitute request.
+      // The session model replaces the bound one, so it runs with the session's effort, not the binding's.
       const next = this.options.registry.candidate(candidate.provider, candidate.model);
       next.capacity();
       this.state.phase = 'confirming'; this.state.candidate = candidate; this.state.confirmationId = randomUUID(); await this.save();

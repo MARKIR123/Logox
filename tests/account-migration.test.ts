@@ -42,8 +42,8 @@ async function fixture() {
     await customStorage.save({name: 'openai', base_url: 'https://api.openai.com/v1', kind: 'openai_compat', catalog: true, models: ['gpt-5.5', 'gpt-5.4'], default_model: 'gpt-5.5'});
     const selection = {version: 1, provider: 'openai', model: 'gpt-5.5', effort: 'auto'};
     await write(files.userPref, selection); await write(files.projectPref, selection); await write(files.otherPref, selection);
-    await write(files.actorModels, {techne: {provider: 'openai', model: 'gpt-5.5'}, kalon: {provider: 'deepseek', model: 'deepseek-flash'}});
-    await write(files.toolModels, {automa: {provider: 'openai', model: 'gpt-5.4'}});
+    await write(files.actorModels, {techne: {provider: 'openai', model: 'gpt-5.5', effort: 'high'}, kalon: {provider: 'deepseek', model: 'deepseek-flash'}});
+    await write(files.toolModels, {automa: {provider: 'openai', model: 'gpt-5.4', effort: 'low'}});
     await write(files.store, {version: 1, updatedAt: 1, models: [{provider: 'openai', id: 'gpt-5.5'}, {provider: 'deepseek', id: 'deepseek-flash'}]});
     await write(files.projectActor, actorFile('techne', 'openai')); await write(files.userActor, actorFile('kalon', 'openai')); await write(files.otherActor, actorFile('aletheia', 'deepseek'));
   };
@@ -75,8 +75,8 @@ test('migrates the credential, record, saved selections, bindings, model store a
     assert.equal((await f.read(f.files.projectPref)).model, 'gpt-5.5');
     assert.equal(await readFile(f.files.otherPref, 'utf8'), before.otherPref, 'another project is not touched');
     // Bindings.
-    assert.deepEqual(await f.read(f.files.actorModels), {techne: {provider: 'openai-auth', model: 'gpt-5.5'}, kalon: {provider: 'deepseek', model: 'deepseek-flash'}});
-    assert.deepEqual(await f.read(f.files.toolModels), {automa: {provider: 'openai-auth', model: 'gpt-5.4'}});
+    assert.deepEqual(await f.read(f.files.actorModels), {techne: {provider: 'openai-auth', model: 'gpt-5.5', effort: 'high'}, kalon: {provider: 'deepseek', model: 'deepseek-flash'}});
+    assert.deepEqual(await f.read(f.files.toolModels), {automa: {provider: 'openai-auth', model: 'gpt-5.4', effort: 'low'}});
     assert.deepEqual((await f.read(f.files.store)).models, [{provider: 'openai-auth', id: 'gpt-5.5'}, {provider: 'deepseek', id: 'deepseek-flash'}]);
     // Actor definition files keep working: still parseable, only the provider changed.
     assert.equal(parseActor(await readFile(f.files.projectActor, 'utf8')).defaultModel?.provider, 'openai-auth');

@@ -5,12 +5,15 @@ import {dirname, join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {z} from 'zod';
+import {effortSchema} from '../config/model-preferences.js';
 
 export const toolIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 
 export const toolModelSchema = z.strictObject({
   provider: z.string().trim().min(1).max(128),
   model: z.string().trim().min(1).max(256),
+  /** Optional thinking effort of this binding (same meaning as an actor binding's); absent means the session's. */
+  effort: effortSchema.optional(),
 });
 
 export type ToolModel = z.infer<typeof toolModelSchema>;

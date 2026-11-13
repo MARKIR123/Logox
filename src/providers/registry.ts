@@ -189,12 +189,17 @@ export class ProviderRegistry {
     if (!this.thinking().levels.includes(effort)) throw new ProviderError('The current model does not declare support for this thinking level');
     this.config = {...this.config, provider: {...this.config.provider, thinking_effort: effort}};
   }
-  candidate(name: string, model?: string): ProviderRegistry {
+  /**
+   * A registry for one provider/model. Without `effort` it carries the session's thinking effort; with `effort` (a dedicated binding's own level)
+   * that level applies instead. Either way a level the model does not declare falls back to `auto`, and a model id that names its level keeps it.
+   */
+  candidate(name: string, model?: string, effort?: ThinkingEffort): ProviderRegistry {
     const next = new ProviderRegistry(this.configFor(name, model), this.env, this.fetcher, this.auth, this.customStorage);
     next.gates = this.gates;
     next.gateOptions = this.gateOptions;
     for (const [k, v] of this.customProviders) next.customProviders.set(k, v);
     for (const [key, value] of this.capabilities) next.capabilities.set(key, {...value});
+    if (effort !== undefined) next.config.provider.thinking_effort = effort;
     const settings = modelSettings(next.config, this.env);
     if (!settings.thinkingLevels?.includes(next.config.provider.thinking_effort)) next.config.provider.thinking_effort = 'auto';
     return next;

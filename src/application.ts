@@ -23,7 +23,7 @@ import {DeliveryQueue} from './actors/delivery-queue.js';
 import {planRestart, restartDependencies, restartStopped} from './actors/restart.js';
 import {TaskModels, TaskModelLedger} from './actors/task-models.js';
 import {loadConfig, themeSchema, type Config} from './config/config.js';
-import {StateFile, preferenceSchema, effortSchema, type ThinkingEffort} from './config/model-preferences.js';
+import {StateFile, preferenceSchema, effortSchema, effortInName, type ThinkingEffort} from './config/model-preferences.js';
 import {UiPreferences, uiSettings} from './config/ui-settings.js';
 import {RoundNotifier} from './tui/terminal/notify.js';
 import {terminalFocus} from './tui/terminal/focus.js';
@@ -230,8 +230,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       const identity = {sessionId: session, ownerId: actorId};
       const configured = (isDirector(actorId) ? undefined : actors.modelStorage.get(actorId) ?? actors.find(actorId)?.defaultModel) ?? registry.selection();
       try {
-        const sel = taskModels.selection(identity);
-        const th = taskModels.thinking(identity);
+        // A running task reports what it runs with; otherwise the model and effort the next task would start with (so a saved binding shows at once).
+        const running = store.getSnapshot().activities.some(activity => activity.sessionId === session && activity.ownerId === actorId && activity.taskModel && ['running', 'waiting_input', 'queued', 'paused'].includes(activity.status));
+        const sel = running ? taskModels.selection(identity) : taskModels.idleSelection(actorId);
+        const th = running ? taskModels.thinking(identity) : taskModels.thinkingOf(sel);
         return {provider: sel.provider, model: sel.model, effort: th.effort, levels: th.levels};
       } catch {
         // Display remains available before model selection or when a provider is unavailable.
@@ -489,7 +491,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const session = registry.selection();
       const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get('automa'), preferred, session, pool: modelPool.snapshot(),
         expand: name => modelPool.resolveShorthand(name, session.provider)});
-      return {provider: registry.candidate(chosen.provider, chosen.model).provider(), model: chosen.provider + '/' + chosen.model};
+      return {provider: registry.candidate(chosen.provider, chosen.model, chosen.effort).provider(), model: chosen.provider + '/' + chosen.model};
     },
     profile: ownerId => actors.find(ownerId)?.automa,
     actorName: ownerId => actors.find(ownerId)?.name,
@@ -1119,6 +1121,18 @@ export async function createSessionApplication(options: SessionApplicationOption
         return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'status'};
       });
   };
+  /** `/model <actor|automa> <model> [effort]`: a trailing thinking level is split off the model text. */
+  const withEffort = (text: string): {text: string; effort?: ThinkingEffort} => {
+    const parts = text.trim().split(/\s+/), last = parts.length > 1 ? effortSchema.safeParse(parts[parts.length - 1]!.toLowerCase()) : undefined;
+    return last?.success ? {text: parts.slice(0, -1).join(' '), effort: last.data} : {text};
+  };
+  /** The binding to store; an effort the model does not declare is an error here (the picker only offers declared ones), and a model id that names its level stores none. */
+  const bindingFor = (provider: string, model: string, effort: ThinkingEffort | undefined): {provider: string; model: string; effort?: ThinkingEffort} => {
+    if (!effort || effortInName(model)) return {provider, model};
+    const levels = registry.candidate(provider, model).thinking().levels;
+    if (!levels.includes(effort)) throw new Error(provider + '/' + model + ' does not support thinking effort "' + effort + '" (available: ' + levels.join(', ') + ')');
+    return {provider, model, effort};
+  };
   const openAutomaModel = async () => {
     modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
@@ -1142,7 +1156,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const chosen = choices.resolve(choice, chosenEffort);
       if (chosen === null) throw new Error('Invalid model selection');
       await tools.modelStorage.save('automa', chosen, commands.signal);
-      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'status'};
+      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}${chosen.effort ? ' · ' + chosen.effort : ''}` : 'Automa model set to inherit session model', presentation: 'status'};
     });
   };
   // Restore the actual model messages; legacy TS demo ledgers remain readable, and tools are not re-executed.
@@ -1455,9 +1469,10 @@ export async function createSessionApplication(options: SessionApplicationOption
               receipt('Automa model set to inherit session model', 'status', undefined, source);
               return;
             }
-            const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
-            await tools.modelStorage.save('automa', {provider: resolved.provider, model: resolved.model}, commands.signal);
-            receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
+            const spec = withEffort(specificModel), resolved = modelPool.resolveShorthand(spec.text, settings.provider);
+            const binding = bindingFor(resolved.provider, resolved.model, spec.effort);
+            await tools.modelStorage.save('automa', binding, commands.signal);
+            receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
             return;
           }
           await openAutomaModel();
@@ -1467,9 +1482,10 @@ export async function createSessionApplication(options: SessionApplicationOption
         if (targetActor) {
           const specificModel = rawArg.slice(firstToken!.length).trim();
           if (specificModel) {
-            const resolved = modelPool.resolveShorthand(specificModel, settings.provider);
-            await actorServices.management.saveDefaultModel(targetActor.id, {provider: resolved.provider, model: resolved.model}, commands.signal);
-            receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
+            const spec = withEffort(specificModel), resolved = modelPool.resolveShorthand(spec.text, settings.provider);
+            const binding = bindingFor(resolved.provider, resolved.model, spec.effort);
+            await actorServices.management.saveDefaultModel(targetActor.id, binding, commands.signal);
+            receipt('Actor ' + targetActor.name + ' model set to: ' + resolved.provider + '/' + resolved.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
             return;
           }
           if (isDirector(targetActor.id)) {

@@ -1,6 +1,6 @@
 import {isDirector} from './runtime/director-id.js';
 import type {ActorCatalog} from './actors/catalog.js';
-import type {TaskModels} from './actors/task-models.js';
+import type {TaskModels, TaskModelSelection} from './actors/task-models.js';
 import type {Config} from './config/config.js';
 import {costOf, modelPrice} from './context/cost.js';
 import type {UsageRecord} from './context/budget.js';
@@ -50,12 +50,12 @@ export function stageStatus(options: StageStatusOptions, ownerId: string): Stage
     recent.find(activity => ['queued', 'paused'].includes(activity.status));
   const identity = {sessionId, ownerId};
   // Same path as the runtime: a running task reports its actual model, an idle window the model its next task would start with.
-  let selected: {provider: string; model: string};
+  let selected: TaskModelSelection;
   try {selected = active?.taskModel ? taskModels.selection(identity) : taskModels.idleSelection(ownerId);}
   catch {selected = registry.selection();}
   let effort = 'Unsupported', effortError: string | undefined;
   try {
-    const thinking = active?.taskModel ? taskModels.thinking(identity) : registry.candidate(selected.provider, selected.model).thinking();
+    const thinking = active?.taskModel ? taskModels.thinking(identity) : taskModels.thinkingOf(selected);
     effort = thinking.levels.length > 1 ? thinking.effort : 'Unsupported';
   } catch (error) {effort = 'Unavailable'; effortError = error instanceof Error ? error.message : String(error);}
   const reading = contexts.status(identity), meter = contexts.meter(identity);
