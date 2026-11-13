@@ -14,7 +14,7 @@
 | Fix connection drops, proxy or TLS | `transport.ts:createHttpTransport()` | `error-format.ts:formatNetworkError()` |
 | Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-table.ts:ModelTable.resolve()`, `model-capacities.ts:modelCapacities` |
 | Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
-| Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()`, `auth.ts:AuthStorage` |
+| Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()` (models in use), `registry.ts:ProviderRegistry.availableModels()` (everything offered, with offline fallbacks; the `/login` model editor uses it), `auth.ts:AuthStorage` |
 | Model list cache and shorthand | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
 | ChatGPT OAuth login or refresh | `oauth.ts:startOpenAiOAuth()` | `oauth.ts:refreshOpenAIToken()`, `login.ts:LoginFlow` |
 | Custom endpoints or importing external credentials | `custom-storage.ts:CustomProviderStorage` | `credential-import.ts`, `registry.ts:ProviderRegistry.syncCustom()` |

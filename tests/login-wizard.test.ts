@@ -247,3 +247,36 @@ test('login wizard groups models by family and expands toggled families to full 
   ]);
   assert.equal(committedRecord.default_model, 'gemini-4-argon-low');
 });
+test('edit lists every provider row: a built-in one not set up yet has no delete, and a bare credential can only be deleted', async () => {
+  const rows = async () => [
+    {name: 'deepseek', custom: false, saved: true, baseUrl: 'https://api.deepseek.com', kind: 'openai_compat'},
+    {name: 'antigravity', custom: false, saved: false, baseUrl: 'http://127.0.0.1:8045/v1', kind: 'openai_compat'},
+    {name: 'orphan', custom: true, saved: true},
+  ];
+  const builtin = scripted(['edit', 'antigravity', null]), first = deps(builtin.ask, {rows});
+  assert.equal(await runLoginWizard(first.deps), 'cancelled');
+  assert.deepEqual(builtin.questions[1]!.options?.map(option => option.id), ['deepseek', 'antigravity', 'orphan']);
+  assert.match(builtin.questions[1]!.options!.find(option => option.id === 'antigravity')!.description ?? '', /not set up/);
+  assert.deepEqual(builtin.questions[2]!.options?.map(option => option.id), ['key', 'models']);
+  const orphan = scripted(['edit', 'orphan', 'delete', 'delete']), second = deps(orphan.ask, {rows});
+  assert.equal(await runLoginWizard(second.deps), 'deleted');
+  assert.deepEqual(orphan.questions[2]!.options?.map(option => option.id), ['delete']);
+  assert.deepEqual(second.calls, ['remove:orphan']);
+});
+test('availableModels ignores the enabled subset, and falls back to known models when the endpoint refuses the listing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-models-'));
+  try {
+    const storage = new CustomProviderStorage(join(cwd, 'custom.json'));
+    await storage.save({name: 'gateway', base_url: 'https://example.invalid/v1', kind: 'openai_compat', models: ['picked']});
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+    const signal = new AbortController().signal;
+    const listing = new ProviderRegistry(config, {}, async () => Response.json({data: [{id: 'picked'}, {id: 'other'}]}), new AuthStorage(join(cwd, 'auth.json')), storage);
+    await listing.syncCustom();
+    assert.deepEqual(await listing.modelsFor('gateway', signal), ['picked']);
+    assert.deepEqual(await listing.availableModels('gateway', signal), ['other', 'picked']);
+    // A subscription login cannot list models: the edit screen must still offer the built-in catalog instead of an empty list.
+    const refused = new ProviderRegistry(config, {}, async () => new Response('', {status: 401}), new AuthStorage(join(cwd, 'auth2.json')), storage);
+    assert.ok((await refused.availableModels('openai', signal, false)).length > 0);
+    await assert.rejects(refused.modelsFor('openai', signal), /not logged in/);
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});

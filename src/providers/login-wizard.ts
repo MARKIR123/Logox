@@ -221,19 +221,21 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
       return 'added';
     }
     if (root.value !== 'edit') return 'cancelled';
-    const rows = (await deps.rows()).filter(row => row.saved);
+    // Every provider the model picker can show is editable here; a built-in one becomes a saved one on its first edit.
+    const rows = await deps.rows();
     if (!rows.length) {
-      deps.notify('No saved providers to edit yet. Run /login again and choose Add a new provider.');
+      deps.notify('No providers to edit yet. Run /login again and choose Add a new provider.');
       return 'cancelled';
     }
-    const provider = await ask(menu('Choose a provider to edit', rows.map(row => option(row.name, row.name))));
+    const provider = await ask(menu('Choose a provider to edit', rows.map(row => option(row.name, row.name,
+      !row.baseUrl ? 'Saved credential without an endpoint' : row.saved ? undefined : 'Built-in, not set up yet'))));
     if (!provider) return 'cancelled';
     const row = rows.find(row => row.name === provider.value);
     if (!row) return 'cancelled';
     let record = fromRow(row);
-    const action = await ask(menu('Choose one field to edit', [option('key', 'API key'),
+    const action = await ask(menu('Choose one field to edit', !row.baseUrl ? [option('delete', 'Delete provider')] : [option('key', 'API key'),
       ...(row.custom ? [option('url', 'Base URL'), option('protocol', 'Wire protocol')] : []),
-      option('models', 'Model list'), option('delete', 'Delete provider')]));
+      option('models', 'Model list'), ...(row.saved ? [option('delete', 'Delete provider')] : [])]));
     if (!action) return 'cancelled';
     switch (action.value) {
       case 'key': {

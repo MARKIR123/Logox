@@ -278,11 +278,17 @@ export class ProviderRegistry {
   async models(signal: AbortSignal = AbortSignal.timeout(15000)): Promise<string[]> {
     return this.modelsFor(this.config.provider.name, signal);
   }
+  /** The models in use for a provider: the enabled subset when one is saved, otherwise everything `availableModels()` finds. */
   async modelsFor(name: string, signal: AbortSignal): Promise<string[]> {
     signal.throwIfAborted();
     const enabled = this.customProviders.get(name)?.models;
     if (enabled?.length) return [...enabled];
-    const settings = await this.settingsFor(name, true);
+    return this.availableModels(name, signal);
+  }
+  /** Everything the provider offers, ignoring the enabled subset: the live `/models` list, or the stored and built-in lists when the endpoint does not answer (a subscription login cannot list models). With `requireAuth` false a provider that is not signed in is still listed from those fallbacks. */
+  async availableModels(name: string, signal: AbortSignal, requireAuth = true): Promise<string[]> {
+    signal.throwIfAborted();
+    const settings = await this.settingsFor(name, requireAuth);
     signal.throwIfAborted();
     const headers: Record<string, string> = {};
     if ((settings.providerKind ?? settings.kind) === 'anthropic') {

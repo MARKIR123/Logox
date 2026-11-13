@@ -300,6 +300,9 @@ export async function createSessionApplication(options: SessionApplicationOption
       catalog: () => Object.entries(presets).map(([name, definition]) => ({name, custom: false, saved: false,
         baseUrl: definition.base_url, kind: definition.kind})),
       discoverModels: async (record, key) => {
+        // A provider the registry already knows, edited without a new key, is listed the way the model picker lists it (stored credential, offline fallbacks).
+        const known = registry.names().includes(record.name) ? registry.candidate(record.name).selection().baseUrl : undefined;
+        if (!key && known?.replace(/\/$/, '') === record.base_url.replace(/\/$/, '')) return registry.availableModels(record.name, AbortSignal.timeout(5000), false);
         key ??= (await registry.candidate(record.name).settings(false)).key;
         const url = record.base_url.replace(/\/$/, '') + '/models';
         const headers: Record<string, string> = record.kind === 'anthropic'
@@ -315,7 +318,8 @@ export async function createSessionApplication(options: SessionApplicationOption
         const saved = await registry.auth.providers();
         const openAiAccount = (await registry.auth.credential('openai'))?.type === 'oauth';
         const custom = new Map((await registry.customStorage.list().catch(() => [])).map(record => [record.name, record]));
-        return registry.names().map((name): WizardProviderRow => {
+        // A credential saved under a name nothing else defines is still listed, so it can be removed.
+        return [...new Set([...registry.names(), ...saved])].map((name): WizardProviderRow => {
           const record = custom.get(name);
           return {
             name,
