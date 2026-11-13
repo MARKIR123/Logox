@@ -170,6 +170,35 @@ cache_keepalive = true     # 默认开启
 
 `node scripts/diff-requests.mjs <requests 目录或单个角色目录> [--context N] [--keepalive]` 对同一角色的相邻请求打印首个不同字节的偏移，以及两侧各约 200 个字符的上下文（默认跳过保活请求）。用它定位为什么前缀缓存没有命中：前缀应当逐字节不变，差异出现得越靠前，缓存损失越大。
 
+### 缓存回归报告（请求指纹）
+
+提示缓存只在请求前缀（工具、系统提示、再按顺序的消息）与上一次请求逐字节相同时才会命中。为了事后能解释一次未命中，每个发给模型的请求都会默认记录一条很小的“指纹”，追加到 `.logox/state/sessions/<会话>/requests/<角色>.fingerprints.jsonl`（`[kernel] request_fingerprints = false` 可关闭）。指纹只有短哈希、标签、估算 token 和缓存相关字段（`max_tokens`、思考配置、缓存保留与时长、是否带缓存键），不含任何消息文本、密钥或请求头；请求结束后另写一行 `result`（同一个 `id`），记录 `input` / `cacheRead` / `cacheWrite` / `output`，失败请求记录错误类别。写入是异步的，错误一律吞掉，不会拖慢或打断请求；每条记录约每个消息块 40 字节，长会话的指纹文件会随之增长，目前没有上限。
+
+```bash
+node scripts/cache-report.mjs <会话目录 | 项目 .logox 目录 | 项目目录> [--all] [--json]
+```
+
+报告按角色分段。每段先给出请求数、纯追加比例、缓存读取占输入的比例和各类未命中的数量，再给出各类别（工具、系统、用户、助手文本、思考回放、工具参数、按工具名的工具结果、图片、宿主消息）的平均 token 与最大请求；随后是相邻 `task` 请求的对比表（默认只列出前缀被破坏或未命中的行，`--all` 列出全部）：
+
+- `kept`：新请求保留了上一次请求前缀块的数量，`kept/total`；`pure` 为 `yes` 表示新请求只是在末尾追加（缓存可以延续）。
+- `first difference`：第一个不同的块，写作 `block <序号> <上次标签> -> <本次标签>`，序号 0 是工具列表，接着是系统块，再是消息块；标签来自 Logox 自己的类型化消息，例如 `tool:Read`、`context:reminder`、`context:task-state/ensemble`、`assistant+calls2`、`user+img1`。`tokens after` 是从该块起需要重新读取的估算 token。
+- `cache`：该请求的 `cacheRead / input`。读取接近零（低于 5%，且输入至少 1024 token）才算未命中，并分四类：`prefix changed`（Logox 改了前缀字节，括号里是第一个被改的块的序号）、`fields changed`（前缀未变，但模型、协议、思考配置、缓存保留、时长、缓存键或工具披露方式变了，括号里列出字段）、`idle`（前缀与字段都没变，但距上一次请求的间隔超过那次请求记录的缓存生命周期）、`unexplained`（前缀与字段都没变且间隔很短，只能认为是服务端丢弃了缓存）。
+
+示例（合成数据）：
+
+```text
+[techne] 6 requests (task 6, keepalive 0)
+  pure append 80% (4/5 pairs) | cache read 15% of input
+  misses 4: prefix changed 1, idle 1, fields changed 1, unexplained 1
+  time      kept  pure  first difference                                          tokens after  cache  miss class
+  13:47:00  5/5   yes   -                                                         100           0%     unexplained (10s gap)
+  13:47:10  3/6   no    block 3 msg#1 assistant+calls1 -> msg#1 context:reminder  400           0%     prefix changed (block 3)
+  13:47:20  7/7   yes   -                                                         100           0%     fields changed (thinking)
+  13:54:00  8/8   yes   -                                                         100           0%     idle (400s gap, lifetime 300s)
+```
+
+`scripts/score-session.mjs` 在 `[Cache]` 段用同一份数据为每个角色列出纯追加比例、缓存读取比例和各类未命中数；没有指纹文件的旧会话显示 `n/a`。需要对比实际字节时再用上面的请求转储。
+
 ```toml
 [provider]
 tool_discovery = "none" # 保守使用普通工具集

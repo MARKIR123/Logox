@@ -552,6 +552,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   };
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,
+    ...(config.kernel.request_fingerprints ? {requestFingerprintFile: (context: {sessionId: string; ownerId: string}) => join(state, 'sessions', context.sessionId, 'requests', context.ownerId + '.fingerprints.jsonl')} : {}),
     ...(dumpRequests ? {requestDumpDir: (context: {sessionId: string; ownerId: string}) => join(state, 'sessions', context.sessionId, 'requests', context.ownerId)} : {}),
     iterations: config.kernel.max_iterations, retries: config.kernel.max_retries, readonlyConcurrency: config.permissions.readonly_concurrency,
     supportsVision: () => true,

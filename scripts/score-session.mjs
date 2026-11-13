@@ -44,11 +44,15 @@
 //                  activity) and summary/compaction/approval calls (session-level usage.jsonl, attributed to the owner's latest activity).
 //                  Per actor they also get their own rows (automa, compaction, approval). A project total (a `.logox` directory or project directory) sums every session in it and lists them.
 //   Wall time      Root task: first ledger record under the root to the last record (any actor or Automa worker) under that root.
+//   Cache          From `requests/<actor>.fingerprints.jsonl` (always-on request fingerprints; definitions in scripts/cache-analysis.mjs, full report
+//                  from scripts/cache-report.mjs): per actor the pure-append share of consecutive task requests, cache-read share of input and
+//                  miss classes (prefix changed / idle / fields changed / unexplained). Sessions without the files print n/a.
 //   Interruptions  User interrupts = activities with stopReason `user` or `interrupted`; Director stops = activities stopped with
 //                  `director_cancel` plus CancelActor calls (reported side by side); interventions = inputs of kind `collaboration_interrupt`.
 import {existsSync, readdirSync, readFileSync, statSync} from 'node:fs';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {analyzeSession} from './cache-analysis.mjs';
 
 const EMPTY_REPLY = 'Model returned only thinking or an empty reply';
 const SERVER_COMMAND = /http\.server|SimpleHTTPServer|\bhttp-server\b|\blive-server\b|\bbrowser-sync\b|\bvite\b|\bwebpack(?:-dev-server| serve)\b|\bnext (?:dev|start)\b|\bnpx\s+(?:-y\s+)?serve\b|\b(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:dev|serve|start)\b|(?:^|[\s;&|])serve\s+[\w./\\-]+|\bphp\s+-S\b|\bnode\s+\S*server\S*/i;
@@ -322,12 +326,17 @@ export function scoreSession(dir, {others = []} = {}) {
     cancelActorCalls: sum(assistant.map(message => message.toolCalls.filter(call => call.name === 'CancelActor').length)),
     interventions: records.filter(record => record.role === 'user' && record.inputKind === 'collaboration_interrupt').length};
 
+  // 11. Cache behavior from the request fingerprints (details: scripts/cache-report.mjs). Per actor: pure-append share, cache-read share, miss classes.
+  const cacheAnalysis = analyzeSession(dir);
+  const cache = cacheAnalysis ? {recorded: true, byActor: Object.fromEntries(Object.entries(cacheAnalysis).map(([actor, {summary}]) => [actor, summary]))} : {recorded: false, byActor: {}};
+  if (!cache.recorded) missing.push('cache: no requests/<actor>.fingerprints.jsonl (sessions recorded before request fingerprints, or kernel.request_fingerprints = false)');
+
   // dir is <project>/.logox/state/sessions/<id> for real runs; a bare session directory falls back to its id.
   const id = basename(dir);
   const project = basename(dirname(dirname(dirname(dir)))) === '.logox' ? basename(dirname(dirname(dirname(dirname(dir))))) : id.slice(0, 8);
   return {session: {id, project, label: project, dir, wallMs, actors, others}, roots,
     finalReports: {total: sum(roots.map(root => root.finalReports))},
-    stages, roundClosing: closing, roundSummaries, failures, writes, preview, messaging, automa: automaStats, usage, interruptions, missing};
+    stages, roundClosing: closing, roundSummaries, failures, writes, preview, messaging, automa: automaStats, usage, cache, interruptions, missing};
 }
 
 const na = 'n/a';
@@ -399,6 +408,13 @@ export function flatten(score) {
     const tag = 'root #' + root.index;
     add('Cost', tag + ' tokens in / out / cache', root.usage ? [root.usage.input, root.usage.output, root.usage.cacheRead + '+' + root.usage.cacheWrite].join(' / ') : na);
     add('Cost', tag + ' cost', root.usage ? costText(root.usage, usage) : na);
+  }
+  if (!score.cache.recorded) add('Cache', 'request fingerprints', na);
+  for (const [actor, entry] of Object.entries(score.cache.byActor)) {
+    const m = entry.misses;
+    add('Cache', actor + ' pure append', entry.pairs ? pct(entry.pureAppendShare) + ' (' + entry.pureAppend + '/' + entry.pairs + ')' : na);
+    add('Cache', actor + ' cache read share', pct(entry.cacheReadShare));
+    add('Cache', actor + ' misses prefix/idle/fields/unexplained', [m['prefix changed'], m.idle, m['fields changed'], m.unexplained].join('/') + ' of ' + entry.requests);
   }
   add('Interruptions', 'user interrupts', score.interruptions.userInterrupts);
   add('Interruptions', 'director stops (cancelled / CancelActor)', score.interruptions.directorStops + ' / ' + score.interruptions.cancelActorCalls);

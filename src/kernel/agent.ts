@@ -69,6 +69,8 @@ export interface AgentOptions {
   keepAlive?: CacheKeeper;
   /** Directory for the serialized request bodies of one actor (debug switch `LOGOX_DUMP_REQUESTS=1`); undefined when off. */
   requestDumpDir?(context: Parameters<ActorExecutor<string>>[1]): string | undefined;
+  /** File that receives the always-on request fingerprint lines of one actor (`kernel.request_fingerprints`); undefined when off. */
+  requestFingerprintFile?(context: Parameters<ActorExecutor<string>>[1]): string | undefined;
   supportsVision?: boolean | (() => boolean);
   context?: ContextManager;
   resources?: Resources;

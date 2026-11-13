@@ -8,6 +8,7 @@ import {resolveProviderCapabilities} from './capabilities.js';
 import {encodeAnthropicTools, encodeAnthropicContext} from './disclosure/anthropic.js';
 import {anthropicRetention, cacheControl, cacheLifetimeMs, openAiRetentionFields, SHORT_CACHE_MS, type CacheRetention} from './cache.js';
 import {dumpRequestBody} from './dump.js';
+import {beginFingerprint, fingerprintBlocks, shortHash} from './fingerprint.js';
 import {decodeOpenAIToolSearchCall, encodeOpenAIToolSearch, encodeOpenAIFunction, encodeOpenAIToolSearchResult, encodeRuntimeContext} from './disclosure/openai.js';
 import {FALLBACK_CAPABILITIES} from './capabilities.js';
 
@@ -549,11 +550,40 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           ...thinking};
     signal.throwIfAborted();
     const deadline = idleDeadline(signal, settings.timeoutMs), timed = deadline.signal;
+    let fingerprint: ReturnType<typeof beginFingerprint> | undefined;
     try {
       let response: Response;
       try {
         const payload = JSON.stringify(body);
         if (request.dumpDir) dumpRequestBody(request.dumpDir, payload, request.purpose);
+        if (request.fingerprint) {
+          const target = request.fingerprint;
+          // Built after the request has left (see `appendFingerprint`); everything it reads is already final.
+          fingerprint = beginFingerprint(target, (id, time) => {
+            const wire = body as Record<string, unknown>;
+            const toolsJson = JSON.stringify(wire.tools ?? []);
+            const replayChat = settings.thinkingProtocol !== 'reasoning-effort';
+            const references = new Set(request.tools.filter(tool => tool.deferLoading).map(tool => tool.name));
+            const discovery = request.toolDiscovery === 'openai-responses' ? {tools: request.tools, capabilities} : undefined;
+            const encode = (message: ModelMessage): unknown => native ? anthropicMessages([message], references, false, retention)
+              : isResponsesApi ? responsesInput([message], supportsVision, discovery)
+              : openaiMessages([message], settings.thinkingControl, supportsVision, replayChat);
+            const blocks = fingerprintBlocks(request.messages,
+              [native ? 'a' : isResponsesApi ? 'r' : 'c', supportsVision, replayChat, settings.thinkingControl === true, native || discovery ? shortHash(toolsJson) : ''].join('|'),
+              encode, message => native ? message.role === 'assistant' && !!message.signature : !isResponsesApi && replayChat);
+            const system = native && caching ? (wire.system as unknown[]).map(block => JSON.stringify(block))
+              : [JSON.stringify(isResponsesApi ? wire.instructions : native ? wire.system : (wire.messages as unknown[])[0])];
+            const budget = (thinking.thinking as {budget_tokens?: unknown} | undefined)?.budget_tokens;
+            const openAiRetention = native ? {} : openAiRetentionFields(settings, isResponsesApi);
+            return {id, time, target, purpose: request.purpose ?? target.purpose ?? 'task', model: chosenModel,
+              host: (() => {try {return new URL(url).host;} catch {return '';}})(),
+              protocol: native ? 'anthropic' : isResponsesApi ? 'responses' : 'chat', toolsJson, systemBlocks: system, systemText: plainSystem, blocks,
+              fields: {maxTokens, thinking: [protocol ?? 'none', effort, typeof budget === 'number' ? 'b' + budget : ''].filter(Boolean).join(':'),
+                retention: native && caching ? anthropicRetention(settings, request) : Object.keys(openAiRetention).length ? JSON.stringify(openAiRetention) : 'none',
+                ttlMs: cacheLifetimeMs(settings, request) ?? null, cacheKey: 'prompt_cache_key' in wire, stream: isStream,
+                discovery: request.toolDiscovery ?? 'none'}};
+          });
+        }
         response = await fetcher(url, {method: 'POST', headers, body: payload, signal: timed, redirect: 'error'});
       }
       catch (error) {
@@ -810,10 +840,12 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
       const toolCalls = [...calls.values()];
       if (toolCalls.some(call => call.kind === 'tool-search') && (toolCalls.some(call => call.kind === 'tool-search' && (!call.id || !call.arguments)) ||
         new Set(toolCalls.map(call => call.id)).size !== toolCalls.length)) throw new ProviderError('Client tool search requires a completed item with a unique original call_id.');
+      fingerprint?.settle(usage ? {usage} : {});
       return {message: {role: 'assistant', text, ...(reasoning ? {reasoning} : {}),
         ...(signature ? {signature} : {}), ...(toolCalls.length ? {toolCalls} : {})}, stop,
         ...(usage ? {usage} : {})};
     } catch (error) {
+      fingerprint?.settle({error: signal.aborted ? 'aborted' : error instanceof ProviderError ? error.category : 'error'});
       if (signal.aborted) signal.throwIfAborted();
       if (error instanceof ProviderError && (error.diagnostic?.phase || isProviderTimeout(error))) {
         const observed = deadline.observation();

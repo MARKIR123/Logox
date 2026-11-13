@@ -24,6 +24,8 @@ export function truncateToTokens(text: string, budget: number): string {
   }
   return value.slice(0, end).trimEnd() + '…';
 }
+/** Estimated tokens of one image, used by every request estimate and by the request fingerprint sizes. */
+export const IMAGE_TOKENS = 1200;
 function estimateMessage(message: ModelMessage): number {
   if (message.role === 'context') {
     if (message.kind === 'environment-baseline' || message.kind === 'capability-change' && message.data?.baseline === true) return 0;
@@ -31,7 +33,7 @@ function estimateMessage(message: ModelMessage): number {
   }
   const images = 'images' in message ? message.images : undefined;
   const textOnly = images?.length ? {...message, images: undefined} : message;
-  return estimateText(JSON.stringify(textOnly)) + (images?.length ?? 0) * 1200 + 8;
+  return estimateText(JSON.stringify(textOnly)) + (images?.length ?? 0) * IMAGE_TOKENS + 8;
 }
 export function estimateRequest(request: ModelRequest): number {
   const expanded = extractDiscoveredToolNames(retainDiscoveryPairs(request.messages, extractDiscoveredToolNames(request.messages)));

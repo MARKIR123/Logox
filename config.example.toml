@@ -29,6 +29,7 @@ max_parallel = 4 # Jobs run at once per dispatch (1-8); a dispatch may ask for m
 max_iterations = 0 # Unlimited round trips; cancellation still applies.
 max_retries = 3
 cache_keepalive = true # Keep an idle actor's short prompt cache warm while it is certain to wake again.
+request_fingerprints = true # Record one small hash-and-size line per model request (no message text) so cache misses can be explained; see scripts/cache-report.mjs.
 
 [permissions]
 mode = "auto" # auto (default), default, or creative; not an OS sandbox.

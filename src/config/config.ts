@@ -96,7 +96,9 @@ const schema = z.object({
     max_retries: z.number().int().nonnegative().max(10).default(3),
     /** Replay an idle actor's last request shortly before its short prompt cache expires, only while it is certain to wake again. */
     cache_keepalive: z.boolean().default(true),
-  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true}),
+    /** Record one small hash-and-size line per model request (`<session>/requests/<actor>.fingerprints.jsonl`) so cache misses can be explained afterwards. Never message text. */
+    request_fingerprints: z.boolean().default(true),
+  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true, request_fingerprints: true}),
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),

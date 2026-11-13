@@ -63,6 +63,16 @@ export interface ModelRequest {
   purpose?: 'keepalive';
   /** Directory that receives the serialized request body when `LOGOX_DUMP_REQUESTS=1`. */
   dumpDir?: string;
+  /** Where the always-on request fingerprint (`providers/fingerprint.ts`) is appended; absent when `kernel.request_fingerprints` is off or the caller is not an actor turn. */
+  fingerprint?: RequestFingerprintTarget;
+}
+export interface RequestFingerprintTarget {
+  /** `<session state>/requests/<actor>.fingerprints.jsonl` */
+  file: string;
+  ownerId: string;
+  activityId?: string;
+  /** `task` unless the request says otherwise; a cache keep-alive replay is always `keepalive`. */
+  purpose?: string;
 }
 export interface ModelTurn {
   message: Extract<ModelMessage, {role: 'assistant'}>;

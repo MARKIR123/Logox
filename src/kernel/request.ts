@@ -124,7 +124,9 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)
       ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled, messages: withStageLines(projected.messages)};
   const dumpDir = options.requestDumpDir?.(context);
+  const fingerprintFile = options.requestFingerprintFile?.(context);
   request = {...request, cacheKey: promptCacheKey(context.sessionId, context.ownerId),
-    cacheRetention: {role: roleCacheRetention(context.ownerId), ...(instruction.cacheRetention ? {actor: instruction.cacheRetention} : {})}, ...(dumpDir ? {dumpDir} : {})};
+    cacheRetention: {role: roleCacheRetention(context.ownerId), ...(instruction.cacheRetention ? {actor: instruction.cacheRetention} : {})}, ...(dumpDir ? {dumpDir} : {}),
+    ...(fingerprintFile ? {fingerprint: {file: fingerprintFile, ownerId: context.ownerId, activityId: context.activityId, purpose: 'task'}} : {})};
   return {kind: 'ready', assembly, instruction, base, definitions, prepared, request, appendUpdate};
 }

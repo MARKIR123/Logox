@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {appendFile, mkdir, mkdtemp, rm, utimes, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {techneRequests, writeFingerprints} from './fingerprint-fixture.js';
 
 interface Score {
   session: {label: string; others: {id: string}[]; wallMs: number | null};
@@ -18,6 +19,7 @@ interface Score {
   usage: {recorded: boolean; costRecorded: boolean; total: {turns: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost: number};
     byActor: Record<string, {turns: number; input: number; cost: number}>};
   interruptions: {userInterrupts: number; directorStops: number; cancelActorCalls: number};
+  cache: {recorded: boolean; byActor: Record<string, {requests: number; pairs: number; pureAppend: number; pureAppendShare: number | null; misses: Record<string, number>}>};
   missing: string[];
 }
 const scorer = await import(new URL('../../scripts/score-session.mjs', import.meta.url).href) as {
@@ -214,6 +216,31 @@ test('Automa worker turns and summary calls count toward actor, root and project
     assert.match(table, /techne compaction cost +0[.]1000 USD/);
     assert.match(table, /logox automa cost +0[.]2500 USD/);
     assert.equal(scorer.projectUsage(join(root, 'proj', '.logox'))?.total.input, 1310);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('the Cache section reports pure-append share and miss classes from request fingerprints, and n/a without them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const dir = join(root, 'proj', '.logox', 'state', 'sessions', SESSION);
+    await writeSession(dir);
+    const without = scorer.scoreSession(dir);
+    assert.equal(without.cache.recorded, false);
+    assert.ok(without.missing.some(note => note.startsWith('cache:')));
+    assert.match(scorer.renderTable([without]), /\[Cache\]\s+request fingerprints\s+n\/a/);
+    await writeFingerprints(dir, 'techne', techneRequests());
+    const score = scorer.scoreSession(dir);
+    assert.equal(score.cache.recorded, true);
+    assert.deepEqual(score.cache.byActor['techne']?.misses, {'prefix changed': 1, 'fields changed': 1, idle: 1, unexplained: 1});
+    assert.equal(score.cache.byActor['techne']?.pureAppendShare, 0.8);
+    assert.ok(!score.missing.some(note => note.startsWith('cache:')));
+    const table = scorer.renderTable([score]);
+    assert.match(table, /\[Cache\]/);
+    assert.match(table, /techne pure append\s+80% \(4\/5\)/);
+    assert.match(table, /techne misses prefix\/idle\/fields\/unexplained\s+1\/1\/1\/1 of 6/);
+    assert.match(table, /techne cache read share\s+\d+%/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }

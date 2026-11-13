@@ -23,7 +23,9 @@ Every `tests/*.test.*` file belongs to exactly one group. Names are shown withou
 | Config, login & doctor | `config*`, `onboarding-preferences`, `user-name`, `doctor`, `login*`, `custom-*`, `account-migration`, `oauth-login`, `statusbar-modules` | `dist/tests/config*.test.js dist/tests/onboarding-preferences.test.js dist/tests/user-name.test.js dist/tests/doctor.test.js dist/tests/login*.test.js dist/tests/custom-*.test.js dist/tests/account-migration.test.js dist/tests/oauth-login.test.js dist/tests/statusbar-modules.test.js` |
 | Demo & Anamnesis | `demo`, `anamnesis*` | `dist/tests/demo.test.js dist/tests/anamnesis*.test.js` |
 
-Full run: `node --test --test-concurrency=4 dist/tests/*.test.js`. Helper files (`runtime-fixture.ts`, `terminal-screen.ts`, `compression-fixture.ts`) are not tests and match no `*.test.js` glob.
+Request fingerprints and the cache report (`src/providers/fingerprint.ts`, `scripts/cache-report.mjs`) belong to the providers group: `provider-fingerprint.test.ts` (builder, labels, integration with the off switch) and `provider-cache-report.test.ts` (miss classification from synthetic files built by `fingerprint-fixture.ts`); the scorer's `[Cache]` section is covered in `session-scorer.test.ts`.
+
+Full run: `node --test --test-concurrency=4 dist/tests/*.test.js`. Helper files (`runtime-fixture.ts`, `terminal-screen.ts`, `compression-fixture.ts`, `fingerprint-fixture.ts`) are not tests and match no `*.test.js` glob.
 
 ## 3. Common Changes
 ### Add a test file
