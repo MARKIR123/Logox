@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {z} from 'zod';
 import type {ModelCapacity} from '../context/contracts.js';
 import type {Provider} from '../runtime/messages.js';
-import {modelSettings, presets, type Config, type ModelSettings} from '../config/config.js';
+import {modelSettings, presets, templateNames, type Config, type ModelSettings} from '../config/config.js';
 import {resolveProviderCapabilities} from './capabilities.js';
 import {createProvider, ProviderError} from './http.js';
 import {modelCapacities} from './model-capacities.js';
@@ -67,6 +67,22 @@ function readStoredModelsForProvider(name: string): string[] {
   return [];
 }
 
+type ProviderEntry = Config['providers'][string];
+/** The config entry a stored record stands for. A `catalog` record of a known template takes endpoint, protocol and routing from the template, so a corrected official URL reaches existing users. */
+function recordEntry(record: CustomProviderRecord, existing: ProviderEntry | undefined): ProviderEntry {
+  const template = record.catalog && Object.hasOwn(presets, record.name) ? presets[record.name] : undefined;
+  const kind = template?.kind ?? record.kind;
+  return {
+    ...existing,
+    kind,
+    base_url: template?.base_url ?? record.base_url,
+    ...(template?.model_kinds ? {model_kinds: template.model_kinds} : {}),
+    ...(template?.api_key_env && !existing?.api_key_env ? {api_key_env: template.api_key_env} : {}),
+    default_model: record.default_model ?? existing?.default_model,
+    api: record.api ?? (kind === 'anthropic' ? undefined : existing?.api),
+  };
+}
+
 /** Unifies provider selection and request-time authentication; owns no agent history or task state. */
 export class ProviderRegistry {
   private config: Config;
@@ -94,18 +110,31 @@ export class ProviderRegistry {
   }
   async close(): Promise<void> {this.closed = true; await this.transport?.close();}
 
+  /** Loads the provider store into the config; first writes a `catalog: true` record for every template that already has a credential but no record. */
   async syncCustom(): Promise<void> {
     const list = await this.customStorage.list();
+    const known = new Set(list.map(record => record.name));
+    // One-time reconciliation: a credential for a template always belongs to a provider record. Credentials that match nothing are left alone.
+    const credentials = await this.auth.providers().catch(() => [] as string[]);
+    for (const name of credentials) {
+      const template = presets[name];
+      if (!template || known.has(name) || !Object.hasOwn(presets, name)) continue;
+      const record: CustomProviderRecord = {name, base_url: template.base_url, kind: template.kind, catalog: true};
+      try {await this.customStorage.save(record);} catch {continue;}
+      list.push(record); known.add(name);
+    }
     for (const record of list) {
       this.customProviders.set(record.name, record);
-      this.config.providers[record.name] = {
-        ...this.config.providers[record.name],
-        kind: record.kind,
-        base_url: record.base_url,
-        default_model: record.default_model ?? this.config.providers[record.name]?.default_model,
-        api: record.api ?? (record.kind === 'anthropic' ? undefined : this.config.providers[record.name]?.api),
-      };
+      this.config.providers[record.name] = recordEntry(record, this.config.providers[record.name]);
     }
+  }
+
+  /** Makes sure a template has its `catalog: true` record (saving a key or finishing an account sign-in calls this); other names are ignored. */
+  async ensureTemplateRecord(name: string): Promise<void> {
+    const template = Object.hasOwn(presets, name) ? presets[name] : undefined;
+    if (!template || this.customProviders.has(name) || await this.customStorage.get(name)) return;
+    await this.customStorage.save({name, base_url: template.base_url, kind: template.kind, catalog: true});
+    await this.syncCustom();
   }
 
   async unregister(name: string): Promise<void> {
@@ -117,9 +146,19 @@ export class ProviderRegistry {
     await this.auth.remove(name);
   }
 
-  names(): string[] {return [...new Set([...Object.keys(presets), ...Object.keys(this.config.providers), ...this.customProviders.keys(), this.config.provider.name])];}
+  /**
+   * The providers: saved records, then providers declared in config, then templates whose key variable is set in the environment,
+   * then the selected provider. Templates the user never set up are not providers (see `templateNames()`).
+   */
+  names(): string[] {
+    const fromEnvironment = Object.entries(presets).filter(([, template]) => template.api_key_env && this.env[template.api_key_env]).map(([name]) => name);
+    return [...new Set([...this.customProviders.keys(), ...Object.keys(this.config.providers), ...fromEnvironment, this.config.provider.name])];
+  }
+  /** Every built-in template name, set up or not. */
+  templateNames(): string[] {return templateNames();}
+  /** Names `/login <name>` and its completion accept: the providers plus the templates, minus keyless local endpoints. */
   loginNames(): string[] {
-    return this.names().filter(name => {
+    return [...new Set([...this.names(), ...this.templateNames()])].filter(name => {
       const config = this.configFor(name), definition = config.providers[name] ?? presets[name];
       const host = new URL(modelSettings(config, this.env).baseUrl).hostname;
       return !!(config.provider.api_key_env ?? definition?.api_key_env) || !['localhost', '127.0.0.1', '[::1]'].includes(host);
@@ -133,15 +172,7 @@ export class ProviderRegistry {
     const current = this.config.provider;
     const custom = this.customProviders.get(name);
     const providers = {...this.config.providers};
-    if (custom) {
-      providers[name] = {
-        ...providers[name],
-        kind: custom.kind,
-        base_url: custom.base_url,
-        default_model: custom.default_model ?? providers[name]?.default_model,
-        api: custom.api ?? (custom.kind === 'anthropic' ? undefined : providers[name]?.api),
-      };
-    }
+    if (custom) providers[name] = recordEntry(custom, providers[name]);
     return {...this.config, providers, provider: name === current.name
       ? {...current, ...(model !== undefined ? {model, ...(model !== current.model ? {context_window: undefined, max_output_tokens: undefined, max_images: undefined} : {})} : {})}
       : {name, model: model ?? '', temperature: current.temperature, max_tokens: current.max_tokens, timeout: current.timeout, thinking_effort: current.thinking_effort}};

@@ -134,14 +134,23 @@ export interface ModelSettings {
   cacheTtlMs?: number | undefined;
   thinkingLevels?: readonly import('./model-preferences.js').ThinkingEffort[];
 }
-export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>}> = {
+/**
+ * Provider templates (kept under the historical name `presets`): a built-in shortcut with a fixed official endpoint and protocol.
+ * A template is not a provider by itself; it becomes one when the user saves a record for it (`catalog: true` in the provider store).
+ * `account` marks templates that support browser account sign-in (OAuth) in addition to an API key.
+ */
+export const presets: Record<string, {kind: ModelSettings['kind']; base_url: string; api_key_env?: string; model_kinds?: Record<string, ModelSettings['kind']>; account?: boolean}> = {
   'openai-compatible': {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
   deepseek: {kind: 'openai_compat', base_url: 'https://api.deepseek.com', api_key_env: 'DEEPSEEK_API_KEY'},
-  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY'},
+  openai: {kind: 'openai_compat', base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY', account: true},
   // The local proxy serves Claude over the native Messages endpoint too; its OpenAI view of Claude intermittently mislabels the answer as reasoning.
   antigravity: {kind: 'openai_compat', base_url: 'http://127.0.0.1:8045/v1', model_kinds: {'claude-*': 'anthropic'}},
   anthropic: {kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_key_env: 'ANTHROPIC_API_KEY'},
 };
+/** Every template name, whether or not the user set it up. */
+export function templateNames(): string[] {return Object.keys(presets);}
+/** Templates that support account sign-in. */
+export function accountTemplateNames(): string[] {return Object.entries(presets).filter(([, template]) => template.account).map(([name]) => name);}
 function pathKey(path: string): string {return process.platform === 'win32' ? path.toLowerCase() : path;}
 function merge(left: Record<string, unknown>, right: Record<string, unknown>): Record<string, unknown> {
   const result = {...left};

@@ -33,7 +33,9 @@ function deps(ask: LoginWizardDeps['ask'], overrides: Partial<LoginWizardDeps> =
     ask, notify: text => calls.push('notice:' + text),
     rows: async () => [{name: 'deepseek', custom: false, saved: true, baseUrl: 'https://api.deepseek.com', kind: 'openai_compat'},
       {name: 'local-proxy', custom: true, saved: true, baseUrl: 'http://127.0.0.1:9000/v1', kind: 'openai_compat', models: ['old-model']}],
-    catalog: () => [{name: 'deepseek', custom: false, saved: false, baseUrl: 'https://api.deepseek.com', kind: 'openai_compat'}],
+    catalog: () => [{name: 'deepseek', custom: false, saved: false, baseUrl: 'https://api.deepseek.com', kind: 'openai_compat'},
+      {name: 'openai', custom: false, saved: false, baseUrl: 'https://api.openai.com/v1', kind: 'openai_compat', account: true},
+      {name: 'antigravity', custom: false, saved: false, baseUrl: 'http://127.0.0.1:8045/v1', kind: 'openai_compat', keyless: true}],
     saveKey: async (name, key) => {calls.push('key:' + name + ':' + key);},
     saveCustom: async record => {calls.push('custom:' + JSON.stringify(record));},
     removeCustom: async name => {calls.push('remove:' + name);},
@@ -71,7 +73,7 @@ test('custom Add cannot reuse an existing route and silently inherit its saved c
 });
 
 test('catalog add inherits endpoint/protocol and can retain whole catalog', async () => {
-  const {ask, questions} = scripted(['add', 'api', 'deepseek', 'fixture-key', 'default', '', 'write']);
+  const {ask, questions} = scripted(['add', 'api', 'deepseek', 'fixture-key', '', 'write']);
   const {deps: input, calls} = deps(ask);
   assert.equal(await runLoginWizard(input), 'added');
   assert.ok(!questions.some(question => question.question.includes('wire protocol')));
@@ -82,6 +84,30 @@ test('OAuth account goes directly to browser login, not another API-key menu', a
   const {ask, questions} = scripted(['add', 'account', 'openai']); const {deps: input, calls} = deps(ask);
   assert.equal(await runLoginWizard(input), 'signed-in');
   assert.equal(questions.length, 3); assert.ok(calls.includes('oauth:openai'));
+});
+test('Add lists every template; the account list is derived from the account property', async () => {
+  const {ask, questions} = scripted(['add', 'api', null]);
+  assert.equal(await runLoginWizard(deps(ask).deps), 'cancelled');
+  assert.deepEqual(questions[2]!.options?.map(option => option.id), ['deepseek', 'openai', 'antigravity']);
+  const accounts = scripted(['add', 'account', null]);
+  const custom = deps(accounts.ask, {catalog: () => [
+    {name: 'deepseek', custom: false, saved: false}, {name: 'future', custom: false, saved: false, account: true},
+    {name: 'openai', custom: false, saved: false, account: true}]});
+  assert.equal(await runLoginWizard(custom.deps), 'cancelled');
+  assert.deepEqual(accounts.questions[2]!.options?.map(option => option.id), ['future', 'openai', '__cancel']);
+  const none = scripted(['add', 'account']), noAccount = deps(none.ask, {catalog: () => [{name: 'deepseek', custom: false, saved: false}]});
+  assert.equal(await runLoginWizard(noAccount.deps), 'failed');
+});
+test('a keyless template is added with an empty key and keeps its template endpoint', async () => {
+  const {ask, questions} = scripted(['add', 'api', 'antigravity', '', '', 'write']);
+  const {deps: input, calls} = deps(ask);
+  assert.equal(await runLoginWizard(input), 'added');
+  assert.equal(questions[3]!.allowEmpty, true);
+  assert.ok(!questions.some(question => question.question.includes('base URL')), 'the endpoint is never asked for');
+  assert.ok(calls.some(call => call.startsWith('custom:') && call.includes('"catalog":true') && call.includes('http://127.0.0.1:8045/v1')));
+  assert.ok(!calls.some(call => call.startsWith('key:')));
+  const keyed = scripted(['add', 'api', 'deepseek', '']);
+  assert.equal(await runLoginWizard(deps(keyed.ask).deps), 'cancelled', 'a template that needs a key still requires one');
 });
 test('single account Cancel sentinel never starts login or asks for a key', async () => {
   const {ask, questions} = scripted(['add', 'account', '__cancel']); const {deps: input, calls} = deps(ask);

@@ -1,7 +1,7 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider `presets`, saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, UI presentation preferences (`ui-settings.ts`) and the `/settings` row definitions (`settings-definitions.ts`), and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
+- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider templates (`presets`, with `templateNames()` and `accountTemplateNames()`), saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, UI presentation preferences (`ui-settings.ts`) and the `/settings` row definitions (`settings-definitions.ts`), and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
 - **Does not own**: HTTP transport, model discovery and wire formats ([`src/providers/AGENTS.md`](../providers/AGENTS.md)); the lock and atomic-replace primitives (`src/store/file-lock.ts`, `src/store/replace-file.ts`, see [`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); picker and settings panels (`src/tui/`); actor colors and models ([`src/actors/AGENTS.md`](../actors/AGENTS.md)).
 - **Design rationale**: [docs/USAGE.md](../../docs/USAGE.md) (load order, keys); [docs/COLORS.md](../../docs/COLORS.md) (theme files and tokens); [docs/modules/task-models.md](../../docs/modules/task-models.md) (model selection).
 
@@ -12,7 +12,7 @@
 | Add or change a config key | `config.ts:schema` | `config.example.toml`, `docs/USAGE.md` |
 | Resolve a thinking protocol or effort levels | `config.ts:modelSettings()` | `model-preferences.ts:isOpenAiReasoningModel()`, `model-grouping.ts:detectEffortLevels()` |
 | Declare which built-in model catalog a gateway mirrors | `config.ts:catalogSchema` (`[catalogs.<provider>]`) | `src/providers/model-table.ts:ModelTable.resolve()`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
-| Provider presets and defaults | `config.ts:presets` | `src/providers/registry.ts:ProviderRegistry.names()` |
+| Provider templates (`presets`: official endpoint, protocol, optional `account`; not providers until saved) | `config.ts:presets` | `src/providers/registry.ts:ProviderRegistry.templateNames()`, `src/providers/registry.ts:ProviderRegistry.names()` (the providers) |
 | Saved model/effort selection | `model-preferences.ts:preferenceSchema` | `model-preferences.ts:StateFile`, `src/store/file-lock.ts:withFileLock()` |
 | Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |
 | Statusbar modules, styles, palettes | `statusbar-preferences.ts:StatusbarPreferences` | `statusbar-palettes.json`, `~/.logox/statusbar.json` |

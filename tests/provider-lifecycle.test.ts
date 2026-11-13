@@ -31,19 +31,23 @@ test('Provider lifecycle unregister removes custom provider entry and credential
   }
 });
 
-test('Provider lifecycle unregister preset clears credentials while keeping preset definition', async () => {
+test('Provider lifecycle unregister of a template-based provider removes record and credential, the template stays', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'logox-life-preset-'));
   try {
     const authStorage = new AuthStorage(join(tempDir, 'auth.json'));
-    await authStorage.save('deepseek', 'sk-deepseek-test', new AbortController().signal);
+    const customStorage = new CustomProviderStorage(join(tempDir, 'custom-providers.json'));
+    await authStorage.save('anthropic', 'sk-anthropic-test', new AbortController().signal);
 
-    const config = await loadConfig(process.cwd(), {}, {});
-    const registry = new ProviderRegistry(config, process.env, fetch, authStorage);
+    const config = await loadConfig(process.cwd(), {provider: {name: 'deepseek', model: 'fixture'}}, {});
+    const registry = new ProviderRegistry(config, {}, fetch, authStorage, customStorage);
+    await registry.syncCustom();
 
-    assert.equal(await authStorage.key('deepseek'), 'sk-deepseek-test');
-    await registry.unregister('deepseek');
-    assert.equal(await authStorage.key('deepseek'), '');
-    assert.ok(registry.names().includes('deepseek'), 'preset still remains in names()');
+    assert.ok(registry.names().includes('anthropic'), 'a template with a credential is a provider (reconciled record)');
+    await registry.unregister('anthropic');
+    assert.equal(await authStorage.key('anthropic'), '');
+    assert.equal(await customStorage.get('anthropic'), undefined);
+    assert.ok(!registry.names().includes('anthropic'), 'removed provider is no longer listed');
+    assert.ok(registry.templateNames().includes('anthropic'), 'the template remains available to add again');
   } finally {
     await rm(tempDir, {recursive: true, force: true});
   }

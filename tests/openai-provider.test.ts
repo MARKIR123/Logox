@@ -10,9 +10,10 @@ import {AuthStorage} from '../src/providers/auth.js';
 import type {Delta} from '../src/runtime/messages.js';
 
 test('ProviderRegistry includes openai in presets and identifies reasoning models', async () => {
-  const config = await loadConfig(process.cwd(), {}, {});
-  const registry = new ProviderRegistry(config, process.env);
-  assert.ok(registry.names().includes('openai'), 'presets should contain openai');
+  const config = await loadConfig(process.cwd(), {provider: {name: 'deepseek', model: 'fixture'}}, {});
+  const registry = new ProviderRegistry(config, {});
+  assert.ok(registry.templateNames().includes('openai'), 'templates should contain openai');
+  assert.ok(!registry.names().includes('openai'), 'an unconfigured template is not a provider');
 
   const settings = await registry.candidate('openai', 'o1').settings(false);
   assert.equal(settings.baseUrl, 'https://api.openai.com/v1');

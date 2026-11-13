@@ -64,14 +64,14 @@ export function LoginDialog({flow, state, width, height, y, onCursor, onClose, n
 
   if (state.phase === 'add') return <Picker key={state.phase} title="Add Provider" description="Pick how this provider authenticates" width={width} height={height} y={y}
     items={[
-      {id: 'account', label: 'Account login', description: 'ChatGPT account (browser)'},
+      {id: 'account', label: 'Account login', description: 'Browser account sign-in'},
       {id: 'url', label: 'Custom URL', description: 'Base URL or port + protocol'},
     ]}
     error={state.error} notice={notice}
     onSelect={id => flow.chooseAddMode(id === 'account' ? 'account' : 'url')} onCancel={() => flow.cancel()}/>;
 
   if (state.phase === 'account') return <Picker key={state.phase} title="Account Login" description="Providers with a browser account flow" width={width} height={height} y={y}
-    items={accountProviders.map(name => ({id: name, label: name, description: 'ChatGPT account (browser)'}))}
+    items={accountProviders.map(name => ({id: name, label: name, description: 'Browser account sign-in'}))}
     error={state.error} notice={notice} onSelect={name => flow.chooseAccount(name)} onCancel={() => flow.cancel()}/>;
 
   if (state.phase === 'import') return <Picker key={state.phase} title="Import Credential" description="Read-only scan of ~/.codex/auth.json and ~/.dsh/.credentials.yaml; the copy goes to ~/.logox/auth.json" width={width} height={height} y={y}

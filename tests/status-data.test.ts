@@ -109,7 +109,7 @@ test('state: keeps the last terminal state, distinguishes approval from question
 });
 
 test('idle model selection follows actor model overrides and the unregistered-provider fallback', () => {
-  const registry = {names: () => ['main'], selection: () => ({provider: 'main', model: 'session'})};
+  const registry = {names: () => ['main'], templateNames: () => ['tpl'], selection: () => ({provider: 'main', model: 'session'})};
   let override: {provider: string; model: string} | undefined = {provider: 'main', model: 'override'};
   const models = new TaskModels({registry: registry as never, defaultModel: owner => owner === 'techne' ? override : undefined,
     defaultFallbackModel: () => ({provider: 'main', model: 'fallback'})});
@@ -117,4 +117,6 @@ test('idle model selection follows actor model overrides and the unregistered-pr
   override = {provider: 'gone', model: 'x'};
   assert.deepEqual(models.idleSelection('techne'), {provider: 'main', model: 'fallback'});
   assert.deepEqual(models.idleSelection('logox'), {provider: 'main', model: 'session'});
+  override = {provider: 'tpl', model: 'y'};
+  assert.deepEqual(models.idleSelection('techne'), {provider: 'tpl', model: 'y'}, 'a binding to a template that is not set up yet is kept');
 });

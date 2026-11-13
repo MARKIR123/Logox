@@ -79,7 +79,8 @@ export class TaskModels {
   }
   private configured(ownerId: string): TaskModelSelection | undefined {
     let configured = isDirector(ownerId) ? undefined : this.options.defaultModel(ownerId);
-    if (configured && !this.options.registry.names().includes(configured.provider)) {
+    // A binding may name a provider or a template that is not set up yet (it keeps its binding); only an unknown name (e.g. a deleted custom provider) falls back.
+    if (configured && !this.options.registry.names().includes(configured.provider) && !this.options.registry.templateNames().includes(configured.provider)) {
       const fallback = typeof this.options.defaultFallbackModel === 'function' ? this.options.defaultFallbackModel() : this.options.defaultFallbackModel;
       if (fallback) configured = fallback;
     }

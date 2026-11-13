@@ -68,7 +68,13 @@ async function main(): Promise<void> {
   if (values['check-config'] || values['check-provider'] || values['list-providers'] || values['list-models']) {
     const registry = new ProviderRegistry(await loadConfig(process.cwd(), overrides));
     try {
-      if (values['list-providers']) process.stdout.write(registry.names().join('\n') + '\n');
+      await registry.syncCustom().catch(() => {});
+      if (values['list-providers']) {
+        const providers = registry.names();
+        process.stdout.write(providers.join('\n') + '\n');
+        const templates = registry.templateNames().filter(name => !providers.includes(name));
+        if (templates.length) process.stdout.write('\nTemplates (add with /login):\n' + templates.map(name => '  ' + name).join('\n') + '\n');
+      }
       if (values['check-config']) {
         const settings = await registry.settings(false);
         process.stdout.write(JSON.stringify({...registry.selection(), credentialConfigured: !!settings.key}, null, 2) + '\n');

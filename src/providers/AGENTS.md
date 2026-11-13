@@ -15,7 +15,7 @@
 | Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-table.ts:ModelTable.resolve()`, `model-capacities.ts:modelCapacities` |
 | Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
 | Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()` (models in use), `registry.ts:ProviderRegistry.availableModels()` (everything offered, with offline fallbacks; the `/login` model editor uses it), `auth.ts:AuthStorage` |
-| Model list cache and shorthand | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
+| Model list cache and shorthand (the pool hands out only models of providers in `ProviderRegistry.names()`; `syncProvider()` / `refresh()` drop other entries from the file) | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
 | ChatGPT OAuth login or refresh | `oauth.ts:startOpenAiOAuth()` | `oauth.ts:refreshOpenAIToken()`, `login.ts:LoginFlow` |
 | Custom endpoints or importing external credentials | `custom-storage.ts:CustomProviderStorage` | `credential-import.ts`, `registry.ts:ProviderRegistry.syncCustom()` |
 | Native tool disclosure support | `capabilities.ts:resolveProviderCapabilities()` | `disclosure/anthropic.ts`, `disclosure/openai.ts`, `registry.ts:ProviderRegistry.provider()` |
@@ -24,12 +24,13 @@
 | Token usage fields per vendor | `http.ts:createProvider()` (usage schema near `cache_read_input_tokens`) | `src/context/usage.ts` |
 
 ## 3. Common Changes
-### Add a built-in provider preset
-1. Add an entry to `src/config/config.ts:presets` (`kind`, `base_url`, optional `api_key_env`, optional `model_kinds`). `ProviderRegistry.names()` and the login catalog in `src/application.ts` read `presets`, so no registry change is needed.
+### Add a built-in provider template
+A template (`presets`) is a name plus a fixed official endpoint and protocol; it is not a provider until the user saves a record for it. A provider is a record in `custom-providers.json`; a record with `catalog: true` whose name is a template takes `base_url`, `kind` and `model_kinds` from the template at load time (`registry.ts:recordEntry()`), so stored copies are ignored. `ProviderRegistry.names()` lists providers (records, then config `providers`, then templates whose `api_key_env` is set, then the selected one); `ProviderRegistry.templateNames()` lists every template and feeds only `/login` Add and `--list-providers`. Credentials always belong to a record: `ensureTemplateRecord()` runs when a key is saved or an account sign-in completes, and `syncCustom()` writes missing `catalog: true` records for template credentials at startup (credentials matching nothing are never touched).
+1. Add an entry to `src/config/config.ts:presets` (`kind`, `base_url`, optional `api_key_env`, optional `model_kinds`, optional `account: true` when browser account sign-in is supported). The login catalog in `src/application.ts` reads `templateNames()`, so no registry change is needed.
 2. If it needs a default model or a thinking protocol, extend `modelSettings()` in `src/config/config.ts` (protocol inference must match `kind`, or it throws).
 3. Add known windows to `model-capacities.ts:baseCapacities` (key `<provider>/<model>`; `openai-compatible/*` entries are mirrored to `openai/*`).
 4. List it in the provider table of `docs/USAGE.md` and in `config.example.toml` if it has user-facing keys.
-- Tests: `tests/providers.test.ts` (antigravity preset case), `tests/openai-provider.test.ts`, `tests/config.test.ts`.
+- Tests: `tests/providers.test.ts` (antigravity preset case), `tests/provider-templates.test.ts` (provider list rules, reconciliation, template-sourced endpoints), `tests/login-wizard.test.ts`, `tests/openai-provider.test.ts`, `tests/config.test.ts`.
 
 ### Add or correct a model's capacity
 1. Edit `model-capacities.ts:baseCapacities` with `{window, maxOutput}`.

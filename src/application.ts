@@ -279,6 +279,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const authentication = new LoginFlow(registry.auth, () => registry.loginNames(), async provider => {
     const owner = loginOwner;
+    // A saved key or finished account sign-in always belongs to a provider record.
+    await registry.ensureTemplateRecord(provider).catch(() => {});
     try {await saveSelection(registry.candidate(provider));}
     catch {notice('API key saved; model preference was not updated. The current model is unchanged.', 'command_error', owner);}
     await modelPool.syncProvider(provider).catch(() => {});
@@ -297,8 +299,10 @@ export async function createSessionApplication(options: SessionApplicationOption
     return runLoginWizard({
       ask: authentication.ask,
       askBatch: authentication.askBatch,
-      catalog: () => Object.entries(presets).map(([name, definition]) => ({name, custom: false, saved: false,
-        baseUrl: definition.base_url, kind: definition.kind})),
+      // Every template, with the ones the user already set up marked.
+      catalog: () => registry.templateNames().map(name => ({name, custom: false, saved: registry.customProviders.has(name),
+        baseUrl: presets[name]!.base_url, kind: presets[name]!.kind,
+        ...(presets[name]!.account ? {account: true} : {}), ...(!presets[name]!.api_key_env ? {keyless: true} : {})})),
       discoverModels: async (record, key) => {
         // A provider the registry already knows, edited without a new key, is listed the way the model picker lists it (stored credential, offline fallbacks).
         const known = registry.names().includes(record.name) ? registry.candidate(record.name).selection().baseUrl : undefined;
@@ -316,18 +320,22 @@ export async function createSessionApplication(options: SessionApplicationOption
       notify: (text, level) => level === 'error' ? notice(text, 'command_error', source) : receipt(text, 'status', undefined, source),
       rows: async () => {
         const saved = await registry.auth.providers();
-        const openAiAccount = (await registry.auth.credential('openai'))?.type === 'oauth';
+        const signedIn = new Set<string>();
+        for (const name of saved) if (presets[name]?.account && (await registry.auth.credential(name))?.type === 'oauth') signedIn.add(name);
         const custom = new Map((await registry.customStorage.list().catch(() => [])).map(record => [record.name, record]));
-        // A credential saved under a name nothing else defines is still listed, so it can be removed.
+        // The providers, plus a credential saved under a name nothing else defines (listed so it can be removed).
         return [...new Set([...registry.names(), ...saved])].map((name): WizardProviderRow => {
           const record = custom.get(name);
+          // A record of a known template takes its endpoint from the template; any other record is a plain custom one.
+          const template = record?.catalog ? presets[name] : undefined;
           return {
             name,
-            custom: record ? !record.catalog : !presets[name],
+            custom: record ? !template : !presets[name],
             saved: saved.includes(name) || Boolean(record) || Boolean(config.providers[name]),
-            accountSignedIn: name === 'openai' && openAiAccount,
-            baseUrl: record?.base_url ?? config.providers[name]?.base_url ?? presets[name]?.base_url,
-            kind: record?.kind ?? config.providers[name]?.kind ?? presets[name]?.kind,
+            accountSignedIn: signedIn.has(name),
+            ...(presets[name]?.account ? {account: true} : {}),
+            baseUrl: template?.base_url ?? record?.base_url ?? config.providers[name]?.base_url ?? presets[name]?.base_url,
+            kind: template?.kind ?? record?.kind ?? config.providers[name]?.kind ?? presets[name]?.kind,
             api: record?.api ?? config.providers[name]?.api,
             ...(record?.models ? {models: record.models} : {}),
           };
@@ -352,6 +360,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       },
       saveKey: async (name, key) => {
         await registry.auth.save(name, key, commands.signal);
+        await registry.ensureTemplateRecord(name);
         await syncCredential(name, source);
       },
       saveCustom: async record => {
@@ -366,7 +375,7 @@ export async function createSessionApplication(options: SessionApplicationOption
         await modelPool.saveCache().catch(() => {});
       },
       signOut: async name => {await registry.auth.remove(name);},
-      browserLogin: async name => name === 'openai' ? authentication.browserLogin(name) : 'unsupported',
+      browserLogin: async name => presets[name]?.account ? authentication.browserLogin(name) : 'unsupported',
     });
   };
   const syncCredential = async (name: string, owner: string, defaultModel?: string) => {

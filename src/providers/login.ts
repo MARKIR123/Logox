@@ -1,3 +1,4 @@
+import {accountTemplateNames} from '../config/config.js';
 import {AuthStorage} from './auth.js';
 import {CustomProviderStorage} from './custom-storage.js';
 import {discoverImportable, type ImportedCredential} from './credential-import.js';
@@ -45,8 +46,9 @@ export interface LoginProviderRow {
   editable?: boolean | undefined;
 }
 
-/** Providers with a browser-account authorization flow; oauth.ts currently ships OpenAI only. */
-export const accountProviders: readonly string[] = ['openai'];
+/** Templates with a browser-account authorization flow (the `account` template property); oauth.ts currently ships OpenAI only. */
+export const accountProviders: readonly string[] = accountTemplateNames();
+const accountMethods = [{id: 'key', label: 'API Key'}, {id: 'oauth', label: 'Account (Browser authorization)'}] as const;
 
 export interface LoginState {
   wizard?: LocalWizardView | undefined;
@@ -166,15 +168,12 @@ export class LoginFlow {
       ...(importable.length ? [{name: '+ Import', saved: false}] : []),
     ];
 
-    if (provider === 'openai') {
+    if (provider && accountProviders.includes(provider)) {
       this.publish({
         phase: directAccount ? 'oauth' : 'method',
         providers: providerList,
-        provider: 'openai',
-        methods: [
-          {id: 'key', label: 'API Key'},
-          {id: 'oauth', label: 'OpenAI Account (Browser authorization)'},
-        ],
+        provider,
+        methods: accountMethods,
         error: '',
       });
       return;
@@ -218,15 +217,12 @@ export class LoginFlow {
       });
       return;
     }
-    if (provider === 'openai') {
+    if (accountProviders.includes(provider)) {
       this.publish({
         ...this.state,
         phase: 'method',
-        provider: 'openai',
-        methods: [
-          {id: 'key', label: 'API Key'},
-          {id: 'oauth', label: 'OpenAI Account (Browser authorization)'},
-        ],
+        provider,
+        methods: accountMethods,
         error: '',
       });
       return;
@@ -246,14 +242,7 @@ export class LoginFlow {
   chooseAccount(provider: string): void {
     const state = this.state;
     if (!state || state.phase !== 'account' || !accountProviders.includes(provider)) return;
-    if (provider === 'openai') {
-      this.publish({...state, phase: 'method', provider, methods: [
-        {id: 'key', label: 'API Key'},
-        {id: 'oauth', label: 'OpenAI Account (Browser authorization)'},
-      ], error: ''});
-      return;
-    }
-    this.publish({...state, phase: 'key', provider, error: ''});
+    this.publish({...state, phase: 'method', provider, methods: accountMethods, error: ''});
   }
 
   /** Open the wizard prefilled with an existing custom provider record. */

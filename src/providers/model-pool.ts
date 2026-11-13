@@ -43,9 +43,20 @@ export class ModelPool {
     this.models = this.models.filter(item => item.provider !== provider);
   }
 
+  /**
+   * What the pool hands out: only models of providers the attached registry lists (`names()`). This is a read-side filter over the loaded
+   * cache (primary and legacy file alike), so a registry that has not synced its store yet hides nothing permanently; stale entries
+   * leave the file when `syncProvider()` or `refresh()` next saves it.
+   */
+  private visible(): DiscoveredModel[] {
+    if (!this.registry) return this.models;
+    const listed = new Set(this.registry.names());
+    return this.models.filter(item => listed.has(item.provider));
+  }
+
   snapshot(): readonly DiscoveredModel[] {
     if (!this.models.length) this.loadCacheSync();
-    return this.models;
+    return this.visible();
   }
 
   loadCacheSync(): DiscoveredModel[] {
@@ -93,12 +104,13 @@ export class ModelPool {
     if (!this.models.length) {
       await this.loadCache();
     }
-    if (!this.models.length && this.registry) {
+    if (!this.visible().length && this.registry) {
       return await this.refresh(signal);
     }
-    return this.models;
+    return this.visible();
   }
 
+  /** Syncs one provider's models; runs after the registry loaded its store, so it also drops cached entries of providers that are no longer listed. */
   async syncProvider(name: string, signal?: AbortSignal): Promise<DiscoveredModel[]> {
     if (!this.registry) return this.models;
     const timeoutSignal = AbortSignal.any([
@@ -107,7 +119,7 @@ export class ModelPool {
     ]);
     try {
       const result = await this.registry.modelsFor(name, timeoutSignal);
-      this.models = this.models.filter(m => m.provider !== name);
+      this.models = this.visible().filter(m => m.provider !== name);
       for (const modelId of result) {
         const isAntigravity = name === 'antigravity' || name.toLowerCase().includes('proxy');
         const isClaudeOrGemini = modelId.toLowerCase().includes('claude') || modelId.toLowerCase().includes('gemini');
@@ -127,7 +139,7 @@ export class ModelPool {
       }
       await this.saveCache().catch(() => {});
     } catch {}
-    return this.models;
+    return this.visible();
   }
 
   async refresh(signal?: AbortSignal): Promise<DiscoveredModel[]> {
@@ -178,7 +190,7 @@ export class ModelPool {
       this.models = discovered;
       await this.saveCache().catch(() => {});
     }
-    return this.models;
+    return this.visible();
   }
 
   resolveShorthand(modelOrShorthand: string, activeProvider: string): {provider: string; model: string} {
@@ -194,7 +206,7 @@ export class ModelPool {
     }
 
     // 2. Search pool
-    const matches = this.models.filter(m => m.id === trimmed);
+    const matches = this.visible().filter(m => m.id === trimmed);
     if (matches.length === 1) {
       return {provider: matches[0]!.provider, model: matches[0]!.id};
     }

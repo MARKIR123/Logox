@@ -31,6 +31,10 @@ export interface WizardProviderRow {
   readonly api?: 'completions' | 'responses' | undefined;
   readonly models?: readonly string[] | undefined;
   readonly accountSignedIn?: boolean | undefined;
+  /** Template property: the provider supports browser account sign-in. */
+  readonly account?: boolean | undefined;
+  /** Template property: the endpoint needs no API key (a local server). */
+  readonly keyless?: boolean | undefined;
 }
 export interface WizardProviderRecord {
   name: string;
@@ -171,8 +175,14 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
       const branch = await ask(menu('Choose a provider source', [option('api', 'Built-in provider'), option('url', 'Custom API endpoint'), option('account', 'Account sign-in')]));
       if (!branch) return 'cancelled';
       if (branch.value === 'account') {
-        const account = await ask(menu('Choose an account provider', [option('openai', 'OpenAI / ChatGPT'), option('__cancel', 'Cancel')]));
-        return account?.value === 'openai' ? await oauth('openai') : 'cancelled';
+        // Which providers offer account sign-in is a template property, not a name.
+        const accounts = (deps.catalog ? deps.catalog() : (await deps.rows()).filter(row => !row.custom)).filter(row => row.account);
+        if (!accounts.length) {
+          deps.notify('Account sign-in is not supported for this provider.', 'error');
+          return 'failed';
+        }
+        const account = await ask(menu('Choose an account provider', [...accounts.map(row => option(row.name, row.name, 'Browser sign-in')), option('__cancel', 'Cancel')]));
+        return account && accounts.some(row => row.name === account.value) ? await oauth(account.value) : 'cancelled';
       }
       let record: WizardProviderRecord;
       let key: string;
@@ -195,18 +205,18 @@ export async function runLoginWizard(deps: LoginWizardDeps): Promise<LoginWizard
         record = withProtocol({name, base_url: expandPortOrUrl(connection[0]!.value), kind: 'openai_compat', models: []}, connection[1]!.value);
       } else if (branch.value === 'api') {
         const catalog = deps.catalog ? deps.catalog() : (await deps.rows()).filter(row => !row.custom);
-        const provider = await ask(menu('Choose a built-in provider', catalog.map(row => option(row.name, row.name))));
+        const provider = await ask(menu('Choose a built-in provider', catalog.map(row => option(row.name, row.name, row.saved ? 'Already set up' : ''))));
         if (!provider) return 'cancelled';
         const row = catalog.find(row => row.name === provider.value);
         if (!row) return 'cancelled';
+        // The endpoint and protocol always come from the template; only the key is asked for.
         record = fromRow(row);
         record.catalog = true;
-        const credential = await ask(field('Enter the API key', {secret: true}));
-        if (!credential || !credential.value.trim()) return 'cancelled';
+        const credential = await ask(row.keyless
+          ? field('Enter the API key', {secret: true, allowEmpty: true, detail: 'Optional for endpoints that do not require authentication.'})
+          : field('Enter the API key', {secret: true}));
+        if (!credential || (!row.keyless && !credential.value.trim())) return 'cancelled';
         key = credential.value.trim();
-        const endpoint = await ask(field('Choose the base URL', {options: [option('default', 'Use default endpoint', record.base_url)], allowEmpty: true}));
-        if (!endpoint) return 'cancelled';
-        if (endpoint.value && endpoint.value !== 'default') record.base_url = expandPortOrUrl(endpoint.value);
       } else return 'cancelled';
       // An explicit empty key means anonymous discovery for this new route.
       // Undefined is reserved for edits, where the host resolves an existing credential.
