@@ -546,7 +546,7 @@ test('local authentication keeps secret drafts outside the fullscreen composer a
     assert.ok(!JSON.stringify(f.store.getSnapshot()).includes('fixture-secret-not-a-credential'));
     assert.deepEqual(f.submissions, []);
     await act(async () => {authentication.cancel();}); await f.flush();
-    assert.deepEqual(await answer, {status: 'cancelled'});
+    assert.deepEqual(await answer, {status: 'closed'}, 'closing the flow is not Esc: the wizard must end instead of going back a page');
     await f.expand();
     assert.match(f.text(), /ordinary draft/);
     assert.doesNotMatch(f.text(), /fixture-secret|Synthetic key/);

@@ -13,6 +13,8 @@ export interface PanelBadgeSegment {readonly text: string; readonly tone: 'succe
 export interface PanelOption {readonly label: string; readonly description?: string; readonly badge?: readonly PanelBadgeSegment[]}
 export interface PanelQuestion {
   readonly question: string;
+  /** What Esc does on this panel, as shown in the hint line (`Cancel` by default; a multi-page form says `Back`). */
+  readonly escLabel?: string;
   readonly header?: string;
   readonly detail?: string;
   readonly link?: string;
@@ -118,7 +120,7 @@ export function buildQuestionRows(input: QuestionRowsInput): {rows: QuestionRow[
       detail: option.description ? wrapped(option.description, Math.max(1, width - 6)).map(line => row(clipLine('      ' + line, width), color, index)) : [],
     };
   });
-  const hint = input.error || input.hint || `${question.multiSelect ? 'Space Toggle · ' : ''}Enter Submit${input.canNavigate ? ' · ←/→ Question' : ''} · Ctrl+K Fold · Esc Cancel`;
+  const hint = input.error || input.hint || `${question.multiSelect ? 'Space Toggle · ' : ''}Enter Submit${input.canNavigate ? ' · ←/→ Question' : ''} · Ctrl+K Fold · Esc ${question.escLabel ?? 'Cancel'}`;
   const inputName = question.inputLabel ?? (question.secret ? 'Input' : 'My view');
   const attachment = input.attached ? ` (${safeText(input.attached)})` : '';
   // The input is a one-row, cursor-following viewport. Newlines remain intact in its draft.

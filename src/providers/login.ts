@@ -59,6 +59,11 @@ export class LoginFlow {
   /** Local forms never enter runtime interactions, transcripts, or model context. */
   ask = async (question: WizardQuestion): Promise<WizardAnswer> =>
     (await this.askBatch([question]))?.[0] ?? {status: 'cancelled'};
+  /** Esc on the open form: the wizard goes back one page (it closes only when that page was its first). */
+  back = (): void => {
+    const batch = this.wizardBatch;
+    if (batch) {this.wizardBatch = undefined; this.publish(null); batch.resolve(null);} else this.cancel();
+  };
   askBatch = (questions: readonly WizardQuestion[]): Promise<readonly WizardAnswer[] | null> => {
     if (this.state || this.wizardBatch) throw new Error('Authentication is already in progress.');
     if (!questions.length) return Promise.resolve([]);
@@ -157,7 +162,8 @@ export class LoginFlow {
 
   cancel(): void {
     const batch = this.wizardBatch;
-    if (batch) {this.wizardBatch = undefined; this.publish(null); batch.resolve(null); return;}
+    // Closing is not Esc: the wizard must end, not reopen the previous page.
+    if (batch) {this.wizardBatch = undefined; this.publish(null); batch.resolve([{status: 'closed'}]); return;}
     this.oauthGeneration++; this.oauthAbort?.abort();
     this.oauthSession?.cancel();
     this.oauthSession = undefined;

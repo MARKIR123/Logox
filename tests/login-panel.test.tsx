@@ -76,6 +76,11 @@ test('real /login: masked input stays out of snapshots and runtime, fold restore
     await f.key('\x0b'); assert.match(f.screen(), /Chat draft/);
     await f.key(' + kept'); await f.key('\x0b'); assert.match(f.screen(), /•/);
     await f.key('\r'); assert.match(f.screen(), /base URL or port/);
+    // Esc goes back one page at a time (base URL -> API key -> route name -> provider list -> sign-in method) and closes only from the first.
+    await f.key('\x1b'); assert.match(f.screen(), /Enter the API key/);
+    await f.key('\x1b'); assert.match(f.screen(), /Enter a route name/);
+    await f.key('\x1b'); assert.match(f.screen(), /Choose a provider/);
+    await f.key('\x1b'); assert.match(f.screen(), /Choose a sign-in method/);
     await f.key('\x1b');
     assert.equal(f.app.authentication.getSnapshot(), null);
     assert.match(f.screen(), /Chat draft \+ kept/); assert.deepEqual(f.submissions, []);

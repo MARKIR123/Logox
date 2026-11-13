@@ -29,7 +29,10 @@ async function fixture(selected: 'gw' | 'other', bound = true) {
     let view = await wait();
     for (const id of ['key', 'gw', 'delete']) {app.authentication.answerWizard({selected: [id]}); view = await wait(view.key);}
     const detail = view.questions[0]!.detail;
-    app.authentication.answerWizard({selected: [answer]}); await submitted;
+    app.authentication.answerWizard({selected: [answer]});
+    // Declining returns to the provider's edit menu; closing the wizard ends it.
+    if (answer === 'cancel') {await wait(view.key); app.authentication.cancel();}
+    await submitted;
     return detail;
   };
   const notices = () => app.store.getSnapshot().messages.map(message => message.text).filter(text => text.startsWith("Provider 'gw' removed."));

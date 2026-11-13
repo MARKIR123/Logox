@@ -31,6 +31,7 @@ import {settingDefinition, settingDefinitions, settingOptions, settingsPages, sa
 import {modelsRows} from './commands/models-page.js';
 import {shortcutRows} from './commands/shortcuts.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from './config/model-grouping.js';
+import {bindingChoices, type ChoiceModel} from './commands/model-choices.js';
 import {UsageLedger, usageRows} from './context/usage.js';
 import {row, rowText, tabContent} from './commands/tab-rows.js';
 import {ContextManager} from './context/manager.js';
@@ -1121,70 +1122,26 @@ export async function createSessionApplication(options: SessionApplicationOption
   const openAutomaModel = async () => {
     modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
-    const choices = new Map<string, {provider: string; model: string} | undefined>([['inherit', undefined]]);
-    for (const item of poolModels) {
-      choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-    }
-    const currentModel = tools.modelStorage.get('automa');
-    const initialItems: PickerItem[] = [
-      {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-      ...poolModels.map(item => {
-        const choiceId = JSON.stringify({provider: item.provider, model: item.id});
-        const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
-        const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
-        const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
-        return {
-          id: choiceId,
-          label: item.id,
-          description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
-          effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-          effortLevels: levels.length > 0 ? levels : undefined,
-          group: item.provider,
-        };
-      }),
-    ];
+    // The same list every actor's model picker shows: see `bindingChoices`.
+    const choices = bindingChoices(tools.modelStorage.get('automa'));
     await surfaces.openPicker({
       title: 'Select Model for Automa',
       description: 'Select dedicated model for Automa worker; Esc to cancel',
-      current: currentModel ? JSON.stringify(currentModel) : 'inherit',
-      ...(poolModels.length > 0 ? {items: initialItems} : {}),
+      current: choices.current,
+      ...(poolModels.length > 0 ? {items: choices.items(poolModels)} : {}),
     }, async signal => {
-      let models = poolModels;
+      let models: readonly ChoiceModel[] = poolModels;
       let warning: string | undefined;
       if (models.length === 0) {
         const result = await registry.modelCatalog(signal);
         warning = result.issues.join('; ');
-        models = result.models.map(m => ({
-          provider: m.provider,
-          id: m.id,
-          thinkingLevels: [...detectEffortLevels(m.id, m.provider)],
-        }));
+        models = result.models.map(m => ({provider: m.provider, id: m.id, thinkingLevels: [...detectEffortLevels(m.id, m.provider)]}));
       }
-      for (const item of models) {
-        choices.set(JSON.stringify({provider: item.provider, model: item.id}), {provider: item.provider, model: item.id});
-      }
-      const loadedItems: PickerItem[] = [
-        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-        ...models.map(item => {
-          const choiceId = JSON.stringify({provider: item.provider, model: item.id});
-          const levels = item.thinkingLevels ?? detectEffortLevels(item.id, item.provider);
-          const win = item.window ? (Math.round(item.window / 1000) + 'k') : '128k';
-          const eff = levels.length > 0 ? '✦ ' + levels.filter(l => l !== 'auto').join('/') : '-';
-          return {
-            id: choiceId,
-            label: item.id,
-            description: win + ' · ' + eff + (item.isOffline ? ' [offline]' : ''),
-            effort: levels.includes('high') ? 'high' : (levels[0] ?? 'auto'),
-            effortLevels: levels.length > 0 ? levels : undefined,
-            group: item.provider,
-          };
-        }),
-      ];
-      return {items: loadedItems, ...(warning ? {warning} : {})};
-    }, async choice => {
-      if (!choices.has(choice)) throw new Error('Invalid model selection');
-      await tools.modelStorage.save('automa', choices.get(choice), commands.signal);
-      const chosen = choices.get(choice);
+      return {items: choices.items(models), ...(warning ? {warning} : {})};
+    }, async (choice, chosenEffort) => {
+      const chosen = choices.resolve(choice, chosenEffort);
+      if (chosen === null) throw new Error('Invalid model selection');
+      await tools.modelStorage.save('automa', chosen, commands.signal);
       return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}` : 'Automa model set to inherit session model', presentation: 'status'};
     });
   };

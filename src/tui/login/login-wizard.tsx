@@ -21,7 +21,7 @@ export function LoginWizardPanel({flow, state, width, height, y}: {
     ...(answer.custom !== undefined ? {custom: answer.custom} : {}),
   });
   const initialDraft = flow.wizardDraft();
-  const panel: PanelQuestion = {question: question.question, header: question.title, inputLabel: 'Input',
+  const panel: PanelQuestion = {question: question.question, header: question.title, inputLabel: 'Input', escLabel: 'Back',
     ...(question.detail !== undefined ? {detail: question.detail} : {}),
     ...(question.options ? {options: question.options.map(({label, description, badge}) => ({label, description, ...(badge ? {badge} : {})}))} : {}),
     ...(question.secret !== undefined ? {secret: question.secret} : {}),
@@ -37,7 +37,7 @@ export function LoginWizardPanel({flow, state, width, height, y}: {
     collapsed={Boolean(state.collapsed)} onToggleFold={flow.toggleWizardFold}
     {...(initialDraft ? {initialDraft: toPanel(initialDraft)} : {})}
     onDraftChange={answer => flow.keepWizardDraft(fromPanel(answer))}
-    onAnswer={answer => flow.answerWizard(fromPanel(answer))} onCancel={() => flow.cancel()}
+    onAnswer={answer => flow.answerWizard(fromPanel(answer))} onCancel={() => flow.back()}
     onBack={wizard.index > 0 ? answer => flow.navigateWizard(-1, fromPanel(answer)) : undefined}
     onForward={wizard.index + 1 < wizard.questions.length ? answer => flow.navigateWizard(1, fromPanel(answer)) : undefined}
     readClipboard={readQuestionClipboard}/></Box></Box>;

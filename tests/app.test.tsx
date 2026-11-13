@@ -570,7 +570,8 @@ test('实际 Ink /login：提供商选择、遮罩粘贴、持久保存、取消
     await key('\r');await asking('Enter the API key');
     output.columns = 32;output.rows = 12;
     await act(async () => {output.emit('resize');});await flushRender(instance);
-    await key('cancelled-secret');await key('\x1b');await phase(null);await act(async () => {await login;});
+    // Esc returns to the edit menu; a second Esc leaves the wizard (it was opened on this provider).
+    await key('cancelled-secret');await key('\x1b');await asking('Choose one field to edit');await key('\x1b');await phase(null);await act(async () => {await login;});
     assert.equal(await new AuthStorage(authPath).key('deepseek'), 'synthetic-ui-secret');
     assert.ok(!output.text.includes('cancelled-secret'));
     await key('\r');assert.deepEqual(submissions, ['ordinary-draft']);

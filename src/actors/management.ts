@@ -9,7 +9,8 @@ import {immutable} from '../runtime/contracts.js';
 import {ActorCatalog, assertActorPath} from './catalog.js';
 import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './definitions.js';
 import type {ContextPolicy} from '../config/config.js';
-import {detectEffortLevels, groupModelsForProvider, resolveActualModel, type GroupedModel} from '../config/model-grouping.js';
+import {detectEffortLevels} from '../config/model-grouping.js';
+import {bindingChoices, type ChoiceModel} from '../commands/model-choices.js';
 
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
 export interface CraftResult {readonly status: 'saved' | 'denied'; readonly path: string; readonly revision: number}
@@ -82,91 +83,33 @@ export class ActorManagement {
     const actor = this.catalog.find(id); if (!actor) throw new Error('Actor not found');
     this.modelPool?.loadCacheSync();
     const poolModels = this.modelPool?.snapshot() ?? [];
-    const groupedMap = new Map<string, GroupedModel>();
-    const choices = new Map<string, ActorModel | undefined>([['inherit', undefined]]);
-
-    const buildItems = (models: readonly {provider: string; id: string; window?: number | undefined; thinkingLevels?: readonly string[] | undefined; isOffline?: boolean | undefined}[]) => {
-      const items: any[] = [
-        {id: 'inherit', label: 'Inherit current session model', description: 'Default'},
-      ];
-      const providers = [...new Set(models.map(m => m.provider))];
-      for (const provider of providers) {
-        const providerModels = models.filter(m => m.provider === provider).map(m => m.id);
-        const currentModel = actor.defaultModel?.provider === provider ? actor.defaultModel.model : '';
-        const groupedList = groupModelsForProvider(providerModels, provider, currentModel);
-        for (const grouped of groupedList) {
-          const choiceId = JSON.stringify({provider: grouped.provider, model: grouped.baseModel});
-          groupedMap.set(choiceId, grouped);
-          groupedMap.set(grouped.id, grouped);
-          choices.set(choiceId, {provider: grouped.provider, model: grouped.baseModel});
-          choices.set(grouped.id, {provider: grouped.provider, model: grouped.baseModel});
-          for (const [tier, variantId] of Object.entries(grouped.variantMap)) {
-            choices.set(JSON.stringify({provider: grouped.provider, model: variantId}), {provider: grouped.provider, model: variantId});
-          }
-
-          const recorded = models.find(m => m.provider === provider && m.id === grouped.baseModel)
-            ?? models.find(m => m.provider === provider && (m.id.startsWith(grouped.baseModel + '-') || grouped.baseModel.startsWith(m.id)));
-          const effortLevels = recorded?.thinkingLevels ?? grouped.effortLevels;
-          const win = recorded?.window ? (Math.round(recorded.window / 1000) + 'k') : '128k';
-          const eff = effortLevels && effortLevels.length > 0 ? '✦ ' + effortLevels.filter(l => l !== 'auto').join('/') : '-';
-          items.push({
-            id: choiceId,
-            label: grouped.baseModel,
-            description: win + ' · ' + eff + (recorded?.isOffline ? ' [offline]' : ''),
-            effort: grouped.currentEffort,
-            effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
-            group: grouped.provider,
-          });
-        }
-      }
-      return items;
-    };
-
-    const initialItems = poolModels.length > 0 ? buildItems(poolModels) : [];
-    const currentKey = actor.defaultModel
-      ? JSON.stringify({provider: actor.defaultModel.provider, model: actor.defaultModel.model})
-      : 'inherit';
-
+    // The same list Automa's picker shows: see `bindingChoices`.
+    const choices = bindingChoices(actor.defaultModel);
     await surfaces.openPicker({
       title: 'Select Model for ' + actor.name,
       description: 'Confirm to apply to this actor only; Esc to cancel',
-      current: currentKey,
-      ...(initialItems.length > 0 ? {items: initialItems} : {}),
+      current: choices.current,
+      ...(poolModels.length > 0 ? {items: choices.items(poolModels)} : {}),
     }, async signal => {
-      let models = poolModels;
+      let models: readonly ChoiceModel[] = poolModels;
       let warning: string | undefined;
       if (models.length === 0) {
         const result = await this.registry.modelCatalog(signal);
         warning = result.issues.join('; ');
-        models = result.models.map(m => ({
-          provider: m.provider,
-          id: m.id,
-          thinkingLevels: [...detectEffortLevels(m.id, m.provider)],
-        }));
+        models = result.models.map(m => ({provider: m.provider, id: m.id, thinkingLevels: [...detectEffortLevels(m.id, m.provider)]}));
       }
-      const loadedItems = buildItems(models);
-      return {items: loadedItems, ...(warning ? {warning} : {})};
+      return {items: choices.items(models), ...(warning ? {warning} : {})};
     }, async (choice, chosenEffort) => {
-      let selectedModel: ActorModel | undefined;
-      if (choice === 'inherit') {
-        selectedModel = undefined;
-      } else if (groupedMap.has(choice)) {
-        const grouped = groupedMap.get(choice)!;
-        const resolved = resolveActualModel(grouped, chosenEffort);
-        selectedModel = {provider: grouped.provider, model: resolved.modelId};
-      } else if (choices.has(choice)) {
-        selectedModel = choices.get(choice);
-      } else {
+      let selectedModel: ActorModel | undefined | null = choices.resolve(choice, chosenEffort);
+      if (selectedModel === null) {
+        // A choice typed or scripted as raw JSON; `saveDefaultModel` still checks it against the catalog.
         try {
           const parsed = JSON.parse(choice);
-          if (Array.isArray(parsed) && parsed.length >= 2) {
-            selectedModel = {provider: parsed[0], model: parsed[1]};
-          } else if (parsed && typeof parsed === 'object') {
-            selectedModel = {provider: parsed.provider, model: parsed.model};
-          }
+          if (Array.isArray(parsed) && parsed.length >= 2) selectedModel = {provider: parsed[0], model: parsed[1]};
+          else if (parsed && typeof parsed === 'object') selectedModel = {provider: parsed.provider, model: parsed.model};
         } catch {}
       }
-      if (choice !== 'inherit' && !selectedModel) throw new Error('Invalid model selection');
+      if (selectedModel === null) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, selectedModel, new AbortController().signal);
       return {message: actor.name + ' default model saved', presentation: 'status'};
     });

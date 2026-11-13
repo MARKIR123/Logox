@@ -22,7 +22,9 @@ export interface WizardQuestion {
   readonly defaultSelected?: readonly string[];
 }
 export type WizardAnswer = {readonly status: 'answered'; readonly value: string; readonly selected?: readonly string[]}
-  | {readonly status: 'cancelled'};
+  | {readonly status: 'cancelled'}
+  /** The host closed the whole wizard (not Esc on one page): the wizard ends at once instead of going back a page. */
+  | {readonly status: 'closed'};
 export type WizardAsk = (question: WizardQuestion) => Promise<WizardAnswer>;
 export interface WizardProviderRow {
   readonly name: string;
@@ -129,16 +131,24 @@ export async function askPreferredName(ask: WizardAsk): Promise<string | undefin
   return answer.value.trim() || undefined;
 }
 
+/** Esc on a page: go back to the page before it instead of ending the wizard. */
+const BACK = Symbol('back');
+/** Thrown inside the wizard when the host closed it, so every nested page unwinds at once. */
+const CLOSED = Symbol('closed');
+type Step = LoginWizardOutcome | typeof BACK;
+
 /** Local orchestration only: credentials remain in local variables until the explicit save boundary. */
 export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): Promise<LoginWizardOutcome> {
   const ask = async (question: WizardQuestion): Promise<Answered | null> => {
     const answer = await deps.ask(question);
+    if (answer.status === 'closed') throw CLOSED;
     return answer.status === 'answered' && answer.value !== '__cancel' ? answer : null;
   };
   const batch = async (questions: readonly WizardQuestion[]): Promise<readonly Answered[] | null> => {
     if (deps.askBatch) {
       const answers = await deps.askBatch(questions);
-      if (!answers || answers.length !== questions.length || answers.some(a => a.status === 'cancelled' || a.value === '__cancel')) return null;
+      if (answers?.some(a => a.status === 'closed')) throw CLOSED;
+      if (!answers || answers.length !== questions.length || answers.some(a => a.status !== 'answered' || a.value === '__cancel')) return null;
       return answers as readonly Answered[];
     }
     const answers: Answered[] = [];
@@ -186,10 +196,11 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     });
     return unique(expanded);
   };
-  const confirm = async (record: WizardProviderRecord, hasKey: boolean): Promise<boolean> => {
+  /** `write`, `cancel` (the Cancel option: ends the wizard) or null (Esc: one step back). */
+  const confirm = async (record: WizardProviderRecord, hasKey: boolean): Promise<'write' | 'cancel' | null> => {
     const answer = await ask({...menu('Write this provider configuration?', [option('write', 'Write and enable'), option('cancel', 'Cancel')]),
       detail: [record.name, record.base_url, protocol(record), record.models?.join(', ') || 'Whole catalog', hasKey ? 'API key supplied' : 'No new API key'].join(' · ')});
-    return answer?.value === 'write';
+    return answer ? answer.value === 'write' ? 'write' : 'cancel' : null;
   };
   const oauth = async (name: string): Promise<LoginWizardOutcome> => {
     const result = await deps.browserLogin(name);
@@ -198,143 +209,215 @@ export async function runLoginWizard(deps: LoginWizardDeps, initial?: string): P
     deps.notify('Account sign-in is not supported for this provider.', 'error');
     return 'failed';
   };
-  /** Persists a chosen record, confirming first; shared by the template add flow and the custom endpoint flow. */
-  const finishAdd = async (record: WizardProviderRecord, key: string): Promise<LoginWizardOutcome> => {
-    // An explicit empty key means anonymous discovery for this new route.
-    // Undefined is reserved for edits, where the host resolves an existing credential.
-    const models = await chooseModels(record, key);
-    if (models === null || (!record.catalog && !models.length)) return 'cancelled';
-    record.models = models;
-    if (models.length > 0 && !record.default_model) {
-      record.default_model = models[0];
+  /** Runs the steps in order. A step that returns false (Esc) goes back to the one before it; backing out of the first step returns false. */
+  const sequence = async (steps: readonly (() => Promise<boolean>)[]): Promise<boolean> => {
+    let index = 0;
+    while (index < steps.length) {
+      if (await steps[index]!()) index++;
+      else if (index === 0) return false;
+      else index--;
     }
-    if (!await confirm(record, Boolean(key))) return 'cancelled';
-    await save(record, key);
-    return 'added';
+    return true;
   };
-  const addCustom = async (): Promise<LoginWizardOutcome> => {
-    const route = await ask(field('Enter a route name'));
-    if (!route || !route.value.trim()) return 'cancelled';
-    const name = route.value.trim();
-    if (!/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u.test(name)) throw new Error('Invalid route name.');
-    // Add must never reuse an existing route's credential with a replacement endpoint.
-    if ((await deps.rows()).some(row => row.name === name)) {
-      deps.notify('This provider route already exists. Choose it in the list to edit it instead.', 'error');
-      return 'failed';
-    }
-    const credential = await ask(field('Enter the API key', {secret: true, allowEmpty: true, detail: 'Optional for endpoints that do not require authentication.'}));
-    if (!credential) return 'cancelled';
-    const connection = await batch([field('Enter the base URL or port'), menu('Choose the wire protocol', protocols)]);
-    if (!connection) return 'cancelled';
-    return finishAdd(withProtocol({name, base_url: expandPortOrUrl(connection[0]!.value), kind: 'openai_compat', models: []}, connection[1]!.value), credential.value.trim());
+  /** The shared tail of both add flows: the model list, then the confirmation that writes. `done.outcome` is set once the flow ends. */
+  const finishSteps = (record: () => WizardProviderRecord, key: () => string, done: {outcome?: LoginWizardOutcome}): (() => Promise<boolean>)[] => {
+    let ownDefault: string | undefined, first = true;
+    return [
+      async () => {
+        const target = record();
+        if (first) {ownDefault = target.default_model; first = false;}
+        for (;;) {
+          // An explicit empty key means anonymous discovery for this new route.
+          // Undefined is reserved for edits, where the host resolves an existing credential.
+          const models = await chooseModels(target, key());
+          if (models === null) return false;
+          if (!target.catalog && !models.length) continue;
+          target.models = models;
+          const fallback = ownDefault ?? models[0];
+          if (fallback) target.default_model = fallback; else delete target.default_model;
+          return true;
+        }
+      },
+      async () => {
+        const answer = await confirm(record(), Boolean(key()));
+        if (answer === null) return false;
+        if (answer === 'write') await save(record(), key());
+        done.outcome = answer === 'write' ? 'added' : 'cancelled';
+        return true;
+      },
+    ];
+  };
+  const addCustom = async (): Promise<Step> => {
+    let name = '', key = '';
+    let record: WizardProviderRecord = {name: '', base_url: '', kind: 'openai_compat', models: []};
+    const done: {outcome?: LoginWizardOutcome} = {};
+    const finished = await sequence([
+      async () => {
+        const route = await ask(field('Enter a route name'));
+        if (!route || !route.value.trim()) return false;
+        name = route.value.trim();
+        if (!/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u.test(name)) throw new Error('Invalid route name.');
+        // Add must never reuse an existing route's credential with a replacement endpoint.
+        if ((await deps.rows()).some(row => row.name === name)) {
+          deps.notify('This provider route already exists. Choose it in the list to edit it instead.', 'error');
+          done.outcome = 'failed';
+        }
+        return true;
+      },
+      async () => {
+        if (done.outcome) return true;
+        const credential = await ask(field('Enter the API key', {secret: true, allowEmpty: true, detail: 'Optional for endpoints that do not require authentication.'}));
+        if (!credential) return false;
+        key = credential.value.trim();
+        return true;
+      },
+      async () => {
+        if (done.outcome) return true;
+        const connection = await batch([field('Enter the base URL or port'), menu('Choose the wire protocol', protocols)]);
+        if (!connection) return false;
+        record = withProtocol({name, base_url: expandPortOrUrl(connection[0]!.value), kind: 'openai_compat', models: []}, connection[1]!.value);
+        return true;
+      },
+      ...finishSteps(() => record, () => key, done).map(step => async () => done.outcome === 'failed' ? true : step()),
+    ]);
+    return finished ? done.outcome ?? 'cancelled' : BACK;
   };
   /** A template the user has not set up: the template only pre-fills the base URL; the saved record owns it. */
-  const addTemplate = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
+  const addTemplate = async (row: WizardProviderRow): Promise<Step> => {
     const record = fromRow(row);
     record.catalog = true;
-    const endpoint = await ask(field('Choose the base URL', {options: [option('default', 'Use default endpoint', record.base_url)], allowEmpty: true}));
-    if (!endpoint) return 'cancelled';
-    if (endpoint.value && endpoint.value !== 'default') record.base_url = expandPortOrUrl(endpoint.value);
-    // Every listed API-key template needs a key; keyless endpoints are custom ones (`addCustom`).
-    const credential = await ask(field('Enter the API key', {secret: true}));
-    if (!credential || !credential.value.trim()) return 'cancelled';
-    return finishAdd(record, credential.value.trim());
+    const official = record.base_url;
+    let key = '';
+    const done: {outcome?: LoginWizardOutcome} = {};
+    const finished = await sequence([
+      async () => {
+        const endpoint = await ask(field('Choose the base URL', {options: [option('default', 'Use default endpoint', official)], allowEmpty: true}));
+        if (!endpoint) return false;
+        record.base_url = endpoint.value && endpoint.value !== 'default' ? expandPortOrUrl(endpoint.value) : official;
+        return true;
+      },
+      async () => {
+        // Every listed API-key template needs a key; keyless endpoints are custom ones (`addCustom`).
+        const credential = await ask(field('Enter the API key', {secret: true}));
+        if (!credential || !credential.value.trim()) return false;
+        key = credential.value.trim();
+        return true;
+      },
+      ...finishSteps(() => record, () => key, done),
+    ]);
+    return finished ? done.outcome ?? 'cancelled' : BACK;
   };
-  const remove = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
+  const remove = async (row: WizardProviderRow): Promise<Step> => {
     const users = await deps.users?.(row.name) ?? [];
     const answer = await ask({...menu('Delete this provider?', [option('delete', 'Delete provider'), option('cancel', 'Cancel')]),
       ...(users.length ? {detail: 'In use by: ' + users.join(', ') + '. Their model bindings are cleared; nothing is switched to another model.'} : {})});
-    if (answer?.value !== 'delete') return 'cancelled';
+    if (answer?.value !== 'delete') return BACK;
     await deps.removeCustom(row.name);
     return 'deleted';
   };
-  const editModels = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
+  const editModels = async (row: WizardProviderRow): Promise<Step> => {
     const record = fromRow(row);
     const models = await chooseModels(record);
-    if (models === null || (!row.custom ? false : !models.length) || sameModels(models, record.models ?? [])) return 'cancelled';
+    if (models === null || (!row.custom ? false : !models.length) || sameModels(models, record.models ?? [])) return BACK;
     record.models = models;
     await save(record);
     return 'updated';
   };
-  /** A provider signed in by account (listed under Account sign-in): sign in again, change its models, or delete it. */
-  const editAccount = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
-    const action = await ask(menu('Choose one field to edit', [option('signin', 'Sign in again'), option('models', 'Model list'), option('delete', 'Delete provider')]));
-    if (action?.value === 'signin') return oauth(row.name);
-    if (action?.value === 'models') return editModels(row);
-    return action?.value === 'delete' ? remove(row) : 'cancelled';
+  /** A provider signed in by account (listed under Account sign-in): sign in again, change its models, or delete it. Esc in a sub-page returns to this menu. */
+  const editAccount = async (row: WizardProviderRow): Promise<Step> => {
+    for (;;) {
+      const action = await ask(menu('Choose one field to edit', [option('signin', 'Sign in again'), option('models', 'Model list'), option('delete', 'Delete provider')]));
+      if (!action) return BACK;
+      if (action.value === 'signin') return oauth(row.name);
+      const result = action.value === 'models' ? await editModels(row) : action.value === 'delete' ? await remove(row) : BACK;
+      if (result !== BACK) return result;
+    }
   };
-  /** A provider that is set up (built-in or custom): change one field of its record or delete it. */
-  const edit = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
-    let record = fromRow(row);
-    const action = await ask(menu('Choose one field to edit', [option('key', 'API key'), option('url', 'Base URL'), option('protocol', 'Wire protocol'),
-      option('models', 'Model list'), ...(row.saved ? [option('delete', 'Delete provider')] : [])]));
-    if (!action) return 'cancelled';
-    switch (action.value) {
-      case 'key': {
+  /** A provider that is set up (built-in or custom): change one field of its record or delete it. Esc or an unchanged value in a field returns to this menu. */
+  const edit = async (row: WizardProviderRow): Promise<Step> => {
+    for (;;) {
+      let record = fromRow(row);
+      const action = await ask(menu('Choose one field to edit', [option('key', 'API key'), option('url', 'Base URL'), option('protocol', 'Wire protocol'),
+        option('models', 'Model list'), ...(row.saved ? [option('delete', 'Delete provider')] : [])]));
+      if (!action) return BACK;
+      if (action.value === 'key') {
         const answer = await ask(field('Enter the API key', {secret: true, allowEmpty: true, detail: 'Leave empty to keep the current key.'}));
-        if (!answer?.value.trim()) return 'cancelled';
+        if (!answer?.value.trim()) continue;
         await deps.saveKey(row.name, answer.value.trim());
         return 'updated';
       }
-      case 'url': {
+      if (action.value === 'models' || action.value === 'delete') {
+        const result = action.value === 'models' ? await editModels(row) : row.saved ? await remove(row) : BACK;
+        if (result !== BACK) return result;
+        continue;
+      }
+      if (action.value === 'url') {
         const answer = await ask(field('Enter the base URL or port', {allowEmpty: true}));
-        if (!answer?.value.trim()) return 'cancelled';
+        if (!answer?.value.trim()) continue;
         const url = expandPortOrUrl(answer.value);
-        if (url === record.base_url) return 'cancelled';
+        if (url === record.base_url) continue;
         record.base_url = url;
-        break;
-      }
-      case 'protocol': {
+      } else if (action.value === 'protocol') {
         const answer = await ask(menu('Choose the wire protocol', protocols));
-        if (!answer || answer.value === protocol(record)) return 'cancelled';
+        if (!answer || answer.value === protocol(record)) continue;
         record = withProtocol(record, answer.value);
-        break;
-      }
-      case 'models': return editModels(row);
-      case 'delete': return row.saved ? remove(row) : 'cancelled';
-      default: return 'cancelled';
+      } else continue;
+      await save(record);
+      return 'updated';
     }
-    await save(record);
-    return 'updated';
   };
   /** Opens one provider: a bare credential can only be deleted, a set-up provider is edited, an unset template is added. */
-  const open = async (row: WizardProviderRow): Promise<LoginWizardOutcome> => {
+  const open = async (row: WizardProviderRow): Promise<Step> => {
     if (!row.baseUrl) {
-      const action = await ask(menu('Choose one field to edit', [option('delete', 'Delete provider')]));
-      return action?.value === 'delete' ? remove(row) : 'cancelled';
+      for (;;) {
+        const action = await ask(menu('Choose one field to edit', [option('delete', 'Delete provider')]));
+        if (action?.value !== 'delete') return BACK;
+        const result = await remove(row);
+        if (result !== BACK) return result;
+      }
     }
     // An account provider has no API-key flow: signed in it opens its account menu, otherwise it starts the browser sign-in.
-    if (row.account) return row.state === 'account' ? editAccount(row) : oauth(row.name);
+    if (row.account) {
+      if (row.state === 'account') return editAccount(row);
+      const result = await oauth(row.name);
+      return result === 'cancelled' ? BACK : result;
+    }
     return isSetUp(row) ? edit(row) : addTemplate(row);
   };
   const entry = (list: 'key' | 'account', rows: readonly WizardProviderRow[]) => (row: WizardProviderRow) =>
     option(row.name, row.name, describe(row), badgeOf(row, list, rows));
   try {
     const rows = await deps.rows();
-    // `/login <name>` jumps straight to that provider's key flow or edit menu.
+    // `/login <name>` jumps straight to that provider's key flow or edit menu; backing out of it closes the wizard.
     const target = initial === undefined ? undefined : rows.find(row => row.name === initial);
-    if (target) return await open(target);
-    const method = await ask(menu('Choose a sign-in method', [option('key', 'API key', 'Sign in with a URL and an API key'),
-      option('account', 'Account sign-in', 'Authorize in the browser with a provider account')]));
-    if (!method) return 'cancelled';
-    if (method.value === 'account') {
+    if (target) {
+      const result = await open(target);
+      return result === BACK ? 'cancelled' : result;
+    }
+    // Esc on any page returns to the page before it; only Esc on this first page closes the wizard.
+    for (;;) {
+      const method = await ask(menu('Choose a sign-in method', [option('key', 'API key', 'Sign in with a URL and an API key'),
+        option('account', 'Account sign-in', 'Authorize in the browser with a provider account')]));
+      if (!method) return 'cancelled';
       // Which providers offer account sign-in is a template property, not a name.
       const accounts = rows.filter(row => row.account);
-      if (!accounts.length) {
+      if (method.value === 'account' && !accounts.length) {
         deps.notify('Account sign-in is not supported for this provider.', 'error');
         return 'failed';
       }
-      const account = await ask(menu('Choose an account provider', accounts.map(entry('account', rows))));
-      const row = accounts.find(row => row.name === account?.value);
-      return row ? await open(row) : 'cancelled';
+      for (;;) {
+        // One list per method: for API keys every template, then the user's own providers, then the entry that starts a custom endpoint.
+        const chosen = method.value === 'account'
+          ? await ask(menu('Choose an account provider', accounts.map(entry('account', rows))))
+          : await ask(menu('Choose a provider', [...rows.filter(row => !row.account).map(entry('key', rows)), option(CUSTOM_ENTRY, 'Custom endpoint', CUSTOM_DESCRIPTION)]));
+        if (!chosen) break;
+        const row = (method.value === 'account' ? accounts : rows).find(row => row.name === chosen.value);
+        const result = method.value !== 'account' && chosen.value === CUSTOM_ENTRY ? await addCustom() : row ? await open(row) : BACK;
+        if (result !== BACK) return result;
+      }
     }
-    // One list: every API-key template, then the user's own providers, then the entry that starts a custom endpoint.
-    const chosen = await ask(menu('Choose a provider', [...rows.filter(row => !row.account).map(entry('key', rows)), option(CUSTOM_ENTRY, 'Custom endpoint', CUSTOM_DESCRIPTION)]));
-    if (!chosen) return 'cancelled';
-    if (chosen.value === CUSTOM_ENTRY) return await addCustom();
-    const row = rows.find(row => row.name === chosen.value);
-    return row ? await open(row) : 'cancelled';
-  } catch {
+  } catch (error) {
+    if (error === CLOSED) return 'cancelled';
     // Callback failures may include credentials in their messages. Never echo them into the UI.
     try {deps.notify('Provider operation failed. No successful completion was reported.', 'error');} catch { /* Notification cannot turn failure into success. */ }
     return 'failed';

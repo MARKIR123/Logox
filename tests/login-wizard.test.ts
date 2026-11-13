@@ -19,9 +19,14 @@ function deferred<T>() {
 }
 function scripted(values: readonly (string | null)[]) {
   const questions: WizardQuestion[] = [];
+  let extra = 0;
   const ask = async (question: WizardQuestion): Promise<WizardAnswer> => {
+    // Esc goes back one page, so a script that ends keeps pressing Esc until the wizard closes; a wizard that never closes is a failure.
+    if (questions.length >= values.length) {
+      assert.ok(++extra <= 12, 'The wizard keeps asking after the script ended: ' + question.question);
+      return {status: 'cancelled'};
+    }
     questions.push(question);
-    assert.ok(questions.length <= values.length, 'Unexpected question: ' + question.title);
     const value = values[questions.length - 1];
     return value === null ? {status: 'cancelled'} : {status: 'answered', value: value!};
   };
@@ -457,4 +462,29 @@ test('deleting a provider names who uses it in the confirmation, and says nothin
   const idle = keyed(['local-proxy', 'delete', 'delete']), idleDeps = deps(idle.ask, {users: async () => []});
   assert.equal(await runLoginWizard(idleDeps.deps), 'deleted');
   assert.equal(idle.questions[2]!.detail, undefined);
+});
+test('Esc goes back one page: from a field to the edit menu, from the menu to the list, from the list to the method, and closes only from the first page', async () => {
+  // method -> list -> edit menu -> Base URL (Esc) -> edit menu (Esc) -> list (Esc) -> method (Esc) -> closed
+  const env = scripted(['key', 'local-proxy', 'url', null, null, null, null]), d = deps(env.ask);
+  assert.equal(await runLoginWizard(d.deps), 'cancelled');
+  assert.deepEqual(env.questions.map(question => question.question), ['Choose a sign-in method', 'Choose a provider', 'Choose one field to edit',
+    'Enter the base URL or port', 'Choose one field to edit', 'Choose a provider', 'Choose a sign-in method']);
+  assert.deepEqual(d.calls, [], 'backing out writes nothing');
+});
+test('the add flow steps back one question at a time, and a later answer replaces the earlier one', async () => {
+  // URL (default) -> key -> Esc back to URL -> custom URL -> key -> models -> write
+  const env = keyed(['deepseek', 'default', null, '9100', 'k2', 'm1', 'write']), d = deps(env.ask);
+  assert.equal(await runLoginWizard(d.deps), 'added');
+  assert.deepEqual(env.questions.map(question => question.question).slice(1, 5), ['Choose the base URL', 'Enter the API key', 'Choose the base URL', 'Enter the API key']);
+  assert.ok(d.calls.some(call => call.includes('http://127.0.0.1:9100/v1')), 'the URL chosen after going back is the one saved');
+});
+test('declining the delete confirmation returns to the edit menu; a closed wizard ends at once', async () => {
+  const env = keyed(['local-proxy', 'delete', 'cancel', null, null]), d = deps(env.ask);
+  assert.equal(await runLoginWizard(d.deps), 'cancelled');
+  assert.deepEqual(env.questions.map(question => question.question).slice(1, 4), ['Choose one field to edit', 'Delete this provider?', 'Choose one field to edit']);
+  assert.deepEqual(d.calls, []);
+  let asked = 0;
+  const closing = deps(async () => {asked++; return asked === 1 ? {status: 'answered', value: 'key'} : {status: 'closed'};});
+  assert.equal(await runLoginWizard(closing.deps), 'cancelled');
+  assert.equal(asked, 2, 'a closed wizard asks nothing more');
 });
