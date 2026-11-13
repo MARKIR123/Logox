@@ -68,9 +68,9 @@ test('提示词工程：纯自定义角色在无内置底座时直接使用自�
 
 test('runtime facts remain typed messages rather than rewriting the system prompt', () => {
   const base = composeBaseSystemPrompt({cwd: '/workspace', ownerId: 'techne', builtinPrompt: 'Techne'});
-  const recovery = createRuntimeContextMessage('recovery', 'Continue from preserved evidence.');
+  const recovery = createRuntimeContextMessage('reminder', 'Continue from preserved evidence.');
   assert.equal(recovery.role, 'context');
-  assert.equal(recovery.kind, 'recovery');
+  assert.equal(recovery.kind, 'reminder');
   assert.ok(!base.system.includes(recovery.text));
   assert.ok(!base.system.includes('does not support image input'));
 });

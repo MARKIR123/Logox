@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {ResolvedTool} from '../tools/catalog.js';
-import {normalizeMessages, type ModelRequest, type ToolDefinition} from '../runtime/messages.js';
+import {normalizeMessages, withoutAnsweredUnexecuted, type ModelRequest, type ToolDefinition} from '../runtime/messages.js';
 import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {ProviderError} from '../providers/http.js';
 import {roleCacheRetention} from '../providers/cache.js';
@@ -99,9 +99,9 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
   }
   for (const ask of run.asks.owed(context.sessionId, context.ownerId)) {
-    if (state.owedSeen(ask.id) === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('recovery', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
+    if (state.owedSeen(ask.id) === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('reminder', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
   }
-  if (state.recovery) await appendUpdate(createRuntimeContextMessage('recovery', state.recovery));
+  if (state.recovery) await appendUpdate(createRuntimeContextMessage('reminder', state.recovery));
   if (state.closing) await appendUpdate(createRuntimeContextMessage('finalizer', FINISH_ROUND_FOLLOW_UP));
   const base = {system: instruction.system,
     ...(instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
@@ -114,8 +114,8 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
   }
   const initialProjection = prepared?.request ?? {...base, messages};
   const snapshot = instruction.snapshot && !appendOnly ? [createRuntimeContextMessage('snapshot', instruction.snapshot, {activityId: context.activityId})] : [];
-  // Hiding finished `_FinishRound` pairs and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
-  const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredTransient(initialProjection.messages)))
+  // Hiding finished `_FinishRound` pairs, answered reminders, answered never-executed turns and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
+  const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredUnexecuted(withoutAnsweredTransient(initialProjection.messages))))
     .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || state.closing && message.data?.activityId === context.activityId)
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
     .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};

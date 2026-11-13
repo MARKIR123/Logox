@@ -19,7 +19,9 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     stage: z.string().optional(),
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),
-    discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional()}),
+    discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional(),
+    /** The call failed before it could run (invalid arguments, voided batch, truncated arguments, unknown tool, restricted tools). Ledger and projection only; never sent to a provider. */
+    unexecuted: z.literal(true).optional()}),
 ]);
 export type ModelMessage = z.infer<typeof modelMessageSchema>;
 /**
@@ -82,6 +84,40 @@ export interface CacheProfile {
   ttlMs: number;
   /** Same body with `maxTokens: 1` keeps the cached prefix and its thinking configuration. */
   replayable: boolean;
+}
+/**
+ * Request projection: drops an assistant turn none of whose calls ran, with its results, once a later turn executed a call or delivered a final answer.
+ * While no such later turn exists everything stays visible. A turn that also said something to the user is kept, and no assistant message is ever rewritten.
+ * Pure and order-only, so later requests stay byte-stable.
+ */
+export function withoutAnsweredUnexecuted<T extends ModelMessage>(messages: readonly T[]): T[] {
+  const dropped = new Set<number>();
+  let answered = false;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role !== 'assistant' || message.contextExcluded || message.toolsExcluded) continue;
+    const calls = message.toolCalls ?? [];
+    if (!calls.length) {
+      if (message.text.trim() && !message.textToolCall) answered = true;
+      continue;
+    }
+    const segment: number[] = [];
+    for (let next = index + 1; next < messages.length && messages[next]!.role !== 'assistant'; next++) segment.push(next);
+    const results = new Map<string, boolean>();
+    for (const at of segment) {
+      const result = messages[at]!;
+      if (result.role === 'tool') results.set(result.callId, result.unexecuted === true);
+    }
+    if (calls.some(call => results.get(call.id) === false)) answered = true;
+    else if (answered && !message.text.trim() && calls.every(call => results.get(call.id) === true)) {
+      dropped.add(index);
+      for (const at of segment) {
+        const result = messages[at]!;
+        if (result.role === 'tool' && calls.some(call => call.id === result.callId)) dropped.add(at);
+      }
+    }
+  }
+  return dropped.size ? messages.filter((_, index) => !dropped.has(index)) : [...messages];
 }
 /** Repairs the request view only; the raw ledger and already-executed tools are unchanged. */
 export function normalizeMessages(messages: readonly ModelMessage[]): ModelMessage[] {

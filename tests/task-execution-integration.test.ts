@@ -35,8 +35,8 @@ test('Director stops after repeated reasoning-only turns while preserving usage 
     const handle = f.app.ensemble.dispatch('logox', '核对这个任务'); await handle.done;
     assert.equal(f.requests.length, 3);
     assert.equal(f.app.store.activities.get('task-flow', handle.activityId)?.status, 'failed');
-    assert.match(f.requests[1]!.messages.findLast(message => message.role === 'context' && message.kind === 'recovery')?.text ?? '', /minimum deliverable step/i);
-    assert.match(f.requests[2]!.messages.findLast(message => message.role === 'context' && message.kind === 'recovery')?.text ?? '', /Pivot the action plan/i);
+    assert.match(f.requests[1]!.messages.findLast(message => message.role === 'context' && message.kind === 'reminder')?.text ?? '', /minimum deliverable step/i);
+    assert.match(f.requests[2]!.messages.findLast(message => message.role === 'context' && message.kind === 'reminder')?.text ?? '', /Pivot the action plan/i);
     for (const request of f.requests) assert.ok(request.messages.every(message => message.role !== 'assistant' || message.text.trim() || message.toolCalls?.length));
     const history = await f.app.journal.load('task-flow', 'logox');
     const reasoning = history.filter(entry => entry.message?.role === 'assistant' && entry.message.reasoning);

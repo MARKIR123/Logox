@@ -11,7 +11,7 @@ import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {createRuntimeContextMessage, withoutAnsweredTransient} from '../src/runtime/context-updates.js';
 import {retainRuntimeContext} from '../src/context/continuity.js';
-import type {ModelMessage, ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
+import {modelMessageSchema, type ModelMessage, type ModelRequest, type ModelTurn, type Provider} from '../src/runtime/messages.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 
@@ -39,7 +39,7 @@ async function run(turns: ModelTurn[], opts: {companion?: boolean; appendOnly?: 
   await task.done;
   return {requests, journal, activity: store.activities.get('s', task.activityId), cleanup: async () => { await ensemble.close(); await rm(cwd, {recursive: true, force: true}); }};
 }
-const notes = (request: ModelRequest, needle = '') => request.messages.filter(message => message.role === 'context' && message.kind === 'recovery' && message.text.includes(needle));
+const notes = (request: ModelRequest, needle = '') => request.messages.filter(message => message.role === 'context' && message.kind === 'reminder' && message.text.includes(needle));
 const toolTexts = (request: ModelRequest) => request.messages.filter(message => message.role === 'tool').map(message => message.text);
 const prefixOf = (before: ModelRequest, after: ModelRequest) => before.messages.every((message, index) => JSON.stringify(message) === JSON.stringify(after.messages[index]));
 
@@ -54,7 +54,7 @@ test('a recovery note reaches the request that follows it and is gone once the m
     assert.equal(notes(f.requests[2]!).length, 0, 'the answered note is not replayed');
     assert.equal(notes(f.requests[3]!).length, 0);
     const ledger = await f.journal.loadRaw('s', 'logox');
-    assert.ok(ledger.some(entry => entry.message?.role === 'context' && entry.message.kind === 'recovery'), 'the ledger still keeps it for audit and restore');
+    assert.ok(ledger.some(entry => entry.message?.role === 'context' && entry.message.kind === 'reminder'), 'the ledger still keeps it for audit and restore');
     assert.ok(prefixOf(f.requests[2]!, f.requests[3]!), 'after the drop each request extends the previous one byte for byte');
   } finally { await f.cleanup(); }
 });
@@ -92,11 +92,12 @@ test('the Automa reminder is a request-only context note after the results, once
 });
 
 test('the projection drops only answered transient notes and compaction does not bring them back', () => {
-  const note = createRuntimeContextMessage('recovery', 'Retry.', {activityId: 'a', slot: 'x'});
+  const note = createRuntimeContextMessage('reminder', 'Retry.', {activityId: 'a', slot: 'x'});
   const other = createRuntimeContextMessage('task-state', 'Keep.', {activityId: 'a', slot: 'y'});
-  const history: ModelMessage[] = [{role: 'user', text: 'Go'}, note, other, {role: 'assistant', text: 'ok'}, {role: 'user', text: 'More'}, note];
+  const legacy = modelMessageSchema.parse({role: 'context', kind: 'recovery', text: 'Old.', data: {activityId: 'a', slot: 'z'}});
+  const history: ModelMessage[] = [{role: 'user', text: 'Go'}, note, legacy, other, {role: 'assistant', text: 'ok'}, {role: 'user', text: 'More'}, note];
   const projected = withoutAnsweredTransient(history);
-  assert.deepEqual(projected, [history[0], other, history[3], history[4], note]);
+  assert.deepEqual(projected, [history[0], other, history[4], history[5], note], 'a legacy recovery record is transient too');
   assert.deepEqual(withoutAnsweredTransient(projected), projected, 'idempotent');
   assert.deepEqual(retainRuntimeContext(history, 'a').map(message => message.kind), ['task-state'], 'compaction keeps no recovery note');
 });

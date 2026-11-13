@@ -121,6 +121,9 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
   const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
   await run.persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, steps.get(thinkingId));
   if (prepared) options.context?.observe(run.context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
+  // The same conditions `execute` below answers with an error before running anything; marks the stored result for the request projection.
+  const neverRan = (call: ToolCall) => isFinishRound(call.name) ? truncated || voidBatch
+    : truncated || !!refusal || schemaErrors.has(call.id) || voidBatch;
   const completed = new Set<string>();
   let automaNote: string | undefined;
   const toolIds = new Map(calls.map(call => [call.id, steps.tool(call,
@@ -220,6 +223,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
             text: output.text, isError: result.isError,
             ...(result.discoveredTools ? {discoveredTools: result.discoveredTools} : {}),
             ...(output.images ? {images: output.images} : {}),
+            ...(neverRan(call) ? {unexecuted: true as const} : {}),
           };
           await run.persist(toolMessage, step);
           const fingerprint = !truncated && !schemaErrors.size ? toolProgressFingerprint(call, result) : undefined;

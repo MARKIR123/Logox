@@ -532,7 +532,7 @@ test('a tool call that came out as plain text is not a delivery: it is recovered
     const handle = f.app.ensemble.dispatch('techne', 'build');
     await handle.done;
     assert.equal(seen.length, 4);
-    const noteOf = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'recovery').map(message => message.text);
+    const noteOf = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'reminder').map(message => message.text);
     assert.deepEqual(noteOf(seen[0]!), []);
     assert.equal(noteOf(seen[1]!).length, 1);
     assert.match(noteOf(seen[1]!)[0]!, /plain text.*real tool call/);

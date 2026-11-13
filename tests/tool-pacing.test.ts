@@ -40,7 +40,7 @@ const toolNames = (request: ModelRequest) => request.tools.map(tool => tool.name
 const toolTexts = (request: ModelRequest) => request.messages.filter(message => message.role === 'tool').map(message => message.text);
 
 const polls = 9;
-const untouched = (request: ModelRequest) => !request.messages.some(message => message.role === 'context' && message.kind === 'recovery');
+const untouched = (request: ModelRequest) => !request.messages.some(message => message.role === 'context' && message.kind === 'reminder');
 
 test('a Director that keeps re-reading while a companion runs is left alone: tools run, no note is injected', async () => {
   const f = await director((_request, index) => index <= polls ? glob('poll-' + index) : reply('Waiting on Techne.', [finish]));
