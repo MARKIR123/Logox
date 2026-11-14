@@ -12,7 +12,9 @@ import {commandHelp} from '../commands.js';
 import type {Config} from '../config/config.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import type {ContextManager} from '../context/manager.js';
-import {usageRows} from '../context/usage.js';
+import {planUsageRows, sessionUsageRows, usageTotalRows, type UsagePageInput} from '../context/usage.js';
+import type {ActorCatalog} from '../actors/catalog.js';
+import {DIRECTOR_ID} from '../runtime/director-id.js';
 import type {ProjectExtensions} from '../extensions/runtime.js';
 import type {PermissionEngine} from '../permissions/engine.js';
 import type {ProviderRegistry} from '../providers/registry.js';
@@ -27,7 +29,8 @@ import {row} from './tab-rows.js';
 export interface CommandContextDeps {
   session: string; config: Config; state: SessionState;
   store: RuntimeStore; permissions: PermissionEngine; tools: Tools; statusbar: StatusbarPreferences; extensions: ProjectExtensions;
-  contexts: ContextManager; taskModels: TaskModels; status: Pick<SessionStatus, 'status' | 'sessionUsageRecords'>;
+  contexts: ContextManager; taskModels: TaskModels; status: Pick<SessionStatus, 'status' | 'sessionUsageRecords' | 'options'>;
+  actors: Pick<ActorCatalog, 'list' | 'find'>;
   providersPage: Pick<ProvidersPage, 'rows'>;
   /** The session selection (provider, model, base URL). */
   selection(): ReturnType<ProviderRegistry['selection']>;
@@ -51,6 +54,15 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
         : [row.field('Context in use', 'No history yet')]),
       row.field('Tokens (this window)', totals(usage?.window)), row.field('Tokens (session, all windows)', totals(usage?.session)),
       row.muted('Input excludes cache reads; cached counts cache reads. Includes task, summary, approval and Automa usage.')];
+  };
+  const opened = Date.now();
+  /** Everything the `/usage` tabs are built from: each actor's meter in roster order (Director first, then companions, then any other owner that spent), the session start and the subscription providers. */
+  const usageInput = (): UsagePageInput => {
+    const meters = contexts.sessionMeters(session), known = [DIRECTOR_ID, ...deps.actors.list().map(item => item.id).filter(id => id !== DIRECTOR_ID)];
+    const ids = [...known, ...[...meters.keys()].filter(id => !known.includes(id))];
+    const times = store.getSnapshot().messages.flatMap(message => message.time === undefined ? [] : [message.time]);
+    return {owners: ids.map(id => ({id, name: deps.actors.find(id)?.name ?? id, records: meters.get(id)?.usageRecords() ?? []})), config, now: Date.now(),
+      startedAt: Math.min(opened, ...times), subscriptions: status.options.subscriptions?.() ?? new Set<string>()};
   };
   return (): ApplicationCommandContext => {
     const settings = selection(), pageOwner = state.pageOwner;
@@ -125,12 +137,15 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
         ];
       })(),
       usageLines: [
-        row.field('Session', session + ' · Role: ' + pageOwner),
-        row.field('Total across session roles', status.sessionUsageRecords().reduce((sum, record) => sum + record.input + record.output, 0) + ' tokens (including approval)'),
+        row.field('Session', session),
+        ...usageTotalRows(status.sessionUsageRecords(), config),
         row.blank(),
-        row.rule('Breakdown'),
-        ...usageRows(contexts.meter({sessionId: session, ownerId: pageOwner}).usageRecords(), config),
+        row.muted('Details: /usage'),
       ],
+      usagePage: (() => {
+        const input = usageInput(), plan = planUsageRows({...input, selected: [status.status(pageOwner).model?.provider ?? ''].filter(Boolean)});
+        return {session: sessionUsageRows(input), ...(plan ? {plan} : {})};
+      })(),
       providersLines: providersPage.rows(),
       commandsLines: [...commandHelp().split('\n').map(line => row.text(line)), ...resources.snapshot().commands.map(item => row.text('/' + item.name + ': ' + item.description))],
     };

@@ -337,10 +337,11 @@ export async function createSessionApplication(options: SessionApplicationOption
   const providersPage = createProvidersPage({registry, modelPool, management: providers, signal: commands.signal, selection: modelSelection.current,
     isEnsembleBusy: () => ensemble.isBusy(), commandOwner: () => state.commandOwner, refreshPage: () => pages.refreshCurrentPage()});
   const buildContext = createCommandContext({session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels,
-    status: sessionStatus, providersPage, selection: modelSelection.current});
+    status: sessionStatus, actors, providersPage, selection: modelSelection.current});
   const pages = createPages({cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry,
     extensions, registry, modelPool, modelSelection, providersPage, status: sessionStatus, buildContext, profileReady});
-  const stopPageUpdates = store.subscribe(() => {if (pages.pageIsOpen()) pages.refreshCurrentPage();});
+  // Store changes and status bumps (usage recorded, subscriptions found) both refresh an open page, so `/usage` grows with the session.
+  const stopPageUpdates = sessionStatus.subscribe(() => {if (pages.pageIsOpen()) pages.refreshCurrentPage();});
   // `Notify when done`: a bell or OSC 9 notification when a stretch of work longer than 30 s ends (see `tui/terminal/notify.ts`).
   const roundNotifier = new RoundNotifier({sessionId: session, mode: () => uiSettings().notify, focused: terminalFocus,
     write: data => {if (process.stdout.isTTY) process.stdout.write(data);}});

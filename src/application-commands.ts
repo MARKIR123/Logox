@@ -21,7 +21,10 @@ export interface ApplicationCommandContext {
   readonly statusbarStatus?: StageStatus;
   readonly statusLines: readonly TabLine[];
   readonly configLines?: readonly TabLine[] | undefined;
+  /** The usage section of `/status`: the session total and a hint to `/usage`. */
   readonly usageLines: readonly TabLine[];
+  /** The `/usage` page: the Session tab, and the Plan tab only while a subscription provider is in use. */
+  readonly usagePage?: {readonly session: readonly TabLine[]; readonly plan?: readonly TabLine[] | undefined} | undefined;
   readonly providersLines: readonly TabLine[];
   readonly commandsLines: readonly TabLine[];
 }
@@ -69,7 +72,17 @@ export function createCommandTabsFor(
     };
   }
 
-  if (normalized === '/status' || normalized === '/usage') {
+  if (normalized === '/usage' || normalized === '/cost') {
+    const page = context.usagePage ?? {session: context.usageLines};
+    return {
+      title: 'Usage',
+      tabs: [{id: 'session', title: 'Session', ...tabContent(page.session)},
+        ...(page.plan ? [{id: 'plan', title: 'Plan', ...tabContent(page.plan)}] : [])],
+      initialTab: 'session',
+    };
+  }
+
+  if (normalized === '/status') {
     return {
       title: 'Status & Usage',
       tabs: [
@@ -89,7 +102,7 @@ export function createCommandTabsFor(
           ...tabContent(context.usageLines),
         },
       ],
-      initialTab: normalized === '/usage' ? 'usage' : 'status',
+      initialTab: 'status',
     };
   }
 

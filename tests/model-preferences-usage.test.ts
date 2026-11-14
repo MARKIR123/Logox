@@ -163,8 +163,8 @@ test('正式应用真实HTTP用量重启保留，模型切换不改旧归属，�
     assert.equal(requests, 1); assert.deepEqual(app.contexts.meter({sessionId: 'http-session', ownerId: 'logox'}).spent, {input: 12, output: 3, cacheRead: 4, cacheWrite: 0});
     await app.submit('/model second'); await app.close(); app = await f.app(await load(), 'http-session');
     await app.submit('/usage');
-    const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page'); assert.equal(page.initialTab, 'usage');
-    const lines = page.tabs.find(tab => tab.id === 'usage')!.lines.join('\n'); assert.match(lines, /local\/first/); assert.match(lines, /12 \/ 3/); assert.doesNotMatch(lines, /local\/second/); app.surfaces.cancel();
+    const page = app.surfaces.getSnapshot(); assert.ok(page?.kind === 'page'); assert.equal(page.initialTab, 'session');
+    const lines = page.tabs.find(tab => tab.id === 'session')!.lines.join('\n'); assert.match(lines, /local\/first/); assert.match(lines, /12 in \/ 3 out/); assert.doesNotMatch(lines, /local\/second/); app.surfaces.cancel();
     assert.equal(requests, 1, '恢复未重放请求');
     await app.close(); app = await f.app(await load(), 'new-session'); assert.equal(app.contexts.meter({sessionId: 'new-session', ownerId: 'logox'}).spent.input, 0);
     await app.submit('/config'); assert.match(configPage(app), /(?:模型：|Model: )second/); app.surfaces.cancel();

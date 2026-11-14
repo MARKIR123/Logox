@@ -58,9 +58,9 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
       await app.submit('/usage');
       const page = app.surfaces.getSnapshot();
       assert.ok(page?.kind === 'page');
-      const lines = page.tabs.find(item => item.id === 'usage')!.lines.join('\n');
-      assert.match(lines, /alpha\/my-worker · automa/);
-      assert.match(lines, /Input \/ output: 200 \/ 14 token/);
+      const lines = page.tabs.find(item => item.id === 'session')!.lines.join('\n');
+      assert.match(lines, /Dispatched by Logox: .*200 in \/ 14 out/);
+      assert.match(lines, /alpha\/my-worker: .*200 in \/ 14 out/);
       app.surfaces.cancel();
     } finally {await app.close();}
   } finally {await rm(cwd, {recursive: true, force: true});}

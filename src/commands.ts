@@ -12,6 +12,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'providers', usage: '/providers', description: 'Inspect connected providers, models, test latency, and refresh', argument: 'none'},
   {name: 'model', usage: '/model [actor]', description: 'Open model picker grouped by provider (defaults to active window, or specify an actor)', argument: 'model'},
   {name: 'status', usage: '/status', description: 'View model, usage, permissions, and session status', argument: 'none'},
+  {name: 'usage', usage: '/usage', description: 'Session cost and tokens per actor, model and category, plus plan limits (alias /cost)', argument: 'none'},
   {name: 'statusbar', usage: '/statusbar', description: 'Customize statusbar modules, order, style, and colors', argument: 'none'},
   {name: 'settings', usage: '/settings', description: 'Appearance, splash, conversation, status bar, permissions, models and shortcuts', argument: 'none'},
   {name: 'config', usage: '/config', description: 'Inspect effective model and execution configuration (read-only)', argument: 'none'},

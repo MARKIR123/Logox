@@ -71,7 +71,8 @@ test('createCommandTabsFor returns status and usage tabs for /status and /usage'
   assert.equal(statusResult.initialTab, 'status');
 
   const usageResult = createCommandTabsFor('/usage', mockContext())!;
-  assert.equal(usageResult.initialTab, 'usage');
+  assert.equal(usageResult.title, 'Usage');
+  assert.equal(usageResult.initialTab, 'session');
 });
 
 test('toggling permission mode updates dedicated single-tab surface without flashing monolithic tabs', async () => {

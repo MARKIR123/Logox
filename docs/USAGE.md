@@ -57,7 +57,8 @@
 
 - `/settings`：按分组列出外观、启动页和对话偏好，并可进入状态栏、权限、模型与价格、快捷键页面（`/animations` 是旧别名）。详见下文“设置页”。
 - `/config`：只读的生效配置，包括当前模型、思考档位、Base URL 和执行限制。
-- `/status`、`/usage`：运行状态与用量。
+- `/status`：运行状态；用量页签只显示会话总计，并提示 `Details: /usage`。
+- `/usage`（别名 `/cost`）：本会话的费用与用量明细，见下文“用量页”。
 
 需要固定参数时，参考 [config.example.toml](../config.example.toml)，放到用户级 `~/.logox/config.toml` 或项目级 `.logox/config.toml`。
 
@@ -414,6 +415,15 @@ playwright = false
 
 先安装带 Nerd Font 字形的等宽字体并在终端中选用，推荐 [Maple Mono NF CN](https://github.com/subframe7536/maple-font/releases)，也可以用任意 [Nerd Font](https://www.nerdfonts.com/font-downloads) 的 Mono 变体，例如 `JetBrainsMono NFM`。偏好保存在 `~/.logox/statusbar.json`，旧布局自动兼容。按键与布局细节见[终端操作](UI-SPEC.md)。
 
+## 用量页
+
+`/usage`（别名 `/cost`）把“本会话花了多少”和“套餐还剩多少”放在一页，页签可用鼠标点击，滚轮滚动；页面随用量增长自动刷新。
+
+- **Session 页签**（默认）：会话总计（费用、输入/输出/缓存读/缓存写 token、缓存命中率 = 缓存读 ÷ 输入、墙钟时间、请求数；有模型没有价格时费用标为 partial 并列出无价格模型），然后按角色顺序（Director、各伙伴）各一块，`Automa` 单独一块并归到派遣它的角色名下（用量本来就记在派遣者的计量器里，类别 `automa`；角色块不重复计入它），再是按模型和按类别（task / summary / approval / automa / keepalive，只列出现过的）。
+- **Plan 页签**：只在使用订阅账号（ChatGPT 账号、Copilot 等 OAuth 登录）时出现。LOGOX 目前不读取套餐额度或限流窗口，所以只显示本会话在该账号上的用量、API 等价费用估算，以及一行说明“额度与重置时间由该提供商未报告”，不编造数字。
+
+数字全部来自同一套用量与价格函数（`src/context/usage.ts`、`src/context/cost.ts`）。`/status` 的用量页签只显示会话总计和 `Details: /usage`。
+
 ## 全部斜杠命令
 
 输入 `/` 打开命令候选，↑/↓ 选择，Tab 补齐；`/help`（或 `/commands`）查看当前可用命令，包括自定义模板。
@@ -422,7 +432,7 @@ playwright = false
 |---|---|---|
 | 帮助与状态 | `/help`、`/commands` | 查看命令和快捷键 |
 | | `/status` | 查看模型、用量、权限和会话状态 |
-| | `/usage` | 直接打开用量页 |
+| | `/usage`、`/cost` | 打开用量页：会话总计、各角色、按模型与类别的费用和 token，订阅账号另有 Plan 页签 |
 | | `/doctor` | 检查环境、终端、浏览器、角色档案和凭据（与 `--doctor` 等价，结果面板按主题着色） |
 | | `/setup` | 重新打开首次设置向导 |
 | | `/name [称呼 \| --reset]` | 查看、设置或清除 Logox 对你的称呼（最多 32 个显示单元，立即生效；时间线用户标题显示该称呼而不是 `You`，模型在环境信息中得知并用它称呼你） |
