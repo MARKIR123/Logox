@@ -5,6 +5,14 @@ export const FALLBACK_CAPABILITIES: ProviderCapabilities = Object.freeze({toolDi
 // Exact official endpoint/model allowlist; unknown aliases and compatible proxies require an explicit assertion.
 // Source (checked 2026-10-26): https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 const anthropicModels = new Set(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-5-5', 'claude-sonnet-5-5']);
+/** The ChatGPT account route: an OAuth token on the official OpenAI endpoint (always streaming Responses with `store: false`). */
+export function isAccountRoute(settings: Pick<ModelSettings, 'baseUrl' | 'key'>): boolean {
+  return settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
+}
+/** Whether the ensemble snapshot is a stored ledger record (appended when its stable text changes) instead of a per-request tail message. */
+export function storesSnapshot(capabilities: Pick<ProviderCapabilities, 'appendOnlyHistory' | 'conversationCache'>): boolean {
+  return capabilities.appendOnlyHistory === true || capabilities.conversationCache === true;
+}
 export function resolveProviderCapabilities(settings: ModelSettings): ProviderCapabilities {
   const declared = settings.toolDiscovery ?? 'auto';
   if (declared === 'anthropic' && settings.kind !== 'anthropic') throw new Error('Anthropic tool discovery requires the Anthropic message protocol.');
@@ -22,5 +30,7 @@ export function resolveProviderCapabilities(settings: ModelSettings): ProviderCa
   const routed = settings.providerKind !== undefined && settings.providerKind !== settings.kind;
   const caching = settings.kind === 'anthropic' ? official || routed || declared === 'anthropic' ? 'anthropic' : 'none'
     : (settings.promptCacheKey ?? settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1') ? 'openai-key' : 'none';
-  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching};
+  // Measured on this route: only a request that purely appends to the previous one reads the whole history from cache; anything else reads just tools and instructions.
+  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}),
+    ...(settings.kind === 'openai_compat' && isAccountRoute(settings) ? {conversationCache: true} : {}), caching};
 }

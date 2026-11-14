@@ -1,4 +1,8 @@
 export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
+/** Stored when the ensemble snapshot becomes empty after an earlier record, so the history never keeps claiming work that is over. */
+export const ENSEMBLE_SNAPSHOT_EMPTY = '[Ensemble snapshot: no active ensemble work right now.]';
+/** The stored form of the snapshot carries no subtitles: it is a record of who holds which task and in what status. */
+export const DIRECTOR_FACTS_HEADER_STORED = '[Ensemble snapshot: who held which task and in what status when this was recorded, not task acceptance. Use ListActors for detail and ReadActor to see what an actor actually did.]';
 /** Opens every ledger entry that wakes or reaches the Director from coordination, so it is never read as the human speaking. */
 export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
 export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}

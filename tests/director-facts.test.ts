@@ -396,3 +396,123 @@ test('BorrowSkill is gone', () => {
   assert.ok(!builtinToolRegistrations().some(item => item.metadata.name === 'BorrowSkill'));
   assert.equal(canonicalToolName('borrow_skill'), undefined);
 });
+
+test('the stored snapshot form leaves out live detail and the live form keeps it', async () => {
+  const f = await fixture();
+  try {
+    f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig the pedals', ownedFiles: ['src/a.ts'],
+      progress: {label: 'Reading a'}, status: 'running', stage: 'Current operation', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
+    const stable = () => f.services.facts(context(), true), live = () => f.services.facts(context());
+    const first = stable();
+    assert.ok(first.includes('Rig the pedals') && !first.includes('subtitle') && !first.includes('Reading a'));
+    assert.ok(live().includes('Reading a'), 'the live form keeps the subtitle');
+    f.store.activities.update('s', 'child', {progress: {label: 'Reading b'}});
+    assert.equal(stable(), first, 'a new subtitle is not a change in the stored form');
+    assert.notEqual(live(), first);
+    f.store.activities.update('s', 'child', {status: 'waiting_input'});
+    assert.notEqual(stable(), first, 'a status change is');
+    f.store.message('s', 'techne', 'assistant', '', {activityId: 'child', kind: 'tool', step: {title: 'Edit · src/a.ts', callId: 'e1', state: 'running', elapsedMs: 0,
+      call: {id: 'e1', name: 'Edit', arguments: JSON.stringify({file_path: 'src/a.ts', old_string: 'a', new_string: 'b'})}}});
+    const roster = (stableForm: boolean) => f.services.facts(context('kalon-1', 'kalon'), stableForm);
+    assert.match(roster(false), /- techne \(waiting_input\): Rig the pedals · Reading b \| owns: src\/a\.ts \| files: src\/a\.ts \(edit\) \| running: Edit · src\/a\.ts/);
+    const kept = roster(true);
+    assert.match(kept, /- techne \(waiting_input\): Rig the pedals \| owns: src\/a\.ts$/m);
+    assert.ok(!kept.includes('Reading b') && !kept.includes('files:') && !kept.includes('running:'));
+  } finally {await f.close();}
+});
+
+test('the conversation-cache capability is set for an OAuth token on the official host only', () => {
+  const settings = {kind: 'openai_compat', baseUrl: 'https://api.openai.com/v1', model: 'm', key: 'oauth-token', temperature: 0, maxTokens: 1, timeoutMs: 1} as const;
+  const caps = (patch: object) => resolveProviderCapabilities({...settings, ...patch} as never);
+  assert.equal(caps({}).conversationCache, true);
+  assert.equal(caps({}).appendOnlyHistory, undefined, 'a separate flag: signed thinking and other projections are not involved');
+  assert.equal(caps({key: 'eyJhbGciOi.payload.sig', baseUrl: 'https://api.openai.com/v1/'}).conversationCache, true);
+  assert.equal(caps({key: 'sk-plain'}).conversationCache, undefined, 'an API key is not the account route');
+  assert.equal(caps({baseUrl: 'https://gateway.example/v1'}).conversationCache, undefined, 'nor is a gateway, whatever the key looks like');
+  assert.equal(caps({kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1'}).conversationCache, undefined);
+});
+
+async function snapshotRun(capabilities: Provider['capabilities'], snapshot: (step: number, context: ActorContext) => string | undefined) {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-test-conv-'));
+  const store = new RuntimeStore();
+  const requests: ModelRequest[] = [];
+  const glob = (id: string): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern: id})}]}, stop: 'tools'});
+  const turns: ModelTurn[] = [glob('g1'), glob('g2'), glob('g3'), glob('g4'),
+    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'}];
+  const provider: Provider = {...capabilities ? {capabilities} : {}, async respond(request, delta) {
+    requests.push(structuredClone(request));
+    const value = turns[requests.length - 1]!;
+    if (value.message.text) delta({kind: 'text', text: value.message.text});
+    return value;
+  }};
+  const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
+    requestBase: async (ctx: ActorContext) => {
+      const text = snapshot(requests.length, ctx);
+      return {...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, ...(text ? {snapshot: text} : {})};
+    }});
+  const ensemble = new EnsembleRuntime<string>('s', store, new Journal(join(directory, 'sessions')), execute, {handoff: async () => {}});
+  await ensemble.dispatch('logox', 'Go', 'direct').done;
+  const stored = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
+  const tail = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot').length;
+  const diverged = (index: number) => {
+    const same = (a: unknown, b: unknown) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+    const before = requests[index - 1]!.messages, after = requests[index]!.messages;
+    return before.findIndex((message, at) => !same(message, after[at]));
+  };
+  return {requests, stored, tail, diverged, async close() {await ensemble.close(); await rm(directory, {recursive: true, force: true});}};
+}
+const CONVERSATION: Provider['capabilities'] = {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'openai-key', conversationCache: true};
+
+test('with the conversation-cache capability a tool loop of unchanged ensemble facts is pure appends and the snapshot is stored once', async () => {
+  const f = await snapshotRun(CONVERSATION, () => 'techne running');
+  try {
+    assert.equal(f.requests.length, 5);
+    for (const request of f.requests) {
+      assert.equal(f.tail(request), 0, 'no tail snapshot');
+      assert.deepEqual(f.stored(request), ['techne running'], 'stored once, never repeated');
+    }
+    for (let index = 1; index < f.requests.length; index++) assert.equal(f.diverged(index), -1, 'request ' + index + ' is a pure append of the previous one');
+  } finally {await f.close();}
+});
+
+test('the conversation-cache snapshot is stored again only when its text changes, and live subtitle changes alone store nothing', async () => {
+  const f = await fixture();
+  try {
+    f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig',
+      progress: {label: 'step 0'}, status: 'running', stage: 'Current operation', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
+    const run = await snapshotRun(CONVERSATION, (step, ctx) => {
+      // The request base is built more than once per request; a finished activity takes no further update.
+      if (f.store.activities.get('s', 'child')?.status === 'running') f.store.activities.update('s', 'child', {progress: {label: 'step ' + step}});
+      if (step === 3 && f.store.activities.get('s', 'child')?.status === 'running') f.store.activities.update('s', 'child', {status: 'waiting_input'});
+      return f.services.facts(ctx, true);
+    });
+    try {
+      const last = run.stored(run.requests.at(-1)!);
+      assert.equal(run.requests.length, 5);
+      assert.equal(last.length, 2, 'running once, then the status change: ' + JSON.stringify(last));
+      assert.ok(last[0]!.includes('"running"') && last[1]!.includes('"waiting_input"'));
+      assert.ok(!last.join('').includes('step '), 'no subtitle ever reaches the ledger');
+      for (let index = 1; index < run.requests.length; index++) assert.equal(run.diverged(index), -1);
+    } finally {await run.close();}
+  } finally {await f.close();}
+});
+
+test('without the capability the snapshot still rides last on the request and is never stored', async () => {
+  let step = 0;
+  const f = await snapshotRun(undefined, () => 'state ' + ++step);
+  try {
+    for (const request of f.requests) {
+      assert.equal(f.tail(request), 1);
+      const last = request.messages.at(-1)!;
+      assert.equal(last.role === 'context' && last.kind, 'snapshot');
+      assert.deepEqual(f.stored(request), []);
+    }
+  } finally {await f.close();}
+});
+
+test('a stored snapshot that becomes empty is superseded once, so the history stops claiming work that is over', async () => {
+  const f = await snapshotRun(CONVERSATION, step => step < 2 ? 'techne running' : undefined);
+  try {
+    assert.deepEqual(f.stored(f.requests.at(-1)!), ['techne running', '[Ensemble snapshot: no active ensemble work right now.]']);
+  } finally {await f.close();}
+});

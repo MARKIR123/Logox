@@ -224,7 +224,7 @@ export class PermissionEngine {
     const outsideRoot = (path: string) => {const rest = relative(this.root, path); return rest === '..' || rest.startsWith('..' + sep) || isAbsolute(rest);};
     const outside = target.paths.filter(path => isAbsolute(path) && outsideRoot(path));
     if (!outside.length || !outside.every(path => isScratchpadPath(path, this.scratchpadDir!))) return true;
-    return target.paths.some(path => riskyPath(path, target.effect));
+    return target.paths.some(path => riskyPath(path, target.effect, this.root));
   }
   evaluate(target: PermissionTarget): {decision: 'allow' | 'deny' | 'ask' | 'review'; reason: string} {
     const shell = target.command === undefined ? undefined : shellWords(target.command);

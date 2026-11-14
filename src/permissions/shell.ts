@@ -42,10 +42,12 @@ export function shellImpact(command: string, depth = 0, root?: string): ShellImp
     const original = shellWords(segment).words, lower = original.map(word => word.toLowerCase().replaceAll('\\', '/'));
     const name = executable(lower[0] ?? '');
     const args = lower.slice(1);
-    if (['remove-item', 'ri', 'rm', 'del', 'erase', 'rd', 'rmdir', 'clear-content', 'set-content', 'add-content', 'out-file', 'sc', 'ac', 'tee', 'mv', 'move-item', 'rename-item', 'copy-item', 'cp', 'chmod', 'chown'].includes(name) && args.some(runtimePath)) {
+    // The project's own bulletin is exempt by exact path, so that comparison uses the words as typed (lowercasing would match other spellings on case-sensitive systems).
+    const runtimeArgs = original.slice(1);
+    if (['remove-item', 'ri', 'rm', 'del', 'erase', 'rd', 'rmdir', 'clear-content', 'set-content', 'add-content', 'out-file', 'sc', 'ac', 'tee', 'mv', 'move-item', 'rename-item', 'copy-item', 'cp', 'chmod', 'chown'].includes(name) && runtimeArgs.some(arg => runtimePath(arg, root))) {
       return {kind: 'danger', reason: 'Modifies or deletes runtime state and history records'};
     }
-    if (/[>]/.test(segment) && args.some(runtimePath)) return {kind: 'danger', reason: 'Redirect writes to runtime state or history records'};
+    if (/[>]/.test(segment) && runtimeArgs.some(arg => runtimePath(arg, root))) return {kind: 'danger', reason: 'Redirect writes to runtime state or history records'};
     if (/^(bcdedit|format|mkfs(?:\..*)?|shutdown)$/.test(name)) return {kind: 'forbidden', reason: 'Self-destructing system commands are forbidden'};
     if (depth < 3 && ['powershell', 'pwsh', 'cmd', 'bash', 'sh'].includes(name)) {
       const at = lower.findIndex(word => ['-command', '-c', '/c'].includes(word));

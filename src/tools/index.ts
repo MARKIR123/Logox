@@ -433,7 +433,7 @@ export class Tools {
     };
     await visit(raw);
     const root = await realpath(this.cwd);
-    const danger = paths.flatMap(item => [item.original, item.canonical]).map(path => pathDanger(path, effect)).find(Boolean);
+    const danger = paths.flatMap(item => [item.original, item.canonical]).map(path => pathDanger(path, effect, [this.cwd, root])).find(Boolean);
     const target: PermissionTarget = {
       tool: call.name,
       paths: paths.flatMap(item => [
@@ -443,7 +443,7 @@ export class Tools {
         relative(this.cwd, item.canonical).replaceAll('\\', '/'),
       ]),
       effect,
-      risky: paths.some(item => !inside(root, item.canonical) || riskyPath(item.original, effect) || riskyPath(item.canonical, effect)),
+      risky: paths.some(item => !inside(root, item.canonical) || riskyPath(item.original, effect, [this.cwd, root]) || riskyPath(item.canonical, effect, [this.cwd, root])),
       ...(danger ? {danger} : {}),
       ...(raw && typeof raw === 'object' && 'command' in raw && typeof raw.command === 'string' ? {command: raw.command} : {}),
     };
@@ -546,7 +546,7 @@ export class Tools {
         ? 'read'
         : ['Write', 'Edit'].includes(name) ? 'write' : 'unknown';
       const targets = [originalPath, path, ...shellPaths.flatMap(item => [item.original, item.canonical])];
-      const danger = targets.map(p => pathDanger(p, effect)).find(Boolean);
+      const danger = targets.map(p => pathDanger(p, effect, [this.cwd, root])).find(Boolean);
       const targetTool = name.toLowerCase();
       const target: PermissionTarget = {
         tool: targetTool,
@@ -563,7 +563,7 @@ export class Tools {
             relative(root, item.canonical).replaceAll('\\', '/'),
           ]),
         ],
-        risky: !inside(root, path) || targets.some(p => riskyPath(p, effect)) || shellPaths.some(item => !inside(root, item.canonical)),
+        risky: !inside(root, path) || targets.some(p => riskyPath(p, effect, [this.cwd, root])) || shellPaths.some(item => !inside(root, item.canonical)),
         ...(danger ? {danger} : {}),
         ...(name === 'Shell' ? {command: schemas.Shell.parse(parsed).command} : {}),
       };

@@ -9,6 +9,24 @@ import type {AgentRun} from './run.js';
 /** A drafting update reaches the store when the call grew by this many characters or this many milliseconds passed (or its tool or target changed). */
 const DRAFT_CHARS_STEP = 1024, DRAFT_MS_STEP = 250;
 
+/** Longest single wait a gateway's own cooldown hint may impose, jitter included. */
+export const MAX_HINTED_WAIT_MS = 120_000;
+/** Spread added on top of a stated cooldown so concurrent actors do not return at the same instant. */
+const HINT_JITTER_MS = 500;
+/**
+ * How long to wait before retry number `attempt + 1`. The normal schedule is 500 ms doubling up to 30 s; a temporary error that states its own wait
+ * (`Retry-After`, or text like "Cooldown wait 27s", read into `diagnostic.retryAfterMs` by `providerFailure()`) waits at least that long plus a little
+ * jitter, never less than the schedule and never more than `MAX_HINTED_WAIT_MS`. `hintedMs` is set only when the hint decides the wait.
+ */
+export function retryDelay(error: unknown, attempt: number, random = Math.random): {readonly ms: number; readonly hintedMs: number | undefined} {
+  const backoff = Math.min(30_000, 500 * 2 ** attempt);
+  const stated = error instanceof ProviderError ? error.diagnostic?.retryAfterMs : undefined;
+  if (stated === undefined || !(stated > backoff)) return {ms: backoff, hintedMs: undefined};
+  const hinted = Math.min(MAX_HINTED_WAIT_MS, stated);
+  return {ms: Math.min(MAX_HINTED_WAIT_MS, hinted + Math.floor(random() * HINT_JITTER_MS)), hintedMs: hinted};
+}
+const retryIn = (hintedMs: number | undefined) => hintedMs === undefined ? '' : ' in ' + Math.ceil(hintedMs / 1000) + 's';
+
 /** What one request came to: a turn, or an instruction to the loop. */
 export type ModelTurnResult =
   | {readonly kind: 'turn'; readonly turn: ModelTurn; readonly request: ModelRequest; readonly thinkingId: string; readonly textId: string | undefined;
@@ -113,18 +131,20 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
         // A failed attempt is kept for history reading only. Retries reuse the original request and never splice partial replies or run half-received tool arguments.
         if (emitted) await run.context.record({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), contextExcluded: true}, step);
         thinkingId = steps.thinking(); textId = undefined; emitted = false;
-        run.context.report('Network retry', 'Connection interrupted. Retrying (' + (attempt + 1) + '/' + options.retries + ')...');
+        const wait = retryDelay(error, attempt);
+        run.context.report('Network retry', 'Connection interrupted. Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
         const resume = steps.wait(thinkingId, 'Waiting for retry');
-        try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: run.context.signal});} finally {resume();}
+        try {await delay(wait.ms, undefined, {signal: run.context.signal});} finally {resume();}
         // Aligned with Claude Code: after a long streaming connection is reset by a proxy or intermediate gateway, retries downgrade to non-streaming requests to avoid long-stream timeouts entirely
         request = {...request, stream: false};
         continue;
       }
       if (retry) {
+        const wait = retryDelay(error, attempt);
         run.context.report('Network retry', '[Network] Service unavailable' + (error instanceof ProviderError && error.diagnostic?.status ? ' (HTTP ' + error.diagnostic.status + ')' : '') +
-          '. Retrying (' + (attempt + 1) + '/' + options.retries + ')...');
+          '. Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
         const resume = steps.wait(thinkingId, 'Waiting for retry');
-        try {await delay(Math.min(30_000, 500 * 2 ** attempt), undefined, {signal: run.context.signal});} finally {resume();}
+        try {await delay(wait.ms, undefined, {signal: run.context.signal});} finally {resume();}
         continue;
       }
       // Already displayed increments are saved too, so the next round can see output from before the interruption.

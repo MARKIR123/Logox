@@ -44,7 +44,7 @@ import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActo
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
 import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
-import {DIRECTOR_FACTS_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
+import {DIRECTOR_FACTS_HEADER, DIRECTOR_FACTS_HEADER_STORED, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
 import {dispatchedResult, endedBatchResult, resumedBatchResult} from '../tools/orchestration/ActorTool/prompt.js';
@@ -193,12 +193,13 @@ export class ActorServices {
     }
     return definition;
   }
-  facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
+  /** The ensemble snapshot text. `stable` is the form stored in the ledger: no live subtitle, recent files or running tool, so it changes only when who does what changes. */
+  facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>, stable = false): string {
     const snapshot = this.options.getSnapshot?.();
     if (!snapshot) return '';
-    if (!isDirector(context.ownerId)) return activeEnsembleRoster(snapshot, context);
-    const facts = directorFacts(snapshot, context, this.deliveries.snapshot());
-    return facts ? DIRECTOR_FACTS_HEADER + '\n' + JSON.stringify(facts) : '';
+    if (!isDirector(context.ownerId)) return activeEnsembleRoster(snapshot, context, stable);
+    const facts = directorFacts(snapshot, context, this.deliveries.snapshot(), stable);
+    return facts ? (stable ? DIRECTOR_FACTS_HEADER_STORED : DIRECTOR_FACTS_HEADER) + '\n' + JSON.stringify(facts) : '';
   }
   policy(ownerId: string) {
     const role = this.active.get(ownerId) ?? this.options.catalog.find(ownerId);

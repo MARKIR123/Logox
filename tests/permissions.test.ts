@@ -10,7 +10,9 @@ import {join} from 'node:path';
 
 import {PermissionEngine, shellWords} from '../src/permissions/engine.js';
 
-import {pathDanger} from '../src/permissions/paths.js';
+import {RUNTIME_WRITE_DANGER, pathDanger, riskyPath, searchablePath, searchExclusions} from '../src/permissions/paths.js';
+
+import {shellImpact} from '../src/permissions/shell.js';
 
 import {createTestApplication as createApplication, finalizingProvider} from './runtime-fixture.js';
 
@@ -125,6 +127,83 @@ test('creative 允许写入运行目录，凭据与版本库仍阻止', async ()
 
   } finally {await rm(cwd, {recursive: true, force: true});}
 
+});
+
+test('exactly <project>/.logox/bulletin.md is an ordinary project file for path risk, in every mode', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-bulletin-'));
+  try {
+    const decide = (mode: 'default' | 'auto' | 'creative', path: string, effect: 'read' | 'write' = 'write') => {
+      const danger = pathDanger(path, effect, cwd);
+      return new PermissionEngine(cwd, mode).evaluate({tool: effect === 'read' ? 'read' : 'write', paths: [path], effect, risky: riskyPath(path, effect, cwd), ...(danger ? {danger} : {})}).decision;
+    };
+    const bulletin = join(cwd, '.logox', 'bulletin.md'), plain = join(cwd, 'docs', 'note.md');
+    assert.equal(pathDanger(bulletin, 'write', cwd), undefined);
+    assert.equal(riskyPath(bulletin, 'write', cwd), false);
+    assert.equal(pathDanger(join(cwd, '.logox', '..', '.logox', 'bulletin.md'), 'write', [cwd]), undefined, 'a normalized spelling of the same file');
+    assert.equal(pathDanger('.logox/bulletin.md', 'write', cwd), undefined, 'the workspace-relative twin');
+    for (const mode of ['default', 'auto', 'creative'] as const) {
+      assert.equal(decide(mode, bulletin), decide(mode, plain), mode + ': a write follows the rules of any project file');
+      assert.equal(decide(mode, bulletin, 'read'), decide(mode, plain, 'read'), mode + ': a read too');
+    }
+    assert.equal(decide('auto', bulletin), 'allow');
+    // Without a known project the whole tree stays protected.
+    assert.equal(pathDanger(bulletin, 'write'), RUNTIME_WRITE_DANGER);
+    assert.equal(new PermissionEngine(cwd, 'auto').evaluate({tool: 'write', paths: [bulletin], effect: 'write', risky: true, danger: RUNTIME_WRITE_DANGER}).decision, 'ask');
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
+test('the bulletin exemption is exact: everything else under .logox, other locations and the user-level file stay protected', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-bulletin-narrow-')), home = await mkdtemp(join(tmpdir(), 'logox-bulletin-home-'));
+  try {
+    const protectedPaths = [
+      join(cwd, '.logox', 'permissions.json'), join(cwd, '.logox', 'actors', 'x.md'), join(cwd, '.logox', 'bulletin.md.bak'),
+      join(cwd, '.logox', 'sub', 'bulletin.md'), join(cwd, 'sub', '.logox', 'bulletin.md'), join(cwd, '.logox-ts', 'bulletin.md'),
+      join(home, '.logox', 'bulletin.md'), join(cwd, '..', 'sibling', '.logox', 'bulletin.md'),
+    ];
+    for (const path of protectedPaths) {
+      assert.equal(pathDanger(path, 'write', cwd), RUNTIME_WRITE_DANGER, path);
+      assert.equal(riskyPath(path, 'write', cwd), true, path);
+      assert.equal(new PermissionEngine(cwd, 'auto').evaluate({tool: 'write', paths: [path], effect: 'write', risky: true, danger: pathDanger(path, 'write', cwd)!}).decision, 'ask', path);
+    }
+    // The shell checks agree: redirecting into or removing other runtime files is still a danger, the project's bulletin is not.
+    assert.notEqual(shellImpact('echo note >> .logox/bulletin.md', 0, cwd).kind, 'danger');
+    assert.notEqual(shellImpact('cp draft.md .logox/bulletin.md', 0, cwd).kind, 'danger');
+    for (const command of ['echo x >> .logox/permissions.json', 'echo x >> sub/.logox/bulletin.md', 'echo x >> ' + join(home, '.logox', 'bulletin.md').replaceAll('\\', '/'), 'rm .logox/actors/x.md']) {
+      assert.equal(shellImpact(command, 0, cwd).kind, 'danger', command);
+    }
+    assert.equal(shellImpact('echo x >> .logox/bulletin.md').kind, 'danger', 'no project root, no exemption');
+    // Glob and Grep keep hiding the runtime tree; the exclusion list is unchanged.
+    assert.ok(searchExclusions(false).includes('**/.logox/**'));
+    assert.equal(searchablePath(join(cwd, '.logox', 'bulletin.md'), false), false);
+  } finally {await rm(cwd, {recursive: true, force: true}); await rm(home, {recursive: true, force: true});}
+});
+
+test('real tools: the project bulletin needs no approval in auto mode, other runtime files and symlinked routes still ask', async () => {
+  const f = await fixture(), elsewhere = await mkdtemp(join(tmpdir(), 'logox-bulletin-elsewhere-'));
+  try {
+    f.permissions.mode = 'auto';
+    await mkdir(join(f.cwd, '.logox'));
+    const written = await f.tools.execute(call('write', {file_path: '.logox/bulletin.md', content: 'first note\n'}), f.context);
+    assert.equal(written.isError, false, written.text);
+    assert.equal(await readFile(join(f.cwd, '.logox', 'bulletin.md'), 'utf8'), 'first note\n');
+    assert.deepEqual(f.requests, [], 'no approval prompt');
+    assert.equal((await f.tools.execute(call('read', {file_path: '.logox/bulletin.md'}), f.context)).isError, false);
+    assert.equal((await f.tools.execute(call('edit', {file_path: '.logox/bulletin.md', old_string: 'first', new_string: 'second'}), f.context)).isError, false);
+    assert.deepEqual(f.requests, []);
+    await f.tools.execute(call('write', {file_path: '.logox/other.md', content: 'x'}), f.context);
+    assert.deepEqual(f.requests, ['write'], 'any other file in the runtime tree still asks');
+    // A directory link that routes the bulletin path elsewhere is judged by where it really points.
+    await symlink(join(f.cwd, '.logox'), join(f.cwd, 'notes'), 'junction');
+    f.requests.length = 0;
+    await f.tools.execute(call('write', {file_path: 'notes/permissions.json', content: '{}'}), f.context);
+    assert.deepEqual(f.requests, ['write'], 'a link to another runtime file is that file');
+    await rm(join(f.cwd, '.logox'), {recursive: true, force: true});
+    await symlink(elsewhere, join(f.cwd, '.logox'), 'junction');
+    f.permissions.mode = 'default';
+    f.requests.length = 0;
+    await f.tools.execute(call('write', {file_path: '.logox/bulletin.md', content: 'x'}), f.context);
+    assert.deepEqual(f.requests, ['write'], 'a bulletin path that really leads outside the project asks');
+  } finally {await f.close(); await rm(elsewhere, {recursive: true, force: true});}
 });
 
 test('项目规则持久、撤销、项目身份隔离与保存失败不生效', async () => {

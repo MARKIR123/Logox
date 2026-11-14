@@ -61,7 +61,7 @@ function activityLive(activity: RuntimeSnapshot['activities'][number], activityM
 }
 /** The retry counter the agent loop reports as `Connection interrupted. Retrying (1/5)...`. */
 function retryLabel(detail: string): string {
-  const counter = /Retrying \((\d+)\/(\d+)\)/i.exec(detail) ?? /retrying \((\d+)\)/i.exec(detail);
+  const counter = /Retrying(?: in \d+s)? \((\d+)\/(\d+)\)/i.exec(detail) ?? /retrying \((\d+)\)/i.exec(detail);
   return counter ? `Retrying (${counter[1]}${counter[2] ? '/' + counter[2] : ''})` : 'Retrying';
 }
 function activityStatus(activity: RuntimeSnapshot['activities'][number]): string {

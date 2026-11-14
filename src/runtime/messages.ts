@@ -45,6 +45,8 @@ export interface ProviderCapabilities {
   caching: 'none' | 'anthropic' | 'automatic' | 'openai-key';
   /** The API binds replayed thinking to the exact earlier messages, so nothing sent before may be removed. */
   appendOnlyHistory?: boolean;
+  /** The route caches the previous request as a whole conversation, not arbitrary prefixes: a request that is not a pure append reads almost nothing. */
+  conversationCache?: boolean;
 }
 export interface ModelRequest {
   system: string;

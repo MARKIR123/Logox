@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import type {ModelSettings} from '../config/config.js';
 import type {Delta, ModelMessage, ModelRequest, ModelTurn, Provider, ProviderCapabilities, ToolCall, ToolDefinition} from '../runtime/messages.js';
 import {runtimeContextText} from '../runtime/context-updates.js';
-import {resolveProviderCapabilities} from './capabilities.js';
+import {isAccountRoute, resolveProviderCapabilities} from './capabilities.js';
 import {encodeAnthropicTools, encodeAnthropicContext} from './disclosure/anthropic.js';
 import {anthropicRetention, cacheControl, cacheLifetimeMs, openAiRetentionFields, SHORT_CACHE_MS, type CacheRetention} from './cache.js';
 import {dumpRequestBody} from './dump.js';
@@ -52,6 +52,16 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   if (/^\d+(?:\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000);
   const at = Date.parse(text);
   return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+const WAIT_UNIT_MS: Record<string, number> = {ms: 1, s: 1000, m: 60_000};
+const waitUnit = (unit: string) => WAIT_UNIT_MS[/^m(?:s|illisecond)/i.test(unit) ? 'ms' : /^m/i.test(unit) ? 'm' : 's']!;
+const WAIT_HINT = /\b(?:wait|retry(?:ing)?\s+(?:again\s+)?(?:after|in)|try\s+again\s+(?:after|in)|cooldown[^.\n\d]{0,40}?)\s*(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m)\b/i;
+/** A wait a gateway states in its error text (`wait 27s`, `retry after 27 seconds`, `cooldown ... 27s`), in milliseconds; undefined when the text states none. */
+export function waitHintMs(text: string | undefined): number | undefined {
+  const match = text ? WAIT_HINT.exec(text) : null;
+  if (!match) return undefined;
+  const value = Number(match[1]) * waitUnit(match[2]!);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
 }
 export function providerTimeout(): ProviderError {
   return new ProviderError('Model request timed out', true, 'temporary', {status: 408, code: 'idle_timeout'});
@@ -153,11 +163,14 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   if (['authentication_error', 'permission_error'].includes(code ?? '')) return new ProviderError('Model authentication or permission unavailable', false, 'authentication');
   if (['model_not_found', 'model_not_exist', 'model_not_available'].includes(code ?? '')) return new ProviderError('Selected model does not exist or is unavailable', false, 'model_missing');
   const rateLimited = status === 429 || status === 529 || rateLimitCodes.includes(code ?? '');
+  // The wait a temporary failure asks for: the `Retry-After` header first, else a conservative statement in the error text ("Cooldown wait 27s").
+  const hint = retryAfterMs ?? waitHintMs(parsed.success ? parsed.data.error?.message : undefined) ?? waitHintMs(response?.body);
+  const wait = hint !== undefined ? {retryAfterMs: hint} : {};
   if (rateLimited) {
     return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status,
-      ...(code && rateLimitCodes.includes(code) ? {code} : {}), ...(retryAfterMs !== undefined ? {retryAfterMs} : {}), ...evidence});
+      ...(code && rateLimitCodes.includes(code) ? {code} : {}), ...wait, ...evidence});
   }
-  if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status, ...evidence});
+  if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status, ...wait, ...evidence});
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
   const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
     : /too many (?:images|media)|(?:images?|media).{0,60}(?:exceed|too many|maximum|at most|limit)|(?:exceed|maximum|more than|at most).{0,60}images?/i.test(text) ? 'too_many_images'
@@ -475,8 +488,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
   }, async respond(request, onDelta, signal) {
     if (!settings.model) throw new ProviderError('No model configured; use /model <name> or --model <name>');
     const native = settings.kind === 'anthropic';
-    const oauthResponses = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' &&
-      (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
+    const oauthResponses = isAccountRoute(settings);
     const officialOpenAI = settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1';
     const isResponsesApi = !native && (oauthResponses || settings.api === 'responses' || capabilities.toolDiscovery === 'openai-responses');
     const url = settings.baseUrl.replace(/\/$/, '') + (native ? '/messages' : isResponsesApi ? '/responses' : '/chat/completions');

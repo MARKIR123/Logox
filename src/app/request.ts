@@ -21,7 +21,7 @@ import {CacheKeeper} from '../kernel/cache-keepalive.js';
 import {getActorScratchpadDir, ensureActorScratchpadDir} from '../kernel/scratchpad.js';
 import type {PermissionEngine} from '../permissions/engine.js';
 import {certainToWake, openWork} from '../actors/facts.js';
-import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
+import {FALLBACK_CAPABILITIES, storesSnapshot} from '../providers/capabilities.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION, TOOLS_RESTRICTED_RESULT} from '../prompts/runtime/environment.js';
@@ -109,7 +109,8 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     const pending = directorReports.get(context.activityId);
     await actorServices.flush();
-    const facts = actorServices.facts(context);
+    // Where the snapshot is stored in the ledger it must not change with every step of an actor.
+    const facts = actorServices.facts(context, storesSnapshot(assembly.capabilities));
     for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : '']] as const) {
       const previous = history.findLast(message => message.role === 'context' && message.kind === 'task-state' &&
         message.data?.slot === slot && message.data?.activityId === context.activityId);
