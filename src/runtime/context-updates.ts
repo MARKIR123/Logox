@@ -8,7 +8,7 @@ export const executionEnvironmentSchema = z.strictObject({
 export type ExecutionEnvironment = z.infer<typeof executionEnvironmentSchema>;
 export const runtimeContextMessageSchema = z.strictObject({
   role: z.literal('context'),
-  // `snapshot` is legacy: it was once sent last on one request and never stored. The ensemble state is now a stored `task-state` message with slot `ensemble`; the kind stays so old ledgers parse.
+  // `snapshot` describes this moment only: it is sent last on one request and never stored in the ledger.
   kind: z.enum(['environment-baseline', 'environment-change', 'capability-change', 'task-state', 'reminder', 'recovery', 'finalizer', 'ledger', 'snapshot', 'interruption']),
   text: z.string(),
   data: z.record(z.string(), z.unknown()).optional(),

@@ -81,6 +81,47 @@ test('a changed tool list or system block breaks the prefix at the very start', 
   });
 });
 
+test('a break near the tail does not explain a near-zero read: the miss is classified as if the prefix had been kept', async () => {
+  const big = (hash: string, label: string) => block(hash, label, 3000);
+  const rows = [
+    request('a', 0, [big('h1', 'user'), big('h2', 'assistant'), big('h3', 'tool:Read')]), result('a', 0, 9400, 9000),
+    // the last block of the previous request changed; only 100 tokens follow it, yet the provider read nothing
+    request('b', 10, [big('h1', 'user'), big('h2', 'assistant'), big('h3x', 'context:snapshot'), block('h4', 'assistant')]), result('b', 10, 9500, 0),
+    // the break sits at the very front: most of the prompt lies after it
+    request('c', 20, [big('h1y', 'user'), big('h2', 'assistant'), big('h3x', 'context:snapshot'), block('h4', 'assistant'), block('h5', 'user')]), result('c', 20, 9600, 0),
+  ];
+  await withSession(rows, async dir => {
+    const pairs = analysis.analyzeSession(dir)!['techne']!.pairs;
+    const [tail, head] = pairs;
+    assert.equal(tail!.pure, false);
+    assert.deepEqual(tail!.firstDiff, {index: 4, label: 'msg#2 tool:Read -> msg#2 context:snapshot'}, 'the break is still reported');
+    assert.equal(tail!.class, 'unexplained');
+    assert.equal(head!.class, 'prefix changed');
+    const text = analysis.renderReport(analysis.analyzeSession(dir)!, {all: true});
+    assert.match(text, /block 4 msg#2 tool:Read -> msg#2 context:snapshot\s+\d+\s+0%\s+unexplained/);
+  });
+});
+
+test('a non-zero read far below the kept prefix is annotated, in the table and in --json', async () => {
+  const big = (hash: string, label: string) => block(hash, label, 3000);
+  const rows = [
+    request('a', 0, [big('h1', 'user')]), result('a', 0, 3500, 0),
+    request('b', 10, [big('h1', 'user'), big('h2', 'assistant'), big('h3', 'tool:Read')]), result('b', 10, 9500, 1000),
+    request('c', 20, [big('h1', 'user'), big('h2', 'assistant'), big('h3', 'tool:Read'), big('h4', 'assistant')]), result('c', 20, 12600, 9000),
+  ];
+  await withSession(rows, async (dir, root) => {
+    const pairs = analysis.analyzeSession(dir)!['techne']!.pairs;
+    assert.equal((pairs[0] as Pair & {readStopsAt: number | null}).readStopsAt, 1000);
+    assert.equal((pairs[1] as Pair & {readStopsAt: number | null}).readStopsAt, null, 'a read close to the kept prefix is not annotated');
+    const text = capture(() => report.main([dir]));
+    assert.match(text.text, /read stops at ~1000 tok/);
+    assert.ok(!/read stops at ~9000/.test(text.text));
+    const json = JSON.parse(capture(() => report.main([join(root, 'proj', '.logox'), '--json'])).text) as {actors: Record<string, {pairs: {readStopsAt: number | null; keptTokens: number}[]}>};
+    assert.equal(json.actors['techne']!.pairs[0]!.readStopsAt, 1000);
+    assert.equal(json.actors['techne']!.pairs[0]!.keptTokens, 3300, 'tools 100 + system 200 + one 3000-token block');
+  });
+});
+
 test('small prompts, failed requests, keep-alives and missing usage are never counted as misses', async () => {
   const rows = [
     request('a', 0, [block('h1', 'user')]), result('a', 0, 600, 0),

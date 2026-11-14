@@ -6,15 +6,23 @@
 //   Pair         Two consecutive requests of one actor whose purpose is `task` (a failed request, one with an error result, is skipped).
 //   Pure append  The later request starts with every block of the earlier one, so a provider prompt cache can extend the entry.
 //   Miss         A request whose usage reports cacheRead below 5% of input while input is at least 1024 tokens (smaller prompts are not cached).
-//   Miss class   prefix changed: the pair is not a pure append (the first differing block is named).
-//                fields changed: pure append, but a cache-relevant request field differs (model, protocol, thinking, retention, ttl, cache key, discovery).
-//                idle: pure append, same fields, and the gap since the previous request of any purpose is longer than that request's recorded cache lifetime.
-//                unexplained: pure append, same fields, short gap: the provider dropped the entry.
+//   Miss class   prefix changed: the pair is not a pure append AND the estimated tokens before the first differing block are under half of the
+//                request's input tokens (most of the prompt lies after the break). A break near the tail cannot explain a near-zero read.
+//                Otherwise the miss is classified as if the prefix had been kept (the break still shows in the "first difference" column):
+//                fields changed: a cache-relevant request field differs (model, protocol, thinking, retention, ttl, cache key, discovery).
+//                idle: same fields, and the gap since the previous request of any purpose is longer than that request's recorded cache lifetime.
+//                unexplained: same fields, short gap: the provider dropped the entry.
+//   Read stops   `read stops at ~N tok`: the cache read is non-zero but under half of the estimated kept prefix (at least 1024 tokens). A read that
+//                stays constant while the kept prefix grows points at the provider, not at LOGOX.
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 export const MISS_RATIO = 0.05;
 export const MIN_CACHED_INPUT = 1024;
+/** A break explains a miss only if the estimated tokens before it are below this share of the request's input tokens. */
+export const BREAK_EXPLAINS_BELOW = 0.5;
+/** A non-zero cache read below this share of the kept prefix is annotated `read stops at ~N tok`. */
+export const READ_STOPS_RATIO = 0.5;
 const SUFFIX = '.fingerprints.jsonl';
 /** Request fields compared between a pair; `maxTokens` and `stream` are recorded but never change a cache entry (a budget derived from them shows up in `thinking`). */
 const CACHE_FIELDS = ['thinking', 'retention', 'ttlMs', 'cacheKey', 'discovery'];
@@ -63,12 +71,13 @@ export function comparePrefix(previous, current) {
   while (kept < a.length && kept < b.length && a[kept].key === b[kept].key) kept++;
   const pure = kept === a.length;
   const tokensAfter = b.slice(kept).reduce((total, block) => total + block.tokens, 0);
+  const keptTokens = b.slice(0, kept).reduce((total, block) => total + block.tokens, 0);
   let firstDiff = null;
   if (!pure) {
     const before = a[kept].label, after = b[kept]?.label;
     firstDiff = {index: kept, label: after === undefined ? 'truncated, dropped ' + before : before === after ? after : before + ' -> ' + after};
   }
-  return {kept, total: a.length, pure, firstDiff, tokensAfter};
+  return {kept, total: a.length, pure, firstDiff, tokensAfter, keptTokens};
 }
 
 const changedFields = (previous, current) => {
@@ -95,12 +104,16 @@ export function analyzeActor(requests) {
     const compared = comparePrefix(previous, current);
     const usage = usageOf(current);
     const row = {id: current.id, time: current.time, activityId: current.activityId, purpose: current.purpose, ...compared,
-      input: usage?.input ?? null, cacheRead: usage?.cacheRead ?? null, miss: isMiss(current), class: null, detail: null};
+      input: usage?.input ?? null, cacheRead: usage?.cacheRead ?? null, miss: isMiss(current), class: null, detail: null, readStopsAt: null};
+    // A non-zero read far below the kept prefix: the provider stopped reading there although LOGOX kept those bytes.
+    if (row.cacheRead && compared.keptTokens >= MIN_CACHED_INPUT && row.cacheRead < compared.keptTokens * READ_STOPS_RATIO) row.readStopsAt = row.cacheRead;
     if (row.miss) {
       const fields = changedFields(previous, current);
       const earlier = ok[ok.indexOf(current) - 1] ?? previous;
       const gap = current.time - earlier.time, lifetime = earlier.fields?.ttlMs;
-      if (!compared.pure) {row.class = 'prefix changed'; row.detail = 'block ' + compared.firstDiff.index;}
+      // A break explains a miss only when most of the prompt lies after it; a break near the tail leaves the prefix cacheable.
+      const breaks = !compared.pure && compared.keptTokens < row.input * BREAK_EXPLAINS_BELOW;
+      if (breaks) {row.class = 'prefix changed'; row.detail = 'block ' + compared.firstDiff.index;}
       else if (fields.length) {row.class = 'fields changed'; row.detail = fields.join(', ');}
       else if (typeof lifetime === 'number' && gap > lifetime) {row.class = 'idle'; row.detail = Math.round(gap / 1000) + 's gap, lifetime ' + Math.round(lifetime / 1000) + 's';}
       else {row.class = 'unexplained'; row.detail = Math.round(gap / 1000) + 's gap';}
@@ -161,9 +174,9 @@ export function renderReport(analysis, {all = false, dir = ''} = {}) {
     const topTools = Object.entries(summary.sizeAverage.toolResultsByTool).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, tokens]) => name + ' ' + tokens).join(', ');
     if (topTools) out.push('  tool results (avg): ' + topTools);
     if (summary.largest) out.push('  largest  ' + sizesText(summary.largest.sizes) + ' (' + summary.largest.messages + ' messages, ' + clock(summary.largest.time) + ')');
-    const rows = (all ? pairs : pairs.filter(pair => !pair.pure || pair.miss)).map(pair => [
+    const rows = (all ? pairs : pairs.filter(pair => !pair.pure || pair.miss || pair.readStopsAt)).map(pair => [
       clock(pair.time), pair.kept + '/' + pair.total, pair.pure ? 'yes' : 'no', pair.firstDiff ? 'block ' + pair.firstDiff.index + ' ' + pair.firstDiff.label : '-',
-      String(pair.tokensAfter), pair.cacheRead === null ? 'n/a' : pair.input ? pct(pair.cacheRead / pair.input) : '0%', pair.class ? pair.class + ' (' + pair.detail + ')' : '']);
+      String(pair.tokensAfter), pair.cacheRead === null ? 'n/a' : pair.input ? pct(pair.cacheRead / pair.input) : '0%', [pair.class ? pair.class + ' (' + pair.detail + ')' : '', pair.readStopsAt ? 'read stops at ~' + pair.readStopsAt + ' tok' : ''].filter(Boolean).join(' ')]);
     if (rows.length) {
       const head = ['time', 'kept', 'pure', 'first difference', 'tokens after', 'cache', 'miss class'];
       const widths = head.map((title, column) => Math.max(title.length, ...rows.map(row => row[column].length)));

@@ -184,6 +184,8 @@ node scripts/cache-report.mjs <会话目录 | 项目 .logox 目录 | 项目目�
 - `kept`：新请求保留了上一次请求前缀块的数量，`kept/total`；`pure` 为 `yes` 表示新请求只是在末尾追加（缓存可以延续）。
 - `first difference`：第一个不同的块，写作 `block <序号> <上次标签> -> <本次标签>`，序号 0 是工具列表，接着是系统块，再是消息块；标签来自 Logox 自己的类型化消息，例如 `tool:Read`、`context:reminder`、`context:task-state/ensemble`、`assistant+calls2`、`user+img1`。`tokens after` 是从该块起需要重新读取的估算 token。
 - `cache`：该请求的 `cacheRead / input`。读取接近零（低于 5%，且输入至少 1024 token）才算未命中，并分四类：`prefix changed`（Logox 改了前缀字节，括号里是第一个被改的块的序号）、`fields changed`（前缀未变，但模型、协议、思考配置、缓存保留、时长、缓存键或工具披露方式变了，括号里列出字段）、`idle`（前缀与字段都没变，但距上一次请求的间隔超过那次请求记录的缓存生命周期）、`unexplained`（前缀与字段都没变且间隔很短，只能认为是服务端丢弃了缓存）。
+- 只有改动点之前的估算 token 少于该请求输入的一半（即提示的大部分在改动点之后）时，才算 `prefix changed`。如果第一个不同的块只是上一次请求的最后一块、其后只有几百 token，它无法解释接近零的缓存读取：这时按“前缀未变”继续判为 `fields changed`、`idle` 或 `unexplained`，改动点仍显示在 `first difference` 列。
+- `read stops at ~N tok`：缓存读取不为零，但不到保留前缀（按指纹块大小估算，至少 1024 token）的一半时标注，N 是实际读取量。读取量在保留前缀不断变长时保持不变，说明服务端只缓存到这个位置，问题在提供商而不在 Logox。`--json` 的每个 pair 同样带有 `keptTokens` 与 `readStopsAt`。
 
 示例（合成数据）：
 
