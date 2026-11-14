@@ -30,7 +30,7 @@ import {InteractionCard} from './interactions/interaction-card.js';
 import {ownerColor, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
 import {uiSettingsRevision} from '../config/ui-settings.js';
 import {palette} from './appearance/theme.js';
-import {mixHex} from './appearance/colors.js';
+import {mixHex, windowAccent} from './appearance/colors.js';
 import {clipLine, safeText} from './terminal/text.js';
 import {draftSelection, emptyDraft, inputViewport, insert, layoutInput, selectedText, type Draft} from './input/editor.js';
 import type {SceneRow, SceneAction} from './timeline/scene.js';
@@ -278,7 +278,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const questionPanel = dockQuestion && response ? request : undefined;
   const activeDraft = editingCustom ? customDraft : draft;
   const editableComposer = focus === 'input' || editingCustom;
-  const windowColor = ownerColor(currentView, roles);
+  const windowColor = windowAccent(currentView, ownerColor(currentView, roles));
   const promptGlyph = editingCustom ? 'Extra preference › ' : '❯ ';
   const composerRule = mixHex(windowColor, palette.bg, 0.45), composerPrompt = mixHex(windowColor, palette.bg, 0.9);
   const promptWidth = stringWidth(promptGlyph);
@@ -326,7 +326,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const footerLayout = useMemo(() => footerStatus
     ? statusbarLayout(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined, {hovered: hoveredWidget})
     : {parts: [], regions: [] as WidgetRegion[], width: 0},
-  [footerStatus, footerStatusWidth, layout, hoveredWidget]);
+  [footerStatus, footerStatusWidth, layout, hoveredWidget, themeVersion]);
   const footerStatusParts = footerLayout.parts;
   const footerStatusText = footerStatus && !noticeInline ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
   const queuedHere = pendingAll.length;

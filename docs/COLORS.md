@@ -18,7 +18,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 `~` 表示用户主目录。项目角色层仍遵循[角色模块](modules/actors.md)的优先级。仓库默认值不一定等于个人已安装的值；构建不会同步覆盖用户目录。
 
-内置主题有 `logox-dark`（默认，完整基准）、`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night`，后四个都通过 `base` 继承 `logox-dark`，只写差异。
+内置主题有 `logox-dark`（默认，完整基准）、`abyss-lantern`、`catppuccin-mocha`、`celadon-pine`、`claude-warm`、`copper-ink`、`marginalia`、`monokai-pro`、`nord-polar`、`tokyo-night`。除默认主题外都通过 `base` 继承 `logox-dark`，只写差异；别名在继承与覆盖合并之后解析，所以继承来的 `$muted`、`$fg` 会自动跟随子主题改过的颜色。`abyss-lantern` 是深海灯笼配色：墨绿黑打底、生物荧光青绿标记焦点、灯笼橙留给用户；`catppuccin-mocha` 采用 Catppuccin Mocha 暗调粉彩（深紫灰底、锦葵紫焦点、蜜桃橙用户轨）；`celadon-pine` 以松烟墨绿打底，青瓷釉色标记焦点，柿木暖橙用于用户轨；`copper-ink` 以暖石墨色打底，琥珀铜色标记焦点，青蓝色用于链接。
 
 默认主题 `logox-dark` 已合并原 `mist-dark` 的配色：Logox 的角色身份色为雾蓝 `#7DA1DE`，用户身份色为 Claude 橙 `#D77757`。角色色由角色 YAML 持有，系统 `accent` 恰好同为雾蓝，但两者互不控制。旧选择名 `mist-dark`（含 `Mist Dark`、`mist_dark`）及旧 `base` 仍可解析到 `logox-dark`；如果用户有同名主题文件，优先使用用户文件。
 
@@ -44,7 +44,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 }
 ```
 
-3. 重启 Logox，在 `/settings` 的 `Theme preset` 选择 `my-dark`。直接编辑磁盘文件不会热更新，需要重新启动。
+3. 重启 Logox，在 `/settings` 的 Appearance 分组选择 `Theme`，用左右方向键切到 `my-dark`，按 Enter 保存。修改主题文件后需要重启才会生效。
 
 颜色值写 `#RRGGBB` 或 `$token`（引用另一个字段）。引用在所有继承与覆盖合并之后才解析，所以子主题改了 `fg`，继承来的 `selectionFg: "$fg"` 也会跟着变；显式写的十六进制值是独立的。
 
@@ -76,7 +76,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 | 分组 | 字段 |
 |---|---|
-| 输入编辑区（折叠与全屏） | `composerFg`、`composerBorder`（文字、边框；背景由终端控制，仅选区填充高亮） |
+| 输入编辑区 | `composerFg` 控制文字，`composerBorder` 控制全屏编辑器的边框。终端提供背景，选区单独填色。 |
 | 系统卡片 | `toolExpanded`、`cardBase`、`cardCollapsed`、`cardExpanded` |
 | Anamnesis | `anamnesis`、`dreamCollapsed`、`dreamExpanded`、`dreamText`、`dreamMuted` |
 | 其他结构 | `borderMuted`、`panelSeparator`、`panelLabel` |
@@ -103,7 +103,9 @@ Markdown 正文读取 `fg`，链接的弱化部分读取 `muted`；行内代码�
 
 ## 状态栏配色
 
-`/statusbar` 与 `/settings → Statusbar` 的 Style 只决定 Pipes 或 Starship 的排版，Palette 决定信息段配色，切换任一项都保留模块组合。theme 使用当前系统语义色；gruvbox / dracula 使用独立的数据预设，不切换整个系统主题。角色段优先使用角色配置色，权限段使用各模式自己的语义色，不被装饰配色覆盖。上下文随已用容量读取 success / warning / error，Pipes 的分隔符使用 muted。默认 theme 配色跟随当前窗口角色：角色段使用角色色（Starship 为 30% 混入 `bg` 的底色加 90% 混入 `strong` 的文字，Pipes 为粗体角色色），其余段 Starship 使用 `muted` 以 12%–18% 混入 `bg` 的石板底色阶与浅灰文字、Pipes 使用 `muted`，权限段仍保留模式语义色；上下文进度条的已用格使用角色色。右下角 Actor 胶囊始终是 Starship 形态，底色为角色色 26% 混入 `bg`，文字为角色色 85% 混入 `strong`。输入框上下分隔线为角色色 45% 混入 `bg`，`❯` 提示符为 90% 混入。以上均由 `mixHex` 从主题语义色与角色色派生，gruvbox / dracula 预设保持原样。Starship 只给信息段绘制底色，不改变终端整屏背景。
+Logox 主窗口的时间线标题、普通输入框和状态栏共用主题的 `accent`。伙伴角色窗口共用各自配置的 `color`。普通输入框的上下横线将窗口强调色按 45% 混入 `bg`，`❯` 按 90% 混入。
+
+在 `/statusbar` 中，Style 选择 Pipes 或 Starship，Palette 选择 `theme`、`gruvbox` 或 `dracula`。角色段跟随窗口强调色，权限段跟随权限模式的语义色。`theme` 配色下，上下文仪表的已用格由窗口强调色派生。Pipes 用粗体显示角色，在普通信息段使用 `muted`。Starship 为各段绘制底色，角色段用窗口强调色与 `bg`、`strong` 混色。右下角的活动角色胶囊使用各自的角色色。
 
 ## 角色配色
 
@@ -119,7 +121,7 @@ card_open: "#2E3850"
 
 ## 兼容与开发约束
 
-- 主题键共 54 个；旧写法 `dream_collapsed`、`dream_expanded` 仍被接受。
+- 主题键共 59 个；旧写法 `dream_collapsed`、`dream_expanded` 仍被接受。
 - TOML `[theme]` 的四色兼容入口保留，默认值取自同一份基准数据；它不是覆盖当前已选预设的通用叠加层。
 - 主题解析集中在 `src/config/theme-palette.ts`，TUI 通过 `src/tui/appearance/theme.ts` 读取同一调色板；角色身份与卡片底色读取位于 `src/tui/appearance/actor-style.ts`。完整系统字段以 `themeColorKeys` 为准。
 - 新增颜色先添加语义字段和基准 JSON，再由界面读取；业务 TS/TSX 不直接写十六进制、固定 RGB、命名颜色或固定彩色 SGR。

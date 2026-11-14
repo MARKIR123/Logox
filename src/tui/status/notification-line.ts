@@ -4,7 +4,7 @@ import type {StatusbarId} from '../../config/statusbar-preferences.js';
 import type {StageStatus} from '../../runtime/stage-status.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
 import {palette} from '../appearance/theme.js';
-import {mixHex} from '../appearance/colors.js';
+import {mixHex, windowAccent} from '../appearance/colors.js';
 import {cacheHitRate, contextOver, contextRamp, contextTone} from './statusbar.js';
 
 /** One styled run of the notification line (row 2 of the footer). */
@@ -113,7 +113,7 @@ function gitDetail(status: StageStatus): NoteSegment[] {
 }
 
 /** Row-2 detail of the hovered status widget. Click actions are named here and executed by `widgetCommand`. */
-export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = status.color ?? palette.accent, width?: number): NoteSegment[] {
+export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = windowAccent(status.ownerId, status.color), width?: number): NoteSegment[] {
   switch (id) {
     case 'context': return contextDetail(status, actor, width);
     case 'model': return modelDetail(status);
@@ -130,7 +130,7 @@ export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string
     case 'tokens': return tokensDetail(status);
     case 'cost': return costDetail(status);
     case 'git': return gitDetail(status);
-    case 'role': return join([[value(status.name, status.color ?? palette.accent)], [dim(status.state)]]);
+    case 'role': return join([[value(status.name, actor)], [dim(status.state)]]);
     case 'state': return join([[dim('run state '), value(status.state)]]);
     case 'session': return join([[dim('session '), value(status.session ?? 'unsaved')]]);
     case 'project': return join([[dim('project '), value(status.project ?? 'N/A')]]);

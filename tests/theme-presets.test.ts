@@ -29,7 +29,7 @@ const mergedPalette = {
   actorPillFg: '#ffffff', oauthSuccess: '#7ee7c4',
   composerFg: '#E8E6E0', composerBorder: '#3E4758',
 };
-const builtinNames = ['logox-dark', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night'];
+const builtinNames = ['logox-dark', 'abyss-lantern', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'copper-ink', 'marginalia', 'monokai-pro', 'nord-polar', 'tokyo-night'];
 const legacyNames = ['mist-dark', 'Mist Dark', 'mist_dark'];
 
 function withThemeHome(run: (home: string) => void): void {
@@ -51,7 +51,7 @@ function userThemeDir(home: string): string {
   return dir;
 }
 
-test('exactly five shipped themes load with logox-dark first and valid colors', () => withThemeHome(home => {
+test('all ten shipped themes load with logox-dark first and valid colors', () => withThemeHome(home => {
   const themes = loadThemePresets(home);
   assert.equal(DEFAULT_THEME, 'logox-dark');
   assert.deepEqual(themes.map(theme => theme.name), builtinNames);
@@ -65,8 +65,8 @@ test('exactly five shipped themes load with logox-dark first and valid colors', 
     for (const [key, color] of Object.entries(resolved)) assert.match(color, /^#[0-9a-fA-F]{6}$/, theme.name + '.' + key);
     if (theme.name !== DEFAULT_THEME) {
       assert.equal(theme.base, DEFAULT_THEME);
-      assert.deepEqual(resolved, resolveThemeColors({...mergedDefinitions, ...theme.colors}));
-      assert.equal(resolved.cardExpanded, mergedPalette.cardExpanded, 'Unspecified tokens inherit the merged root');
+      assert.deepEqual(resolved, resolveThemeColors({...mergedDefinitions, ...theme.colors}),
+        'Theme overrides and aliases resolve over the merged root');
     }
   }
 }));

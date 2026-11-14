@@ -8,7 +8,7 @@ import {defaultGaugeCells, defaultStatusbar, type StatusbarAppearance, type Stat
 import {hexColorSchema, themeColorKeys, type ThemeColorKey} from '../../config/theme-palette.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
 import {palette} from '../appearance/theme.js';
-import {mixHex} from '../appearance/colors.js';
+import {mixHex, windowAccent} from '../appearance/colors.js';
 
 /** `widget` tags every cell that belongs to one module (hover and click target); `gauge` marks gauge cells for scheme remapping. */
 export type StatusbarPart = {text: string; color?: string; backgroundColor?: string; bold?: boolean; widget?: StatusbarId; gauge?: 'used' | 'track' | 'tick'};
@@ -60,7 +60,7 @@ export function contextOver(status: StageStatus): boolean {
   const context = status.context;
   return !!context && (context.over === true || context.window > 0 && context.tokens > context.window);
 }
-/** Five-step ramp of the window actor's colour, system (darkest) to tools (brightest). */
+/** Five-step ramp of the window accent, system (darkest) to tools (brightest). */
 const RAMP_SHARES = [0.4, 0.55, 0.7, 0.85, 1] as const;
 export function contextRamp(actor: string): Record<ContextCategory, string> {
   return Object.fromEntries(contextCategories.map((category, index) => [category, mixHex(actor, palette.bg, RAMP_SHARES[index]!)])) as Record<ContextCategory, string>;
@@ -201,7 +201,7 @@ export function statusbarLayout(status: StageStatus, width: number, modules: rea
   const decorative = appearance.colorScheme === 'gruvbox' || appearance.colorScheme === 'dracula';
   const scheme = decorative ? schemes[appearance.colorScheme as 'gruvbox' | 'dracula'] : {};
   const colors = {...palette, ...scheme};
-  const actor = hexColorSchema.safeParse(status.color).data ?? palette.accent;
+  const actor = windowAccent(status.ownerId, hexColorSchema.safeParse(status.color).data);
   const env: Env = {cells: Math.max(8, Math.min(40, Math.floor(appearance.gaugeCells ?? defaultGaugeCells))), actor};
   const enabled = modules.filter((module, index) => module.enabled && Object.hasOwn(registry, module.id) && modules.findIndex(other => other.id === module.id) === index);
   const candidates = new Map<StatusbarId, {variants: Variant[]; icon: string; chosen: number}>();

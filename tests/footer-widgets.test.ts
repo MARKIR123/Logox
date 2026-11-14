@@ -69,7 +69,7 @@ test('gauge: the used span splits by category, free cells follow, and a tick mar
   const bar = parts.filter(part => part.widget === 'context' && part.gauge);
   assert.equal(bar.reduce((sum, part) => sum + stringWidth(part.text), 0), 16, 'cell count is exactly the gauge width');
   assert.equal(bar.filter(part => part.gauge === 'tick').length, 1);
-  const ramp = contextRamp('#7a9ee0');
+  const ramp = contextRamp(palette.accent);
   assert.ok(bar.some(part => part.color === ramp.tools) && bar.some(part => part.color === ramp.system));
   assert.ok(bar.some(part => part.color === gaugeTrack() && part.gauge === 'track'));
   assert.equal(new Set(Object.values(ramp)).size, 5, 'five distinct steps');

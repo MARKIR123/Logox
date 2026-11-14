@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {act} from 'react';
 import {render} from 'ink';
+import chalk from 'chalk';
 import {PassThrough} from 'node:stream';
 import {App} from '../src/tui/app.js';
 import {TerminalPlaneContext} from '../src/tui/terminal/terminal.js';
@@ -10,6 +11,7 @@ import type {SceneRow} from '../src/tui/timeline/scene.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {builtinActors} from '../src/actors/builtins.js';
 import {applyTheme, palette} from '../src/config/theme-palette.js';
+import {mixHex} from '../src/tui/appearance/colors.js';
 import {TerminalScreen} from './terminal-screen.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
@@ -27,33 +29,53 @@ class CapturedPlane extends TerminalPlane {
   override get time() {return 100;}
 }
 
-test('App rerender refreshes history colors with unchanged snapshot and stable actor definitions', async () => {
+test('a live theme change updates the Logox title, composer and footer with stable runtime data', async () => {
   const previous = {...palette}, input = new Input(), output = new TerminalScreen(), plane = new CapturedPlane();
+  const previousChalkLevel = chalk.level;
   const store = new RuntimeStore();
   store.message('s', 'logox', 'assistant', 'Theme switch probe');
   const snapshot = store.getSnapshot();
+  const director = builtinActors.find(actor => actor.id === 'logox')!;
+  const status = {ownerId: director.id, name: director.name, color: director.color, state: 'Ready', context: {tokens: 20, window: 100}};
   const props = {store, sessionId: 's', stage: true, getActors: () => builtinActors,
-    onSubmit: async () => {}, onCancel: () => {}, onClose: async () => {}};
+    getStatus: () => status, onSubmit: async () => {}, onCancel: () => {}, onClose: async () => {}};
   const view = () => <TerminalPlaneContext.Provider value={plane}><App {...props}/></TerminalPlaneContext.Provider>;
   const color = () => {
     const row = plane.rows.find(row => row.text.includes('Theme switch probe')) as SceneRow | undefined;
     assert.ok(row, 'History frame contains the assistant body');
     return row.segments?.find(segment => segment.text.includes('Theme switch probe'))?.color;
   };
+  const outputColor = (content: RegExp) => {
+    const codes = [...output.text.matchAll(/\x1b\[38;2;(\d+);(\d+);(\d+)m([^\x1b]*)/g)];
+    const rgb = codes.findLast(match => content.test(match[4]!))?.slice(1, 4);
+    return rgb && '#' + rgb.map(channel => Number(channel).toString(16).padStart(2, '0')).join('');
+  };
+  const assertAccent = (accent: string) => {
+    const header = plane.rows.find(row => row.railGlyph === '◈');
+    assert.equal(header?.railColor, accent, 'Timeline speaker header');
+    assert.equal(outputColor(/❯ /), mixHex(accent, palette.bg, 0.9), 'Composer prompt');
+    assert.equal(outputColor(/────/), mixHex(accent, palette.bg, 0.45), 'Composer border');
+    assert.equal(outputColor(/Logox/), accent, 'Statusbar role');
+    assert.equal(outputColor(/^█{3}$/), accent, 'Statusbar context fill');
+  };
   let instance: ReturnType<typeof render> | undefined;
   try {
-    applyTheme({fg: '#112233'});
+    chalk.level = 3;
+    applyTheme({fg: '#112233', accent: '#6699bb'});
     await act(async () => {instance = render(view(), {stdin: input, stdout: output, stderr: output,
       interactive: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
     await act(async () => {await instance!.waitUntilRenderFlush();});
     assert.equal(color(), '#112233');
-    applyTheme({fg: '#445566'});
+    assertAccent('#6699bb');
+    output.text = '';
+    applyTheme({fg: '#445566', accent: '#e8b476'});
     await act(async () => {instance!.rerender(view());});
     await act(async () => {await instance!.waitUntilRenderFlush();});
     assert.equal(store.getSnapshot(), snapshot, 'No message or runtime change triggers this refresh');
     assert.equal(color(), '#445566');
+    assertAccent('#e8b476');
   } finally {
     if (instance) {await act(async () => {instance!.unmount();}); await instance.waitUntilExit();}
-    plane.dispose(); input.destroy(); output.destroy(); applyTheme(previous);
+    plane.dispose(); input.destroy(); output.destroy(); applyTheme(previous); chalk.level = previousChalkLevel;
   }
 });

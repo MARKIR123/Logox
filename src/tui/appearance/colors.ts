@@ -1,5 +1,10 @@
 import {palette} from './theme.js';
 import {toolTintScale, uiSettings} from '../../config/ui-settings.js';
+import {isDirector} from '../../runtime/director-id.js';
+
+export function windowAccent(ownerId: string, actorColor?: string): string {
+  return isDirector(ownerId) ? palette.accent : actorColor ?? palette.accent;
+}
 
 function parseHex(hex: string): [number, number, number] {
   const value = Number.parseInt(hex.replace('#', ''), 16);

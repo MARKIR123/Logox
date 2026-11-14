@@ -203,13 +203,14 @@ test('live themes recolor segments while decorative palettes preserve role and p
 });
 
 test('valid Actor identity overrides decorative schemes but malformed colors never reach Ink', () => {
+  const companion = {...status, ownerId: 'kalon', name: 'Kalon'};
   for (const style of ['pipes', 'starship'] as const) {
     for (const colorScheme of ['theme', 'gruvbox', 'dracula'] as const) {
-      const parts = statusbarParts({...status, color: '#123abc'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
+      const parts = statusbarParts({...companion, color: '#123abc'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
       const tinted = colorScheme === 'theme' && style === 'starship';
       assert.equal(parts[0]?.color, tinted ? mixHex('#123abc', palette.bg, 0.3) : '#123abc');
       if (style === 'starship') assert.ok(parts.some(part => part.backgroundColor === (tinted ? mixHex('#123abc', palette.bg, 0.3) : '#123abc')));
-      const invalid = statusbarParts({...status, color: '\u001b[31mred'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
+      const invalid = statusbarParts({...companion, color: '\u001b[31mred'}, 80, [{id: 'role', enabled: true}], {style, colorScheme});
       assert.equal(invalid[0]?.color, tinted ? mixHex(palette.accent, palette.bg, 0.3) : palette.accent);
     }
   }
@@ -235,9 +236,9 @@ test('all ten IDs retain order and enabled state in either appearance', () => {
   }
 });
 
-test('default scheme follows the window Actor: tinted identity segment, slate steps for the rest, Actor-coloured gauge fill', () => {
+test('default scheme follows the companion color in a companion window', () => {
   const modules = [{id: 'role', enabled: true}, {id: 'model', enabled: true}, {id: 'effort', enabled: true}, {id: 'context', enabled: true}] as const;
-  const actor = '#b3a0d4', quiet = {...status, color: actor};
+  const actor = '#b3a0d4', quiet = {...status, ownerId: 'kalon', name: 'Kalon', color: actor};
   const pipes = statusbarParts(quiet, 240, modules, {style: 'pipes', colorScheme: 'theme'});
   assert.deepEqual({...pipes[0]}, {text: pipes[0]!.text, color: actor, bold: true, widget: 'role'});
   assert.ok(pipes.filter(part => part.text === ' │ ').every(part => part.color === mixHex(palette.muted, palette.bg, 0.55)));
@@ -248,7 +249,7 @@ test('default scheme follows the window Actor: tinted identity segment, slate st
   const blocks = statusbarParts(quiet, 240, modules, {style: 'starship', colorScheme: 'theme'});
   const roleBg = mixHex(actor, palette.bg, 0.3);
   assert.equal(blocks[0]?.color, roleBg);
-  const role = blocks.find(part => part.text.includes('Logox'))!;
+  const role = blocks.find(part => part.text.includes('Kalon'))!;
   assert.equal(role.backgroundColor, roleBg);
   assert.equal(role.color, mixHex(actor, palette.strong, 0.9));
   const slate = blocks.filter(part => part.backgroundColor && part.backgroundColor !== roleBg && part.text.trim()).map(part => part.backgroundColor);

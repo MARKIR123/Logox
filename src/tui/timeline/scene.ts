@@ -2,7 +2,7 @@ import {isDirector} from '../../runtime/director-id.js';
 import type {Step} from '../../runtime/contracts.js';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
-import {expandedTint, faintColor, quietRail} from '../appearance/colors.js';
+import {expandedTint, faintColor, quietRail, windowAccent} from '../appearance/colors.js';
 import {clipSegments} from './tool-card.js';
 import {palette} from '../appearance/theme.js';
 import {clipLine, safeText} from '../terminal/text.js';
@@ -67,8 +67,7 @@ export interface SceneRow extends Row {
 function railColorFor(who: string, roles: ActorStyles = cast): string {
   if (who === 'user') return palette.user;
   if (who === 'system') return palette.system;
-  if (isDirector(who)) return palette.accent;
-  return ownerColor(who, roles);
+  return windowAccent(who, ownerColor(who, roles));
 }
 
 function whoName(who: string, roles: ActorStyles = cast): string {

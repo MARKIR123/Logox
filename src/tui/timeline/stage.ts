@@ -9,7 +9,7 @@ import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
 import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment, type TurnActivity} from './scene.js';
 import {CANCELLABLE_TOOLS, expanderId, pushExpander, TOOL_BODY_LINES} from './tool-card.js';
-import {faintColor} from '../appearance/colors.js';
+import {faintColor, windowAccent} from '../appearance/colors.js';
 import wrapAnsi from 'wrap-ansi';
 import {getToolUI, isVisibleToolMessage} from '../../tools/ui-registry.js';
 import {hiddenFromView, pairSendMessages} from '../../tools/coordination/SendMessageTool/pairing.js';
@@ -122,7 +122,7 @@ export function stageFoldOpen(snapshot: RuntimeSnapshot, id: string, folds: Read
 export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, view: string, width: number,
   folds: Readonly<Record<string, boolean>>, hovered: string | null,
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
-  const viewColor = isDirector(view) ? palette.accent : ownerColor(view, roles);
+  const viewColor = windowAccent(view, ownerColor(view, roles));
   const builder = createBuilder(width, hovered, roles, viewColor);
   const {messages, candidates, staged, activities, grouped, thinking, pairs} = messageProjection(snapshot, sessionId, view);
   const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (isDirector(view) || request.ownerId === view));
