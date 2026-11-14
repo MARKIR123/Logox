@@ -10,6 +10,7 @@ import {CommandResultPanel} from './command-result.js';
 import {EnsemblePage} from './ensemble-page.js';
 import {SettingsPage} from './settings-page.js';
 import {TabbedPage} from './tabbed-page.js';
+import {ThemePage} from './theme-page.js';
 
 export function overlayPage(ctx: ShellContext): ReactElement | null {
   const {close, closing, composerExpanded, composerMode, currentView, draft, exitDeadline, flash, interrupt, notice, onDraft, roles, screenRows,
@@ -30,11 +31,15 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
   </MouseHost>;
   if (surface?.kind === 'settings' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><SettingsPage key={surface.id} items={surface.items} pages={surface.pages}
-    width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} sub={surface.sub}
+    width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} sub={surface.sub} theme={surface.theme}
+    onPreviewTheme={name => surfaces.previewTheme(surface.id, name)} onChooseTheme={name => {void surfaces.chooseTheme(surface.id, name);}} onCloseTheme={() => surfaces.cancel()}
     onSave={changes => {void surfaces.saveSettings(surface.id, changes);}} onPreview={(key, value) => surfaces.previewSetting(surface.id, key, value)}
     onDiscard={() => surfaces.cancel()} onOpenPage={id => surfaces.openSettingsPage(surface.id, id)} onCloseSub={() => surfaces.closeSettingsPage(surface.id)}
     onSubSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
     onSubAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseHost>;
+  if (surface?.kind === 'theme' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><ThemePage key={surface.id} themes={surface.themes} current={surface.current}
+    width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice}
+    onPreview={name => surfaces.previewTheme(surface.id, name)} onChoose={name => {void surfaces.chooseTheme(surface.id, name);}} onCancel={() => surfaces.cancel()}/></MouseHost>;
   if (surface?.kind === 'ensemble' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><EnsemblePage key={surface.id} data={surface.data} width={width} height={screenRows} notice={notice}
     onClose={() => surfaces.cancel()} onModel={actorId => {void surfaces.ensembleModel(surface.id, actorId).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));}}
     onNotice={text => flash(text, 3500, 'info')}

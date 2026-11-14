@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
+import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
 import {immutable} from '../runtime/contracts.js';
-import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage} from '../runtime/command-surface.js';
+import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   /** Shown instead of the search box when the list loads empty; say what to do next. */
   readonly emptyText?: string;
@@ -29,6 +30,15 @@ export interface SettingsActions {
   revert?(): void;
   /** Builds the sub-page behind a `Pages` row; null when it cannot open. */
   openPage(id: string): {title: string; tabs: readonly CommandTab[]; initialTab: string; actions: PageActions} | null;
+  /** Data and callbacks of the /theme page the Theme row opens; the saved theme name comes back through `pages` afterwards. */
+  openTheme?(): {data: ThemePageData; actions: ThemeActions};
+}
+/** Callbacks of the /theme page. Nothing is written until `save`; the surface restores the palette it found when the page closes without one. */
+export interface ThemeActions {
+  /** Puts a theme on the live palette (preview). */
+  apply(name: string): void;
+  /** Persists the choice through the preference store and applies it. */
+  save(name: string): Promise<void>;
 }
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
@@ -43,6 +53,9 @@ export class CommandSurfaces {
   private settingsActions: SettingsActions | undefined;
   private ensembleActions: EnsembleActions | undefined;
   private subActions: PageActions | undefined;
+  private themeActions: ThemeActions | undefined;
+  /** The palette in force when the /theme page opened; present exactly while a preview may be on screen. */
+  private themeSnapshot: ThemePalette | undefined;
   getSnapshot = (): CommandSurface | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
   constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
@@ -146,6 +159,57 @@ export class CommandSurfaces {
     this.settingsActions = actions;
     this.publish({id: randomUUID(), kind: 'settings', title: 'Settings', items, pages, ...this.origin?.()});
   }
+  /** Opens /theme: the page previews the highlighted theme live; closing without a choice puts the palette back. */
+  openTheme(data: ThemePageData, actions: ThemeActions): void {
+    this.assertIdle();
+    this.beginTheme(actions);
+    this.publish({id: randomUUID(), kind: 'theme', title: 'Theme', ...data});
+  }
+  private beginTheme(actions: ThemeActions): void {
+    this.themeActions = actions;
+    this.themeSnapshot = {...palette};
+  }
+  /** Puts back the palette found when the page opened (exactly, token by token); a no-op once a theme was saved. */
+  private restoreTheme(): void {
+    const snapshot = this.themeSnapshot;
+    this.themeSnapshot = undefined; this.themeActions = undefined;
+    if (snapshot) applyTheme({...snapshot});
+  }
+  private themeOpen(surfaceId: string): ThemePageData | undefined {
+    const state = this.state;
+    if (state?.kind === 'theme' && state.id === surfaceId) return state;
+    if (state?.kind === 'settings' && state.id === surfaceId) return state.theme;
+    return undefined;
+  }
+  /** Live preview of one listed theme; nothing is written. */
+  previewTheme(surfaceId: string, name: string): void {
+    const data = this.themeOpen(surfaceId);
+    if (!data || data.saving || !this.themeActions || !data.themes.some(theme => theme.name === name && !theme.unavailable)) return;
+    try {this.themeActions.apply(name);} catch {/* a theme that cannot apply leaves the palette as it was */}
+  }
+  /** Saves the chosen theme and closes (back to /settings when it was opened from there). A failure keeps the page open with the reason. */
+  async chooseTheme(surfaceId: string, name: string): Promise<void> {
+    const data = this.themeOpen(surfaceId), actions = this.themeActions, state = this.state;
+    if (!data || !state || data.saving || !actions || !data.themes.some(theme => theme.name === name && !theme.unavailable)) return;
+    const patch = (fields: Partial<ThemePageData>) => this.publish(state.kind === 'settings' ? {...state, theme: {...data, ...fields}} : {...state, ...fields} as CommandSurface);
+    patch({saving: true, error: ''});
+    try {await actions.save(name);}
+    catch (error) {
+      if (this.themeOpen(surfaceId)) patch({saving: false, error: error instanceof Error ? error.message : 'Save failed'});
+      return;
+    }
+    this.themeSnapshot = undefined;
+    const current = this.state;
+    if (current?.id !== surfaceId) return;
+    if (current.kind === 'settings') {
+      const {theme: _theme, ...rest} = current;
+      this.themeActions = undefined;
+      this.publish({...rest, pages: current.pages.map(page => page.id === 'theme' ? {...page, value: name} : page)});
+    } else {
+      this.dismiss();
+      this.onDone({message: 'Theme set to ' + name, presentation: 'status'}, this.completion(current, true));
+    }
+  }
   /** Opens /ensemble; the page is read-only and reports edits and model changes through `actions`. */
   openEnsemble(data: import('../runtime/ensemble-view.js').EnsembleData, actions: EnsembleActions): void {
     this.assertIdle();
@@ -190,7 +254,14 @@ export class CommandSurfaces {
   /** Opens the sub-page behind a `Pages` row over /settings (drafts stay in the page). */
   openSettingsPage(surfaceId: string, pageId: string): void {
     const state = this.state, actions = this.settingsActions;
-    if (state?.kind !== 'settings' || state.id !== surfaceId || state.saving || state.sub || !actions) return;
+    if (state?.kind !== 'settings' || state.id !== surfaceId || state.saving || state.sub || state.theme || !actions) return;
+    if (pageId === 'theme') {
+      const theme = actions.openTheme?.();
+      if (!theme) return;
+      this.beginTheme(theme.actions);
+      this.publish({...state, error: "", theme: theme.data});
+      return;
+    }
     const opened = actions.openPage(pageId);
     if (!opened) return;
     this.subActions = opened.actions;
@@ -243,14 +314,24 @@ export class CommandSurfaces {
   }
   cancel(): void {
     const state = this.state;
+    if (state?.kind === 'theme') {
+      if (!state.saving) this.dismiss();
+      return;
+    }
     if (state?.kind === 'settings') {
       if (state.saving) return;
+      if (state.theme) {
+        if (state.theme.saving) return;
+        const {theme: _theme, ...rest} = state;
+        this.restoreTheme(); this.publish(rest);
+        return;
+      }
       if (state.sub) {if (!state.sub.saving) this.leavePage(); return;}
       this.settingsActions?.revert?.();
       this.dismiss(); return;
     }
     if (state?.kind === 'page' ? !state.saving : state?.kind !== 'picker' || state.status !== 'saving') this.dismiss();
   }
-  private dismiss(): void {this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
+  private dismiss(): void {this.restoreTheme(); this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
   close(): void {this.dismiss();}
 }

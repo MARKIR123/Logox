@@ -13,6 +13,8 @@ export interface SettingsEntry {
   readonly kind: 'item' | 'page';
   readonly key: string; readonly label: string; readonly description: string; readonly group: string;
   readonly item?: SettingsItem;
+  /** A page row's current value, shown before its arrow (the saved theme). */
+  readonly value?: string;
 }
 export interface Seg {readonly text: string; readonly color: string; readonly bold?: boolean; readonly italic?: boolean; readonly bg?: string}
 export type SettingsCommand =
@@ -85,10 +87,14 @@ export function stepValue(item: SettingsItem, value: DraftValue, delta: -1 | 1):
 }
 /** Entries in page order, filtered by `query` (every word must appear in the label, description or group). */
 export function settingsEntries(items: readonly SettingsItem[], pages: readonly SettingsPageLink[], query: string): SettingsEntry[] {
-  const all: SettingsEntry[] = [
-    ...items.map(item => ({kind: 'item' as const, key: item.key, label: item.label, description: item.description, group: item.group, item})),
-    ...pages.map(page => ({kind: 'page' as const, key: 'page:' + page.id, label: page.label, description: page.description, group: 'Pages'})),
-  ];
+  const all: SettingsEntry[] = items.map(item => ({kind: 'item' as const, key: item.key, label: item.label, description: item.description, group: item.group, item}));
+  const pageEntry = (page: SettingsPageLink): SettingsEntry => ({kind: 'page', key: 'page:' + page.id, label: page.label, description: page.description, group: page.group ?? 'Pages', ...(page.value ? {value: page.value} : {})});
+  // A page row that names a group leads that group; the others close the list under `Pages`.
+  for (const page of pages.filter(page => page.group)) {
+    const at = all.findIndex(entry => entry.group === page.group);
+    all.splice(at < 0 ? all.length : at, 0, pageEntry(page));
+  }
+  all.push(...pages.filter(page => !page.group).map(pageEntry));
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   return words.length ? all.filter(entry => words.every(word => (entry.label + ' ' + entry.description + ' ' + entry.group).toLowerCase().includes(word))) : all;
 }
@@ -155,8 +161,10 @@ export function settingsLayout(input: {
     const over = (region: Region) => inRegion(pointer, region);
     const right = padding + columns;
     if (current.kind === 'page') {
-      valueWidth = 1;
+      const shown = current.value ? clipLine(current.value, Math.max(4, Math.floor(columns / 2))) + ' ' : '';
+      valueWidth = stringWidth(shown) + 1;
       const region = regionFor(right - 1, right);
+      if (shown) segs.push({text: shown, color: isSelected ? palette.fg : palette.muted, ...(bg ? {bg} : {})});
       segs.push({text: '›', color: isSelected ? hoverColor : over(region) ? hoverColor : palette.muted, bold: isSelected || over(region), ...(bg ? {bg} : {})});
     } else {
       const item = current.item!, dirtyRow = isDirty(current, view.drafts);

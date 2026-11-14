@@ -1,12 +1,13 @@
 import React, {useRef, useState, type ReactElement} from 'react';
 import {Box, Text, useInput} from 'ink';
-import type {CommandToggle, SettingsItem, SettingsPageLink, SettingsSubPage} from '../../runtime/command-surface.js';
+import type {CommandToggle, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../../runtime/command-surface.js';
 import type {StatusbarAppearance} from '../../config/statusbar-preferences.js';
 import {palette} from '../appearance/theme.js';
 import {PanelFrame, footerParts, hitFooter, panelRows, type FooterAction} from '../components/panel-frame.js';
 import {inRegion, useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 import {changedDrafts, settingsLayout, stepValue, type DraftValue, type Seg, type SettingsCommand, type SettingsView} from './settings-layout.js';
 import {TabbedPage} from './tabbed-page.js';
+import {ThemePage} from './theme-page.js';
 
 const TEXT_LIMIT = 64;
 const initialView: SettingsView = {drafts: {}, query: '', searching: false, selected: 0, scroll: 0, editing: undefined, confirming: false, saving: false, error: '', notice: ''};
@@ -20,11 +21,16 @@ function Line({segs}: {segs: readonly Seg[]}) {
  * /settings: data-driven rows grouped on one page, values on the right, a description for the selected row, a search box and sub-pages.
  * Drafts stay in the page until Enter; the host receives only the changed values. Keyboard, mouse and the footer buttons all run the same commands.
  */
-export function SettingsPage({items, pages, width, height, y = 0, saving = false, error = '', notice = '', sub, onSave, onPreview, onDiscard, onOpenPage, onCloseSub, onSubSave, onSubAction}: {
+export function SettingsPage({items, pages, width, height, y = 0, saving = false, error = '', notice = '', sub, theme, onSave, onPreview, onDiscard, onOpenPage, onCloseSub, onSubSave, onSubAction, onPreviewTheme, onChooseTheme, onCloseTheme}: {
   items: readonly SettingsItem[]; pages: readonly SettingsPageLink[]; width: number; height: number; /** Screen row of the page's top rule. */ y?: number;
   saving?: boolean; error?: string; notice?: string;
   /** The sub-page open over the settings; the settings keep their drafts underneath. */
   sub?: SettingsSubPage | undefined;
+  /** The /theme page open over the settings (the Theme row); it previews, chooses and returns here. */
+  theme?: ThemePageData | undefined;
+  onPreviewTheme?(name: string): void;
+  onChooseTheme?(name: string): void;
+  onCloseTheme?(): void;
   onSave(changes: Record<string, DraftValue>): void;
   onPreview?(key: string, value: DraftValue): void;
   onDiscard(): void;
@@ -60,7 +66,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
     if (Object.keys(changes).length === 0) onDiscard(); else onSave(changes);
   };
   const run = (command: SettingsCommand): void => {
-    if (saving || sub) return;
+    if (saving || sub || theme) return;
     const count = latest.current.entries.length;
     const select = (index: number) => update({selected: Math.max(0, Math.min(count - 1, index)), editing: undefined});
     switch (command.kind) {
@@ -100,7 +106,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
   };
 
   useInput((input, key) => {
-    if (key.eventType === 'release' || sub || saving) return;
+    if (key.eventType === 'release' || sub || theme || saving) return;
     const state = view.current;
     if (state.confirming) {
       if (input === 'y' || input === 'Y') run({kind: 'confirm', yes: true});
@@ -153,7 +159,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
   const footerView = footerParts(plan.footer.text, actions, width, y, height);
   const hoveredFooter = hitFooter(footerView, pointer);
   useMouse(event => {
-    if (sub || saving || event.x < 0 || event.x >= width || event.y < y || event.y >= y + height) return;
+    if (sub || theme || saving || event.x < 0 || event.x >= width || event.y < y || event.y >= y + height) return;
     const wheel = event.action === 'wheel_up' ? -1 : event.action === 'wheel_down' ? 1 : 0;
     if (wheel) {if (!view.current.confirming && view.current.editing === undefined) run({kind: 'move', delta: wheel}); return;}
     if (event.action !== 'press' || event.button !== 0) return;
@@ -164,6 +170,8 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
     if (hit) run(hit.command);
   });
 
+  if (theme) return <ThemePage themes={theme.themes} current={theme.current} width={width} height={height} y={y} saving={theme.saving ?? false} error={theme.error ?? ''} notice={notice}
+    onPreview={name => onPreviewTheme?.(name)} onChoose={name => onChooseTheme?.(name)} onCancel={() => onCloseTheme?.()}/>;
   if (sub) return <TabbedPage key={sub.id} title={sub.title} tabs={sub.tabs} initialTab={sub.initialTab} width={width} height={height} y={y}
     onClose={onCloseSub} saving={sub.saving ?? false} error={sub.error ?? ''} notice={notice}
     {...(sub.confirm ? {confirm: sub.confirm} : {})} {...(onSubSave ? {onSave: onSubSave} : {})} {...(onSubAction ? {onAction: onSubAction} : {})}/>;

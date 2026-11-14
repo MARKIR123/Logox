@@ -218,7 +218,7 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 ────────────────────────────────────────────────────────────────
   Settings · 1 unsaved                                  / search
   Appearance
-  ❯ Theme                                          ‹ logox-dark ›
+  ❯ Theme                                           logox-dark ›
     Cursor                                            ‹ Block █ ›
     Animations                                              [✓]
     ……
@@ -338,7 +338,7 @@ Pages 分组的四行分别打开状态栏编辑器、`/permissions` 页、只�
 
 ## 主题与动效
 
-主题是数据文件。内置主题位于 `src/config/themes/*.json`，用户在 `~/.logox/themes/*.json` 新增文件或同名覆盖即可改色，具体步骤见[配色设置](COLORS.md)。在 `/settings` 的 `Theme` 选择主题（草稿阶段就实时预览，丢弃时还原），结果保存到 `~/.logox/ui-preferences.json`。
+主题是数据文件。内置主题位于 `src/config/themes/*.json`，用户在 `~/.logox/themes/*.json` 新增文件或同名覆盖即可改色，具体步骤见[配色设置](COLORS.md)。用 `/theme`（或 `/settings` 里的 `Theme` 行）选择主题：移动高亮即在整个界面预览，右侧样例与可读性检查同步更新，Esc 还原，Enter 或点击保存，结果保存到 `~/.logox/ui-preferences.json`。
 
 主题只管系统颜色（边线、高亮、描述、选区等），切换角色窗口不会变色，切换主题才会变。角色的身份色与卡片底色属于角色配置 `~/.logox/actors/<id>/config.yaml` 的 `color`、`card_closed`、`card_open`，不随主题切换；`config.toml` 的 `[theme]` 仍可做四色覆盖，见[配置示例](../config.example.toml)和[角色模块](modules/actors.md)。
 

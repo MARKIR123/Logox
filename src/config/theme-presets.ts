@@ -1,6 +1,6 @@
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {join} from 'node:path';
+import {basename, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
 import {applyTheme, isThemeColorKey, canonicalColorKey, resolveThemeColors, themeColorValueSchema, type ThemeOverrides, type ThemePalette} from './theme-palette.js';
@@ -20,6 +20,8 @@ export interface ThemeFile {
   readonly name: string;
   readonly base?: string;
   readonly colors: Readonly<Record<string, string>>;
+  /** Where the file came from; a user file of a shipped name replaces it and counts as the user's. */
+  readonly source: 'shipped' | 'user';
 }
 
 export interface ThemeIssue {readonly file: string; readonly message: string;}
@@ -60,7 +62,7 @@ function readDirectory(dir: string, strict: boolean): Map<string, ThemeFile> {
         }
         colors[canonicalColorKey(key)] = value;
       }
-      themes.set(name, {name, ...(parsed.base ? {base: parsed.base} : {}), colors});
+      themes.set(name, {name, ...(parsed.base ? {base: parsed.base} : {}), colors, source: strict ? 'shipped' : 'user'});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (strict) throw new Error('Invalid built-in theme ' + path + ': ' + message);
@@ -118,6 +120,27 @@ export function loadThemePresets(home: string = homedir()): readonly ThemeFile[]
 
 export function listThemes(): readonly ThemeFile[] {
   return registry ? [...registry.values()].sort((a, b) => a.name === DEFAULT_THEME ? -1 : b.name === DEFAULT_THEME ? 1 : a.name.localeCompare(b.name)) : loadThemePresets();
+}
+
+/** One row of the `/theme` page: a usable theme, or a file that failed to load with the reason. */
+export interface ThemeListing {
+  readonly name: string;
+  readonly source: 'shipped' | 'user';
+  /** Why the file is not usable; absent for a usable theme. */
+  readonly unavailable?: string;
+}
+
+/**
+ * The themes of the `/theme` page: shipped ones first in their usual order, then the user's, then user files that failed to load
+ * (with their reason; they cannot be chosen). Unknown colour keys only drop that key, so they are not failures.
+ */
+export function themeListing(): readonly ThemeListing[] {
+  const themes = listThemes();
+  const usable = [...themes.filter(theme => theme.source === 'shipped'), ...themes.filter(theme => theme.source === 'user')]
+    .map((theme): ThemeListing => ({name: theme.name, source: theme.source}));
+  const failed = themeIssues().filter(issue => !issue.message.startsWith('unknown color key'))
+    .map((issue): ThemeListing => ({name: basename(issue.file, '.json'), source: 'user', unavailable: (issue.message.split('\n')[0] ?? issue.message).slice(0, 120)}));
+  return [...usable, ...failed];
 }
 
 /**

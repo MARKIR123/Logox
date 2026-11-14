@@ -40,7 +40,10 @@ export type CommandSurface = Partial<CommandOrigin> & (
       readonly effort?: string; readonly effortLevels?: readonly string[]}
   | {readonly id: string; readonly kind: 'result'; readonly title: string; readonly text: string; readonly lines?: readonly ResultLine[]}
   | {readonly id: string; readonly kind: 'settings'; readonly title: string; readonly items: readonly SettingsItem[]; readonly pages: readonly SettingsPageLink[];
-      readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage}
+      readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage;
+      /** The /theme page opened from the Theme row; it draws over the settings and Esc returns to them. */
+      readonly theme?: ThemePageData}
+  | ({readonly id: string; readonly kind: 'theme'; readonly title: string} & ThemePageData)
   | {readonly id: string; readonly kind: 'ensemble'; readonly title: string; readonly data: EnsembleData}
   | {readonly id: string; readonly kind: 'page'; readonly title: string; readonly tabs: readonly CommandTab[]; readonly initialTab: string;
       readonly saving?: boolean; readonly error?: string;
@@ -55,8 +58,12 @@ export interface SettingsItem {
   /** The saved value; the page keeps unsaved drafts itself. */
   readonly value: string | number | boolean;
 }
-/** A row that opens a sub-page (Status bar, Permissions, Models & pricing, Shortcuts). */
-export interface SettingsPageLink {readonly id: string; readonly label: string; readonly description: string}
+/** A row that opens a sub-page (Theme, Status bar, Permissions, Models & pricing, Shortcuts). `group` places it among the rows of that group; `value` is shown before the arrow. */
+export interface SettingsPageLink {readonly id: string; readonly label: string; readonly description: string; readonly group?: string | undefined; readonly value?: string | undefined}
+/** One row of the /theme list: a usable theme, or a file that failed to load (`unavailable` carries the reason). */
+export interface ThemeRow {readonly name: string; readonly source: 'shipped' | 'user'; readonly unavailable?: string | undefined}
+/** Data of the /theme page: the rows and the saved theme (marked in the list). */
+export interface ThemePageData {readonly themes: readonly ThemeRow[]; readonly current: string; readonly saving?: boolean; readonly error?: string}
 /** A page opened from /settings; it draws over the settings page and Esc returns to it. */
 export interface SettingsSubPage {
   readonly id: string; readonly title: string; readonly tabs: readonly CommandTab[]; readonly initialTab: string;

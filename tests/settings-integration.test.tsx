@@ -61,8 +61,8 @@ test('/settings and its legacy alias open the data-driven page, the old two-tab 
     for (const command of ['/settings', '/animations']) {
       await f.open(command);
       const surface = f.app.surfaces.getSnapshot(); assert.equal(surface?.kind, 'settings');
-      assert.ok(surface?.kind === 'settings' && surface.items.length === 16 && surface.pages.map(page => page.id).join() === 'statusbar,permissions,models,shortcuts');
-      assert.match(f.text(), /Settings/); assert.match(f.text(), /‹ logox-dark ›/); assert.doesNotMatch(f.text(), /Theme preset:|Cursor style:|UI animations/);
+      assert.ok(surface?.kind === 'settings' && surface.items.length === 15 && surface.pages.map(page => page.id).join() === 'theme,statusbar,permissions,models,shortcuts');
+      assert.match(f.text(), /Settings/); assert.match(f.text(), /Theme +logox-dark ›/); assert.doesNotMatch(f.text(), /Theme preset:|Cursor style:|UI animations/);
       await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null);
     }
     assert.equal(f.calls, 0);
@@ -89,24 +89,45 @@ test('Default mode and Your name save through the same stores as /permissions an
   } finally {await f.close();}
 });
 
-test('Theme previews live while a draft and reverts on discard; saving keeps it', async () => {
+test('/theme opens its own page in the application: previewing changes the palette, Esc restores it, Enter saves', async () => {
   const f = await fixture();
   try {
-    const original = palette.bg, accent = palette.accent;
-    await f.open();
-    let changed = false;
-    for (let step = 0; step < 6 && !changed; step++) {await f.key('\x1b[C'); changed = palette.bg !== original || palette.accent !== accent;}
-    assert.ok(changed, 'the palette changed while the page was still a draft'); assert.match(f.text(), /1 unsaved/);
-    await f.key('\x1b'); assert.match(f.text(), /Discard 1 unsaved change\?/);
-    await f.key('n'); assert.ok(palette.bg !== original || palette.accent !== accent, 'keeping the draft keeps the preview');
-    await f.key('\x1b'); await f.key('y');
-    assert.equal(f.app.surfaces.getSnapshot(), null);
-    assert.equal(palette.bg, original); assert.equal(palette.accent, accent, 'discard puts the saved theme back');
-    await assert.rejects(readFile(f.uiPath, 'utf8'), {code: 'ENOENT'}, 'nothing was written');
-    await f.open(); await f.key('\x1b[C'); const previewed = palette.accent;
+    const original = {...palette};
+    await f.open('/theme');
+    const surface = f.app.surfaces.getSnapshot(); assert.ok(surface?.kind === 'theme' && surface.current === 'logox-dark' && surface.themes.length >= 10);
+    await f.key('\x1b[B'); assert.notDeepEqual({...palette}, original);
+    await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null); assert.deepEqual({...palette}, original);
+    await assert.rejects(readFile(f.uiPath, 'utf8'), {code: 'ENOENT'});
+    await f.open('/theme'); await f.key('\x1b[B'); const previewed = {...palette};
     await f.key('\r');
-    assert.equal(palette.accent, previewed);
-    assert.equal(JSON.parse(await readFile(f.uiPath, 'utf8')).theme !== 'logox-dark', true);
+    await waitFor(() => f.app.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'});
+    assert.deepEqual({...palette}, previewed); assert.notEqual(JSON.parse(await readFile(f.uiPath, 'utf8')).theme, 'logox-dark');
+    assert.ok(f.app.store.getSnapshot().messages.some(message => /^Theme set to /.test(message.text)), 'a status receipt follows');
+  } finally {await f.close();}
+});
+
+test('the Theme row opens /theme over the settings: it previews live, Esc restores and returns, Enter saves and returns', async () => {
+  const f = await fixture();
+  try {
+    const original = {...palette};
+    await f.open();
+    await f.key('\r');
+    const open = f.app.surfaces.getSnapshot();
+    assert.ok(open?.kind === 'settings' && open.theme, 'the theme page sits over the settings'); assert.match(f.text(), /Theme · current/);
+    await f.key('\x1b[B');
+    assert.notDeepEqual({...palette}, original, 'moving the highlight previewed the theme on the whole palette'); assert.match(f.text(), /Theme · previewing /);
+    await assert.rejects(readFile(f.uiPath, 'utf8'), {code: 'ENOENT'}, 'previewing writes nothing');
+    await f.key('\x1b');
+    const back = f.app.surfaces.getSnapshot(); assert.ok(back?.kind === 'settings' && !back.theme, 'Esc returns to the settings'); assert.match(f.text(), /Settings/);
+    assert.deepEqual({...palette}, original, 'Esc put every token back');
+    await f.key('\r'); await f.key('\x1b[B'); const previewed = {...palette};
+    await f.key('\r');
+    const saved = await waitFor(() => f.app.surfaces.getSnapshot(), surface => surface?.kind === 'settings' && !surface.theme, {timeoutMs: 5000, label: 'choosing returns to the settings'});
+    assert.equal(saved?.kind, 'settings');
+    assert.deepEqual({...palette}, previewed);
+    const name = JSON.parse(await readFile(f.uiPath, 'utf8')).theme as string;
+    assert.notEqual(name, 'logox-dark'); assert.match(f.text(), new RegExp('Theme +' + name + ' ›'), 'the Theme row shows the new theme');
+    await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null); assert.deepEqual({...palette}, previewed, 'discarding the settings keeps a saved theme');
   } finally {await f.close();}
 });
 

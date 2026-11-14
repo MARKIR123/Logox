@@ -1,6 +1,6 @@
 # 配色设置
 
-Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角色配置。界面只读取语义色，动画只在配置色之间插值。想改颜色的最短路径：找到主题文件，复制一份，改几个值，在 `/settings` 里选中。
+Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角色配置。界面只读取语义色，动画只在配置色之间插值。想改颜色的最短路径：找到主题文件，复制一份，改几个值，在 `/theme` 里预览并选中。
 
 ## 文件在哪里
 
@@ -44,7 +44,43 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 }
 ```
 
-3. 重启 Logox，在 `/settings` 的 Appearance 分组选择 `Theme`，用左右方向键切到 `my-dark`，按 Enter 保存。修改主题文件后需要重启才会生效。
+3. 运行 `/theme`（或在 `/settings` 的 Appearance 分组打开 `Theme` 一行），在列表里找到 `my-dark`（用户主题带 `· user`），移动高亮即可预览，按 Enter 保存。每次打开 `/theme` 都会重新读取主题文件，所以新增或改过的文件不必重启；写坏的文件会出现在列表末尾并说明原因。已经保存并在使用的主题，改动要重新打开 `/theme` 选一次或重启才会生效。
+
+## 主题页与可读性检查
+
+`/theme` 页面左边是主题列表，右边是样例，样例下面是可读性检查（详细操作见[用户手册](USAGE.md)“主题页”）。预览不写文件：移动高亮时只是把该主题应用到当前调色板，页面按打开时的调色板快照在任何关闭路径上还原；Enter 或点击才经偏好文件保存。
+
+样例使用真实的时间线构建器（用户消息、Logox 发言头与回复、运行中的角色卡片及其子标题和计时、折叠的工具行、展开的工具卡片与 Edit 差异、搜索高亮、路径、链接、梦境卡片）；状态符号、思考档位与权限模式色字、选区、`cardExpanded` 上的提问卡（弱化文字和 `question` 色）以及输入框用同一批调色板字段直接绘制。样例画在该主题的 `bg` 上。
+
+可读性检查把页面实际使用的颜色配对算 WCAG 对比度（相对亮度比，1 到 21）：
+
+| 项 | 前景 / 背景 | 阈值 |
+|---|---|---|
+| `text` / `muted` | `fg` / `muted` 对 `bg` | 4.5 |
+| `text on card` / `muted on card` | `fg` / `muted` 对 `cardExpanded` | 4.5 |
+| `dream text` / `dream muted` | `dreamText` / `dreamMuted` 对 `dreamCollapsed` | 4.5 |
+| `selection` | `selectionFg` 对 `selectionBg` | 4.5 |
+| `diff +` / `diff −` | 新增/删除文字对各自底色 | 3.0 |
+| `border` | `borderMuted` 对 `bg` | 3.0 |
+
+4.5 是 WCAG 对正文文字的要求，3.0 用于图形和边线。第一行写 `Legible` 或 `<n> below threshold`；达标的对用 `success` 色，不达标的用 `warning` 色；比值向下截断到两位小数，显示 `4.50` 即达标。另外，`accent`、`user`、`success`、`warning`、`error`、`question`、`link` 中色相相差不足 20 度的两种颜色会各列一行（如 `accent ≈ warning`）。纯函数在 `src/config/theme-legibility.ts`（`contrastRatio`、`confusablePairs`、`legibilityReport`）。
+
+内置主题当前的检查结果：
+
+| 主题 | 低于阈值的项 | 易混淆的色对 |
+|---|---|---|
+| `logox-dark` | `muted on card` 4.08，`dream muted` 4.23，`border` 1.68 | `accent ≈ link` |
+| `abyss-lantern` | `border` 1.81 | `user ≈ warning` |
+| `catppuccin-mocha` | `muted on card` 3.23，`dream muted` 3.77，`border` 2.45 | `user ≈ warning` |
+| `celadon-pine` | `dream muted` 4.38，`border` 2.17 | `user ≈ warning` |
+| `claude-warm` | `muted on card` 4.08，`border` 1.68 | `user ≈ warning` |
+| `copper-ink` | `border` 2.70 | `accent ≈ warning` |
+| `marginalia` | `border` 2.15 | 无 |
+| `monokai-pro` | `muted on card` 4.08，`dream text` 3.08，`dream muted` 1.30，`border` 1.68 | `accent ≈ warning` |
+| `nord-polar` | `muted on card` 4.08，`border` 1.68 | `accent ≈ user`，`user ≈ link` |
+| `tokyo-night` | `muted on card` 4.08，`dream text` 2.45，`dream muted` 1.03，`border` 1.68 | `accent ≈ error`，`user ≈ link` |
+
+这是提示，不是错误：边线本来就是弱化的装饰，梦境卡片的浅色底在深色主题里常常需要单独调字色。
 
 颜色值写 `#RRGGBB` 或 `$token`（引用另一个字段）。引用在所有继承与覆盖合并之后才解析，所以子主题改了 `fg`，继承来的 `selectionFg: "$fg"` 也会跟着变；显式写的十六进制值是独立的。
 

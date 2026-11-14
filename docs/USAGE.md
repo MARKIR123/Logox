@@ -55,6 +55,7 @@
 
 通常用交互命令即可：
 
+- `/theme`：主题页，带实时预览和可读性检查；详见下文“主题页”。
 - `/settings`：按分组列出外观、启动页和对话偏好，并可进入状态栏、权限、模型与价格、快捷键页面（`/animations` 是旧别名）。详见下文“设置页”。
 - `/config`：只读的生效配置，包括当前模型、思考档位、Base URL 和执行限制。
 - `/status`：运行状态；用量页签只显示会话总计，并提示 `Details: /usage`。
@@ -369,13 +370,37 @@ playwright = false
 
 修改 MCP 配置后需要重启 Logox，`/reload` 不会重启服务。
 
+## 主题页
+
+`/theme` 打开一整页：左边是主题列表（内置主题在前，保持原有顺序，其后是 `~/.logox/themes/` 里的用户主题，标有 `· user`；已保存的主题行尾有 `✓`），右边是用同一份调色板画出的样例，样例下面是可读性检查。`/settings` 的 Appearance 分组里 `Theme` 一行打开的是同一页，Esc 或选定后回到设置页。
+
+- **预览**：移动高亮（`↑`/`↓`、`Tab`、`PageUp`/`PageDown`、`Home`/`End`，鼠标悬停某一行，或在列表上滚轮）就会把该主题应用到整个界面，页面本身立刻换色；预览期间不写任何文件。样例区上滚轮只滚动样例。
+- **选定**：Enter、空格或点击某一行，把主题保存到 `~/.logox/ui-preferences.json` 并关闭，状态栏提示 `Theme set to <名称>`。
+- **放弃**：Esc、页脚的 `Esc cancel`，以及任何不经选定的关闭方式（包括程序退出）都会按页面打开时的调色板快照逐项还原，还原发生在 `CommandSurfaces` 的关闭路径里，不依赖按键处理。保存失败时页面保持打开并显示原因，预览仍在，之后 Esc 照常还原。
+- **加载失败的主题文件**：列在列表末尾，标 `✗` 和原因，不能选中，光标和悬停都会跳过。每次打开页面都会重新读取主题文件，所以新增或修好的文件无需重启即可出现。
+- **布局**：终端够宽（约 100 列）时左右两栏；较窄（约 50 列）时列表在上、样例在下；更窄或太矮时只显示列表（页面自己仍按高亮的主题着色）。调整终端大小会立即重排。
+- **样例**：由一段固定的假会话经过真实的时间线构建器、工具卡片和 Edit 差异渲染器生成，所以不会和真实界面漂移；状态符号、思考档位、权限模式、选区、提问卡和输入框几个区域没有时间线对应物，直接按同样的调色板字段绘制。样例画在该主题的 `bg` 上，便于判断对比。
+
+**可读性检查**：第一行是 `Legible`（全部达标）或 `<n> below threshold`，随后每对颜色一格 `名称 比值`，达标用 `success` 色，低于阈值用 `warning` 色。比值是 WCAG 对比度（1 到 21），显示时向下截断到两位小数，所以显示 `4.50` 就一定达标。
+
+| 名称 | 前景 / 背景 | 阈值 |
+|---|---|---|
+| `text`、`muted` | `fg`、`muted` / `bg` | 4.5 |
+| `text on card`、`muted on card` | `fg`、`muted` / `cardExpanded` | 4.5 |
+| `dream text`、`dream muted` | `dreamText`、`dreamMuted` / `dreamCollapsed` | 4.5 |
+| `selection` | `selectionFg` / `selectionBg` | 4.5 |
+| `diff +`、`diff −` | `diffAdded` / `diffAddedBg`，`diffRemoved` / `diffRemovedBg` | 3.0 |
+| `border` | `borderMuted` / `bg` | 3.0 |
+
+随后列出容易混淆的语义色：在 `accent`、`user`、`success`、`warning`、`error`、`question`、`link` 中，色相相差不到 20 度的两种颜色各占一行，例如 `accent ≈ warning`（`warning` 色）。灰色没有色相，不参与。这是提示而不是错误：不少内置主题的 `border` 只有 1.7 到 2.7，因为边线本来就是弱化的装饰。
+
 ## 设置页
 
 `/settings` 是一页数据驱动的列表：每一行来自 `src/config/settings-definitions.ts` 里的一条定义（标签、说明、分组、类型、可选值、默认值，以及保存和预览的方式）。右侧显示当前值：选项行是 `‹ 值 ›`，开关行是 `[✓]` / `[ ]`，文本行直接显示文字（空值显示 `(none)`）。选中行有一行说明，页面够高时说明可折成两行。
 
 | 分组 | 设置项 | 效果与保存位置 |
 |---|---|---|
-| Appearance | Theme | 主题；草稿阶段就实时预览，丢弃时还原。保存到 `~/.logox/ui-preferences.json` |
+| Appearance | Theme（页面行） | 显示当前主题，按 Enter 或点击打开 `/theme` 页面（见下节“主题页”）；选定后保存到 `~/.logox/ui-preferences.json`，Esc 回到设置页并还原预览 |
 | | Cursor | 光标形状（Block / Underline / Bar） |
 | | Animations | 动效开关，与 `statusbar.json` 里的 `motion` 是同一份 |
 | | Tool card tint | `none` / `subtle` / `standard`：展开卡片的底色强度，把三档嵌套深度的混色比例按 0 / 0.5 / 1 缩放 |
@@ -440,6 +465,7 @@ playwright = false
 | | `/name [称呼 \| --reset]` | 查看、设置或清除 Logox 对你的称呼（最多 32 个显示单元，立即生效；时间线用户标题显示该称呼而不是 `You`，模型在环境信息中得知并用它称呼你） |
 | 配置 | `/config` | 只读查看生效配置 |
 | | `/settings`（旧别名 `/animations`） | 外观、启动页、对话偏好，以及状态栏、权限、模型与价格、快捷键页面 |
+| | `/theme` | 主题页：左侧列表、右侧实时样例和可读性检查，移动高亮即预览（见“主题页”） |
 | | `/statusbar` | 状态栏模块、顺序、风格和配色 |
 | 登录与模型 | `/login [provider]` | 登录、保存 API key、管理自定义接口 |
 | | `/model [provider/model]` | 选择模型；`/model <actor> [provider/model]` 设置角色默认模型 |

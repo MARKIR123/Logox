@@ -58,11 +58,12 @@ test('render tiers: full at 120 columns, the same plan at 80, arrows only on the
         const text = ui.screen();
         assert.match(lines[1]!, /^ {2}Settings/); assert.doesNotMatch(lines[1]!, /unsaved/);
         assert.ok(text.indexOf('Appearance') < text.indexOf('Theme') && text.indexOf('Theme') < text.indexOf('Splash') && text.indexOf('Splash') < text.indexOf('Conversation'));
-        assert.match(lines[rowOf(lines, 'Theme')]!, /^ {2}❯ Theme +‹ logox-dark ›$/, columns + ': values are right-aligned with arrows on a select');
+        assert.match(lines[rowOf(lines, 'Theme')]!, /^ {2}❯ Theme +logox-dark ›$/, columns + ': the Theme row is a page row that shows the saved theme before its arrow');
+        assert.match(lines[rowOf(lines, 'Tool card tint')]!, /‹ standard ›$|standard$/, columns + ': values are right-aligned, with arrows on a select');
         assert.match(lines[rowOf(lines, 'Animations')]!, /\[✓\]$/, columns + ': booleans are checkboxes at the right edge');
         assert.match(lines[rowOf(lines, 'Your name')]!, /\(none\)$/, 'text rows show their value plainly');
-        assert.match(text, /Colour theme; the page previews/, 'the selected row has a description');
-        assert.match(lines.at(-2)!, /^ {2}↑↓ choose · ←→ change · Enter save/, 'footer hints');
+        assert.match(text, /Colour theme; the \/theme page previews/, 'the selected row has a description');
+        assert.match(lines.at(-2)!, /^ {2}↑↓ choose · Enter open · Ctrl\+S save/, 'footer hints of a page row');
         if (columns >= 70) {
           assert.match(lines[1]!, /\/ search$/, 'the search control sits at the right of the header');
           assert.match(lines[rowOf(lines, 'Cursor')]!, /‹ Block █ ›$/);
@@ -79,7 +80,7 @@ test('a tall page wraps the description onto a second row; a long list scrolls w
   const f = await settingsFixture();
   const tall = await mount(f.items(), f.pages, 60, 40);
   try {
-    assert.match(tall.screen(), /Colour theme; the page previews it live and puts the old\s*\n.*one back when you discard\./);
+    assert.match(tall.screen(), /Colour theme; the \/theme page previews each one live[\s\S]*how legible it is\./);
   } finally {await tall.close();}
   const short = await mount(f.items(), f.pages, 80, 12);
   try {
@@ -97,20 +98,18 @@ test('keyboard: arrows choose and change, Space toggles, the unsaved count follo
   const f = await settingsFixture();
   const ui = await mount(f.items(), f.pages);
   try {
-    await ui.key('\x1b[C');
-    assert.match(ui.screen(), /Settings · 1 unsaved/); assert.match(ui.screen(), /‹ claude-warm ›/);
-    assert.deepEqual(ui.calls.previews, [['theme', 'claude-warm']], 'a theme draft previews live');
+    await ui.key('\x1b[C'); assert.doesNotMatch(ui.screen(), /unsaved/, 'the Theme row is a page: arrows change nothing on it');
+    await ui.key('\x1b[B'); await ui.key('\x1b[C');
+    assert.match(ui.screen(), /Settings · 1 unsaved/); assert.match(ui.screen(), /‹ Underline _ ›/);
     await ui.key('\x1b[D'); assert.doesNotMatch(ui.screen(), /unsaved/, 'back to the saved value is no change');
-    await ui.key('\x1b[D'); assert.match(ui.screen(), /‹ mist-light ›/, 'left wraps around');
+    await ui.key('\x1b[D'); assert.match(ui.screen(), /‹ Bar \| ›/, 'left wraps around');
     await ui.key('\x1b[B'); await ui.key(' ');
-    assert.match(ui.screen(), /❯ Cursor +‹ Underline _ ›/, 'Space advances a select');
-    await ui.key('\x1b[B'); await ui.key(' ');
-    assert.match(ui.screen(), /❯ Animations +\[ \]/); assert.match(ui.screen(), /Settings · 3 unsaved/);
+    assert.match(ui.screen(), /❯ Animations +\[ \]/, 'Space toggles a checkbox'); assert.match(ui.screen(), /Settings · 2 unsaved/);
     await ui.key('\x1b[B'); await ui.key('\x1b[B'); await ui.key('\x1b[B'); await ui.key('\x1b[C'); await ui.key('\x1b[C');
     assert.match(ui.screen(), /❯ Context bar width +‹ 24 ›/, 'a number steps by 4 and stops at its maximum');
     await ui.key('\x1b[C'); assert.match(ui.screen(), /‹ 24 ›/);
     await ui.key('\r');
-    assert.deepEqual(ui.calls.saved, [{theme: 'mist-light', cursor: 'Underline _', animations: false, contextBarWidth: 24}]);
+    assert.deepEqual(ui.calls.saved, [{cursor: 'Bar |', animations: false, contextBarWidth: 24}]);
     assert.equal(ui.calls.discards, 0);
   } finally {await ui.close(); await f.close();}
 });
@@ -119,7 +118,8 @@ test('Enter without changes closes like a discard; Ctrl+S saves from a page row'
   const f = await settingsFixture();
   const ui = await mount(f.items(), f.pages);
   try {
-    await ui.key('\r'); assert.equal(ui.calls.discards, 1); assert.deepEqual(ui.calls.saved, []);
+    await ui.key('\r'); assert.deepEqual(ui.calls.opened, ['theme'], 'Enter on the Theme row opens the /theme page'); assert.equal(ui.calls.discards, 0);
+    await ui.key('\x1b[B'); await ui.key('\r'); assert.equal(ui.calls.discards, 1); assert.deepEqual(ui.calls.saved, []);
     await ui.key('\x1b[C'); await ui.key('\x1b[F'); assert.match(ui.screen(), /Enter open · Ctrl\+S save/);
     await ui.key('\x13'); assert.equal(ui.calls.saved.length, 1);
   } finally {await ui.close(); await f.close();}
@@ -163,7 +163,7 @@ test('Esc with unsaved changes asks inline; n keeps editing, y discards, both ar
   const ui = await mount(f.items(), f.pages);
   try {
     await ui.key('\x1b'); assert.equal(ui.calls.discards, 1, 'nothing to lose, nothing to ask');
-    await ui.key('\x1b[C'); await ui.key('\x1b');
+    await ui.key('\x1b[B'); await ui.key('\x1b[C'); await ui.key('\x1b');
     assert.match(ui.screen(), /Discard 1 unsaved change\?  y Discard · n Keep editing/);
     assert.equal(ui.calls.discards, 1);
     await ui.key('\r'); assert.equal(ui.calls.discards, 1, 'Enter never discards by accident');
@@ -201,7 +201,7 @@ test('mouse: click selects, ‹ › change, a checkbox toggles, wheel moves, pag
     const footer = ui.lines().findIndex(text => text.includes('↑↓ choose'));
     await ui.click(ui.lines()[footer]!.indexOf('←→ change') + 2, footer); assert.match(ui.screen(), /‹ Underline _ ›/, '←→ change is a button');
     await ui.click(ui.lines()[footer]!.indexOf('/ search') + 2, footer); assert.match(ui.screen(), /\/▌/, '/ search is a button');
-    await ui.key('\x1b');
+    await ui.key('\x1b'); await ui.key('\x1b[B'); // clearing the search selects the first row (the Theme page row); Cursor is the next one
     await ui.click(ui.lines()[footer]!.indexOf('Enter save') + 2, footer); assert.deepEqual(ui.calls.saved, [{cursor: 'Underline _'}]);
     await ui.click(ui.lines()[footer]!.indexOf('Esc discard') + 2, footer); assert.match(ui.screen(), /Discard 1 unsaved change/, 'Esc discard is a button and asks first');
     await ui.key('n');
@@ -232,13 +232,13 @@ test('a sub-page draws over the settings, Esc returns, and the drafts underneath
   const sub: SettingsSubPage = {id: 'shortcuts', title: 'Shortcuts', tabs, initialTab: 'shortcuts'};
   const ui = await mount(f.items(), f.pages);
   try {
-    await ui.key('\x1b[C'); assert.match(ui.screen(), /1 unsaved/);
+    await ui.key('\x1b[B'); await ui.key('\x1b[C'); assert.match(ui.screen(), /1 unsaved/);
     await ui.rerender({sub});
     assert.match(ui.screen(), /Shortcuts/); assert.match(ui.screen(), /Ctrl\+S {2}save/); assert.doesNotMatch(ui.screen(), /Appearance/);
     await ui.key('\x1b[B'); await ui.key('\r'); assert.deepEqual(ui.calls.saved, [], 'settings keys are inert while the sub-page is open');
     await ui.key('\x1b'); assert.equal(ui.calls.closedSub, 1);
     await ui.rerender({});
-    assert.match(ui.screen(), /Settings · 1 unsaved/, 'the draft survived the round trip'); assert.match(ui.screen(), /‹ claude-warm ›/);
+    assert.match(ui.screen(), /Settings · 1 unsaved/, 'the draft survived the round trip'); assert.match(ui.screen(), /‹ Underline _ ›/);
   } finally {await ui.close(); await f.close();}
 });
 
@@ -246,9 +246,9 @@ test('saving locks the page and an error stays in the footer with the drafts int
   const f = await settingsFixture();
   const ui = await mount(f.items(), f.pages);
   try {
-    await ui.key('\x1b[C');
+    await ui.key('\x1b[B'); await ui.key('\x1b[C');
     await ui.rerender({saving: true}); assert.match(ui.screen(), /Saving…/);
-    await ui.key('\x1b[C'); await ui.key('\r'); assert.deepEqual(ui.calls.saved, []); assert.match(ui.screen(), /‹ claude-warm ›/);
+    await ui.key('\x1b[C'); await ui.key('\r'); assert.deepEqual(ui.calls.saved, []); assert.match(ui.screen(), /‹ Underline _ ›/);
     await ui.rerender({error: 'Cursor was not saved: disk full'});
     assert.match(ui.screen(), /Cursor was not saved: disk full/); assert.match(ui.screen(), /1 unsaved/);
     await ui.rerender({}); assert.match(ui.screen(), /↑↓ choose/);
@@ -259,13 +259,14 @@ test('the layout plan is the single source for drawing and hit regions', async (
   const f = await settingsFixture();
   try {
     const items = f.items(), common = {items, pages: f.pages, width: 100, height: 30, y: 0, pointer: null, hoverColor: HOVER};
-    const view = {drafts: {theme: 'claude-warm'}, query: '', searching: false, selected: 0, scroll: 0, confirming: false, saving: false, error: '', notice: ''};
+    const view = {drafts: {cursor: 'Underline _'}, query: '', searching: false, selected: 0, scroll: 0, confirming: false, saving: false, error: '', notice: ''};
     const plan = settingsLayout({...common, view});
     assert.equal(plan.dirty, 1); assert.equal(plan.header.map(seg => seg.text).join('').trim().startsWith('Settings · 1 unsaved'), true);
     assert.ok(plan.header.some(seg => seg.text === '1 unsaved' && seg.color === palette.warning), 'the unsaved count uses the warning colour');
-    const theme = plan.hits.filter(hit => hit.region.y === 3);
-    assert.deepEqual(theme.map(hit => hit.command.kind), ['change', 'change', 'select'], 'narrow regions come before the row-wide one');
-    assert.ok(theme[0]!.region.x1 === theme[0]!.region.x0 + 1 && theme[1]!.region.x1 === 98, 'the arrows are one cell at the value block edges');
-    assert.deepEqual(changedDrafts(items, {theme: 'logox-dark', cursor: 'Bar |', ghost: 1}), {cursor: 'Bar |'}, 'unchanged and unknown drafts are not changes');
+    assert.deepEqual(plan.hits.filter(hit => hit.region.y === 3).map(hit => hit.command.kind), ['open'], 'the Theme page row opens as a whole');
+    const cursor = plan.hits.filter(hit => hit.region.y === 4);
+    assert.deepEqual(cursor.map(hit => hit.command.kind), ['change', 'change', 'select'], 'narrow regions come before the row-wide one');
+    assert.ok(cursor[0]!.region.x1 === cursor[0]!.region.x0 + 1 && cursor[1]!.region.x1 === 98, 'the arrows are one cell at the value block edges');
+    assert.deepEqual(changedDrafts(items, {cursor: 'Bar |', animations: true, ghost: 1}), {cursor: 'Bar |'}, 'unchanged and unknown drafts are not changes');
   } finally {await f.close();}
 });

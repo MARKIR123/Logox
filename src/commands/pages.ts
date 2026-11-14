@@ -14,7 +14,7 @@ import {themeSchema, type Config} from '../config/config.js';
 import {effortSchema} from '../config/model-preferences.js';
 import {settingDefinition, settingDefinitions, settingOptions, settingsPages, saveSettings, type SettingsEnv} from '../config/settings-definitions.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
-import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, listThemes, loadThemePresets, resolveTheme, type CursorStyleName} from '../config/theme-presets.js';
+import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, loadThemePresets, resolveTheme, themeListing, type CursorStyleName} from '../config/theme-presets.js';
 import {UiPreferences} from '../config/ui-settings.js';
 import {saveUserName, setUserLabel} from '../config/user-profile.js';
 import {mcpRegistrations, type ProjectExtensions} from '../extensions/runtime.js';
@@ -23,7 +23,7 @@ import {permissionDecisionSchema, permissionModeSchema, permissionScopeSchema} f
 import {validateRuleInput} from '../permissions/rule-input.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
-import type {SettingsItem} from '../runtime/command-surface.js';
+import type {SettingsItem, ThemePageData} from '../runtime/command-surface.js';
 import {isDirector} from '../runtime/director-id.js';
 import {permissionModes} from '../runtime/permission-mode.js';
 import type {RuntimeStore} from '../runtime/store.js';
@@ -35,7 +35,7 @@ import {modelsRows} from './models-page.js';
 import type {ProvidersPage} from './providers-page.js';
 import {shortcutRows} from './shortcuts.js';
 import {tabContent} from './tab-rows.js';
-import type {CommandSurfaces, PageActions} from './surfaces.js';
+import type {CommandSurfaces, PageActions, ThemeActions} from './surfaces.js';
 
 /**
  * Loads the theme presets and the saved UI preferences (theme, cursor style) in the background and returns the preferences.
@@ -120,8 +120,6 @@ export function createPages(deps: PagesDeps) {
   /** Everything /settings reads and writes, wired to the real stores. */
   const settingsEnv: SettingsEnv = {
     ui, statusbar,
-    themes: () => listThemes().map(theme => theme.name),
-    applyTheme: name => {applyThemePreset(name);},
     applyCursor: name => applyCursorStyle(name as CursorStyleName, process.stdout),
     userName: () => state.userName,
     saveUserName: async name => {
@@ -167,9 +165,24 @@ export function createPages(deps: PagesDeps) {
     }
     return null;
   };
+  /** The saved theme as a theme file name (older preferences stored display names). */
+  const savedTheme = () => resolveTheme(ui.get().theme)?.name ?? DEFAULT_THEME;
+  /** /theme reads the theme files again, so a file added or fixed since startup shows up; nothing is saved until a choice. */
+  const themePage = (): {data: ThemePageData; actions: ThemeActions} => {
+    loadThemePresets(homeDir);
+    return {
+      data: {themes: themeListing(), current: savedTheme()},
+      actions: {
+        apply: name => {applyThemePreset(name);},
+        save: async name => {await ui.save({theme: name}); applyThemePreset(name);},
+      },
+    };
+  };
+  const openTheme = () => {const {data, actions} = themePage(); surfaces.openTheme(data, actions);};
   const openSettings = () => {
     let previewed = false;
-    surfaces.openSettings(settingsItems(), settingsPages.map(({id, label, description}) => ({id, label, description})), {
+    surfaces.openSettings(settingsItems(), settingsPages.map(({id, label, description, group}) => ({id, label, description, ...(group ? {group} : {}), ...(id === 'theme' ? {value: savedTheme()} : {})})), {
+      openTheme: themePage,
       save: changes => saveSettings(settingsEnv, changes),
       preview: (key, value) => {const definition = settingDefinition(key); if (definition?.preview) {previewed = true; definition.preview(settingsEnv, value);}},
       revert: () => {if (previewed) for (const definition of settingDefinitions) definition.revert?.(settingsEnv);},
@@ -187,6 +200,6 @@ export function createPages(deps: PagesDeps) {
       edit: path => openInEditor(path),
     });
   };
-  return {pageActions, openSettings, openEnsemble, pageIsOpen, refreshCurrentPage};
+  return {pageActions, openSettings, openTheme, openEnsemble, pageIsOpen, refreshCurrentPage};
 }
 export type Pages = ReturnType<typeof createPages>;

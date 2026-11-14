@@ -33,7 +33,7 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
   const [, refreshReading] = useState(0);
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
-    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
+    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
     if (plane) plane.present({
       ...current,
       width,
@@ -47,7 +47,7 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
-    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'result' || welcome) plane.hide();
+    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome) plane.hide();
     else plane.present({
       ...view,
       width,

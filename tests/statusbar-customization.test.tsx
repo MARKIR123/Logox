@@ -113,8 +113,6 @@ test('settings saves appearance and motion through the data-driven page and keep
     await f.open('/settings');
     const page = f.app.surfaces.getSnapshot(); assert.ok(page?.kind === 'settings');
     assert.match(f.text(), /Settings/); assert.match(f.text(), /Appearance/); assert.match(f.text(), /Animations/);
-    await f.key('\x1b[C');
-    const themeDraft = f.text().match(/‹ (\S+) ›/)?.[1]; assert.ok(themeDraft);
     await f.key('\x1b[B'); await f.key('\x1b[C');
     await f.key('\x1b[B'); await f.key('\x1b[D');
     assert.match(f.text(), /1? ?unsaved/); assert.match(f.text(), /\[ \]/);
@@ -122,7 +120,7 @@ test('settings saves appearance and motion through the data-driven page and keep
     assert.equal(f.app.surfaces.getSnapshot(), null, 'Enter saves and closes with a receipt');
     assert.ok(f.app.store.getSnapshot().messages.some(message => message.text === 'Settings saved'));
     const ui = JSON.parse(await readFile(f.uiPath, 'utf8'));
-    assert.equal(ui.theme, themeDraft); assert.equal(ui.cursor, 'Underline _');
+    assert.equal(ui.cursor, 'Underline _');
     const saved = JSON.parse(await readFile(f.path, 'utf8'));
     assert.equal(saved.motion, false); assert.equal(f.app.statusbar.getSnapshot().motion, false);
     assert.equal(f.calls, 0); assert.equal(f.networkCalls, 0);

@@ -15,6 +15,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'usage', usage: '/usage', description: 'Session cost and tokens per actor, model and category, plus plan limits (alias /cost)', argument: 'none'},
   {name: 'statusbar', usage: '/statusbar', description: 'Customize statusbar modules, order, style, and colors', argument: 'none'},
   {name: 'settings', usage: '/settings', description: 'Appearance, splash, conversation, status bar, permissions, models and shortcuts', argument: 'none'},
+  {name: 'theme', usage: '/theme', description: 'Pick a colour theme with a live preview and a legibility check', argument: 'none'},
   {name: 'config', usage: '/config', description: 'Inspect effective model and execution configuration (read-only)', argument: 'none'},
   {name: 'cast', usage: '/cast task', description: 'Dispatch task across actor ensemble', argument: 'text'},
   {name: 'compact', usage: '/compact', description: 'Compact current role context while preserving ledgers', argument: 'none'},

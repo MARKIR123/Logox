@@ -1,7 +1,7 @@
 # Module: Configuration & Persistence (`src/config/`)
 
 ## 1. Scope
-- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider templates (`presets`, with `templateNames()`, `accountTemplateNames()` and `providerFamily()`; a retired template name such as `openai-compatible` resolves silently to its template in `loadConfig()`/`modelSettings()` through `src/config/config.ts:legacyTemplateNames`, unless the user gave it a `base_url` or `[providers.<name>]`), saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, UI presentation preferences (`ui-settings.ts`) and the `/settings` row definitions (`settings-definitions.ts`), and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
+- **Owns**: The config schema and cascade (`config.ts:loadConfig()`), `modelSettings()` (thinking protocol and level inference), provider templates (`presets`, with `templateNames()`, `accountTemplateNames()` and `providerFamily()`; a retired template name such as `openai-compatible` resolves silently to its template in `loadConfig()`/`modelSettings()` through `src/config/config.ts:legacyTemplateNames`, unless the user gave it a `base_url` or `[providers.<name>]`), saved model preferences and atomic `StateFile<T>` (`model-preferences.ts`), model variant grouping (`model-grouping.ts`), statusbar and onboarding preferences, UI presentation preferences (`ui-settings.ts`) and the `/settings` row definitions (`settings-definitions.ts`; the Theme row is a page row that opens `/theme`), the theme legibility checks (`theme-legibility.ts`), and the theme registry (shipped `themes/*.json` plus `~/.logox/themes/*.json`).
 - **Does not own**: HTTP transport, model discovery and wire formats ([`src/providers/AGENTS.md`](../providers/AGENTS.md)); the lock and atomic-replace primitives (`src/store/file-lock.ts`, `src/store/replace-file.ts`, see [`src/runtime/AGENTS.md`](../runtime/AGENTS.md)); picker and settings panels (`src/tui/`); actor colors and models ([`src/actors/AGENTS.md`](../actors/AGENTS.md)).
 - **Design rationale**: [docs/USAGE.md](../../docs/USAGE.md) (load order, keys); [docs/COLORS.md](../../docs/COLORS.md) (theme files and tokens); [docs/modules/task-models.md](../../docs/modules/task-models.md) (model selection).
 
@@ -17,6 +17,8 @@
 | Collapse model variants in the picker | `model-grouping.ts:groupModelsForProvider()` | `model-grouping.ts:groupModelFamilies()` |
 | Statusbar modules, styles, palettes | `statusbar-preferences.ts:StatusbarPreferences` | `statusbar-palettes.json`, `~/.logox/statusbar.json` |
 | Theme files, `base` chains, user overrides | `theme-presets.ts:loadThemePresets()` | `theme-palette.ts:resolveThemeColors()`, `themes/logox-dark.json` |
+| The `/theme` list (shipped first, then user, unavailable files with their reason) | `theme-presets.ts:themeListing()` | `theme-presets.ts:themeIssues()`, `src/tui/panels/theme-layout.ts:themeLayout` |
+| Contrast ratios and confusable colours of a theme | `theme-legibility.ts:legibilityReport()` | `theme-legibility.ts:contrastRatio()`, `theme-legibility.ts:confusablePairs()` |
 | Add or change a `/settings` row (label, description, group, kind, options, default, persistence) | `settings-definitions.ts:settingDefinitions` | `ui-settings.ts:UiPreferences`, `tests/settings-definitions.test.ts` |
 | Presentation preferences read by renderers (tool tint, thinking display, diff layout, splash, enter key, notify) | `ui-settings.ts:uiSettings()` | `ui-settings.ts:applyUiSettings`, `~/.logox/ui-preferences.json` |
 | Preferred user name (`/name`, onboarding step, live timeline label) | `user-profile.ts:sanitizeUserName()` | `user-profile.ts:saveUserName()`, `src/context/environment.ts:formatEnvironment()` |
@@ -38,7 +40,7 @@
 
 ### Add a shipped theme
 1. Create `themes/<name>.json` with `colors` and optionally `base` (`logox-dark` is the root).
-2. Update the shipped-theme count assertions and list in `tests/theme-presets.test.ts` (it expects exactly the shipped set). Build copies `themes/*.json` to `dist`.
+2. Update the shipped-theme count assertions and list in `tests/theme-presets.test.ts` (it expects exactly the shipped set). Build copies `themes/*.json` to `dist`. Check the new theme on `/theme` (the legibility block) and add its row to the table in `docs/COLORS.md`.
 - Tests: `tests/theme-presets.test.ts`.
 
 ### Add a `/settings` row
@@ -63,6 +65,7 @@
 - **An unreadable or invalid saved preference never aborts startup**: one diagnostic is emitted and config values win; the file is left untouched. Enforced by `tests/model-preferences-usage.test.ts` (diagnostic and fallback); byte preservation is *Unenforced*.
 - **`StateFile` writes are locked, temp-then-replace, and never overwrite a corrupt file**: Enforced by `tests/state-file-lock.test.ts`.
 - **Colors are data**: system colors live only in theme JSON (`logox-dark.json` is complete and the root); actor colors and card surfaces belong to `~/.logox/actors/<id>/config.yaml`. Enforced by `tests/color-literals.test.ts`, `tests/theme-colors.test.ts`.
+- **Legibility is a pure function of a palette**: `theme-legibility.ts` computes WCAG contrast (4.5 for the text pairs, 3.0 for `border` and the diff pairs) and flags semantic colours (`accent`, `user`, `success`, `warning`, `error`, `question`, `link`) whose hue differs by less than 20 degrees; it reads no global, so any theme can be checked without applying it. Enforced by `tests/theme-legibility.test.ts`.
 - **Theme application is atomic**: aliases resolve after inheritance; an invalid overlay changes nothing. Enforced by `tests/theme-colors.test.ts`.
 - **Bad user theme files are skipped and reported by `themeIssues()`; a bad shipped file throws**: Enforced by `tests/theme-presets.test.ts` (user side); the shipped-file throw is *Unenforced*.
 - **Thinking levels per protocol** (`deepseek` has no `medium`; `anthropic-adaptive` on Opus adds `max`; others default to five levels). Enforced by `tests/model-preferences-usage.test.ts`; a user `thinking_levels` always wins.

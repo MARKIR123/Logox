@@ -43,8 +43,9 @@ test('every definition names a known group, a description, a label, a default an
         assert.ok(Number(definition.default) >= definition.min! && Number(definition.default) <= definition.max!, label + ' default inside bounds');
       }
     }
-    assert.ok(settingDefinitions.some(definition => definition.preview) && settingDefinition('theme')?.revert, 'the theme previews and reverts');
-    assert.deepEqual(settingsPages.map(page => page.id), ['statusbar', 'permissions', 'models', 'shortcuts']);
+    assert.equal(settingDefinition('theme'), undefined, 'the theme is chosen on its own /theme page, not by an inline row');
+    assert.deepEqual(settingsPages.map(page => page.id), ['theme', 'statusbar', 'permissions', 'models', 'shortcuts']);
+    assert.equal(settingsPages[0]!.group, 'appearance', 'the Theme row leads the Appearance group');
     for (const page of settingsPages) assert.ok(page.label && page.description.endsWith('.'), page.id + ' description');
     assert.equal(settingText(settingDefinition('diffLayout')!, 'auto'), 'auto (by width)');
     assert.equal(settingText(settingDefinition('animations')!, true), '[✓]');
@@ -70,7 +71,7 @@ test('every setting persists through its own store and survives a reload', async
     // Everything the ui-preferences file owns comes back from disk.
     const reloadedUi = new UiPreferences(f.root); await reloadedUi.load();
     assert.deepEqual({...reloadedUi.get()}, {...f.ui.get()});
-    assert.equal(reloadedUi.get().theme, 'claude-warm'); assert.equal(reloadedUi.get().cursor, 'Underline _');
+    assert.equal(reloadedUi.get().cursor, 'Underline _');
     for (const key of ['toolTint', 'startPage', 'emblem', 'tagline', 'thinkingDisplay', 'diffLayout', 'notify', 'enterKey'] as const) {
       assert.notEqual(reloadedUi.get()[key], defaultUiSettings[key], key + ' was saved');
     }
@@ -80,7 +81,7 @@ test('every setting persists through its own store and survives a reload', async
     assert.equal(reloadedBar.getSnapshot().modules.find(module => module.id === 'context')?.enabled, false, 'context bar');
     // The other stores took the write through their hooks.
     assert.equal(f.state.name, 'Tester'); assert.deepEqual(f.state.savedEfforts, ['off']); assert.deepEqual(f.state.savedModes, ['auto']);
-    assert.deepEqual(f.state.appliedThemes, ['claude-warm']); assert.deepEqual(f.state.appliedCursors, ['Underline _']);
+    assert.deepEqual(f.state.appliedCursors, ['Underline _']);
     // Live settings follow the saved file.
     assert.equal(uiSettings().toolTint, f.ui.get().toolTint); assert.equal(uiSettings().enterKey, 'newline');
   } finally {applyUiSettings(defaultUiSettings); await f.close();}
@@ -94,10 +95,10 @@ test('saveSettings writes in page order, coerces numbers and reports the first f
     const done = await saveSettings(f.env, {toolTint: 'subtle', animations: false, contextBarWidth: 12});
     assert.equal(done.error, undefined);
     assert.deepEqual(done.saved, {animations: false, toolTint: 'subtle', contextBarWidth: 12}, 'saved values come back in definition order');
-    const failed = await saveSettings(f.env, {theme: 'claude-warm', cursor: 'Sparkle', startPage: false});
-    assert.match(failed.error ?? '', /Cursor was not saved: Cursor: "Sparkle" is not one of/);
-    assert.deepEqual(failed.saved, {theme: 'claude-warm'}, 'the earlier row stays saved, the later one is not attempted');
-    assert.equal(f.ui.get().startPage, true);
+    const failed = await saveSettings(f.env, {animations: true, emblem: 'huge', tagline: 'rotate'});
+    assert.match(failed.error ?? '', /Emblem size was not saved: Emblem size: "huge" is not one of/);
+    assert.deepEqual(failed.saved, {animations: true}, 'the earlier row stays saved, the later one is not attempted');
+    assert.equal(f.ui.get().tagline, 'fixed');
     assert.deepEqual(await saveSettings(f.env, {}), {saved: {}});
   } finally {applyUiSettings(defaultUiSettings); await f.close();}
 });

@@ -57,7 +57,7 @@ export interface SubmitDeps {
   input: Pick<InputDelivery, 'beginTask' | 'dispatchInput' | 'ownerIsBusy'>;
   modelSelection: Pick<ModelSelection, 'isSelecting' | 'saveSelection' | 'saveEffort' | 'openThinking' | 'openModels' | 'modelCommand' | 'rememberProvider' | 'current'>;
   providers: Pick<ProviderManagement, 'wizardRows' | 'loginWizard' | 'removeProvider'>;
-  pages: Pick<Pages, 'openSettings' | 'openEnsemble' | 'pageActions'>;
+  pages: Pick<Pages, 'openSettings' | 'openTheme' | 'openEnsemble' | 'pageActions'>;
   buildContext: CommandContextBuilder;
   sessionCommand(text: string): Promise<boolean>;
   requireIdle(): void;
@@ -168,6 +168,7 @@ export function createSubmit(deps: SubmitDeps) {
     state.pageOwner = source;
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
+    if (text === '/theme') {pages.openTheme(); return;}
     const pageSpec = createCommandTabsFor(text, buildContext());
     if (pageSpec) {
       state.activeCommandPage = text;

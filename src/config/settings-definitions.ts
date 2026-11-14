@@ -18,9 +18,6 @@ export const cursorChoices = ['Block █', 'Underline _', 'Bar |'] as const;
 export interface SettingsEnv {
   readonly ui: UiPreferences;
   readonly statusbar: Pick<StatusbarPreferences, 'getSnapshot' | 'save' | 'saveMotion'>;
-  themes(): readonly string[];
-  /** Applies a theme to the live palette without saving it (preview and revert use this too). */
-  applyTheme(name: string): void;
   applyCursor(name: string): void;
   userName(): string | undefined;
   saveUserName(name: string | undefined): Promise<string | undefined>;
@@ -51,8 +48,13 @@ export interface SettingDefinition {
   preview?(env: SettingsEnv, value: SettingValue): void;
   revert?(env: SettingsEnv): void;
 }
-export interface SettingsPageDefinition {readonly id: 'statusbar' | 'permissions' | 'models' | 'shortcuts'; readonly label: string; readonly description: string}
+export interface SettingsPageDefinition {
+  readonly id: 'theme' | 'statusbar' | 'permissions' | 'models' | 'shortcuts'; readonly label: string; readonly description: string;
+  /** A group of the setting rows: the page row sits first in that group instead of under `Pages`. */
+  readonly group?: Exclude<SettingGroupId, 'pages'>;
+}
 export const settingsPages: readonly SettingsPageDefinition[] = [
+  {id: 'theme', label: 'Theme', group: 'appearance', description: 'Colour theme; the /theme page previews each one live and shows how legible it is.'},
   {id: 'statusbar', label: 'Status bar', description: 'Choose, order and style the status line modules and the context gauge.'},
   {id: 'permissions', label: 'Permissions', description: 'Permission mode, saved rules and this run\'s approval statistics.'},
   {id: 'models', label: 'Models & pricing', description: 'Configured models with window, output limit, prices and how confidently each was matched.'},
@@ -78,12 +80,6 @@ const gauge = (env: SettingsEnv): StatusbarAppearance => {
 };
 
 export const settingDefinitions: readonly SettingDefinition[] = [
-  {key: 'theme', label: 'Theme', group: 'appearance', kind: 'select', default: 'logox-dark', options: env => env.themes(),
-    description: 'Colour theme; the page previews it live and puts the old one back when you discard.',
-    read: env => env.ui.get().theme,
-    write: async (env, value) => {await env.ui.save({theme: String(value)}); env.applyTheme(String(value));},
-    preview: (env, value) => env.applyTheme(String(value)),
-    revert: env => env.applyTheme(env.ui.get().theme)},
   {key: 'cursor', label: 'Cursor', group: 'appearance', kind: 'select', default: 'Block █', options: cursorChoices,
     description: 'Shape of the terminal cursor while Logox runs.',
     read: env => env.ui.get().cursor,

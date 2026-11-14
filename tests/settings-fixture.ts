@@ -10,15 +10,13 @@ import type {SettingsItem, SettingsPageLink} from '../src/runtime/command-surfac
 export async function settingsFixture() {
   const root = await mkdtemp(join(tmpdir(), 'logox-settings-'));
   const state = {
-    name: undefined as string | undefined, effort: 'auto', mode: 'default', theme: 'logox-dark',
-    appliedThemes: [] as string[], appliedCursors: [] as string[], savedModes: [] as string[], savedEfforts: [] as string[],
+    name: undefined as string | undefined, effort: 'auto', mode: 'default',
+    appliedCursors: [] as string[], savedModes: [] as string[], savedEfforts: [] as string[],
   };
   const ui = new UiPreferences(root), statusbar = new StatusbarPreferences(join(root, '.logox', 'statusbar.json'));
   await ui.load(); await statusbar.load();
   const env: SettingsEnv = {
     ui, statusbar,
-    themes: () => ['logox-dark', 'claude-warm', 'mist-light'],
-    applyTheme: name => {state.theme = name; state.appliedThemes.push(name);},
     applyCursor: name => {state.appliedCursors.push(name);},
     userName: () => state.name,
     saveUserName: async name => {state.name = name; return name;},
@@ -34,6 +32,6 @@ export async function settingsFixture() {
     ...(definition.labels ? {labels: definition.labels} : {}),
     ...(definition.min !== undefined ? {min: definition.min} : {}), ...(definition.max !== undefined ? {max: definition.max} : {}), ...(definition.step !== undefined ? {step: definition.step} : {}),
   }));
-  const pages: SettingsPageLink[] = settingsPages.map(({id, label, description}) => ({id, label, description}));
+  const pages: SettingsPageLink[] = settingsPages.map(({id, label, description, group}) => ({id, label, description, ...(group ? {group} : {}), ...(id === 'theme' ? {value: ui.get().theme} : {})}));
   return {root, env, state, items, pages, ui, statusbar, close: () => rm(root, {recursive: true, force: true})};
 }
