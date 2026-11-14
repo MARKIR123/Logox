@@ -121,6 +121,7 @@ test('final reports separate unverified checks and known risks; verification is 
   assert.match(collaborationFor('techne'), /Verify incrementally: read the evidence a teammate's report provides or what the assignment says is already verified/);
   assert.doesNotMatch(collaborationFor('logox'), /Verify incrementally/);
   assert.match(profile('logox', 'collaboration.md'), /Accept on the record[\s\S]*check yourself only what the two leave doubtful[\s\S]*say in your answer what you relied on/);
+  assert.match(profile('logox', 'collaboration.md'), /Accept on the record[\s\S]*Do not redefine success as a smaller or easier part of the request: check each requested outcome against evidence, and treat what you could not verify as not done\./);
 });
 
 test('the empty-reply reminder is one static constant', () => {

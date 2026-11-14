@@ -26,7 +26,7 @@ export function truncateToTokens(text: string, budget: number): string {
 }
 /** Estimated tokens of one image, used by every request estimate and by the request fingerprint sizes. */
 export const IMAGE_TOKENS = 1200;
-function estimateMessage(message: ModelMessage): number {
+export function estimateMessage(message: ModelMessage): number {
   if (message.role === 'context') {
     if (message.kind === 'environment-baseline' || message.kind === 'capability-change' && message.data?.baseline === true) return 0;
     return estimateText(runtimeContextText(message)) + 8;

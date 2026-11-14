@@ -213,7 +213,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     modelPool,
   });
-  const contexts = new ContextManager({journal, pricing: config,
+  const contexts = new ContextManager({journal, pricing: config, cwd,
     cacheLifetimeMs: identity => {
       const selection = taskModels.selection(identity), actor = actors.find(identity.ownerId);
       return cacheLifetimeMs(registry.configuredSettings(selection.provider, selection.model),
@@ -318,7 +318,12 @@ export async function createSessionApplication(options: SessionApplicationOption
         await actorServices.flush();
       }
     },
-    roundStart: async (context, info) => {await contexts.roundStart(context, await requestBase(context), context.signal, info);},
+    roundStart: async (context, info) => {
+      // The Anthropic protocol binds replayed thinking to every earlier message (`appendOnlyHistory`); unknown settings count as such.
+      let appendOnly = true;
+      try {const selection = taskModels.selection(context); appendOnly = registry.configuredSettings(selection.provider, selection.model).kind === 'anthropic';} catch {}
+      await contexts.roundStart(context, await requestBase(context), context.signal, info, appendOnly);
+    },
     handoff: result => state.closed ? Promise.resolve() : actorServices.handoff(result),
     directAnchor: async result => {
       const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;

@@ -9,6 +9,7 @@ import type {AgentOptions} from './agent.js';
 import type {ExecutionRecoveryKind} from './execution-recovery.js';
 import type {PeerWait} from './peer-wait.js';
 import type {RoundState} from './round-state.js';
+import type {RepeatGuard} from './repeat-guard.js';
 import type {ToolPacing} from './tool-pacing.js';
 
 export type RunContext = Parameters<ActorExecutor<string>>[1];
@@ -25,6 +26,7 @@ export interface AgentRun {
   readonly asks: AskBoard;
   readonly wait: PeerWait;
   readonly pacing: ToolPacing;
+  readonly repeat: RepeatGuard;
   readonly taskModel: Awaited<ReturnType<TaskModels['begin']>> | undefined;
   readonly approvalHandled: ReadonlySet<string>;
   readonly concurrency: number;

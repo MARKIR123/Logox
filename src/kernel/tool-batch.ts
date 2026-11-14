@@ -35,6 +35,8 @@ export interface ToolBatch {
 /** What the loop needs after the batch: the Automa reminder to deliver and whether the batch was answered with the restriction text. */
 export interface ToolBatchResult {
   readonly automaNote: string | undefined;
+  /** The reminder for a streak of identical calls with unchanged results (`repeat-guard.ts:RepeatGuard.loopNote`). */
+  readonly loopNote: string | undefined;
   readonly refused: boolean;
 }
 
@@ -124,7 +126,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
   const neverRan = (call: ToolCall) => isFinishRound(call.name) ? truncated || voidBatch
     : truncated || !!refusal || schemaErrors.has(call.id) || voidBatch;
   const completed = new Set<string>();
-  let automaNote: string | undefined;
+  let automaNote: string | undefined, loopNote: string | undefined;
   const toolIds = new Map(calls.map(call => [call.id, steps.tool(call,
     instruction.pool?.find(item => item.definition.name === (canonicalToolName(call.name) ?? call.name))?.metadata.terminalVisibility)]));
   try {
@@ -212,14 +214,23 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
           return result;
         });
         // Images get files, oversized results are offloaded, and the turn's total is capped, all decided once here and stored.
-        const settledOutputs = await settleToolResults(finals.map((result, index) => ({callId: group[index]!.id, text: result.text, images: result.images})),
+        const settledOutputs = await settleToolResults(finals.map((result, index) => ({callId: group[index]!.id, text: result.text, images: result.images,
+          tool: canonicalToolName(group[index]!.name) ?? group[index]!.name, arguments: group[index]!.arguments})),
           options.cwd, run.context.sessionId, run.context.ownerId);
         for (let index = 0; index < group.length; index++) {
           const call = group[index]!, result = finals[index]!, output = settledOutputs[index]!;
           const step = steps.get(toolIds.get(call.id)!);
+          // Observed in model order on the undecorated result: a fact about this read goes into its result, a streak of identical calls into one reminder.
+          let text = output.text;
+          if (!neverRan(call)) {
+            const unchanged = run.repeat.readNote(call, result);
+            if (unchanged) text += '\n' + unchanged;
+            const looping = run.repeat.loopNote(call, result, run.directorWaiting());
+            if (looping) loopNote = looping;
+          }
           const toolMessage: ModelMessage = {
             role: 'tool', callId: call.id, name: call.name,
-            text: output.text, isError: result.isError,
+            text, isError: result.isError,
             ...(result.discoveredTools ? {discoveredTools: result.discoveredTools} : {}),
             ...(output.images ? {images: output.images} : {}),
             ...(neverRan(call) ? {unexecuted: true as const} : {}),
@@ -238,5 +249,5 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
       await run.persist({role: 'tool', callId: call.id, name: call.name, text: interruptedToolText(run.context.stopReason?.(), 'Tool execution was interrupted before a complete result was obtained.'), isError: true}, step);
     }
   }
-  return {automaNote, refused: !!refusal && !truncated};
+  return {automaNote, loopNote, refused: !!refusal && !truncated};
 }

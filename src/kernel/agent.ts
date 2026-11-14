@@ -17,6 +17,7 @@ import type {TaskModels} from '../actors/task-models.js';
 import {ActorRecovery} from '../actors/recovery.js';
 import {ExecutionRecoveryError, executionRecoveryInstruction, type ExecutionRecoveryKind} from './execution-recovery.js';
 import {ToolPacing} from './tool-pacing.js';
+import {RepeatGuard} from './repeat-guard.js';
 import {PeerWait} from './peer-wait.js';
 import {asksFor} from '../runtime/asks.js';
 import {roundEffect} from '../runtime/round-scope.js';
@@ -150,7 +151,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
         signal: context.signal, hasPendingInbox: () => run.context.hasPendingInbox?.() ?? false});
       const run: AgentRun = {
-        options, messages, steps, state, narration, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(),
+        options, messages, steps, state, narration, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(), repeat: new RepeatGuard(options.cwd),
         context: {...context, reviewMessages: () => [...userRequests, ...messages.filter(message => message.role === 'assistant')]},
         persist: async (message, step) => {
           const usage = state.takeUsage(message);

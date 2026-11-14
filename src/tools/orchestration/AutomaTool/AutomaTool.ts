@@ -6,7 +6,7 @@ import {diffLines} from 'diff';
 import {z} from 'zod';
 import type {AutomaSwarm, AutomaJobState} from '../../../runtime/contracts.js';
 import type {ModelMessage, ModelTurn, Provider, ToolCall, ToolDefinition, TurnUsage} from '../../../runtime/messages.js';
-import {ensureActorScratchpadDir, getActorScratchpadDir, maybePersistLargeOutput} from '../../../kernel/scratchpad.js';
+import {ensureActorScratchpadDir, getActorScratchpadDir, maybePersistLargeOutput, TOOL_OUTPUT_LIMIT} from '../../../kernel/scratchpad.js';
 import type {ToolResult} from '../../types.js';
 import {readSchema} from '../../ReadTool/ReadTool.js';
 import {READ_DESCRIPTION} from '../../ReadTool/prompt.js';
@@ -368,7 +368,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
           if (result.isError && result.disposition === 'denied') refused.push(title);
           else if (!result.isError) succeeded++;
           if (/^(?:shell|bash)$/i.test(call.name) && result.disposition !== 'denied') ran.push((JSON.parse(call.arguments) as {command?: string}).command + (result.isError ? ' (failed)' : ' (passed)'));
-          const text = await maybePersistLargeOutput(result.text, options.cwd, scoped.id, options.sessionId);
+          const text = await maybePersistLargeOutput(result.text, options.cwd, scoped.id, options.sessionId, undefined, TOOL_OUTPUT_LIMIT, {tool: call.name, arguments: call.arguments});
           messages.push({role: 'tool', name: call.name, callId: call.id, text, isError: Boolean(result.isError)});
           await journal(index, 'tool', {call, isError: Boolean(result.isError), disposition: result.disposition, text});
         }

@@ -33,8 +33,10 @@ function plainText(text: string): string {
 
 /** WebFetch card view: URL, `page title · status · size`, then a rendered excerpt of the page. */
 export function webFetchView(url: string, result: string): ToolView {
-  const persisted = /Output too large \(([\d.]+)\s*KB\)/.exec(result);
-  const preview = persisted ? result.slice(result.indexOf('Preview (first 2KB):') + 'Preview (first 2KB):'.length) : result;
+  // An offloaded page is an index (`kernel/scratchpad.ts:persistedIndex`): size line, then the first lines, then an optional tail.
+  const persisted = /^Size: ([\d.]+)\s*KB/m.exec(result);
+  const headStart = persisted ? /^First lines \([^)]*\):\n/m.exec(result) : undefined;
+  const preview = headStart ? result.slice(headStart.index + headStart[0].length).replace(/\n\.\.\.\n(?:Last lines \([^)]*\):\n[\s\S]*)?<\/persisted-output>\s*$/, '') : result;
   const header = /^\s*\[Fetched from: ([^\s|\]]+)((?:\s*\|[^\]]*)?)\]\s*/.exec(preview);
   const meta = header?.[2] ?? '';
   const status = /\|\s*HTTP (\d{3})/.exec(meta)?.[1];

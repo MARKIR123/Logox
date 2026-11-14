@@ -143,6 +143,7 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       const result = await runToolBatch(run, {ready, prepared, request, turn, thinkingId, truncated});
       // Delivered after the results as a request-only note, so the tool results stay clean in history.
       if (result.automaNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.automaNote, {slot: 'automa'}));
+      if (result.loopNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.loopNote, {slot: 'loop'}));
       if (truncated) await recoverOutput('truncated_tools', thinkingId);
       else state.batchRan();
       // A refused batch is answered once. A second one in a row ends the exchange without another request, so a model that ignores the refusal cannot loop.

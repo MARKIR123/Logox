@@ -106,7 +106,7 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     ...(instruction.toolDiscovery ? {toolDiscovery: instruction.toolDiscovery} : {}),
     // Tool fields and validation are unchanged; omits the draft-version URL repeated in every schema.
     tools: definitions.map(tool => {const {$schema: _, ...parameters} = tool.parameters; return {...tool, parameters};})};
-  const prepared = await options.context?.prepare(context, base, context.signal);
+  const prepared = await options.context?.prepare(context, base, context.signal, false, undefined, appendOnly);
   if (await run.drainInbox()) return {kind: 'rebuild'};
   if (taskModel && prepared && prepared.model.identity !== taskModel.model().identity) {
     throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');

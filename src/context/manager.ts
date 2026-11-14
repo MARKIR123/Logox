@@ -5,9 +5,10 @@ import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeMessages} from '../runtime/messages.js';
 import {inputMessage} from '../runtime/provenance.js';
 import {Journal, storedMessage, type HistoryEntry, type TaskCheckpoint} from '../store/journal.js';
-import {digest, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
+import {digest, estimateMessage, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
+import {supersededReads} from './supersession.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
-import {PROGRESS_FORK_INSTRUCTION} from '../prompts/compaction.js';
+import {PROGRESS_FORK_INSTRUCTION, supersededReadText} from '../prompts/compaction.js';
 import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
@@ -36,6 +37,8 @@ export interface ContextOptions {
   cacheLifetimeMs?(identity: Identity): number | undefined | Promise<number | undefined>;
   /** Clock for the cache-expiry check; tests inject it. */
   now?(): number;
+  /** Working directory that relative `Read` paths resolve against when deciding which reads a later read supersedes; defaults to the process directory. */
+  cwd?: string;
   /** Source of list prices for the cost stored with each turn's usage (see `cost.ts:costOf`). */
   pricing?: Parameters<typeof costOf>[1];
 }
@@ -44,6 +47,8 @@ export class ContextBudgetError extends Error {}
 export interface RoundStartFold {keepLast: boolean}
 /** Upper bound for a model-written overview or progress summary. */
 const SUMMARY_TOKENS = 4000;
+/** A superseded read may be tombstoned while the cache is warm only when at most this many estimated tokens follow it in the request. */
+export const SUPERSEDE_SUFFIX_TOKENS = 8000;
 interface Fork {readonly base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>; readonly prefix: readonly ModelMessage[]; readonly model: ModelCapacity; readonly safety: number}
 function withoutThinking(value: ModelMessage): ModelMessage {
   if (value.role !== 'assistant' || !value.reasoning && !value.signature) return value;
@@ -162,8 +167,8 @@ export class ContextManager {
    * the routine fold of `prepare()`: a companion folds every closed round at the end of the history unless the new task continues the root
    * task of its latest round; Logox folds down to its recent rounds when its cache has expired or the request is at half the high watermark.
    */
-  async roundStart(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, fold: RoundStartFold): Promise<void> {
-    await this.prepare(identity, base, signal, false, fold);
+  async roundStart(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, fold: RoundStartFold, appendOnly = false): Promise<void> {
+    await this.prepare(identity, base, signal, false, fold, appendOnly);
   }
   /**
    * Stopped or failed rounds the routine folds leave alone, by start index. A round unpins once it was resumed and the resumption completed,
@@ -197,7 +202,8 @@ export class ContextManager {
     }
     return pinned;
   }
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, routine?: RoundStartFold):
+  /** `appendOnly` (the provider binds replayed thinking to every earlier message) forbids rewriting any sent message, so superseded reads stay in full. */
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, routine?: RoundStartFold, appendOnly = false):
     Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
     signal.throwIfAborted();
     base = this.requestBase(identity, base);
@@ -224,6 +230,7 @@ export class ContextManager {
     let original = state;
     const closed = rounds.filter(round => round.closed);
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
+    const pairByCall = new Map(pairs.map(pair => [pair.call.id, pair]));
     const projected = (candidate: ContextState, end = entries.length): ModelMessage[] => {
       // After a compaction, earlier thinking is never sent again: its signature bound the history that was replaced.
       const raw = entries.map((entry, index) => {
@@ -239,8 +246,15 @@ export class ContextManager {
         raw[archive.resultIndex] = {...archived, text: 'Tool result archived: ' + path + '; ' + (result.isError ? 'Original result failed.' : 'Original result succeeded.') +
           (images?.length ? '\n' + images.map(imageReference).join('\n') : '')};
       }
+      // A superseded read keeps its place and its call; only the result shrinks to one line. An archived result stays archived.
+      for (const [callId, range] of Object.entries(candidate.superseded ?? {})) {
+        const pair = pairByCall.get(callId), result = pair ? raw[pair.resultIndex] : undefined;
+        if (!pair || result?.role !== 'tool' || candidate.archives.some(archive => archive.resultIndex === pair.resultIndex)) continue;
+        const {images: _images, ...bare} = result;
+        raw[pair.resultIndex] = {...bare, text: supersededReadText(range)};
+      }
       const output: ModelMessage[] = [];
-      const retain = (start: number, end: number, recent = false) => {
+      const retain =(start: number, end: number, recent = false) => {
         const retained = pairs.filter(pair => pair.callIndex >= start && pair.resultIndex < end &&
           (discoveryIds.has(pair.call.id) || recent && protectedPairs.has(pair.resultIndex)));
         for (const callIndex of new Set(retained.map(pair => pair.callIndex))) {
@@ -329,21 +343,29 @@ export class ContextManager {
     const snapshot = (value: ContextState): ContextState => ({...structuredClone(value), ...contextSnapshot(sourceMessages), thinkingCut: entries.length, sourceLength: entries.length, sourceHash: digest(entries)});
     // The routine fold is mechanical: it only lists closed rounds as folded and never calls the model. A companion's replacement point is the
     // end of its history (a new task is starting), so it costs no cache; Logox pays only when its cache has expired anyway or the request is at half the high watermark.
+    // The cache counts as expired only when its lifetime is known and the last assistant entry is at least that old; unknown means never.
+    const cacheCold = async (): Promise<boolean> => {
+      let lifetime: number | undefined;
+      try {lifetime = await this.options.cacheLifetimeMs?.(identity);} catch {lifetime = undefined;}
+      const lastReply = entries.findLast(entry => entry.role === 'assistant')?.time;
+      return lifetime !== undefined && lastReply !== undefined && (this.options.now?.() ?? Date.now()) - lastReply >= lifetime;
+    };
+    // Reads a later read covers and this view does not yet show as tombstones. Never on an append-only protocol.
+    const cwd = this.options.cwd ?? process.cwd();
+    const unseen = (value: ContextState): Record<string, string> => appendOnly ? {} :
+      Object.fromEntries([...supersededReads(sourceMessages, cwd)].filter(([id]) => !value.superseded?.[id]));
     if (routine && !force) {
       let due = !isDirector(identity.ownerId);
-      if (!due) {
-        let lifetime: number | undefined;
-        try {lifetime = await this.options.cacheLifetimeMs?.(identity);} catch {lifetime = undefined;}
-        const lastReply = entries.findLast(entry => entry.role === 'assistant')?.time;
-        due = lifetime !== undefined && lastReply !== undefined && (this.options.now?.() ?? Date.now()) - lastReply >= lifetime || before >= marks.high / 2;
-      }
+      if (!due) due = await cacheCold() || before >= marks.high / 2;
       const targets = isDirector(identity.ownerId) ? closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds)) : routine.keepLast ? [] : closed;
       const already = new Set(state.folded), fresh = due ? targets.filter(round => !already.has(round.start)) : [];
       if (fresh.length) {
         const held = await pinned();
         const starts = fresh.filter(round => !held.has(round.start)).map(round => round.start);
         if (starts.length) {
-          const next = snapshot({...state, folded: [...state.folded, ...starts]});
+          // The fold already changes the request bytes after its first replaced round, so every covered read is tombstoned in the same save.
+          const covered = {...state.superseded, ...unseen(state)};
+          const next = snapshot({...state, folded: [...state.folded, ...starts], ...(Object.keys(covered).length ? {superseded: covered} : {})});
           try {
             await journal.saveContext(next);
             signal.throwIfAborted();
@@ -355,6 +377,29 @@ export class ContextManager {
         }
       }
     }
+    // A tombstone changes every byte after it, so a covered read is shrunk only when the cache is cold anyway or little follows it; the
+    // decision is saved in the view and never taken back. Folds and compactions tombstone all of them in their own save.
+    const fresh = force ? {} : unseen(state);
+    if (Object.keys(fresh).length) {
+      const sent = requestFor(state).messages, cold = await cacheCold();
+      const costs = sent.map(estimateMessage);
+      let after = 0;
+      const tail = new Array<number>(sent.length);
+      for (let index = sent.length - 1; index >= 0; index--) {tail[index] = after; after += costs[index]!;}
+      const chosen = Object.fromEntries(Object.entries(fresh).filter(([id]) => {
+        const at = sent.findIndex(value => value.role === 'tool' && value.callId === id);
+        return at >= 0 && (cold || tail[at]! <= SUPERSEDE_SUFFIX_TOKENS);
+      }));
+      if (Object.keys(chosen).length) {
+        const next: ContextState = {...structuredClone(state), superseded: {...state.superseded, ...chosen}, sourceLength: entries.length, sourceHash: digest(entries)};
+        try {
+          await journal.saveContext(next);
+          signal.throwIfAborted();
+          state = next; original = next; meter.invalidate();
+          before = meter.estimate(requestFor(state), model);
+        } catch {signal.throwIfAborted();}
+      }
+    }
     let compacted = false, request = requestFor(state);
     if (force || before >= marks.high) {
       this.options.beforeCompact?.(identity, before);
@@ -362,6 +407,8 @@ export class ContextManager {
       try {
         // A compacted view never sends thinking from before this point, including in the request built right now.
         const candidate: ContextState = {...structuredClone(state), ...contextSnapshot(sourceMessages), thinkingCut: entries.length};
+        const covered = unseen(state);
+        if (Object.keys(covered).length) candidate.superseded = {...candidate.superseded, ...covered};
         const archiveTools = async (all: boolean) => {
           for (const pair of pairs) {
             signal.throwIfAborted();

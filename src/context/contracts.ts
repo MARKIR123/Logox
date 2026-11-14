@@ -29,6 +29,8 @@ export const contextStateSchema = z.strictObject({
   thinkingCut: z.number().int().nonnegative().optional(),
   /** Ledger index below which images were replaced by `[image: <path>]` text, because a request would have exceeded the model's image limit. Only grows. */
   imageCut: z.number().int().positive().optional(),
+  /** `Read` results shown as a one-line tombstone, as tool call id to the range of the later read that covers them. Decided once (cold cache, cheap suffix or a fold) and only grows, so a request never flips back. */
+  superseded: z.record(z.string(), z.string()).optional(),
 });
 export type ContextState = z.infer<typeof contextStateSchema>;
 export interface ModelCapacity {

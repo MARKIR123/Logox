@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import type {ToolResult} from '../types.js';
-import {maybePersistLargeOutput} from '../../kernel/scratchpad.js';
+import {maybePersistLargeOutput, TOOL_OUTPUT_LIMIT} from '../../kernel/scratchpad.js';
 import {htmlToMarkdown} from './utils.js';
 
 export {htmlToMarkdown};
@@ -66,7 +66,7 @@ export async function executeWebFetch(
   let result = header + markdown;
 
   if (options.cwd) {
-    result = await maybePersistLargeOutput(result, options.cwd, options.callId ?? 'web-fetch', options.sessionId);
+    result = await maybePersistLargeOutput(result, options.cwd, options.callId ?? 'web-fetch', options.sessionId, undefined, TOOL_OUTPUT_LIMIT, {tool: 'WebFetch', arguments: JSON.stringify({url: args.url})});
   }
 
   return {

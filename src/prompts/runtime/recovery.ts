@@ -33,6 +33,11 @@ export const EMPTY_REPLY_REMINDER = 'Your previous reply was empty. Continue the
 /** Request-only note sent once per run after a long streak of read-only results. */
 export const AUTOMA_STREAK_NOTE = 'That is several read-only calls in a row. If more are coming and you only need the conclusion, hand the rest to `Automa` so the raw output stays out of your context. If you must understand this material yourself, carry on.';
 
+/** Request-only note, once per streak, when the same call returned the same result several times in a row. */
+export function repeatedCallNote(tool: string, count: number): string {
+  return `You called ${tool} ${count} times in a row with identical arguments and got the same result. Do not repeat it: change the arguments, use another tool, or report what you have.`;
+}
+
 /** Cross-tool output recovery instructions appended only on retry. */
 export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerId: string, adjustment = false): string {
   const next = kind === 'no_delivery'
