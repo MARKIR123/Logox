@@ -60,7 +60,7 @@ test('ListActors discovers dynamic roles and reports waiting, queued and paused 
   assert.ok(data.actors.every((item: {status: string}) => item.status !== 'idle'));
 });
 
-test('ListActors includes recent completed tool outcomes while peer detail remains sanitized', () => {
+test('ListActors includes recent completed tool outcomes without private output, for the Director and for companions alike', () => {
   const store = new RuntimeStore(); activity(store, 'child', 'techne', 'running');
   store.message('s', 'techne', 'assistant', 'Private output', {activityId: 'child', kind: 'tool',
     step: {title: 'Read', callId: 'read-1', state: 'completed', elapsedMs: 3}});
@@ -69,7 +69,29 @@ test('ListActors includes recent completed tool outcomes while peer detail remai
   assert.equal(director.recentTools?.[0]?.state, 'completed');
   assert.ok(!JSON.stringify(director).includes('Private output'));
   const peer = JSON.parse(executeListActors({}, {caller: 'kalon', getSnapshot: () => store.getSnapshot()}).text).actors.find((item: {id: string}) => item.id === 'techne');
-  assert.equal(peer.recentTools, undefined); assert.equal(peer.activityId, undefined);
+  // Companions no longer get a per-request roster, so ListActors gives them the same detail.
+  assert.equal(peer.recentTools?.[0]?.callId, 'read-1'); assert.equal(peer.activityId, 'child');
+  assert.ok(!JSON.stringify(peer).includes('Private output'));
+});
+
+test('ListActors shows status, task title, live subtitle, owned files, running tool and held-report progress, and is callable by companions', async () => {
+  const f = await fixture();
+  try {
+    f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig the pedals', ownedFiles: ['src/a.ts'],
+      progress: {label: 'Reading a'}, status: 'running', stage: 'Current operation', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
+    f.store.message('s', 'techne', 'assistant', '', {activityId: 'child', kind: 'tool', step: {title: 'Shell · npm test', callId: 's1', state: 'running', elapsedMs: 0}});
+    activity(f.store, 'late', 'aletheia', 'running');
+    const delivery = {id: 'r', sessionId: 's', status: 'pending', time: 1, ownerId: 'logox', source: 'kalon', sourceActivityId: 'k', rootActivityId: 'root', kind: 'report', inputKind: 'actor', text: 'done', hold: 'root'} as never;
+    for (const caller of ['logox', 'kalon']) {
+      const result = await f.services.execute({id: 'c', name: 'ListActors', arguments: '{}'}, context('x', caller));
+      assert.equal(result.isError, false, caller + ': ' + result.text);
+      const techne = JSON.parse(result.text).actors.find((item: {id: string}) => item.id === 'techne');
+      assert.equal(techne.activityStatus, 'running'); assert.equal(techne.taskTitle, 'Rig the pedals'); assert.equal(techne.selfReportedLabel, 'Reading a');
+      assert.deepEqual(techne.ownedFiles, ['src/a.ts']); assert.equal(techne.currentTool, 'Shell · npm test');
+    }
+    const direct = JSON.parse(executeListActors({}, {caller: 'logox', getSnapshot: () => f.store.getSnapshot(), deliveries: () => [delivery]}).text);
+    assert.match(direct.heldReports, /^Reported 1\/3; still running: /);
+  } finally {await f.close();}
 });
 
 test('ListActors retains terminal tool evidence without presenting a completed task as executing', () => {
@@ -106,9 +128,9 @@ test('resident facts distinguish self-reported labels and tool completion from t
     const text = f.facts();
     const data = JSON.parse(text.slice(text.indexOf('\n') + 1));
     const child = data.tasks.find((item: {activityId: string}) => item.activityId === 'child');
-    assert.deepEqual(Object.keys(child).sort(), ['activityId', 'ownerId', 'status', 'subtitle']);
+    assert.deepEqual(Object.keys(child).sort(), ['activityId', 'ownerId', 'status'], 'the record has no live subtitle');
     assert.equal(child.status, 'running');
-    assert.equal(child.subtitle, 'Tests passed according to Actor');
+    assert.ok(!text.includes('Tests passed according to Actor'));
     assert.ok(!text.includes('Large private result body')); assert.ok(!text.includes('Private task instructions'));
     assert.equal(f.facts(), text, 'an unchanged ensemble produces identical text, so no new record is written');
     f.store.message('s', 'techne', 'assistant', 'More work', {activityId: 'child', kind: 'tool', step: {title: 'Read', callId: 'read-9', state: 'completed', elapsedMs: 1}});
@@ -131,7 +153,7 @@ test('resident facts bound large ensembles without hiding the count of additiona
   } finally {await f.close();}
 });
 
-test('activeEnsembleRoster returns empty string when solo and formats peer mainTitle · subTitle, files, and running tool when active', async () => {
+test('the companion record is empty when solo and lists active peers with task title and owned files only', async () => {
   const f = await fixture();
   try {
     activity(f.store, 'techne-1', 'techne', 'running');
@@ -189,8 +211,9 @@ test('activeEnsembleRoster returns empty string when solo and formats peer mainT
     });
 
     const roster = f.facts(context('techne-1', 'techne'));
-    assert.match(roster, /^Active ensemble roster \(Logox is always reachable as Director; idle roles omitted\):/);
-    assert.match(roster, /- kalon \(running\): Refine palette tokens · Auditing contrast \| files: src\/tui\/theme\.ts \(edit\), docs\/design\.md \(read\) \| running: Shell · npm test/);
+    assert.match(roster, /^\[Ensemble record, written after your context was folded or the session restarted:/);
+    assert.match(roster, /^- kalon \(running\): Refine palette tokens$/m);
+    assert.ok(!roster.includes('Auditing contrast') && !roster.includes('files:') && !roster.includes('running: Shell'), 'no live subtitle, files or running tool');
 
     f.store.activities.update('s', 'kalon-active', {status: 'completed'});
     assert.equal(f.facts(context('techne-1', 'techne')), '');
@@ -285,11 +308,10 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
   }
 });
 
-test('only the current snapshot is ever sent: it replaces the last one, comes last and is never stored', async () => {
+test('no request carries an ensemble snapshot, and copies stored by older sessions are not replayed', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-test-snapshot-'));
   const store = new RuntimeStore();
   const requests: ModelRequest[] = [];
-  const stored: unknown[] = [];
   const turns: ModelTurn[] = [
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g1', name: 'Glob', arguments: '{"pattern":"a*"}'}]}, stop: 'tools'},
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g2', name: 'Glob', arguments: '{"pattern":"b*"}'}]}, stop: 'tools'},
@@ -301,31 +323,23 @@ test('only the current snapshot is ever sent: it replaces the last one, comes la
     if (turn.message.text) delta({kind: 'text', text: turn.message.text});
     return turn;
   }};
-  let state = 0;
   const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: 'state ' + ++state})});
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions})});
   const journal = new Journal(join(directory, 'sessions'));
   const old = createRuntimeContextMessage('task-state', 'stale facts', {slot: 'director-facts', activityId: 'a'});
   const savedFacts = {role: 'context', text: old.text, message: old} as unknown as ActorContext['history'][number];
-  const ensemble = new EnsembleRuntime<string>('s', store, journal, async (prompt, context) => execute(prompt, {...context, history: [...context.history, savedFacts], record: async (message, step) => { stored.push(message); await context.record(message, step); }}), {handoff: async () => {}});
+  const ensemble = new EnsembleRuntime<string>('s', store, journal, async (prompt, context) => execute(prompt, {...context, history: [...context.history, savedFacts]}), {handoff: async () => {}});
   try {
     await ensemble.dispatch('logox', 'Go', 'direct').done;
     assert.equal(requests.length, 3);
-    const states: number[] = [];
     for (const request of requests) {
-      const snapshots = request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot');
-      assert.equal(snapshots.length, 1, 'never more than one');
-      assert.equal(request.messages.at(-1), snapshots[0], 'always last');
-      states.push(Number(/state (\d+)$/.exec(request.messages.at(-1)!.text)![1]));
+      assert.ok(!request.messages.some(message => message.role === 'context' && (message.kind === 'snapshot' || message.data?.slot === 'ensemble')), 'no snapshot message');
       assert.ok(!JSON.stringify(request.messages).includes('stale facts'), 'copies stored by older sessions are not replayed');
     }
-    assert.ok(states[0]! < states[1]! && states[1]! < states[2]!, 'each request carries the state read for it');
-    assert.ok(!JSON.stringify(stored).includes('state '), 'never written to the ledger');
-    assert.ok(stored.length > 0);
   } finally { await ensemble.close(); await rm(directory, {recursive: true, force: true}); }
 });
 
-test('where the API binds thinking to history, the snapshot is appended only on change and nothing is ever removed', async () => {
+test('where the API binds thinking to history, requests carry no snapshot and nothing is ever removed', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-test-append-'));
   const store = new RuntimeStore();
   const requests: ModelRequest[] = [];
@@ -341,14 +355,13 @@ test('where the API binds thinking to history, the snapshot is appended only on 
       return value;
     }};
   const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: requests.length < 2 ? 'techne running' : 'techne completed'})});
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions})});
   const ensemble = new EnsembleRuntime<string>('s', store, new Journal(join(directory, 'sessions')), execute, {handoff: async () => {}});
   try {
     await ensemble.dispatch('logox', 'Go', 'direct').done;
     assert.equal(requests.length, 4);
     const copies = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
-    assert.deepEqual(copies(requests[0]!), ['techne running']);
-    assert.deepEqual(copies(requests.at(-1)!), ['techne running', 'techne completed'], 'one record per change, and the earlier one stays');
+    assert.deepEqual(copies(requests.at(-1)!), []);
     assert.ok(!requests.some(request => request.messages.some(message => message.role === 'context' && message.kind === 'snapshot')));
     await ensemble.dispatch('logox', 'Again', 'direct').done;
     assert.equal(requests.length, 5);
@@ -397,42 +410,36 @@ test('BorrowSkill is gone', () => {
   assert.equal(canonicalToolName('borrow_skill'), undefined);
 });
 
-test('the stored snapshot form leaves out live detail and the live form keeps it', async () => {
+test('the ensemble record keeps who, status, title, owned files and paused batches, and no live detail', async () => {
   const f = await fixture();
   try {
     f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig the pedals', ownedFiles: ['src/a.ts'],
       progress: {label: 'Reading a'}, status: 'running', stage: 'Current operation', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
-    const stable = () => f.services.facts(context(), true), live = () => f.services.facts(context());
-    const first = stable();
-    assert.ok(first.includes('Rig the pedals') && !first.includes('subtitle') && !first.includes('Reading a'));
-    assert.ok(live().includes('Reading a'), 'the live form keeps the subtitle');
+    const record = () => f.services.facts(context());
+    const first = record();
+    assert.ok(first.includes('Rig the pedals') && first.includes('src/a.ts') && !first.includes('subtitle') && !first.includes('Reading a'));
     f.store.activities.update('s', 'child', {progress: {label: 'Reading b'}});
-    assert.equal(stable(), first, 'a new subtitle is not a change in the stored form');
-    assert.notEqual(live(), first);
+    assert.equal(record(), first, 'a new subtitle is not a change');
+    f.store.activities.create({sessionId: 's', activityId: 'held', ownerId: 'kalon', kind: 'actor', title: 'held', taskTitle: 'Wait for it', batchId: 'b-1',
+      status: 'paused', stage: 'Paused', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
+    assert.match(record(), /"ownerId":"kalon","status":"paused","taskTitle":"Wait for it","batchId":"b-1"/);
     f.store.activities.update('s', 'child', {status: 'waiting_input'});
-    assert.notEqual(stable(), first, 'a status change is');
-    f.store.message('s', 'techne', 'assistant', '', {activityId: 'child', kind: 'tool', step: {title: 'Edit · src/a.ts', callId: 'e1', state: 'running', elapsedMs: 0,
-      call: {id: 'e1', name: 'Edit', arguments: JSON.stringify({file_path: 'src/a.ts', old_string: 'a', new_string: 'b'})}}});
-    const roster = (stableForm: boolean) => f.services.facts(context('kalon-1', 'kalon'), stableForm);
-    assert.match(roster(false), /- techne \(waiting_input\): Rig the pedals · Reading b \| owns: src\/a\.ts \| files: src\/a\.ts \(edit\) \| running: Edit · src\/a\.ts/);
-    const kept = roster(true);
-    assert.match(kept, /- techne \(waiting_input\): Rig the pedals \| owns: src\/a\.ts$/m);
-    assert.ok(!kept.includes('Reading b') && !kept.includes('files:') && !kept.includes('running:'));
+    assert.notEqual(record(), first, 'a status change is');
+    const peers = f.services.facts(context('kalon-1', 'kalon'));
+    assert.match(peers, /^- techne \(waiting_input\): Rig the pedals \| owns: src\/a\.ts$/m);
+    assert.ok(!peers.includes('Reading b'));
   } finally {await f.close();}
 });
 
-test('the conversation-cache capability is set for an OAuth token on the official host only', () => {
+test('the account route has no conversation-cache capability any more and is not append-only', () => {
   const settings = {kind: 'openai_compat', baseUrl: 'https://api.openai.com/v1', model: 'm', key: 'oauth-token', temperature: 0, maxTokens: 1, timeoutMs: 1} as const;
-  const caps = (patch: object) => resolveProviderCapabilities({...settings, ...patch} as never);
-  assert.equal(caps({}).conversationCache, true);
-  assert.equal(caps({}).appendOnlyHistory, undefined, 'a separate flag: signed thinking and other projections are not involved');
-  assert.equal(caps({key: 'eyJhbGciOi.payload.sig', baseUrl: 'https://api.openai.com/v1/'}).conversationCache, true);
-  assert.equal(caps({key: 'sk-plain'}).conversationCache, undefined, 'an API key is not the account route');
-  assert.equal(caps({baseUrl: 'https://gateway.example/v1'}).conversationCache, undefined, 'nor is a gateway, whatever the key looks like');
-  assert.equal(caps({kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1'}).conversationCache, undefined);
+  const caps = resolveProviderCapabilities(settings as never);
+  assert.equal(Reflect.has(caps, 'conversationCache'), false);
+  assert.equal(caps.appendOnlyHistory, undefined);
 });
 
-async function snapshotRun(capabilities: Provider['capabilities'], snapshot: (step: number, context: ActorContext) => string | undefined) {
+async function snapshotRun(capabilities: Provider['capabilities'],
+  update: (step: number, context: ActorContext) => ReturnType<typeof createRuntimeContextMessage>[] = () => [], stored: (update: unknown) => void = () => {}) {
   const directory = await mkdtemp(join(tmpdir(), 'logox-test-conv-'));
   const store = new RuntimeStore();
   const requests: ModelRequest[] = [];
@@ -446,73 +453,82 @@ async function snapshotRun(capabilities: Provider['capabilities'], snapshot: (st
     return value;
   }};
   const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async (ctx: ActorContext) => {
-      const text = snapshot(requests.length, ctx);
-      return {...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, ...(text ? {snapshot: text} : {})};
-    }});
+    contextUpdated: (_context, value) => stored(value),
+    requestBase: async (ctx: ActorContext) => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, contextUpdates: update(requests.length, ctx)})});
   const ensemble = new EnsembleRuntime<string>('s', store, new Journal(join(directory, 'sessions')), execute, {handoff: async () => {}});
   await ensemble.dispatch('logox', 'Go', 'direct').done;
-  const stored = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
-  const tail = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot').length;
+  const records = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
+  const snapshots = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot').length;
   const diverged = (index: number) => {
     const same = (a: unknown, b: unknown) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
     const before = requests[index - 1]!.messages, after = requests[index]!.messages;
     return before.findIndex((message, at) => !same(message, after[at]));
   };
-  return {requests, stored, tail, diverged, async close() {await ensemble.close(); await rm(directory, {recursive: true, force: true});}};
+  return {requests, records, snapshots, diverged, async close() {await ensemble.close(); await rm(directory, {recursive: true, force: true});}};
 }
-const CONVERSATION: Provider['capabilities'] = {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'openai-key', conversationCache: true};
 
-test('with the conversation-cache capability a tool loop of unchanged ensemble facts is pure appends and the snapshot is stored once', async () => {
-  const f = await snapshotRun(CONVERSATION, () => 'techne running');
-  try {
-    assert.equal(f.requests.length, 5);
-    for (const request of f.requests) {
-      assert.equal(f.tail(request), 0, 'no tail snapshot');
-      assert.deepEqual(f.stored(request), ['techne running'], 'stored once, never repeated');
-    }
-    for (let index = 1; index < f.requests.length; index++) assert.equal(f.diverged(index), -1, 'request ' + index + ' is a pure append of the previous one');
-  } finally {await f.close();}
-});
+for (const [label, capabilities] of [['without appendOnlyHistory', undefined],
+  ['with appendOnlyHistory', {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true}],
+  ['on the account route', {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'openai-key'}]] as const) {
+  test('a normal tool loop ' + label + ' carries no snapshot and every request is a pure append of the previous one', async () => {
+    const f = await snapshotRun(capabilities);
+    try {
+      assert.equal(f.requests.length, 5);
+      for (const request of f.requests) {
+        assert.equal(f.snapshots(request), 0, 'no snapshot message');
+        assert.deepEqual(f.records(request), [], 'no ensemble record either');
+      }
+      for (let index = 1; index < f.requests.length; index++) assert.equal(f.diverged(index), -1, 'request ' + index + ' is a pure append');
+    } finally {await f.close();}
+  });
+}
 
-test('the conversation-cache snapshot is stored again only when its text changes, and live subtitle changes alone store nothing', async () => {
+test('the restore record is appended once after a fold, never per request, and not when no work is open', async () => {
   const f = await fixture();
   try {
-    f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig',
+    const due = (ctx: ActorContext) => {
+      const text = f.services.restoreRecord(ctx);
+      return text ? [createRuntimeContextMessage('task-state', text, {slot: 'ensemble'})] : [];
+    };
+    f.store.activities.create({sessionId: 's', activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'child', taskTitle: 'Rig the pedals', ownedFiles: ['src/a.ts'],
       progress: {label: 'step 0'}, status: 'running', stage: 'Current operation', detail: '', inputKind: 'director', rootActivityId: 'root', parentActivityId: 'root'});
-    const run = await snapshotRun(CONVERSATION, (step, ctx) => {
-      // The request base is built more than once per request; a finished activity takes no further update.
-      if (f.store.activities.get('s', 'child')?.status === 'running') f.store.activities.update('s', 'child', {progress: {label: 'step ' + step}});
-      if (step === 3 && f.store.activities.get('s', 'child')?.status === 'running') f.store.activities.update('s', 'child', {status: 'waiting_input'});
-      return f.services.facts(ctx, true);
+    const writes: string[] = [];
+    // The fold happens before request 2 (the manager calls `folded`, which the application wires to recordDueFor).
+    const run = await snapshotRun(undefined, (step, ctx) => {
+      if (step === 2 && !writes.length && !f.services.restoreRecord(ctx)) f.services.recordDueFor('logox');
+      // Live changes between requests must not produce further records.
+      f.store.activities.update('s', 'child', {progress: {label: 'step ' + step}});
+      return due(ctx);
+    }, value => {
+      if ((value as {data?: {slot?: string}}).data?.slot === 'ensemble') {writes.push((value as {text: string}).text); f.services.recordStored('logox');}
     });
     try {
-      const last = run.stored(run.requests.at(-1)!);
       assert.equal(run.requests.length, 5);
-      assert.equal(last.length, 2, 'running once, then the status change: ' + JSON.stringify(last));
-      assert.ok(last[0]!.includes('"running"') && last[1]!.includes('"waiting_input"'));
-      assert.ok(!last.join('').includes('step '), 'no subtitle ever reaches the ledger');
+      assert.equal(writes.length, 1, 'exactly one record: ' + JSON.stringify(writes));
+      assert.ok(writes[0]!.includes('Rig the pedals') && writes[0]!.includes('src/a.ts') && !writes[0]!.includes('step '));
+      assert.equal(run.records(run.requests[1]!).length, 0, 'not before the fold');
+      assert.equal(run.records(run.requests.at(-1)!).length, 1);
       for (let index = 1; index < run.requests.length; index++) assert.equal(run.diverged(index), -1);
     } finally {await run.close();}
+    // Nothing open: the flag clears without producing a record.
+    f.store.activities.update('s', 'child', {status: 'completed'});
+    f.services.recordDueFor('logox');
+    assert.equal(f.services.restoreRecord(context()), '');
+    assert.equal(f.services.restoreRecord(context()), '', 'and it is no longer due');
   } finally {await f.close();}
 });
 
-test('without the capability the snapshot still rides last on the request and is never stored', async () => {
-  let step = 0;
-  const f = await snapshotRun(undefined, () => 'state ' + ++step);
+test('a companion with active teammates on its root gets the roster record after a restart, a companion alone gets none', async () => {
+  const f = await fixture();
   try {
-    for (const request of f.requests) {
-      assert.equal(f.tail(request), 1);
-      const last = request.messages.at(-1)!;
-      assert.equal(last.role === 'context' && last.kind, 'snapshot');
-      assert.deepEqual(f.stored(request), []);
-    }
-  } finally {await f.close();}
-});
-
-test('a stored snapshot that becomes empty is superseded once, so the history stops claiming work that is over', async () => {
-  const f = await snapshotRun(CONVERSATION, step => step < 2 ? 'techne running' : undefined);
-  try {
-    assert.deepEqual(f.stored(f.requests.at(-1)!), ['techne running', '[Ensemble snapshot: no active ensemble work right now.]']);
+    activity(f.store, 'k1', 'kalon', 'running');
+    f.services.recordDueFor('techne');
+    const record = f.services.restoreRecord(context('t1', 'techne'));
+    assert.match(record, /^- kalon \(running\): k1$/m);
+    assert.equal(f.services.restoreRecord(context('t1', 'techne')), record, 'kept unchanged until it is stored');
+    f.services.recordStored('techne');
+    assert.equal(f.services.restoreRecord(context('t1', 'techne')), '');
+    f.services.recordDueFor('kalon');
+    assert.equal(f.services.restoreRecord(context('k1', 'kalon')), '');
   } finally {await f.close();}
 });

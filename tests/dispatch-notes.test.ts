@@ -35,7 +35,9 @@ test('resume tasks are ignored and tasks of one owner are grouped', () => {
 });
 
 test('notes follow the dispatch result on their own lines', () => {
-  const text = dispatchedResult('techne', 'b1', ['Note: one', 'Note: two']);
+  const tasks = [{activityId: 'a1', ownerId: 'techne', title: 'Build', owns: ['src/a.ts'], after: ['a0']}];
+  const text = dispatchedResult(tasks, 'b1', ['Note: one', 'Note: two']);
   assert.match(text, /\nNote: one\nNote: two$/);
-  assert.equal(dispatchedResult('techne', 'b1'), dispatchedResult('techne', 'b1', []));
+  assert.match(text, /^Dispatched to techne \(Batch b1\):\n- a1 techne: Build \| owns: src\/a\.ts \| after: a0\n/);
+  assert.equal(dispatchedResult(tasks, 'b1'), dispatchedResult(tasks, 'b1', []));
 });

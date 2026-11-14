@@ -183,6 +183,53 @@ async function quitWithHeldMessage(cwd: string) {
   return held!;
 }
 
+const ensembleRecords = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble');
+
+test('after a restart with open dispatched work the Director gets one ensemble record, once; with no open work it gets none', {timeout: 40000}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-test-record-'));
+  try {
+    // Process 1: the Director dispatches kalon (hangs) and techne (after kalon, never starts), then the process quits.
+    const dispatched = JSON.stringify({tasks: [{ownerId: 'kalon', prompt: 'A work', title: 'Task A'}, {ownerId: 'techne', prompt: 'B work', title: 'Task B', after: ['kalon']}]});
+    const first = await open(cwd, async (request, _delta, signal) => {
+      const prompt = request.messages.find(message => message.role === 'user')?.text ?? '';
+      if (prompt.includes('A work')) {await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve())); signal.throwIfAborted(); return done();}
+      const answered = request.messages.some(message => message.role === 'tool');
+      return answered ? done() : {stop: 'tools' as const, message: {role: 'assistant' as const, text: '', toolCalls: [{id: 'assign', name: 'Actor', arguments: dispatched}]}};
+    });
+    await first.submit('please build it');
+    await waitFor(() => first.journal.activeTasks('s'), tasks => tasks.some(task => task.ownerId === 'techne' && task.status === 'queued') && tasks.some(task => task.ownerId === 'kalon' && task.status === 'running'), {label: 'A running, B queued'});
+    await first.close();
+    // Process 2: --resume. The next Director request carries the record once; a later one does not repeat it.
+    const requests: ModelRequest[] = [];
+    const second = await open(cwd, async request => {requests.push(structuredClone(request)); return done();});
+    try {
+      await second.submit('what is going on?'); await waitFor(() => second.ensemble.isBusy(), busy => !busy, {label: 'round ends'});
+      assert.ok(requests.length > 0);
+      const records = ensembleRecords(requests.at(-1)!);
+      assert.equal(records.length, 1, 'one record');
+      assert.match(records[0]!.text, /Task B/); assert.match(records[0]!.text, /"status":"paused"/);
+      const before = requests.length;
+      await second.submit('and now?'); await waitFor(() => second.ensemble.isBusy(), busy => !busy, {label: 'second round ends'});
+      assert.ok(requests.length > before);
+      for (const request of requests.slice(before)) assert.equal(ensembleRecords(request).length, 1, 'still the same single record, never appended again');
+    } finally {await second.close();}
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
+test('a restart with no open dispatched work appends no ensemble record', {timeout: 20000}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-test-norecord-'));
+  try {
+    await quitWithHeldMessage(cwd);
+    const requests: ModelRequest[] = [];
+    const app = await open(cwd, async request => {requests.push(structuredClone(request)); return done();});
+    try {
+      await app.submit('a fresh request'); await waitFor(() => app.ensemble.isBusy(), busy => !busy, {label: 'fresh round ends'});
+      assert.ok(requests.length > 0);
+      for (const request of requests) assert.equal(ensembleRecords(request).length, 0);
+    } finally {await app.close();}
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
 test('a held message persists across a restart, comes back restored and is never delivered automatically', {timeout: 20000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-test-held-'));
   try {

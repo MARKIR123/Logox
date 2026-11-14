@@ -1,14 +1,14 @@
-export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
-/** Stored when the ensemble snapshot becomes empty after an earlier record, so the history never keeps claiming work that is over. */
-export const ENSEMBLE_SNAPSHOT_EMPTY = '[Ensemble snapshot: no active ensemble work right now.]';
-/** The stored form of the snapshot carries no subtitles: it is a record of who holds which task and in what status. */
-export const DIRECTOR_FACTS_HEADER_STORED = '[Ensemble snapshot: who held which task and in what status when this was recorded, not task acceptance. Use ListActors for detail and ReadActor to see what an actor actually did.]';
+/** Opens the one record stored after a context fold or a restart: who held which task and in what status when it was written. */
+export const ENSEMBLE_RECORD_HEADER = '[Ensemble record, written after your context was folded or the session restarted: who held which task and in what status then, not task acceptance. Use ListActors for the current state and ReadActor to see what an actor actually did.]';
+/** Opens the block that ends a Director assignment when teammates work on the same task. */
+export const TEAMMATES_HEADER = '[Teammates on this task right now; ones dispatched later are not announced]';
+export const TEAMMATES_FOOTER = 'Use ListActors for the current state.';
 /** Opens every ledger entry that wakes or reaches the Director from coordination, so it is never read as the human speaking. */
 export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
 export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}
 export const DIRECTOR_COORDINATION_WAKE = 'Process the coordination events below for Director-owned work. Human instructions take precedence. Decide from the delivered evidence and keep effects that already happened; receiving a report is not accepting it.';
 export const DIRECTOR_RESULTS_READY = 'Actor results are available (one or more reports, each in its own event below and followed by the runtime record of what that actor changed and ran). Read each account against its record, check what the two leave doubtful, and continue the original task.';
-/** One line of the facts snapshot while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */
+/** One line of the early-wake event while reports are held back: who has reported, who is still working, and whether the rest waits for the human. */
 export function reportProgress(reported: readonly string[], running: readonly string[], total: number, waitsForHuman: boolean): string {
   return 'Reported ' + reported.length + '/' + total + (running.length ? '; still running: ' + running.join(', ') : '') +
     (waitsForHuman ? '; held until the human speaks again' : '');

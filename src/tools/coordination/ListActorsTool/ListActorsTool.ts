@@ -2,14 +2,16 @@ import {DIRECTOR_ID} from '../../../runtime/director-id.js';
 import {z} from 'zod';
 import type {ToolResult} from '../../types.js';
 import {currentTaskProgress, type ActivityStatus, type RuntimeSnapshot} from '../../../runtime/contracts.js';
-import {toolFacts} from '../../../actors/facts.js';
+import {heldProgress, toolFacts} from '../../../actors/facts.js';
+import type {Delivery} from '../../../runtime/delivery.js';
 
 export const listActorsSchema = z.strictObject({});
 export type ListActorsArgs = z.infer<typeof listActorsSchema>;
 export interface ActorStatusReport {
   id: string; name: string; status: 'busy' | 'idle'; activityStatus?: ActivityStatus;
-  stage?: string; activityId?: string; currentTool?: string; tool_id?: string; toolElapsed?: string;
-  queuedCount?: number; selfReportedLabel?: string; recentTools?: ReturnType<typeof toolFacts>['recentTools'];
+  stage?: string; activityId?: string; taskTitle?: string; currentTool?: string; tool_id?: string; toolElapsed?: string;
+  queuedCount?: number; selfReportedLabel?: string; ownedFiles?: string[]; batchId?: string; recentFiles?: string[];
+  recentTools?: ReturnType<typeof toolFacts>['recentTools'];
 }
 const DEFAULT_NAMES: Record<string, string> = {logox: 'Logox', techne: 'Techne', aletheia: 'Aletheia', kalon: 'Kalon'};
 
@@ -25,6 +27,8 @@ export function rosterFingerprint(actors: readonly ActorStatusReport[]): string 
 export function executeListActors(_args: ListActorsArgs, context: {
   caller: string; getSnapshot: () => RuntimeSnapshot; roles?: Record<string, {name: string; title?: string}>;
   memo?: ListActorsMemo; now?: () => number;
+  /** Reads the Director's deliveries so held-report progress ("Reported 1/3; still running: ...") can be shown. */
+  deliveries?: () => readonly Delivery[];
 }): ToolResult {
   const isDirector = context.caller === DIRECTOR_ID || context.caller === 'director';
   const snapshot = context.getSnapshot();
@@ -37,26 +41,28 @@ export function executeListActors(_args: ListActorsArgs, context: {
     const base = {id, name: context.roles?.[id]?.name ?? DEFAULT_NAMES[id] ?? id};
     if (!active) {
       const latest = activities.at(-1);
-      return {...base, status: 'idle', stage: 'idle', ...(isDirector && latest ? {
+      return {...base, status: 'idle', stage: 'idle', ...(latest ? {
         activityStatus: latest.status, activityId: latest.activityId, recentTools: toolFacts(snapshot, latest.activityId).recentTools,
       } : {})};
     }
     const state = {...base, status: 'busy' as const, activityStatus: active.status, stage: active.stage || active.status};
-    if (!isDirector) return state;
     const label = currentTaskProgress(active.progress)?.label;
-    return {...state, activityId: active.activityId, queuedCount: activities.filter(activity => activity.status === 'queued').length, ...(label ? {selfReportedLabel: label} : {}),
+    return {...state, activityId: active.activityId, ...(active.taskTitle ? {taskTitle: active.taskTitle} : {}),
+      queuedCount: activities.filter(activity => activity.status === 'queued').length, ...(label ? {selfReportedLabel: label} : {}),
+      ...(active.ownedFiles?.length ? {ownedFiles: active.ownedFiles} : {}), ...(active.status === 'paused' && active.batchId ? {batchId: active.batchId} : {}),
       ...toolFacts(snapshot, active.activityId)};
   });
+  const progress = context.deliveries ? heldProgress(snapshot, context.deliveries()) : undefined;
   const memo = context.memo ?? (memos.get(context.getSnapshot) ?? memos.set(context.getSnapshot, {fingerprints: new Map()}).get(context.getSnapshot)!);
   const now = (context.now ?? Date.now)();
-  const fingerprint = rosterFingerprint(actors);
+  const fingerprint = rosterFingerprint(actors) + (progress ?? '');
   const previous = memo.fingerprints.get(context.caller);
   memo.fingerprints.set(context.caller, {fingerprint, at: now});
   if (previous?.fingerprint === fingerprint) {
     const seconds = Math.max(0, Math.round((now - previous.at) / 1000));
     return {text: `No change since your last check (${seconds}s ago). Peer messages arrive automatically; you do not need to poll.`, isError: false};
   }
-  return {text: JSON.stringify({actors}, null, 2), isError: false};
+  return {text: JSON.stringify({actors, ...(progress ? {heldReports: progress} : {})}, null, 2), isError: false};
 }
 
 export const metadata: import('../../metadata.js').ToolMetadataInput = {name: 'ListActors', category: 'coordination', loading: 'eager', roles: 'all', terminalVisibility: 'card', description: 'List available actors in the active ensemble'};

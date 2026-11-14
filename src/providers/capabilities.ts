@@ -9,10 +9,6 @@ const anthropicModels = new Set(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude
 export function isAccountRoute(settings: Pick<ModelSettings, 'baseUrl' | 'key'>): boolean {
   return settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1' && (settings.key.startsWith('eyJ') || settings.key.startsWith('oauth-'));
 }
-/** Whether the ensemble snapshot is a stored ledger record (appended when its stable text changes) instead of a per-request tail message. */
-export function storesSnapshot(capabilities: Pick<ProviderCapabilities, 'appendOnlyHistory' | 'conversationCache'>): boolean {
-  return capabilities.appendOnlyHistory === true || capabilities.conversationCache === true;
-}
 export function resolveProviderCapabilities(settings: ModelSettings): ProviderCapabilities {
   const declared = settings.toolDiscovery ?? 'auto';
   if (declared === 'anthropic' && settings.kind !== 'anthropic') throw new Error('Anthropic tool discovery requires the Anthropic message protocol.');
@@ -30,7 +26,5 @@ export function resolveProviderCapabilities(settings: ModelSettings): ProviderCa
   const routed = settings.providerKind !== undefined && settings.providerKind !== settings.kind;
   const caching = settings.kind === 'anthropic' ? official || routed || declared === 'anthropic' ? 'anthropic' : 'none'
     : (settings.promptCacheKey ?? settings.baseUrl.replace(/\/$/, '') === 'https://api.openai.com/v1') ? 'openai-key' : 'none';
-  // Measured on this route: only a request that purely appends to the previous one reads the whole history from cache; anything else reads just tools and instructions.
-  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}),
-    ...(settings.kind === 'openai_compat' && isAccountRoute(settings) ? {conversationCache: true} : {}), caching};
+  return {toolDiscovery, runtimeInstructions: 'meta-user', ...(settings.kind === 'anthropic' ? {appendOnlyHistory: true} : {}), caching};
 }

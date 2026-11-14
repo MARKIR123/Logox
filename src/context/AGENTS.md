@@ -69,7 +69,7 @@
 
 ## 5. Dependencies
 - **Depends on**: `src/store/journal.ts` (ledgers, sidecars, task checkpoints), `src/runtime/` (messages, context updates), `src/tools/protocol/` (`_FinishRound`), `src/tools/discovery.ts` (discovery names), `src/prompts/` (summary and memo instructions), `src/config/` (policy schema), `src/providers/cache.ts` (cache lifetime).
-- **Used by**: `src/kernel/request.ts` (`ContextManager.prepare()` before each request), `src/application.ts` (manager construction, `cacheLifetimeMs` wiring, the `roundStart` hook), `src/app/submit.ts` (manual compaction), `src/actors/ensemble.ts` (round closure through `finishRecord()`, `roundStart` call), `src/store/journal.ts` (`extractRoundMemory()`).
+- **Used by**: `src/kernel/request.ts` (`ContextManager.prepare()` before each request), `src/application.ts` (manager construction, `cacheLifetimeMs` wiring, the `roundStart` hook, the `folded` option that makes `ActorServices.recordDueFor()` append one ensemble record after a saved fold or compaction), `src/app/submit.ts` (manual compaction), `src/actors/ensemble.ts` (round closure through `finishRecord()`, `roundStart` call), `src/store/journal.ts` (`extractRoundMemory()`).
 
 ## 6. Verification & Gaps
 - Fast run: `node --test dist/tests/context*.test.js dist/tests/round-folding.test.js dist/tests/actor-context.test.js dist/tests/round-memory.test.js dist/tests/round-boundaries.test.js dist/tests/finish-round.test.js dist/tests/tool-disclosure-context.test.js dist/tests/actor-compression-contracts.test.js`

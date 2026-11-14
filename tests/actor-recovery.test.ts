@@ -101,7 +101,7 @@ test('Actor stop cancels its work and pauses dependencies without cancelling ind
   const started = barrier(); let sideEffects = 0;
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') await services.execute(call([{ownerId: 'techne', prompt: '等待工具'}, {ownerId: 'aletheia', prompt: '依赖'}]), context);
-    else if (prompt === '等待工具') {
+    else if (prompt.startsWith('等待工具')) {
       started.resolve(); await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), {once: true}));
       context.signal.throwIfAborted(); sideEffects++;
     } else context.say('独立完成');
@@ -178,11 +178,12 @@ test('new human instructions resume paused batches without repeating completed w
   let batchId = '', dependentRuns = 0;
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') await services.execute(call([{ownerId: 'techne', prompt: '故障'}, {ownerId: 'kalon', prompt: '依赖'}]), context);
-    else if (prompt === '故障') throw new Error('暂时工具故障');
+    // Both tasks of one dispatch end with the teammates block, so the prompts are compared by their start.
+    else if (prompt.startsWith('故障')) throw new Error('暂时工具故障');
     else if (prompt === '用户允许继续') {
       const result = await services.execute({id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({resumeBatch: batchId})}, context);
       assert.equal(result.isError, false);
-    } else if (prompt === '依赖') {dependentRuns++; context.say('依赖任务完成');}
+    } else if (prompt.startsWith('依赖')) {dependentRuns++; context.say('依赖任务完成');}
     else context.say('等待用户新指示');
   });
   try {

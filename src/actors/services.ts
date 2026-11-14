@@ -43,11 +43,11 @@ import {renderBrief} from '../tools/orchestration/ActorTool/brief.js';
 import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
-import {activeEnsembleRoster, directorFacts, hasOpenWork, openWork} from './facts.js';
-import {DIRECTOR_FACTS_HEADER, DIRECTOR_FACTS_HEADER_STORED, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
+import {activeEnsembleRoster, directorFacts, hasOpenWork, heldProgress, openWork, teammatesBlock} from './facts.js';
+import {ENSEMBLE_RECORD_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
-import {dispatchedResult, endedBatchResult, resumedBatchResult} from '../tools/orchestration/ActorTool/prompt.js';
+import {dispatchedResult, endedBatchResult, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -193,14 +193,31 @@ export class ActorServices {
     }
     return definition;
   }
-  /** The ensemble snapshot text. `stable` is the form stored in the ledger: no live subtitle, recent files or running tool, so it changes only when who does what changes. */
-  facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>, stable = false): string {
+  /** The ensemble record text: who holds which task and in what status, owned files, held-report progress and paused batches. Empty when nothing is open. */
+  facts(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
     const snapshot = this.options.getSnapshot?.();
     if (!snapshot) return '';
-    if (!isDirector(context.ownerId)) return activeEnsembleRoster(snapshot, context, stable);
-    const facts = directorFacts(snapshot, context, this.deliveries.snapshot(), stable);
-    return facts ? (stable ? DIRECTOR_FACTS_HEADER_STORED : DIRECTOR_FACTS_HEADER) + '\n' + JSON.stringify(facts) : '';
+    if (!isDirector(context.ownerId)) return activeEnsembleRoster(snapshot, context);
+    const facts = directorFacts(snapshot, context, this.deliveries.snapshot());
+    return facts ? ENSEMBLE_RECORD_HEADER + '\n' + JSON.stringify(facts) : '';
   }
+  /** Owners whose history was folded or whose session restarted and that still wait for their one ensemble record; the value is the record once computed. */
+  private readonly recordDue = new Map<string, string>();
+  /** A fold, compaction or restart removed (or never held) what the actor was told about the ensemble: it gets one record with its next request. */
+  recordDueFor(ownerId: string): void {this.recordDue.set(ownerId, '\0');}
+  /** The record this actor is due, computed once and kept until it is stored; empty (and no longer due) when no work is open. */
+  restoreRecord(context: Pick<ActorContext, 'ownerId' | 'activityId' | 'rootActivityId'>): string {
+    const cached = this.recordDue.get(context.ownerId);
+    if (cached === undefined) return '';
+    // The Director's record is due only while dispatched work is open (a queued, running, waiting or paused task, or a held report).
+    const open = !isDirector(context.ownerId) || (this.options.getSnapshot?.().activities.some(activity => !isDirector(activity.ownerId) && activity.inputKind === 'director' &&
+      ['queued', 'running', 'waiting_input', 'paused'].includes(activity.status)) ?? false) || this.deliveries.held(DIRECTOR_ID).length > 0;
+    const text = cached === '\0' ? open ? this.facts(context) : '' : cached;
+    if (text) this.recordDue.set(context.ownerId, text); else this.recordDue.delete(context.ownerId);
+    return text;
+  }
+  /** The record was stored (or an identical one is already the latest). */
+  recordStored(ownerId: string): void {this.recordDue.delete(ownerId);}
   policy(ownerId: string) {
     const role = this.active.get(ownerId) ?? this.options.catalog.find(ownerId);
     if (isDirector(ownerId) && role?.id === DIRECTOR_ID) return this.options.config.context;
@@ -307,25 +324,32 @@ export class ActorServices {
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const dispatched = new Map<string, string>();
-        const handles = orderByDependency(grouped).map(([owner, task]) => {
+        const titleOf = (task: {prompts: string[]; taskTitle?: string}) => task.taskTitle ?? task.prompts[0]!.split('\n', 1)[0]!.slice(0, 80);
+        const batch = [...grouped].map(([ownerId, task]) => ({ownerId, title: titleOf(task), owns: [...task.files]}));
+        const snapshot = this.options.getSnapshot?.();
+        const receipt: DispatchedTask[] = [];
+        orderByDependency(grouped).forEach(([owner, task]) => {
           const after = this.resolveAfter(owner, task.after, dispatched);
           const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
             ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {})};
-          const handle = this.options.enqueue(owner, task.prompts.join('\n\n'), DIRECTOR_ID, childOrigin);
+          const ownerOf = (id: string) => [...dispatched].find(([, activity]) => activity === id)?.[0] ?? snapshot?.activities.find(activity => activity.activityId === id)?.ownerId;
+          const finished = new Set(after.map(ownerOf).filter((who): who is string => !!who));
+          const teammates = teammatesBlock(owner, batch, snapshot, rootActivityId, finished);
+          const prompt = task.prompts.join('\n\n') + (teammates ? '\n\n' + teammates : '');
+          const handle = this.options.enqueue(owner, prompt, DIRECTOR_ID, childOrigin);
           this.origins.set(handle.activityId, childOrigin);
           this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
           dispatched.set(owner, handle.activityId);
-          return handle;
+          receipt.push({activityId: handle.activityId, ownerId: owner, title: titleOf(task), owns: [...task.files], after});
         });
         applyBatch?.();
         for (const activityId of resumed) {
           this.continuedTasks.add(activityId); this.restartInterrupted.delete(activityId);
           for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
         }
-        const targets = [...new Set(tasks.map(t => t.ownerId))].join(', ');
         return {
-          text: dispatchedResult(targets, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd())),
+          text: dispatchedResult(receipt, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd())),
           isError: false,
         };
       }
@@ -362,6 +386,7 @@ export class ActorServices {
           caller: context.ownerId,
           getSnapshot: this.options.getSnapshot ?? (() => ({revision: 0, pending: [], activities: [], interactions: [], messages: []})),
           roles,
+          deliveries: () => this.deliveries.snapshot(),
           memo: this.listActorsMemo,
         });
       }
@@ -481,7 +506,10 @@ export class ActorServices {
       .sort((a, b) => deliveryPriority[a.kind] - deliveryPriority[b.kind]);
     const first = pending[0];
     if (!first) return;
-    const handle = this.options.enqueue(DIRECTOR_ID, automatedEvent(DIRECTOR_COORDINATION_WAKE), first.source,
+    // An early wake (something urgent, or a root that is not held) still says which reports are outstanding.
+    const snapshot = this.options.getSnapshot?.();
+    const outstanding = snapshot ? heldProgress(snapshot, this.deliveries.snapshot()) : undefined;
+    const handle = this.options.enqueue(DIRECTOR_ID, automatedEvent(DIRECTOR_COORDINATION_WAKE + (outstanding ? '\n' + outstanding : '')), first.source,
       {...first.origin, rootActivityId: first.rootActivityId ?? first.origin?.rootActivityId ?? first.sourceActivityId,
         inputKind: 'actor', coordinationWake: true, priority: first.kind === 'failure' || first.kind === 'help'});
     this.wakeTask = handle;

@@ -221,6 +221,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     }, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
     contract: identity => actorServices.contract(identity.ownerId),
+    folded: identity => actorServices.recordDueFor(identity.ownerId),
     anchors: async identity => isDirector(identity.ownerId)
       ? (await journal.activeTasks(session)).filter(task => task.source === 'direct' && !isDirector(task.ownerId) &&
           ['completed', 'failed', 'cancelled'].includes(task.status)).slice(-16).map(task => ({role: 'user',
@@ -298,7 +299,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     recoverExecution: (context, kind) => actorServices.recovery.execution(context.rootActivityId ?? context.activityId, kind, context.ownerId),
     executionProgress: (context, fingerprint) => actorServices.recovery.progress(context.rootActivityId ?? context.activityId, fingerprint),
-    contextUpdated: (context, update) => {if (update.kind === 'environment-change') notice('Execution environment updated:\n' + update.text, 'environment_change', context.ownerId, context.activityId, {presentation: 'silent'});},
+    contextUpdated: (context, update) => {if (update.kind === 'task-state' && update.data?.slot === 'ensemble') actorServices.recordStored(context.ownerId);
+      if (update.kind === 'environment-change') notice('Execution environment updated:\n' + update.text, 'environment_change', context.ownerId, context.activityId, {presentation: 'silent'});},
     executionNotice: (context, text) => {if (isDirector(context.ownerId)) notice(text, 'task_notice', context.ownerId, context.activityId);},
     resources, extraTools, extraApprovalHandled: extraTools.map(tool => tool.name),
     executeExtra: observeExtra(extensions.hooks, async (call, context) => {

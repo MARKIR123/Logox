@@ -205,8 +205,10 @@ test('the dispatch result carries the waiting contract and the description no lo
     const batch = f.store.activities.list().find(activity => activity.ownerId === 'techne')!.batchId!;
     const NL = String.fromCharCode(10);
     const notes = ['techne', 'kalon'].map(actor => NL + 'Note: ' + actor + ' has no `owns`, so teammates are not told which files it is changing.').join('');
-    assert.equal(result.startsWith(dispatchedResult('techne, kalon', batch)), true);
-    assert.equal(result, 'Dispatched to techne, kalon (Batch ' + batch + '). They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.' + notes);
+    const idOf = (owner: string) => f.store.activities.list().find(activity => activity.ownerId === owner)!.activityId;
+    const receipt = [{activityId: idOf('techne'), ownerId: 'techne', title: 'Build', owns: [], after: []}, {activityId: idOf('kalon'), ownerId: 'kalon', title: 'Draw', owns: [], after: []}];
+    assert.equal(result.startsWith(dispatchedResult(receipt, batch)), true);
+    assert.equal(result, 'Dispatched to techne, kalon (Batch ' + batch + '):' + NL + '- ' + idOf('techne') + ' techne: Build' + NL + '- ' + idOf('kalon') + ' kalon: Draw' + NL + 'They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.' + notes);
     assert.match(resumedBatchResult('b1'), /^Resumed batch b1: its paused tasks are queued again. They start and work in the background/);
     assert.doesNotMatch(endedBatchResult('b1'), /wake you/);
   } finally {await f.close();}

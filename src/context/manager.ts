@@ -33,6 +33,8 @@ export interface ContextOptions {
   beforeCompact?(identity: Identity, tokens: number): void;
   /** Brackets a running compaction so the UI can show `Compacting context` for that owner. */
   compacting?(identity: Identity, active: boolean): void;
+  /** Called once after a fold or compaction was saved for this owner: what the model was told earlier may be gone from its view. */
+  folded?(identity: Identity): void;
   /** Prompt cache lifetime of the owner's current model in milliseconds (`providers/cache.ts:cacheLifetimeMs`); undefined when unknown, which counts as never expired. */
   cacheLifetimeMs?(identity: Identity): number | undefined | Promise<number | undefined>;
   /** Clock for the cache-expiry check; tests inject it. */
@@ -370,6 +372,7 @@ export class ContextManager {
             await journal.saveContext(next);
             signal.throwIfAborted();
             state = next; original = next; meter.invalidate();
+            this.options.folded?.(identity);
             const after = meter.estimate(requestFor(state), model);
             if (isDirector(identity.ownerId)) this.options.report?.(identity, `[Context] Folded ${starts.length} closed round${starts.length === 1 ? '' : 's'} into index lines (~${before} to ~${after} tokens).`);
             before = after;
@@ -470,6 +473,7 @@ export class ContextManager {
           await journal.saveContext(candidate);
           signal.throwIfAborted();
           state = candidate; request = candidateRequest; compacted = true; meter.invalidate();
+          this.options.folded?.(identity);
           const trigger = force ? 'history cleanup' : 'automatic';
           this.options.report?.(identity, `[Context] Compacted ~${before} to ~${estimateRequest(request)} tokens (${trigger}; high watermark ${marks.high}; window ${model.window}). Raw ledger retained.`);
         } else if (force) this.options.report?.(identity, '[Context] No reducible closed history; retaining the current view.');

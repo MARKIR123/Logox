@@ -68,6 +68,23 @@ test('a failed or cancelled companion round stays in full until its Director rou
   } finally {await f.cleanup();}
 });
 
+test('the folded callback fires once per saved fold and never when nothing folds', async () => {
+  const f = await workspace();
+  try {
+    await round(f.journal, 'techne', 'r1'); await root(f.journal, 'techne', 'r1', 'old-root');
+    await open(f.journal, 'techne', 'next');
+    const folded: string[] = [];
+    const manager = new ContextManager(options(f.journal, {folded: identity => {folded.push(identity.ownerId);}}));
+    const identity = {sessionId: SESSION, ownerId: 'techne', activityId: 'next'};
+    await manager.roundStart(identity, base, signal, {keepLast: true});
+    assert.deepEqual(folded, [], 'a task that continues the latest root folds nothing');
+    await manager.roundStart(identity, base, signal, {keepLast: false});
+    assert.deepEqual(folded, ['techne']);
+    await manager.roundStart(identity, base, signal, {keepLast: false});
+    assert.deepEqual(folded, ['techne'], 'already folded: no second callback');
+  } finally {await f.cleanup();}
+});
+
 test('a stopped round that was resumed to completion is an ordinary round', async () => {
   const f = await workspace();
   try {

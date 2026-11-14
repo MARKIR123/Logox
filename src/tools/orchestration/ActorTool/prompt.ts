@@ -7,8 +7,15 @@ export const ACTOR_DESCRIPTION =
 /** What the Director needs to know while dispatched work runs; the tool result is the one place that says it. */
 const WAITING_CONTRACT = 'They work in the background, and their reports wake you automatically once all of this work has ended, or earlier with an urgent message. Until then you know nothing about their results: do not report, assume or predict them, and do not re-check their files or progress. Do your own independent work, or tell the user in one line what is running and end your reply.';
 
-export function dispatchedResult(targets: string, batchId: string, notes: readonly string[] = []): string {
-  return `Dispatched to ${targets} (Batch ${batchId}). ${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
+/** One dispatched task of a receipt. */
+export interface DispatchedTask {activityId: string; ownerId: string; title: string; owns: readonly string[]; after: readonly string[]}
+
+/** The receipt of a dispatch: one line per task (activity id, owner, title, `owns`, `after`), then the waiting contract and advisory notes. */
+export function dispatchedResult(tasks: readonly DispatchedTask[], batchId: string, notes: readonly string[] = []): string {
+  const targets = [...new Set(tasks.map(task => task.ownerId))].join(', ');
+  const lines = tasks.map(task => `- ${task.activityId} ${task.ownerId}: ${task.title}` +
+    (task.owns.length ? ` | owns: ${task.owns.join(', ')}` : '') + (task.after.length ? ` | after: ${task.after.join(', ')}` : ''));
+  return `Dispatched to ${targets} (Batch ${batchId}):\n${lines.join('\n')}\n${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
 }
 
 /** Dispatch-time notes: advisory only, appended to the result of a dispatch that already succeeded. */

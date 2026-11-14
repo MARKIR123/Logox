@@ -47,7 +47,6 @@ export interface AgentRequestBase {
   /** When set, every business tool call of this request is answered with this text instead of running; the tool list itself never changes. */
   refuseTools?: string;
   /** The ensemble as it is right now: sent last on this request only, so earlier states never pile up in context. */
-  snapshot?: string;
   /** The actor's own `cache_retention`; unset leaves the model's setting and the role default. */
   cacheRetention?: 'short' | 'long';
 }

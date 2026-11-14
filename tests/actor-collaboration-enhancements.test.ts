@@ -44,7 +44,7 @@ test('ListActors: Director receives full execution metrics with tool_id, compani
   assert.equal(techneDirector.tool_id, 'tool-call-999');
   assert.equal(techneDirector.stage, '执行 · 动画生成');
 
-  // 2. Peer actor view (e.g. kalon): sanitized, no tool_id or raw command metrics
+  // 2. Peer actor view (e.g. kalon): the same detail now, since companions no longer get a per-request roster
   const peerResult = executeListActors({}, {
     caller: 'kalon',
     getSnapshot: () => store.getSnapshot(),
@@ -54,8 +54,8 @@ test('ListActors: Director receives full execution metrics with tool_id, compani
   const technePeer = peerData.actors.find((a: any) => a.id === 'techne');
   assert.equal(technePeer.status, 'busy');
   assert.equal(technePeer.stage, '执行 · 动画生成');
-  assert.equal(technePeer.tool_id, undefined);
-  assert.equal(technePeer.currentTool, undefined);
+  assert.equal(technePeer.tool_id, 'tool-call-999');
+  assert.equal(technePeer.currentTool, 'Shell · Run tests');
 });
 
 test('CancelActor: Director can cancel tool with reason; non-director is rejected', () => {

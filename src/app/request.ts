@@ -1,7 +1,7 @@
 /**
  * Model request assembly for every actor of a session. Wires the Automa worker environment and the cache keep-alive, and
  * builds the `requestBase` the agent kernel and the context manager call before each round: role prompt, environment
- * baseline and updates, task-state slots (restriction and pending handoff), and the actor's facts. It owns the environment
+ * baseline and updates, and task-state slots (restriction, pending handoff and the one-off ensemble record). It owns the environment
  * state (what the model was last told about its surroundings); it reads, never writes, the preferred name.
  */
 import {join} from 'node:path';
@@ -21,7 +21,7 @@ import {CacheKeeper} from '../kernel/cache-keepalive.js';
 import {getActorScratchpadDir, ensureActorScratchpadDir} from '../kernel/scratchpad.js';
 import type {PermissionEngine} from '../permissions/engine.js';
 import {certainToWake, openWork} from '../actors/facts.js';
-import {FALLBACK_CAPABILITIES, storesSnapshot} from '../providers/capabilities.js';
+import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import {PENDING_HANDOFF_HEADER, REVOCATION_RESTRICTION, TOOLS_RESTRICTED_RESULT} from '../prompts/runtime/environment.js';
@@ -109,14 +109,18 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     const pending = directorReports.get(context.activityId);
     await actorServices.flush();
-    // Where the snapshot is stored in the ledger it must not change with every step of an actor.
-    const facts = actorServices.facts(context, storesSnapshot(assembly.capabilities));
+    // After a fold or a restart the actor gets one stored record of the ensemble (never one per request); an identical latest record means it is already there.
+    const record = actorServices.restoreRecord(context);
+    if (record) {
+      if (history.findLast(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble')?.text === record) actorServices.recordStored(context.ownerId);
+      else contextUpdates.push(createRuntimeContextMessage('task-state', record, {slot: 'ensemble'}));
+    }
     for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : '']] as const) {
       const previous = history.findLast(message => message.role === 'context' && message.kind === 'task-state' &&
         message.data?.slot === slot && message.data?.activityId === context.activityId);
       if (text || previous?.text) contextUpdates.push(createRuntimeContextMessage('task-state', text || 'No current ' + slot + '.', {slot, activityId: context.activityId}));
     }
-    return {...base, contextUpdates, ...(restriction ? {refuseTools: TOOLS_RESTRICTED_RESULT} : {}), ...(facts ? {snapshot: facts} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
+    return {...base, contextUpdates, ...(restriction ? {refuseTools: TOOLS_RESTRICTED_RESULT} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
   };
   return {requestBase, keepAlive};
 }

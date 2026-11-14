@@ -1,13 +1,12 @@
 import {createHash} from 'node:crypto';
 import type {ResolvedTool} from '../tools/catalog.js';
 import {normalizeMessages, withoutAnsweredUnexecuted, type ModelRequest, type ToolDefinition} from '../runtime/messages.js';
-import {FALLBACK_CAPABILITIES, storesSnapshot} from '../providers/capabilities.js';
+import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {ProviderError} from '../providers/http.js';
 import {roleCacheRetention} from '../providers/cache.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {askOwedWhileWorking} from '../prompts/runtime/recovery.js';
-import {ENSEMBLE_SNAPSHOT_EMPTY} from '../prompts/runtime/director.js';
 import {FINISH_ROUND_FOLLOW_UP} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import type {AgentAssembly, AgentRequestBase} from './agent.js';
 import type {AgentRun} from './run.js';
@@ -93,14 +92,6 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
   const appendOnly = assembly.capabilities.appendOnlyHistory === true;
   const appendUpdate = contextAppender(run, appendOnly);
   for (const update of 'contextUpdates' in instruction ? instruction.contextUpdates ?? [] : []) await appendUpdate(update);
-  // Where the API binds thinking to history (`appendOnlyHistory`) or caches only the previous request as a whole (`conversationCache`), the snapshot is a stored record
-  // appended when its (stable) text changes, so consecutive requests stay pure appends; elsewhere it rides last on one request and is never stored.
-  const storedSnapshot = storesSnapshot(assembly.capabilities);
-  if (storedSnapshot) {
-    const lastEnsemble = messages.findLast(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble');
-    const text = instruction.snapshot || (lastEnsemble && lastEnsemble.text !== ENSEMBLE_SNAPSHOT_EMPTY ? ENSEMBLE_SNAPSHOT_EMPTY : '');
-    if (text) await appendUpdate(createRuntimeContextMessage('task-state', text, {slot: 'ensemble'}));
-  }
   for (const notice of waitNotices) {
     await appendUpdate(createRuntimeContextMessage('task-state', notice.text, {slot: 'wait-' + notice.id}));
     options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
@@ -120,13 +111,11 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');
   }
   const initialProjection = prepared?.request ?? {...base, messages};
-  // A transient last message only re-bills that final block on providers with automatic prefix caching; the stored prefix stays byte-identical.
-  const snapshot = instruction.snapshot && !storedSnapshot ? [createRuntimeContextMessage('snapshot', instruction.snapshot, {activityId: context.activityId})] : [];
   // Hiding finished `_FinishRound` pairs, answered reminders, answered never-executed turns and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
   const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredUnexecuted(withoutAnsweredTransient(initialProjection.messages))))
     .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || state.closing && message.data?.activityId === context.activityId)
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
-    .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
+    .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts')]};
   // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
   let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)

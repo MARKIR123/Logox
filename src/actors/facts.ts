@@ -1,7 +1,7 @@
 import {isDirector} from '../runtime/director-id.js';
 import {currentTaskProgress, type Activity, type RuntimeSnapshot} from '../runtime/contracts.js';
 import type {Delivery} from '../runtime/delivery.js';
-import {reportProgress} from '../prompts/runtime/director.js';
+import {ENSEMBLE_RECORD_HEADER, reportProgress, TEAMMATES_FOOTER, TEAMMATES_HEADER} from '../prompts/runtime/director.js';
 
 function extractRecentFiles(snapshot: RuntimeSnapshot, activityId: string): string[] {
   const tools = snapshot.messages.filter(message => message.activityId === activityId && message.step?.call);
@@ -46,21 +46,17 @@ export function toolFacts(snapshot: RuntimeSnapshot, activityId: string, now = D
     })),
   };
 }
-/**
- * One line of the ensemble snapshot. Detail lives in ListActors, and what an actor actually did in ReadActor.
- * `stable` is the form that is stored in the ledger (and so must not change on every step): the live subtitle is left out.
- */
-export function activityFacts(activity: Activity, stable = false) {
-  const terminal = ['completed', 'failed', 'cancelled'].includes(activity.status);
-  const subtitle = terminal || stable ? undefined : currentTaskProgress(activity.progress)?.label?.trim();
+/** One task of the ensemble record: who holds it and in what status. Live detail (subtitle, running tool) lives in ListActors, what an actor did in ReadActor. */
+export function activityFacts(activity: Activity) {
   return {activityId: activity.activityId, ownerId: activity.ownerId, status: activity.status,
     ...(activity.taskTitle ? {taskTitle: activity.taskTitle} : {}),
-    ...(subtitle ? {subtitle} : {})};
+    ...(activity.ownedFiles?.length ? {owns: activity.ownedFiles.slice(0, 4)} : {}),
+    ...(activity.status === 'paused' && activity.batchId ? {batchId: activity.batchId} : {})};
 }
+/** The record of a companion's active teammates, stored once after a fold or a restart: who, status, task title and owned files. */
 export function activeEnsembleRoster(
   snapshot: RuntimeSnapshot,
   context: {ownerId: string; activityId: string; rootActivityId?: string | undefined},
-  stable = false,
 ): string {
   const peers = snapshot.activities.filter(activity =>
     !isDirector(activity.ownerId) &&
@@ -69,23 +65,33 @@ export function activeEnsembleRoster(
   );
   if (!peers.length) return '';
   const lines = peers.slice(0, 8).map(peer => {
-    const main = (peer.taskTitle ?? peer.title).trim();
-    // The stable (stored) form keeps who, status, task title and owned files; the subtitle, recent files and running tool change every step.
-    const sub = stable ? undefined : currentTaskProgress(peer.progress)?.label?.trim();
-    const title = main && sub && sub !== main ? `${main} · ${sub}` : (sub || main);
-    const observed = stable ? undefined : toolFacts(snapshot, peer.activityId);
-    const files = observed?.recentFiles?.join(', ');
-    const running = observed?.currentTool;
+    const title = (peer.taskTitle ?? peer.title).trim();
     const owns = peer.ownedFiles?.slice(0, 4).join(', ');
-    return `- ${peer.ownerId} (${peer.status}): ${title}` +
-      (owns ? ` | owns: ${owns}${peer.ownedFiles!.length > 4 ? ', ...' : ''}` : '') +
-      (files ? ` | files: ${files}` : '') +
-      (running ? ` | running: ${running}` : '');
+    return `- ${peer.ownerId} (${peer.status}): ${title}` + (owns ? ` | owns: ${owns}${peer.ownedFiles!.length > 4 ? ', ...' : ''}` : '');
   });
-  return 'Active ensemble roster (Logox is always reachable as Director; idle roles omitted):\n' + lines.join('\n');
+  return ENSEMBLE_RECORD_HEADER + '\n' + lines.join('\n');
+}
+/**
+ * The teammates block that ends a Director assignment: the other owners of the same dispatch plus companions still active on the same root task.
+ * Empty without teammates. `finished` names owners this task runs `after`: they have ended when it starts, so they are no teammates.
+ * It is delivered once with the assignment; teammates dispatched later are not announced.
+ */
+export function teammatesBlock(owner: string, batch: readonly {ownerId: string; title: string; owns: readonly string[]}[],
+  snapshot: RuntimeSnapshot | undefined, root: string, finished: ReadonlySet<string> = new Set()): string {
+  const mates = new Map<string, {title: string; owns: readonly string[]}>();
+  for (const task of batch) if (task.ownerId !== owner && !finished.has(task.ownerId)) mates.set(task.ownerId, {title: task.title, owns: task.owns});
+  for (const activity of snapshot?.activities ?? []) {
+    if (isDirector(activity.ownerId) || activity.ownerId === owner || mates.has(activity.ownerId) || finished.has(activity.ownerId) || activity.activityId === root ||
+      (activity.rootActivityId ?? activity.activityId) !== root || !['queued', 'running', 'waiting_input'].includes(activity.status)) continue;
+    mates.set(activity.ownerId, {title: (activity.taskTitle ?? activity.title).trim(), owns: activity.ownedFiles ?? []});
+  }
+  if (!mates.size) return '';
+  const lines = [...mates].slice(0, 8).map(([id, mate]) => `- ${id}: ${mate.title}` +
+    (mate.owns.length ? ` | owns: ${mate.owns.slice(0, 4).join(', ')}${mate.owns.length > 4 ? ', ...' : ''}` : ''));
+  return TEAMMATES_HEADER + '\n' + lines.join('\n') + '\n' + TEAMMATES_FOOTER;
 }
 export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: string; activityId: string; rootActivityId?: string | undefined},
-  deliveries: readonly Delivery[] = [], stable = false) {
+  deliveries: readonly Delivery[] = []) {
   if (!isDirector(context.ownerId)) return undefined;
   const root = context.rootActivityId ?? context.activityId;
   const related = new Set(deliveries.filter(item => isDirector(item.ownerId) &&
@@ -96,11 +102,11 @@ export function directorFacts(snapshot: RuntimeSnapshot, context: {ownerId: stri
   const rank = (activity: Activity) => ['running', 'waiting_input'].includes(activity.status) ? 0 : ['queued', 'paused'].includes(activity.status) ? 1 : 2;
   tasks.sort((a, b) => rank(a) - rank(b));
   const progress = heldProgress(snapshot, deliveries);
-  return {tasks: tasks.slice(0, 8).map(task => activityFacts(task, stable)), additionalTasks: Math.max(0, tasks.length - 8), ...(progress ? {progress} : {})};
+  return {tasks: tasks.slice(0, 8).map(activityFacts), additionalTasks: Math.max(0, tasks.length - 8), ...(progress ? {progress} : {})};
 }
 const titleCase = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
 /** One line per root whose reports are held back: who has reported and who is still working. Absent when nothing is held. */
-function heldProgress(snapshot: RuntimeSnapshot, deliveries: readonly Delivery[]): string | undefined {
+export function heldProgress(snapshot: RuntimeSnapshot, deliveries: readonly Delivery[]): string | undefined {
   const held = deliveries.filter(item => isDirector(item.ownerId) && item.status === 'pending' && item.hold);
   const lines = [...new Set(held.map(item => item.rootActivityId ?? ''))].map(root => {
     const work = openWork(snapshot, root, deliveries);

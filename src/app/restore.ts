@@ -127,6 +127,8 @@ export async function replaySession(deps: ReplayDeps) {
     store.message(session, task.ownerId, 'user', task.prompt, {activityId: task.activityId, source: task.source,
       inputKind: inputKind(task), time: task.time});
   }
+  // A resumed session starts from folded ledgers: every owner gets one ensemble record with its next request if work is still open for it.
+  for (const owner of owners) actorServices.recordDueFor(owner);
   const dependencies = restartDependencies(plan.restore, checkpoints);
   ensemble.restoreQueued(plan.restore, dependencies);
   actorServices.restoreRestart(plan.restore, dependencies.interrupted, checkpoints.filter(task => restartStopped(task) && !isDirector(task.ownerId) && inputKind(task) === 'director').map(task => task.activityId));
