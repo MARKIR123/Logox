@@ -8,16 +8,16 @@ export const effortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max
 export type ThinkingEffort = z.infer<typeof effortSchema>;
 
 /**
- * The thinking level a model id names itself (`<family>-low|medium|high|max`, `-extra-low` counts as low). Such a model is one fixed level of its family,
- * so that level is its effort: a separately chosen effort (the session's, inherited by every actor) must not contradict the name.
+ * The thinking level a model id names itself (`<family>-low|medium|high|max`, `-extra-low` counts as low, `-xhigh` is the family's top level and counts as max).
+ * Such a model is one fixed level of its family, so that level is its effort: a separately chosen effort (the session's, inherited by every actor) must not contradict the name.
  */
 export function effortInName(model: string): ThinkingEffort | undefined {
-  const tier = /-(extra-low|low|medium|high|max)$/.exec(model.toLowerCase())?.[1];
-  return tier === undefined ? undefined : tier === 'extra-low' ? 'low' : tier as ThinkingEffort;
+  const tier = /-(extra-low|low|medium|high|xhigh|max)$/.exec(model.toLowerCase())?.[1];
+  return tier === undefined ? undefined : tier === 'extra-low' ? 'low' : tier === 'xhigh' ? 'max' : tier as ThinkingEffort;
 }
 /** How a model and its thinking level are shown: `<model> · <level>`. A model id that names its level shows its family once (`claude-x-medium` -> `claude-x · medium`), never the level twice. */
 export function modelLabel(model: string, effort?: string): string {
-  const named = /^(.+)-(extra-low|low|medium|high|max)$/i.exec(model);
+  const named = /^(.+)-(extra-low|low|medium|high|xhigh|max)$/i.exec(model);
   if (named) return named[1] + ' · ' + named[2]!.toLowerCase();
   return effort && effort !== 'none' ? model + ' · ' + effort : model;
 }

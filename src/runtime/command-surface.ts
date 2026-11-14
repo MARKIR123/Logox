@@ -9,7 +9,7 @@ export interface CommandToggle {readonly id: string; readonly label?: string | u
 /** Structured page row. Producers choose the kind; the renderer wraps words with a hanging indent and draws rules to the page width. */
 export type TabRow =
   | {readonly kind: 'heading'; readonly text: string}
-  | {readonly kind: 'field'; readonly label: string; readonly value: string}
+  | {readonly kind: 'field'; readonly label: string; readonly value: string; readonly tone?: 'muted' | undefined}
   | {readonly kind: 'text'; readonly text: string; readonly tone?: 'muted' | undefined; readonly indent?: number | undefined}
   | {readonly kind: 'rule'; readonly title?: string | undefined}
   | {readonly kind: 'blank'};

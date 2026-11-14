@@ -164,6 +164,27 @@ export function thinkingHint(hit: Resolution | undefined): ('off' | 'low' | 'med
 }
 
 export const modelTable = new ModelTable(modelTableData);
+/**
+ * The one built-in model a name could plausibly be priced like: the only first-party catalog id that shares the name's family prefix (the normalized id without its last
+ * `-segment`, at least two segments, e.g. `gemini-4` for `gemini-4-hydrogen`). Undefined when none or several qualify, because a guess among siblings would mislead.
+ */
+export function familyCandidate(model: string): string | undefined {
+  const normal = normalizeModelId(model), cut = normal.lastIndexOf('-');
+  if (cut < 0) return undefined;
+  const prefix = normal.slice(0, cut + 1);
+  if (prefix.split('-').length < 3) return undefined;
+  const found = new Map<string, string>();
+  for (const name of modelTable.catalogNames()) {
+    const entry = modelTable.data.providers[name];
+    if (!entry || entry.subscription || name === 'openrouter' || name === 'google-vertex') continue;
+    for (const id of modelTable.modelIds(name)) {
+      if (id.includes('/') || id.includes(':')) continue;
+      const key = normalizeModelId(id);
+      if (key.startsWith(prefix) && key !== normal) found.set(key, id);
+    }
+  }
+  return found.size === 1 ? [...found.values()][0] : undefined;
+}
 /** True when the provider's prices are subscription-based: declared `subscription`, an OAuth login on the ChatGPT catalog, or a subscription catalog such as github-copilot. */
 export function isSubscriptionProvider(provider: string, options: ResolveOptions = {}): boolean {
   const declared = options.catalogs?.[provider]?.subscription;

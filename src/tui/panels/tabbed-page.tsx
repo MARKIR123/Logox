@@ -40,13 +40,15 @@ export function tabDisplay(tab: CommandTab | undefined, columns: number): Displa
     if (item.kind === 'heading') return textRows(item.text, columns, palette.accent, 0, true);
     if (item.kind === 'text') return textRows(item.text, columns, item.tone === 'muted' ? palette.muted : palette.fg, item.indent ?? 0);
     const label = item.label + ':', labelWidth = stringWidth(label) + 1;
+    // A muted field (for example a model with no price) draws its value in the muted tone and not bold.
+    const valueStyle = item.tone === 'muted' ? {color: palette.muted} : {color: palette.fg, bold: true};
     // A long label puts the value on its own indented rows; otherwise continuation rows align under the value.
     if (labelWidth > Math.floor(columns / 2)) {
-      return [[{text: label, color: palette.panelLabel}], ...wrapBody(item.value, columns - 2).map((line): DisplayRow => [{text: '  ' + line, color: palette.fg, bold: true}])];
+      return [[{text: label, color: palette.panelLabel}], ...wrapBody(item.value, columns - 2).map((line): DisplayRow => [{text: '  ' + line, ...valueStyle}])];
     }
     return wrapBody(item.value, columns - labelWidth).map((line, index): DisplayRow => index === 0
-      ? [{text: label, color: palette.panelLabel}, {text: ' ' + line, color: palette.fg, bold: true}]
-      : [{text: ' '.repeat(labelWidth) + line, color: palette.fg, bold: true}]);
+      ? [{text: label, color: palette.panelLabel}, {text: ' ' + line, ...valueStyle}]
+      : [{text: ' '.repeat(labelWidth) + line, ...valueStyle}]);
   });
   if (tab.rows) return fromRows(tab.rows);
   return tab.lines.flatMap((line, index): DisplayRow[] => {

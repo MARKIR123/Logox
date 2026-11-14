@@ -296,8 +296,13 @@ export function scoreSession(dir, {others = []} = {}) {
   for (const line of readJsonl(join(dir, 'usage.jsonl'))) if (line.usage && typeof line.usage === 'object' && typeof line.ownerId === 'string') {
     billed.push({actor: line.ownerId, category: line.category === 'summary' ? 'compaction' : String(line.category), activityId: latestActivity(line.ownerId, line.time ?? Infinity), usage: line.usage});
   }
+  const unpricedModels = new Map();
   for (const item of billed) {
     usage.recorded = true;
+    if (typeof item.usage.cost !== 'number') {
+      const model = [item.usage.provider, item.usage.model].filter(part => typeof part === 'string' && part).join('/') || 'unknown model';
+      unpricedModels.set(model, (unpricedModels.get(model) ?? 0) + 1);
+    }
     const root = item.activityId ? rootOf(item.activityId) : undefined;
     const categories = usage.byActorCategory[item.actor] ??= {};
     const targets = [usage.total, usage.byActor[item.actor] ??= zero(), ...(root ? [usage.byRoot[root] ??= zero()] : [])];
@@ -315,7 +320,10 @@ export function scoreSession(dir, {others = []} = {}) {
   }
   if (!usage.recorded) missing.push('tokens and cost: no ledger record carries `usage` (sessions recorded before turn usage was persisted)');
   else if (!usage.costRecorded) missing.push('cost: usage has tokens but no priced turn');
-  else if (usage.total.costTurns < usage.total.turns) missing.push('cost: ' + (usage.total.turns - usage.total.costTurns) + ' of ' + usage.total.turns + ' turns had no price, so cost is partial');
+  else if (usage.total.costTurns < usage.total.turns) {
+    const named = [...unpricedModels].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([model, turns]) => model + ' (' + turns + ')').join(', ');
+    missing.push('cost: ' + (usage.total.turns - usage.total.costTurns) + ' of ' + usage.total.turns + ' turns had no price, so cost is partial; unpriced: ' + named);
+  }
   for (const root of roots) root.usage = usage.byRoot[root.activityId] ?? null;
   const ranges = [...times.values()];
   const wallMs = ranges.length ? Math.max(...ranges.map(range => range[1])) - Math.min(...ranges.map(range => range[0])) : null;

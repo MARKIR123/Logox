@@ -6,7 +6,7 @@
 
 import {isOpenAiReasoningModel} from './model-preferences.js';
 
-const SUFFIX_REGEX = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/;
+const SUFFIX_REGEX = /^(.*?)-(low|medium|high|xhigh|extra-low|max|tiered|thinking)$/;
 
 export interface GroupedModelVariant {
   readonly id: string; // Actual model ID, e.g. gemini-3.8-flash-high
@@ -30,7 +30,35 @@ function normalizeTier(suffix: string): string {
   if (suffix === 'thinking') return 'high';
   if (suffix === 'tiered') return 'auto';
   if (suffix === 'extra-low') return 'low';
+  if (suffix === 'xhigh') return 'max';
   return suffix;
+}
+
+/**
+ * Split model ids into family buckets. `-xhigh` is the family's top level and folds as `max`; when the family also lists a real `-max` variant the two
+ * cannot share one level (the effort enum has no `xhigh`), so the `-xhigh` model stays a separate, un-folded row.
+ */
+function bucketModels(models: readonly string[]): Map<string, Array<{modelId: string; tier?: string}>> {
+  const maxFamilies = new Set<string>();
+  for (const modelId of models) {
+    const match = SUFFIX_REGEX.exec(modelId);
+    if (match && match[2] === 'max') maxFamilies.add(match[1]!);
+  }
+  const groups = new Map<string, Array<{modelId: string; tier?: string}>>();
+  for (const modelId of models) {
+    const match = SUFFIX_REGEX.exec(modelId);
+    if (match && !(match[2] === 'xhigh' && maxFamilies.has(match[1]!))) {
+      const base = match[1]!;
+      const list = groups.get(base) ?? [];
+      list.push({modelId, tier: normalizeTier(match[2]!)});
+      groups.set(base, list);
+    } else {
+      const list = groups.get(modelId) ?? [];
+      list.push({modelId, tier: 'auto'});
+      groups.set(modelId, list);
+    }
+  }
+  return groups;
 }
 
 export const STANDARD_THINKING_LEVELS: readonly string[] = ['auto', 'off', 'low', 'medium', 'high', 'max'];
@@ -103,22 +131,7 @@ export function groupModelsForProvider(
   currentModel: string
 ): GroupedModel[] {
   // 1. Scan candidates and group by baseModel
-  const groups = new Map<string, Array<{modelId: string; tier?: string}>>();
-
-  for (const modelId of models) {
-    const match = SUFFIX_REGEX.exec(modelId);
-    if (match) {
-      const base = match[1]!;
-      const tier = normalizeTier(match[2]!);
-      const list = groups.get(base) ?? [];
-      list.push({modelId, tier});
-      groups.set(base, list);
-    } else {
-      const list = groups.get(modelId) ?? [];
-      list.push({modelId, tier: 'auto'});
-      groups.set(modelId, list);
-    }
-  }
+  const groups = bucketModels(models);
 
   const result: GroupedModel[] = [];
 
@@ -230,22 +243,7 @@ export function groupModelFamilies(
 ): ModelFamilyGroup[] {
   const filtered = models.filter(isConversationalModel);
   const pool = filtered.length ? filtered : models;
-  const groups = new Map<string, Array<{modelId: string; tier?: string}>>();
-
-  for (const modelId of pool) {
-    const match = SUFFIX_REGEX.exec(modelId);
-    if (match) {
-      const base = match[1]!;
-      const tier = normalizeTier(match[2]!);
-      const list = groups.get(base) ?? [];
-      list.push({modelId, tier});
-      groups.set(base, list);
-    } else {
-      const list = groups.get(modelId) ?? [];
-      list.push({modelId, tier: 'auto'});
-      groups.set(modelId, list);
-    }
-  }
+  const groups = bucketModels(pool);
 
   const order = ['off', 'low', 'medium', 'high', 'max'];
   const result: ModelFamilyGroup[] = [];

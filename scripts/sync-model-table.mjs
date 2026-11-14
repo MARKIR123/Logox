@@ -4,7 +4,7 @@
 //
 //   node scripts/sync-model-table.mjs                    # pinned version
 //   node scripts/sync-model-table.mjs --latest           # newest published version
-//   node scripts/sync-model-table.mjs --version 1.5.0
+//   node scripts/sync-model-table.mjs --version 1.5.2
 //   node scripts/sync-model-table.mjs --from <dir>       # use an already extracted package directory (offline)
 //   node scripts/sync-model-table.mjs --check            # exit 1 when the committed file is out of date
 import {execFileSync, execSync} from 'node:child_process';
@@ -14,7 +14,7 @@ import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 export const PACKAGE = '@earendil-works/pi-ai';
-export const PINNED_VERSION = '1.5.0';
+export const PINNED_VERSION = '1.5.2';
 /** Catalog providers LOGOX can meaningfully resolve against: first-party vendors, ChatGPT/Copilot subscriptions and the OpenRouter gateway. */
 export const KEEP_PROVIDERS = ['anthropic', 'deepseek', 'github-copilot', 'google', 'google-vertex', 'minimax', 'mistral', 'moonshotai',
   'openai', 'openai-codex', 'openrouter', 'xai', 'zai'];

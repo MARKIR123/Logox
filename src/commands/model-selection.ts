@@ -71,7 +71,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
   const openModels = (forActor = 'Logox') => {
     const groupedMap = new Map<string, GroupedModel>();
     const currentBase = (() => {
-      const match = /^(.*?)-(low|medium|high|extra-low|max|tiered|thinking)$/.exec(settings.model);
+      const match = /^(.*?)-(low|medium|high|xhigh|extra-low|max|tiered|thinking)$/.exec(settings.model);
       return match ? match[1]! : settings.model;
     })();
     /** One picker row per model family of every provider in the listing. */

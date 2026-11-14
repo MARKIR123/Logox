@@ -20,6 +20,7 @@
 | Change conversation-language detection or its environment line | `language.ts:detectConversationLanguage()` | `environment.ts:formatEnvironment()`, `../app/request.ts` (`requestBase`), `../prompts/runtime/environment.ts:conversationLanguage()` |
 | Token estimates and usage anchors | `budget.ts:estimateRequest()` | `usage.ts:UsageLedger` |
 | Per-turn usage and cost stored in the session ledger | `manager.ts:ContextManager.turnUsage()` | `src/runtime/messages.ts:turnUsageSchema`, `cost.ts:turnUsageOf()` (also priced onto Automa `message` events and the session-level `usage.jsonl` lines for summary and approval calls, written in `src/app/status.ts`), `src/kernel/reply.ts:presentTurn()` (`turnUsage`), `scripts/score-session.mjs` |
+| The `/usage` page, including the unpriced-model lines and the TOML that fixes them | `usage.ts:usageRows()` | `usage.ts:unpricedModels()`, `../commands/models-page.ts:modelsRows()` (models with no price drawn muted), `tests/model-unpriced.test.ts` |
 | Restart, rollback or physical line references | `../store/journal.ts:Journal.sourceLines()` | `contracts.ts:RoundRecord` source hashes |
 
 ## 3. Common Changes

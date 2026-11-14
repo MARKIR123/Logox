@@ -197,6 +197,24 @@ test('projectUsage sums every session of a .logox directory and keeps n/a sessio
   }
 });
 
+test('the partial-cost note names the unpriced model ids with their turn counts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const dir = join(root, 'proj', '.logox', 'state', 'sessions', SESSION);
+    await writeSession(dir, true);
+    const bare = (model: string) => ({input: 10, output: 1, cacheRead: 0, cacheWrite: 0, provider: 'antigravity', model});
+    await writeFile(join(dir, 'usage.jsonl'), jsonl([
+      {version: 1, time: tick(), ownerId: 'techne', category: 'summary', usage: bare('gemini-4-hydrogen')},
+      {version: 1, time: tick(), ownerId: 'techne', category: 'summary', usage: bare('gemini-4-hydrogen')},
+      {version: 1, time: tick(), ownerId: 'techne', category: 'approval', usage: bare('gemini-4-hydrogen-xhigh')}]));
+    const score = scorer.scoreSession(dir);
+    const note = score.missing.find(item => item.startsWith('cost:'));
+    assert.equal(note, 'cost: 3 of 15 turns had no price, so cost is partial; unpriced: antigravity/gemini-4-hydrogen (2), antigravity/gemini-4-hydrogen-xhigh (1)');
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('Automa worker turns and summary calls count toward actor, root and project totals with their own rows', async () => {
   const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
   try {

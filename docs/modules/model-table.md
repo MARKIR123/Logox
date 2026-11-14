@@ -29,7 +29,25 @@ subscription = false         # 可选；true 表示按订阅计费，价格只�
 "gemini-4-argon-high" = "gemini-4-argon"
 ```
 
-匹配依次是：别名、目录内精确 id、规范化 id（忽略厂商前缀、`:variant`、日期、`-low/-medium/-high/-thinking/-tiered` 后缀和点号/连字符差异）。都找不到时，会按裸模型名在其他目录里找，这类结果标记为低可信（`inferred`），窗口只在没有别的来源时使用，思考档位不采用。
+匹配依次是：别名、目录内精确 id、规范化 id（忽略厂商前缀、`:variant`、日期、`-low/-medium/-high/-xhigh/-max/-thinking/-tiered` 后缀和点号/连字符差异）。都找不到时，会按裸模型名在其他目录里找，这类结果标记为低可信（`inferred`），窗口只在没有别的来源时使用，思考档位不采用。
+
+别名只匹配完整的模型 id（不区分大小写），所以一个模型有 `-low`、`-high`、`-xhigh` 等档位变体时，每个 id 各写一条，或者让别名指向的目录里本来就有该系列。规范化时 `-xhigh` 和 `-max` 一样被忽略，`gemini-4-hydrogen-xhigh` 与 `gemini-4-hydrogen` 按同一价格查询。
+
+## 没有价格的模型
+
+内置表、别名和 `[models."p/m".prices]` 都查不到价格时，该模型没有价格：`/usage` 的费用只算有价格的部分并标为 partial，页面会列出无价格的模型（含调用次数），并给出可粘贴的配置；Models & pricing 页把它显示为暗色的 `no price`。修法有两种，任选其一：
+
+```toml
+# 1. 直接写价格（美元 / 每百万 token；cache_read、cache_write 可省略）
+[models."antigravity/gemini-4-hydrogen"]
+prices = {input = 0.0, output = 0.0}
+
+# 2. 计价与某个内置模型相同时，用别名指过去（每个 id 一条）
+[catalogs.antigravity.aliases]
+"gemini-4-hydrogen" = "gemini-4-argon"
+```
+
+用量页只在内置表里恰好有一个同系列模型时才给出别名写法，否则只给第一种。
 
 ## 订阅与 OAuth
 
@@ -42,7 +60,7 @@ subscription = false         # 可选；true 表示按订阅计费，价格只�
 ```bash
 npm run sync:models              # 使用脚本里固定的版本
 npm run sync:models -- --latest  # 取最新发布版本
-npm run sync:models -- --version 1.5.0
+npm run sync:models -- --version 1.5.2
 npm run sync:models -- --from <已解压的包目录>   # 离线
 npm run sync:models -- --check   # 只检查是否已是最新，过期则退出码为 1
 ```

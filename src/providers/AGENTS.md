@@ -13,7 +13,7 @@
 | Limit concurrent requests or slow down on HTTP 429/529 | `request-gate.ts:RequestGate` | `registry.ts:ProviderRegistry.gateFor()`, `http.ts:isRateLimitFailure()`, `http.ts:parseRetryAfter()` |
 | Fix connection drops, proxy or TLS | `transport.ts:createHttpTransport()` | `error-format.ts:formatNetworkError()` |
 | Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-table.ts:ModelTable.resolve()`, `model-capacities.ts:modelCapacities` |
-| Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, [docs/modules/model-table.md](../../docs/modules/model-table.md) |
+| Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, `model-table.ts:familyCandidate` (the one sibling the usage page suggests as an alias), [docs/modules/model-table.md](../../docs/modules/model-table.md) |
 | Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()` (models in use), `registry.ts:ProviderRegistry.availableModels()` (everything offered, with offline fallbacks; the `/login` model editor uses it), `auth.ts:AuthStorage` |
 | Model list cache and shorthand (the pool hands out only models of providers in `ProviderRegistry.names()`; `syncProvider()` / `refresh()` drop other entries from the file) | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
 | ChatGPT OAuth login or refresh | `oauth.ts:startOpenAiOAuth()` | `oauth.ts:refreshOpenAIToken()`, `login.ts:LoginFlow` (browser sign-in only; every form is `login-wizard.ts`), `account-migration.ts:migrateOpenAiAccount()` |

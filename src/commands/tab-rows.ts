@@ -3,7 +3,7 @@ import type {TabLine, TabRow} from '../runtime/command-surface.js';
 /** Explicit row constructors: producers say what a row is, so renderers never guess from the text. */
 export const row = {
   heading: (text: string): TabRow => ({kind: 'heading', text}),
-  field: (label: string, value: string | number): TabRow => ({kind: 'field', label, value: String(value)}),
+  field: (label: string, value: string | number, tone?: 'muted'): TabRow => ({kind: 'field', label, value: String(value), ...(tone ? {tone} : {})}),
   text: (text: string): TabRow => ({kind: 'text', text}),
   muted: (text: string): TabRow => ({kind: 'text', text, tone: 'muted'}),
   bullet: (text: string): TabRow => ({kind: 'text', text: '• ' + text, indent: 2}),

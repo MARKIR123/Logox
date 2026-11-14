@@ -122,7 +122,7 @@ name = "local"
 - `max_images`（可写在 `[provider]` 或 `[models."p/m"]`，可选）是单次请求的图片上限；Anthropic 协议默认 100（官方上限），其他协议默认不设，只在服务拒绝“图片过多”时处理。超限时一次性把最旧的图片换成 `[image: 路径]`，直到约剩上限的一半，并保存这个决定，之后的请求保持字节一致；服务拒绝时同样降一半后重试一次。旧配置没有这个键，行为不变。
 - 工具结果超过 32768 字符落盘到 `tool-results/` 并只留预览；同一轮并行工具结果合计超过 200000 字符时，按从大到小继续落盘，直到总量不超过上限。两项都在结果产生时决定一次，不会事后改写。
 - `/effort`（别名 `/thinking`、`/think`）选择当前模型支持的思考档位；不支持的档位不会因此可用。
-- `/usage` 的费用按每百万 token 的静态价格估算（先看 `[models."p/m".prices]`，再查[内置模型表](modules/model-table.md)；自建网关用 `[catalogs.<name>]` 指定对应目录），不是提供商账单；服务未返回的 usage 不会被补造。
+- `/usage` 的费用按每百万 token 的静态价格估算（先看 `[models."p/m".prices]`，再查[内置模型表](modules/model-table.md)；自建网关用 `[catalogs.<name>]` 指定对应目录），不是提供商账单；服务未返回的 usage 不会被补造。有模型查不到价格时，费用只算有价格的部分并标为 partial，用量页会多出几行：列出无价格的模型及其调用次数（最多几个，其余写 `+N more`），并给出可直接粘贴的 `[models."<provider>/<model>"]` 配置（`prices = {input = ..., output = ...}`，单位为每百万 token，另有可选的 `cache_read`、`cache_write`、`currency`）；自建网关上若内置表里恰好只有一个同系列模型，还会附上 `[catalogs.<provider>.aliases]` 的写法（别名按模型 id 逐个写，仅在两者计价相同时使用）。Models & pricing 页里没有价格的模型整行用暗色显示并写着 `no price`。`scripts/score-session.mjs` 的缺失项也会列出无价格的模型 id。
 
 ### 网络
 
