@@ -46,13 +46,13 @@ export function toolFacts(snapshot: RuntimeSnapshot, activityId: string, now = D
     })),
   };
 }
-/** One line of the ensemble snapshot. Detail lives in ListActors, and what an actor actually did in ReadActor. */
+/**
+ * One line of the ensemble snapshot, which is stored in the ledger whenever its text changes. It therefore holds only facts whose change
+ * matters to the Director (who, which task, status); the live subtitle changes with every step of the actor and stays in ListActors.
+ */
 export function activityFacts(activity: Activity) {
-  const terminal = ['completed', 'failed', 'cancelled'].includes(activity.status);
-  const subtitle = terminal ? undefined : currentTaskProgress(activity.progress)?.label?.trim();
   return {activityId: activity.activityId, ownerId: activity.ownerId, status: activity.status,
-    ...(activity.taskTitle ? {taskTitle: activity.taskTitle} : {}),
-    ...(subtitle ? {subtitle} : {})};
+    ...(activity.taskTitle ? {taskTitle: activity.taskTitle} : {})};
 }
 export function activeEnsembleRoster(
   snapshot: RuntimeSnapshot,
@@ -65,17 +65,11 @@ export function activeEnsembleRoster(
   );
   if (!peers.length) return '';
   const lines = peers.slice(0, 8).map(peer => {
-    const main = (peer.taskTitle ?? peer.title).trim();
-    const sub = currentTaskProgress(peer.progress)?.label?.trim();
-    const title = main && sub && sub !== main ? `${main} · ${sub}` : (sub || main);
-    const observed = toolFacts(snapshot, peer.activityId);
-    const files = observed.recentFiles?.join(', ');
-    const running = observed.currentTool;
+    // Stored in the ledger whenever the text changes: live subtitles, recent files and the running tool change every step and stay out (ListActors has them).
+    const title = (peer.taskTitle ?? peer.title).trim();
     const owns = peer.ownedFiles?.slice(0, 4).join(', ');
     return `- ${peer.ownerId} (${peer.status}): ${title}` +
-      (owns ? ` | owns: ${owns}${peer.ownedFiles!.length > 4 ? ', ...' : ''}` : '') +
-      (files ? ` | files: ${files}` : '') +
-      (running ? ` | running: ${running}` : '');
+      (owns ? ` | owns: ${owns}${peer.ownedFiles!.length > 4 ? ', ...' : ''}` : '');
   });
   return 'Active ensemble roster (Logox is always reachable as Director; idle roles omitted):\n' + lines.join('\n');
 }

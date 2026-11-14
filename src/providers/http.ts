@@ -525,6 +525,13 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
     const chosenModel = settings.model;
     // Routes requests of one session and actor to the same cache; sent only where the provider is known to accept it.
     const cacheKey = !native && capabilities.caching === 'openai-key' && request.cacheKey ? {prompt_cache_key: request.cacheKey} : {};
+    // Account route only. The open-source `@oh-my-pi/pi-ai` ChatGPT transport documents that the backend derives prompt-cache affinity from
+    // session headers (codex-rs `responses_session_id`), so each session and actor presents its opaque cache key there too.
+    // UNVERIFIED against the live service; an endpoint that ignores the headers is unaffected. Never dumped or fingerprinted.
+    if (oauthResponses && request.cacheKey) {
+      headers.session_id = request.cacheKey;
+      headers.conversation_id = request.cacheKey;
+    }
     const body = native
       ? {model: chosenModel, max_tokens: maxTokens, ...(thinking.thinking && effort !== 'off' ? {} : {temperature: settings.temperature}),
         ...(isStream ? {stream: true} : {}),

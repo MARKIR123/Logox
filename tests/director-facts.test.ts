@@ -106,16 +106,17 @@ test('resident facts distinguish self-reported labels and tool completion from t
     const text = f.facts();
     const data = JSON.parse(text.slice(text.indexOf('\n') + 1));
     const child = data.tasks.find((item: {activityId: string}) => item.activityId === 'child');
-    assert.deepEqual(Object.keys(child).sort(), ['activityId', 'ownerId', 'status', 'subtitle']);
+    assert.deepEqual(Object.keys(child).sort(), ['activityId', 'ownerId', 'status']);
     assert.equal(child.status, 'running');
-    assert.equal(child.subtitle, 'Tests passed according to Actor');
+    assert.ok(!text.includes('Tests passed according to Actor'), 'the live subtitle changes every step and is not part of the stored snapshot');
+    f.store.activities.update('s', 'child', {progress: {label: 'A later self-reported label'}});
+    assert.equal(f.facts(), text, 'a changed subtitle is not a change in the snapshot');
     assert.ok(!text.includes('Large private result body')); assert.ok(!text.includes('Private task instructions'));
     assert.equal(f.facts(), text, 'an unchanged ensemble produces identical text, so no new record is written');
     f.store.message('s', 'techne', 'assistant', 'More work', {activityId: 'child', kind: 'tool', step: {title: 'Read', callId: 'read-9', state: 'completed', elapsedMs: 1}});
     assert.equal(f.facts(), text, 'tool activity is not a change in who is doing what');
     f.store.activities.update('s', 'child', {status: 'completed'});
     assert.notEqual(f.facts(), text, 'a status change is');
-    assert.ok(!f.facts().includes('Tests passed according to Actor'), 'a finished task shows no subtitle');
     const roster = JSON.parse(executeListActors({}, {caller: 'logox', getSnapshot: () => f.store.getSnapshot()}).text).actors.find((item: {id: string}) => item.id === 'techne');
     assert.equal(roster.recentTools.at(-1).callId, 'read-9', 'detail is still available through ListActors');
   } finally {await f.close();}
@@ -190,7 +191,11 @@ test('activeEnsembleRoster returns empty string when solo and formats peer mainT
 
     const roster = f.facts(context('techne-1', 'techne'));
     assert.match(roster, /^Active ensemble roster \(Logox is always reachable as Director; idle roles omitted\):/);
-    assert.match(roster, /- kalon \(running\): Refine palette tokens · Auditing contrast \| files: src\/tui\/theme\.ts \(edit\), docs\/design\.md \(read\) \| running: Shell · npm test/);
+    assert.match(roster, /- kalon \(running\): Refine palette tokens$/m);
+    assert.ok(!/Auditing contrast|theme\.ts|npm test/.test(roster), 'subtitles, recent files and the running tool are not stored');
+    f.store.activities.update('s', 'kalon-active', {progress: {label: 'Checking another thing'}});
+    f.store.message('s', 'kalon', 'assistant', '', {activityId: 'kalon-active', kind: 'tool', step: {title: 'Shell · other', callId: 'shell-2', state: 'running', elapsedMs: 1}});
+    assert.equal(f.facts(context('techne-1', 'techne')), roster, 'live progress does not change the roster');
 
     f.store.activities.update('s', 'kalon-active', {status: 'completed'});
     assert.equal(f.facts(context('techne-1', 'techne')), '');
@@ -285,7 +290,7 @@ test('Actor dispatch with title preserves natural prompt without task-book heade
   }
 });
 
-test('only the current snapshot is ever sent: it replaces the last one, comes last and is never stored', async () => {
+test('on any protocol the snapshot is stored once while unchanged, again on change, and requests only ever append', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-test-snapshot-'));
   const store = new RuntimeStore();
   const requests: ModelRequest[] = [];
@@ -301,9 +306,8 @@ test('only the current snapshot is ever sent: it replaces the last one, comes la
     if (turn.message.text) delta({kind: 'text', text: turn.message.text});
     return turn;
   }};
-  let state = 0;
   const execute = createAgent({cwd: directory, store, tools: new Tools(directory), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: 'state ' + ++state})});
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd: directory, ownerId: 'logox', builtinPrompt: 'Test'}), tools: toolDefinitions, snapshot: requests.length < 2 ? 'state 1' : 'state 2'})});
   const journal = new Journal(join(directory, 'sessions'));
   const old = createRuntimeContextMessage('task-state', 'stale facts', {slot: 'director-facts', activityId: 'a'});
   const savedFacts = {role: 'context', text: old.text, message: old} as unknown as ActorContext['history'][number];
@@ -311,16 +315,21 @@ test('only the current snapshot is ever sent: it replaces the last one, comes la
   try {
     await ensemble.dispatch('logox', 'Go', 'direct').done;
     assert.equal(requests.length, 3);
-    const states: number[] = [];
+    const copies = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble').map(message => message.text);
     for (const request of requests) {
-      const snapshots = request.messages.filter(message => message.role === 'context' && message.kind === 'snapshot');
-      assert.equal(snapshots.length, 1, 'never more than one');
-      assert.equal(request.messages.at(-1), snapshots[0], 'always last');
-      states.push(Number(/state (\d+)$/.exec(request.messages.at(-1)!.text)![1]));
+      assert.ok(!request.messages.some(message => message.role === 'context' && message.kind === 'snapshot'), 'no per-request tail snapshot');
       assert.ok(!JSON.stringify(request.messages).includes('stale facts'), 'copies stored by older sessions are not replayed');
     }
-    assert.ok(states[0]! < states[1]! && states[1]! < states[2]!, 'each request carries the state read for it');
-    assert.ok(!JSON.stringify(stored).includes('state '), 'never written to the ledger');
+    assert.deepEqual(copies(requests[0]!), ['state 1']);
+    assert.deepEqual(copies(requests[1]!), ['state 1'], 'an unchanged ensemble is not stored again');
+    assert.deepEqual(copies(requests[2]!), ['state 1', 'state 2'], 'a change is stored once');
+    assert.equal(stored.filter(message => JSON.stringify(message).includes('state ')).length, 2);
+    for (let index = 1; index < requests.length; index++) {
+      const before = requests[index - 1]!.messages, after = requests[index]!.messages;
+      const same = (a: unknown, b: unknown) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+      const diverged = before.findIndex((message, at) => !same(message, after[at]));
+      assert.equal(diverged, -1, `request ${index} rewrote message ${diverged}`);
+    }
     assert.ok(stored.length > 0);
   } finally { await ensemble.close(); await rm(directory, {recursive: true, force: true}); }
 });

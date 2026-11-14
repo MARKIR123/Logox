@@ -92,7 +92,8 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
   const appendOnly = assembly.capabilities.appendOnlyHistory === true;
   const appendUpdate = contextAppender(run, appendOnly);
   for (const update of 'contextUpdates' in instruction ? instruction.contextUpdates ?? [] : []) await appendUpdate(update);
-  if (appendOnly && instruction.snapshot) await appendUpdate(createRuntimeContextMessage('task-state', instruction.snapshot, {slot: 'ensemble'}));
+  // Stored on every protocol and appended only when its text changed, so consecutive requests keep their whole prefix.
+  if (instruction.snapshot) await appendUpdate(createRuntimeContextMessage('task-state', instruction.snapshot, {slot: 'ensemble'}));
   for (const notice of waitNotices) {
     await appendUpdate(createRuntimeContextMessage('task-state', notice.text, {slot: 'wait-' + notice.id}));
     options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
@@ -112,12 +113,11 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     throw new ProviderError('Task model and context budget identity mismatch; wire ContextManager.model to TaskModels.model');
   }
   const initialProjection = prepared?.request ?? {...base, messages};
-  const snapshot = instruction.snapshot && !appendOnly ? [createRuntimeContextMessage('snapshot', instruction.snapshot, {activityId: context.activityId})] : [];
   // Hiding finished `_FinishRound` pairs, answered reminders, answered never-executed turns and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
   const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredUnexecuted(withoutAnsweredTransient(initialProjection.messages))))
     .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || state.closing && message.data?.activityId === context.activityId)
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
-    .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts'), ...snapshot]};
+    .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts')]};
   // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
   let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)

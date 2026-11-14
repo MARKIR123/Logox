@@ -1,4 +1,4 @@
-export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance; subtitles are self-reported. Use ListActors for detail and ReadActor to see what an actor actually did.]';
+export const DIRECTOR_FACTS_HEADER = '[Ensemble snapshot: who is doing what right now, not task acceptance. Use ListActors for detail and ReadActor to see what an actor actually did.]';
 /** Opens every ledger entry that wakes or reaches the Director from coordination, so it is never read as the human speaking. */
 export const DIRECTOR_AUTOMATED_EVENT = "[Automated event, not a message from the human. It confirms and approves nothing on the human's behalf.]";
 export function automatedEvent(text: string): string {return DIRECTOR_AUTOMATED_EVENT + '\n' + text;}

@@ -95,6 +95,25 @@ test('OAuth remains streaming Responses while API-key auto mode retains Chat rou
   }
 });
 
+test('session headers carry the cache key on the ChatGPT account route only', async () => {
+  const cases = [
+    {name: 'account', baseUrl: 'https://api.openai.com/v1', key: 'oauth-fixture', expected: true},
+    {name: 'account jwt', baseUrl: 'https://api.openai.com/v1', key: 'eyJfixture', expected: true},
+    {name: 'api key', baseUrl: 'https://api.openai.com/v1', key: 'sk-fixture', expected: false},
+    {name: 'other host', baseUrl: 'https://fixture.invalid/v1', key: 'oauth-fixture', expected: false},
+  ];
+  for (const item of cases) {
+    let seen: Record<string, string> = {};
+    const provider = createProvider({...settings, baseUrl: item.baseUrl, key: item.key, model: 'gpt-4o', toolDiscovery: 'auto'}, async (_url, init) => {
+      seen = init?.headers as Record<string, string>;
+      return item.key.startsWith('sk-') ? Response.json({choices: [{message: {content: 'Done'}, finish_reason: 'stop'}]}) : sse([{type: 'response.completed', response: {status: 'completed'}}]);
+    });
+    await provider.respond({system: 'Rules', messages: [], tools: [], stream: false, cacheKey: 'logox-abc'}, () => {}, new AbortController().signal);
+    assert.equal(seen.session_id, item.expected ? 'logox-abc' : undefined, item.name);
+    assert.equal(seen.conversation_id, item.expected ? 'logox-abc' : undefined, item.name);
+  }
+});
+
 test('incomplete native discovery batches execute no writes or schema discoveries', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-search-incomplete-'));
   let count = 0;
