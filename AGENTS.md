@@ -40,6 +40,7 @@ Paths under `src/`. "Inherits" means no local signpost; use the named one.
 | `config/` | [`src/config/AGENTS.md`](src/config/AGENTS.md) | Config cascade, TOML, `modelSettings()`, themes, onboarding preferences, atomic `StateFile` |
 | `prompts/` | [`src/prompts/AGENTS.md`](src/prompts/AGENTS.md) | Prompt composer, charter, collaboration contracts, cache-stable ordering |
 | `kernel/` | Inherits `runtime/` | Agent loop (`agent.ts`), execution recovery, scratchpad |
+| `app/` | Inherits `runtime/` | Container-level wiring split out of `application.ts`: shared session state, footer status and usage metering, request assembly, input delivery and pending messages, startup restore, the `submit` command dispatcher |
 | `store/` | Inherits `runtime/` and `config/` | `.lock-v2` file locks, journals, sessions, session trash, system history, atomic replace |
 | `extensions/` | Inherits `tools/` | MCP client (`mcp.ts`, `mcp-client.ts`), Playwright controller, hooks, external processes, extension config |
 | `commands/`, `commands.ts` | Inherits `tui/` | Command surface descriptors and slash commands |

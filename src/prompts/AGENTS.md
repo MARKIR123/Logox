@@ -15,7 +15,7 @@
 | Change rules for every non-Director actor | `collaboration/companion.ts:COMPANION_COLLABORATION` | `collaboration/index.ts:collaborationFor()` |
 | Change the formal task-report contract | `collaboration/reporting.ts:TASK_REPORT_CONTRACT` | `../context/round-memory.ts:TaskDelivery`, `runtime/director.ts:RUNTIME_RECORD_LABELS` |
 | Change Director wake-up or recovery wording | `runtime/director.ts` | `runtime/recovery.ts`, `../actors/services.ts` |
-| Change the live environment or restriction text | `runtime/environment.ts` | `../runtime/context-updates.ts`, `../application.ts` |
+| Change the live environment or restriction text | `runtime/environment.ts` | `../runtime/context-updates.ts`, `../app/request.ts` |
 | Change history summarization instructions | `compaction.ts:HISTORY_MEMO_INSTRUCTION` | `../context/manager.ts:mergeMemo()` |
 
 ## 3. Common Changes
@@ -35,7 +35,7 @@
 
 ### Add a typed host message (live update)
 1. Put the English text constant in `runtime/` (`environment.ts` for request context, `director.ts` for Director wake-ups).
-2. Emit it from the caller (see `../application.ts`) as a typed message through `../runtime/context-updates.ts:createRuntimeContextMessage()`; never rewrite the system prompt.
+2. Emit it from the caller (see `../app/request.ts`) as a typed message through `../runtime/context-updates.ts:createRuntimeContextMessage()`; never rewrite the system prompt.
 - Tests: `tests/runtime-context-updates.test.ts`, `tests/prompts.test.ts`.
 
 ## 4. Hard Boundaries

@@ -32,14 +32,14 @@ categories:
 | Silent git inspection | `protocol/_GitStatusTool/_GitStatusTool.ts` | `metadata` export there (`terminalVisibility: 'silent'`) |
 | Trace an Automa dispatch (stateless parallel workers) | `index.ts:Tools.runAutoma()` | `orchestration/AutomaTool/AutomaTool.ts:executeAutomaDispatch()`, `tool-models.ts:ToolModelStorage` (`/model automa`) |
 | Change what a worker may touch, or when a dispatch is refused | `orchestration/AutomaTool/grant.ts:planDispatch()` | `index.ts:Tools.workerDenial()`, `grant.ts:pathDenial()`, `grant.ts:normalizeWrite()`, `orchestration/AutomaTool/paths.ts:canonicalPath()` |
-| Change an actor's swarm name, worker styles or worker model | `src/actors/profiles/<id>/config.yaml` (`automa:`) | `orchestration/AutomaTool/preset.ts:automaProfileSchema`, `preset.ts:chooseStyle()`, `src/application.ts` (`setAutomaEnvironment`) |
+| Change an actor's swarm name, worker styles or worker model | `src/actors/profiles/<id>/config.yaml` (`automa:`) | `orchestration/AutomaTool/preset.ts:automaProfileSchema`, `preset.ts:chooseStyle()`, `src/app/request.ts` (`setAutomaEnvironment`) |
 | Change how a receipt reads or what `changed` measures | `orchestration/AutomaTool/AutomaTool.ts:executeAutomaDispatch()` | `snapshots.ts:Snapshots.trackWrites()` |
 | Classify a Shell command as search, read, list or command (timeline grouping) | `ShellTool/classify.ts:classifyShellCommand()` | `src/tui/timeline/tool-groups.ts:groupToolMessages()`, `src/permissions/shell.ts:shellCommands()` |
 | Missing ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `@vscode/ripgrep` in `package.json` |
 | Hanging child process | `process.ts:runProcess()` | `process.ts:killActivityProcesses()` |
 | Shell `run_in_background`, reading or stopping a background job | `ShellTool/ShellTool.ts:executeShell()` | `process.ts:startBackgroundProcess()`, `ShellJobTool/ShellJobTool.ts:executeShellJob()`, `process.ts:killBackgroundJobs()` |
-| `/undo` rollback | `snapshots.ts:Snapshots` | the `/undo` branch in `src/application.ts` |
-| MCP tools, Playwright browser | `src/extensions/mcp.ts:Mcp` | `src/extensions/playwright.ts:playwrightServer()`; `src/application.ts` registers MCP tools under category `extensions` |
+| `/undo` rollback | `snapshots.ts:Snapshots` | the `/undo` branch in `src/app/submit.ts` |
+| MCP tools, Playwright browser | `src/extensions/mcp.ts:Mcp` | `src/extensions/playwright.ts:playwrightServer()`; `src/extensions/runtime.ts:mcpRegistrations` registers MCP tools under category `extensions` |
 
 ## 3. Common Changes
 ### Add a built-in tool

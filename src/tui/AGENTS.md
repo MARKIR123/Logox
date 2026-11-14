@@ -18,9 +18,10 @@
 | Change Markdown or display-cell layout | `timeline/markdown.ts` | `timeline/markdown-table.ts`, `terminal/text.ts` |
 | Change the composer, multiline editing or native caret | `input/fullscreen-editor.tsx`, `input/editor.ts` | `app.tsx` owns the shared draft and the single cursor setter |
 | Change command matching or candidates | `commands/completion.ts:commandSuggestions()` | `commands/command-menu.tsx`, `src/commands.ts:commandCatalog` |
-| Add, reword or regroup a `/settings` row; change how the page draws or hit-tests | `src/config/settings-definitions.ts:settingDefinitions` | `panels/settings-layout.ts:settingsLayout`, `panels/settings-page.tsx`, `src/application.ts` (`settingsEnv`, `settingsSubPage`) |
+| Add, reword or regroup a `/settings` row; change how the page draws or hit-tests | `src/config/settings-definitions.ts:settingDefinitions` | `panels/settings-layout.ts:settingsLayout`, `panels/settings-page.tsx`, `src/commands/pages.ts` (`settingsEnv`, `settingsSubPage`) |
 | Change the /ensemble page (tabs, parameters, tools and skills trees, prompts, `e`) | `panels/ensemble-layout.ts:ensembleLayout`, `panels/ensemble-layout.ts:stepEnsemble` | `panels/ensemble-page.tsx`, `src/commands/ensemble-model.ts:buildEnsemble`, `src/commands/editor.ts:resolveEditor` |
 | Change selectors, management pages or query results | `panels/` | `panels/command-result.tsx`, `src/commands/surfaces.ts:CommandSurfaces`, `src/application-commands.ts:createCommandTabsFor()` |
+| Change the model, thinking or Automa pickers or the `/model <actor> <model> [effort]` text forms | `src/commands/model-selection.ts:createModelSelection` | `src/commands/model-choices.ts:bindingChoices`, `src/commands/providers-page.ts` (`/providers` tab) |
 | Change question layout or answer interaction | `interactions/question-panel.tsx` | `interactions/production-question.tsx`; `app.tsx` owns runtime keyboard handling |
 | Change login forms | `login/login.tsx`, `login/login-wizard.tsx` | `src/providers/login-wizard.ts`, `interactions/question-panel.tsx:buildQuestionRows` (option status badges) |
 | Change statusbar layout, modules, priorities or the context gauge | `status/statusbar.ts:statusbarLayout`, `status/statusbar-editor.tsx` | `src/config/statusbar-preferences.ts`, `src/context/breakdown.ts` |
@@ -34,18 +35,18 @@
 ### Add a statusbar module
 1. Add the id to `statusbarIds` and a label to `statusbarLabels` in `src/config/statusbar-preferences.ts`. New ids append disabled to saved layouts; `defaultStatusbar` enables only the first six (role, model, effort, permission, context, cache; git and cost stay off).
 2. Add a `Descriptor` (`icon`, color `token`, `build`) to `registry` in `status/statusbar.ts` and give the id a place in `statusbarPriority` (narrow-width order). It is typed `Record<StatusbarId, Descriptor>`, so a missing entry fails typecheck. `build` returns whole variants from longest to shortest; never truncate text inside a variant. Add its hover detail to `status/notification-line.ts:widgetDetail` (and `widgetCommand` if a click acts).
-3. If the module needs data not on `StageStatus`, extend `src/runtime/stage-status.ts` and populate it in `src/application-status.ts`. A variant list that returns `[]` hides the module (cost, cache and git do this when there is nothing to show). Anything that changes the footer without touching the store or statusbar preferences must call the application's `bumpStatus()` (permission mode, git, usage restore).
+3. If the module needs data not on `StageStatus`, extend `src/runtime/stage-status.ts` and populate it in `src/application-status.ts`. A variant list that returns `[]` hides the module (cost, cache and git do this when there is nothing to show). Anything that changes the footer without touching the store or statusbar preferences must call the application's `bumpStatus()` (`src/app/status.ts:createSessionStatus`; permission mode, git, usage restore).
 - Tests: `tests/statusbar-modules.test.ts` (iterates `statusbarIds`), `tests/statusbar-customization.test.tsx`
 
 ### Add a slash command
 1. Add an entry to `commandCatalog` in `src/commands.ts` (`name`, `usage`, `description`, `argument`). Completion, `/help` and the reserved-name check for custom commands all read this list.
-2. Handle it in `src/application.ts`: simple actions are an `if (text === '/name')` branch in the command dispatcher (near `/help`, `/skills`, `/reload`); tabbed pages are added to `src/application-commands.ts:createCommandTabsFor()`.
+2. Handle it in `src/app/submit.ts:createSubmit`: simple actions are an `if (text === '/name')` branch in the command dispatcher (near `/help`, `/skills`, `/reload`); tabbed pages are added to `src/application-commands.ts:createCommandTabsFor()`.
 3. Report through the existing receipt or surface helpers with an explicit `presentation`; never classify text in a renderer.
 - Tests: `tests/command-surfaces.test.ts`, `tests/statusbar-customization.test.tsx` (catalog and completion discoverability), `tests/slash-receipts.test.ts`
 
 ### Add a tab or page to a command surface
 1. Build the `CommandTab` (`id`, `title`, `lines` or `toggles`) in `src/application-commands.ts:createCommandTabsFor()`, and extend `ApplicationCommandContext` for any new data.
-2. Persist edits in `saveConfigToggles()` (same file), dispatched by tab id from the `onSaveToggles` callback in `src/application.ts`.
+2. Persist edits in `saveConfigToggles()` (same file), dispatched by tab id from the `onSaveToggles` callback in `src/commands/pages.ts:pageActions`.
 3. `src/commands/surfaces.ts:CommandSurfaces.openPage()` and `panels/tabbed-page.tsx` render it with no changes; a single-tab page hides its tab bar.
 - Tests: `tests/settings-interaction.test.tsx`, `tests/tabbed-page-single.test.tsx`, `tests/command-panels.test.tsx`
 

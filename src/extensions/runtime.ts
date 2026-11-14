@@ -3,6 +3,7 @@ import type {Config} from '../config/config.js';
 import type {ToolCall} from '../runtime/messages.js';
 import {Resources, type ResourceOptions} from '../resources/manager.js';
 import {Tools, type ToolResult} from '../tools/tools.js';
+import type {ToolRegistration} from '../tools/catalog.js';
 import {Hooks} from './hooks.js';
 import {Mcp, type ExtensionApproval} from './mcp.js';
 import {playwrightServer} from './playwright.js';
@@ -22,6 +23,11 @@ export class ProjectExtensions {
   }
   async initialize(): Promise<void> {await Promise.all([this.resources.reload(), this.hooks.initialize()]);}
   async close(): Promise<void> {await Promise.all([this.mcp.close(), this.hooks.close()]);}
+}
+/** The configured MCP services as registry entries (category `extensions`), for request assembly and the /ensemble tool tree. */
+export function mcpRegistrations(mcp: Mcp): ToolRegistration[] {
+  return mcp.definitions().map(definition => ({definition,
+    metadata: {name: definition.name, category: 'extensions', roles: 'all', terminalVisibility: 'card', description: 'Discover and call configured MCP services'}}));
 }
 export function observeTools(tools: Tools, hooks: Hooks): Tools {
   const execute = tools.execute.bind(tools);

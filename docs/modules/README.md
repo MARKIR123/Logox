@@ -28,7 +28,7 @@ Logox 把终端显示、任务执行、模型请求和持久化分开，让每�
 
 | 职责 | 入口 |
 |---|---|
-| 启动与装配 | [cli.tsx](../../src/cli.tsx)、[application.ts](../../src/application.ts)、[application-sessions.ts](../../src/application-sessions.ts) |
+| 启动与装配 | [cli.tsx](../../src/cli.tsx)、[application.ts](../../src/application.ts)、[application-sessions.ts](../../src/application-sessions.ts)、[app/](../../src/app/submit.ts) |
 | 配置与模型服务 | [config.ts](../../src/config/config.ts)、[registry.ts](../../src/providers/registry.ts)、[http.ts](../../src/providers/http.ts) |
 | 模型与工具循环 | [agent.ts](../../src/kernel/agent.ts)、[tools.ts](../../src/tools/tools.ts)、[工具注册](../../src/tools/index.ts) |
 | 活动与交互状态 | [contracts.ts](../../src/runtime/contracts.ts)、[store.ts](../../src/runtime/store.ts) |

@@ -12,16 +12,16 @@
 | Trace an actor-facing tool call | `services.ts:ActorServices.execute()` | `services.ts:serviceTools`, `services.ts:executeCancelActor` |
 | Trace `SendMessage` routing and interruption | `collaboration.ts:Collaboration.execute()` | `ensemble.ts:EnsembleRuntime.injectTaskMessage()` |
 | Change Queue/Steer priority or durable receipts | `../runtime/delivery.ts:deliveryPriority` | `delivery-queue.ts:DeliveryQueue.drain()`, `services.ts:wakeDirector()` |
-| Change what the Director or peers observe | `facts.ts:directorFacts()` | `facts.ts:activeEnsembleRoster()`, `services.ts:executeListActors`, `application.ts:requestBase()` |
+| Change what the Director or peers observe | `facts.ts:directorFacts()` | `facts.ts:activeEnsembleRoster()`, `services.ts:executeListActors`, `src/app/request.ts:requestBase` |
 | Change when a finished task's report reaches the Director (held reports, batch release) | `facts.ts:openWork()` | `services.ts:ActorServices.releaseEndedRoots()`, `delivery-queue.ts:DeliveryQueue.release()`, `../runtime/delivery.ts:deliverySchema` |
-| Trace what a restart restores (paused batch, interrupted blockers, held human requests) | `restart.ts:planRestart()` | `ensemble.ts:EnsembleRuntime.restoreQueued()`, `services.ts:ActorServices.restoreRestart()`, `src/application.ts` (restore loop) |
+| Trace what a restart restores (paused batch, interrupted blockers, held human requests) | `restart.ts:planRestart()` | `ensemble.ts:EnsembleRuntime.restoreQueued()`, `services.ts:ActorServices.restoreRestart()`, `src/app/restore.ts:replaySession` |
 | Change what happens while a provider is down (Director wake delays, budget, status line) | `outage.ts:OutageBackoff` | `services.ts:ActorServices.handoff()`, `services.ts:ActorServices.resumeDirector()` |
 | Change recovery, stop gates or retry budgets | `recovery.ts` | `../kernel/execution-recovery.ts`, `services.ts:handoff()` |
 | Change how profiles are discovered, merged or validated | `catalog.ts:ActorCatalog.reload()` | `definitions.ts:mergeActorPromptLayer()`, `definitions.ts:parseActorProfile()` |
 | Fix a missing or corrupt shipped profile at startup | `profiles.ts:assertActorProfiles()` | `profiles.ts:seedActorProfiles()`, `scripts/install-actor-profiles.mjs` |
 | Persist an actor's default model | `actor-models-storage.ts` | `management.ts`, `~/.logox/actor-models.json` |
 | Refresh a shipped `compression.md` default | `compression-migration.ts:refreshShippedCompression()` | `compression-migration.ts:shippedFingerprints` |
-| Decide whether an idle actor is certain to wake (cache keep-alive) | `facts.ts:certainToWake()` | `facts.ts:openWork()`, `src/application.ts` (`keepAlive`), `src/kernel/cache-keepalive.ts:CacheKeeper` |
+| Decide whether an idle actor is certain to wake (cache keep-alive) | `facts.ts:certainToWake()` | `facts.ts:openWork()`, `src/app/request.ts` (`keepAlive`), `src/kernel/cache-keepalive.ts:CacheKeeper` |
 | Bulletin board | `bulletin.ts:appendProjectBulletin()` | `../prompts/collaboration/common.ts:BULLETIN` |
 
 ## 3. Common Changes

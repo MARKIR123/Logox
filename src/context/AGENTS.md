@@ -17,9 +17,9 @@
 | Change hidden-pair replay | `round-memory.ts:omitInternalToolPairs()` | `../tools/protocol/_FinishRoundTool/_FinishRoundTool.ts:finishRoundPolicy` |
 | Change role memory focus | `contracts.ts:memoryFocusInstruction()` | `src/actors/profiles/<id>/compression.md` |
 | Keep discovery or environment across compaction | `continuity.ts:retainRuntimeContext()` | `contracts.ts:contextStateSchema`, `../tools/discovery.ts` |
-| Change conversation-language detection or its environment line | `language.ts:detectConversationLanguage()` | `environment.ts:formatEnvironment()`, `../application.ts` (`requestBase`), `../prompts/runtime/environment.ts:conversationLanguage()` |
+| Change conversation-language detection or its environment line | `language.ts:detectConversationLanguage()` | `environment.ts:formatEnvironment()`, `../app/request.ts` (`requestBase`), `../prompts/runtime/environment.ts:conversationLanguage()` |
 | Token estimates and usage anchors | `budget.ts:estimateRequest()` | `usage.ts:UsageLedger` |
-| Per-turn usage and cost stored in the session ledger | `manager.ts:ContextManager.turnUsage()` | `src/runtime/messages.ts:turnUsageSchema`, `cost.ts:turnUsageOf()` (also priced onto Automa `message` events and the session-level `usage.jsonl` lines for summary and approval calls, written in `src/application.ts`), `src/kernel/reply.ts:presentTurn()` (`turnUsage`), `scripts/score-session.mjs` |
+| Per-turn usage and cost stored in the session ledger | `manager.ts:ContextManager.turnUsage()` | `src/runtime/messages.ts:turnUsageSchema`, `cost.ts:turnUsageOf()` (also priced onto Automa `message` events and the session-level `usage.jsonl` lines for summary and approval calls, written in `src/app/status.ts`), `src/kernel/reply.ts:presentTurn()` (`turnUsage`), `scripts/score-session.mjs` |
 | Restart, rollback or physical line references | `../store/journal.ts:Journal.sourceLines()` | `contracts.ts:RoundRecord` source hashes |
 
 ## 3. Common Changes
@@ -66,7 +66,7 @@
 
 ## 5. Dependencies
 - **Depends on**: `src/store/journal.ts` (ledgers, sidecars, task checkpoints), `src/runtime/` (messages, context updates), `src/tools/protocol/` (`_FinishRound`), `src/tools/discovery.ts` (discovery names), `src/prompts/` (summary and memo instructions), `src/config/` (policy schema), `src/providers/cache.ts` (cache lifetime).
-- **Used by**: `src/kernel/request.ts` (`ContextManager.prepare()` before each request), `src/application.ts` (manager construction, `cacheLifetimeMs` wiring, the `roundStart` hook, manual compaction), `src/actors/ensemble.ts` (round closure through `finishRecord()`, `roundStart` call), `src/store/journal.ts` (`extractRoundMemory()`).
+- **Used by**: `src/kernel/request.ts` (`ContextManager.prepare()` before each request), `src/application.ts` (manager construction, `cacheLifetimeMs` wiring, the `roundStart` hook), `src/app/submit.ts` (manual compaction), `src/actors/ensemble.ts` (round closure through `finishRecord()`, `roundStart` call), `src/store/journal.ts` (`extractRoundMemory()`).
 
 ## 6. Verification & Gaps
 - Fast run: `node --test dist/tests/context*.test.js dist/tests/round-folding.test.js dist/tests/actor-context.test.js dist/tests/round-memory.test.js dist/tests/round-boundaries.test.js dist/tests/finish-round.test.js dist/tests/tool-disclosure-context.test.js dist/tests/actor-compression-contracts.test.js`

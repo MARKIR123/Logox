@@ -13,7 +13,7 @@
 | Change guideline discovery, size limits or ordering | `manager.ts:Resources.reload()` | `maxBytes` and `ancestors()` in `manager.ts` |
 | Change category descriptions shown to an actor | `builtin-skills/<actor>/agent.md` frontmatter `categories:` | `manager.ts:Resources.categoriesFor()` |
 | Change first-run seeding or shipped-skill refresh | `manager.ts:ensureUserSkillsSeeded()` | `skill-defaults.ts:previousBrowserSkills` |
-| Change `/reload` behavior or its report | `reload.ts:reloadResources()` | `/reload` branch in `src/application.ts` |
+| Change `/reload` behavior or its report | `reload.ts:reloadResources()` | `/reload` branch in `src/app/submit.ts` |
 | Add or expand a custom slash command | `manager.ts:Resources.expand()` | `.logox/commands/*.md`, `src/commands.ts:commandCatalog` (built-in names are reserved) |
 | Meta-procedure for adopting a third-party skill | `builtin-skills/public/skill-internalization.md` | `builtin-skills/<actor>/agent.md` |
 
@@ -48,7 +48,7 @@
 
 ## 5. Dependencies
 - **Depends on**: `src/commands.ts` (`commandCatalog` reserved names), `src/actors/definitions.ts` (`actorIdSchema`), `yaml` (frontmatter parsing).
-- **Used by**: `src/application.ts` (instantiates `Resources`, `/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/tui/commands/` (custom command suggestions).
+- **Used by**: `src/application.ts` (instantiates `Resources`), `src/app/submit.ts` (`/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/tui/commands/` (custom command suggestions).
 
 ## 6. Verification & Gaps
 - Fast run: `node --test dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/prompt-composition.test.js dist/tests/prompt-disclosure-integration.test.js`
