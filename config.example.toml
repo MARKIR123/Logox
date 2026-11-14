@@ -77,7 +77,8 @@ readonly_concurrency = 4
 # cache_write = 3
 
 # Custom gateway that serves models from a built-in catalog: declare the catalog it mirrors (and ids the catalog lacks)
-# so context windows and prices resolve. See docs/modules/model-table.md.
+# so context windows and prices resolve. See docs/modules/model-table.md. The known endpoint `antigravity` already defaults to
+# google-antigravity, google, anthropic; write this only to override it.
 # [catalogs.antigravity]
 # mirror = "google"
 # [catalogs.antigravity.aliases]

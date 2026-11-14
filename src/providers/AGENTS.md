@@ -13,7 +13,7 @@
 | Limit concurrent requests or slow down on HTTP 429/529 | `request-gate.ts:RequestGate` | `registry.ts:ProviderRegistry.gateFor()`, `http.ts:isRateLimitFailure()`, `http.ts:parseRetryAfter()` |
 | Fix connection drops, proxy or TLS | `transport.ts:createHttpTransport()` | `error-format.ts:formatNetworkError()` |
 | Resolve context window or max output | `registry.ts:ProviderRegistry.capacity()` | `model-table.ts:ModelTable.resolve()`, `model-capacities.ts:modelCapacities` |
-| Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs`, `model-table.ts:familyCandidate` (the one sibling the usage page suggests as an alias), [docs/modules/model-table.md](../../docs/modules/model-table.md) |
+| Price a model or map a gateway to a catalog | `model-table.ts:tablePrice()` | `src/config/config.ts:catalogSchema`, `scripts/sync-model-table.mjs` (`decodeCatalog`, `UPSTREAM_NAMES`, `KEEP_PROVIDERS`), `model-table.ts:DEFAULT_MIRRORS` (the hidden `antigravity` endpoint's built-in catalogs), `model-table.ts:priceOf` (dated rate cards), [docs/modules/model-table.md](../../docs/modules/model-table.md) |
 | Resolve credentials, switch provider, list models | `registry.ts:ProviderRegistry.select()` | `registry.ts:ProviderRegistry.modelsFor()` (models in use), `registry.ts:ProviderRegistry.availableModels()` (everything offered, with offline fallbacks; the `/login` model editor uses it), `auth.ts:AuthStorage` |
 | Model list cache and shorthand (the pool hands out only models of providers in `ProviderRegistry.names()`; `syncProvider()` / `refresh()` drop other entries from the file) | `model-pool.ts:ModelPool` | `~/.logox/models-store.json` |
 | ChatGPT OAuth login or refresh | `oauth.ts:startOpenAiOAuth()` | `oauth.ts:refreshOpenAIToken()`, `login.ts:LoginFlow` (browser sign-in only; every form is `login-wizard.ts`), `account-migration.ts:migrateOpenAiAccount()` |
@@ -75,7 +75,8 @@ A template (`presets`) is a name plus a fixed official endpoint and protocol; it
 - **Local proxy auto-probe**: when the configured proxy port refuses, `transport.ts` probes `7898, 7890, 7897, 10808, 10809` on `127.0.0.1`. *Unenforced*.
 - **The transport never modifies global fetch, dispatcher or environment**: *Unenforced*.
 
-- **The generated table is data only**: the sync script reads the upstream package's JSON and never imports or executes its code; output is sorted and deterministic. Enforced by `tests/model-table.test.ts`.
+- **The generated table is data only**: the sync script downloads `@oh-my-pi/pi-catalog` with `npm pack` (never `npm install`), reads only its model JSON and license text, decodes the compact encoding itself and never imports, requires or executes a file from the package; output is sorted and deterministic. Enforced by `tests/model-table.test.ts`.
+- **Prices follow the card in force when asked**: a row's `dated` cards switch by `effectiveFrom` against `ResolveOptions.at` (default now); usage records carry no time, so cost is computed with the card in force at computation time. Peak/off-peak tariffs are not modelled. A hidden gateway endpoint maps to catalogs through `DEFAULT_MIRRORS` only when the user declares no `[catalogs.<provider>]`. Enforced by `tests/model-table.test.ts`.
 - **Low-confidence (`inferred`) table matches never feed thinking levels or output clamps**: they only fill a window or output the name heuristics leave empty. Enforced by `tests/model-table.test.ts`.
 
 ## 5. Dependencies

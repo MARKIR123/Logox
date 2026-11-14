@@ -265,15 +265,21 @@ test('内置 antigravity 预设走本地 8045 端口与 openai_compat 协议，�
     assert.equal(settings.key, '');
     assert.equal(settings.thinkingProtocol, 'reasoning-effort');
 
-    // 自动推导容量：Gemini 模型 1,000,000 上下文，64,000 最大输出
+    // 容量：antigravity 默认镜像 google-antigravity 目录，Gemini 3.8 Flash 为 1,048,576 上下文，65,536 最大输出（原先靠名称推导 1,000,000 / 64,000）
     const geminiCapacity = f.registry.capacity('antigravity', 'gemini-3.8-flash');
-    assert.equal(geminiCapacity.window, 1_000_000);
-    assert.equal(geminiCapacity.maxOutput, 64_000);
+    assert.equal(geminiCapacity.window, 1_048_576);
+    assert.equal(geminiCapacity.maxOutput, 65_536);
+    // 目录里没有的名字仍走名称推导
+    assert.equal(f.registry.capacity('antigravity', 'gemini-9-unlisted').window, 1_000_000);
+    assert.equal(f.registry.capacity('antigravity', 'gemini-9-unlisted').maxOutput, 64_000);
 
-    // Claude 模型经 antigravity 走 openai_compat，推导 1,000,000 上下文，128,000 最大输出
+    // Claude 模型经 antigravity 走 openai_compat；目录（google-antigravity）给出 250,000 上下文、64,000 最大输出（原先靠名称推导 1,000,000 / 128,000）
     const claudeCapacity = f.registry.capacity('antigravity', 'claude-sonnet-4-6');
-    assert.equal(claudeCapacity.window, 1_000_000);
-    assert.equal(claudeCapacity.maxOutput, 128_000);
+    assert.equal(claudeCapacity.window, 250_000);
+    assert.equal(claudeCapacity.maxOutput, 64_000);
+    // 目录里没有的 Claude 名字仍走名称推导
+    assert.equal(f.registry.capacity('antigravity', 'claude-unlisted-9').window, 1_000_000);
+    assert.equal(f.registry.capacity('antigravity', 'claude-unlisted-9').maxOutput, 128_000);
   } finally {
     await f.cleanup();
   }

@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {loadConfig, type Config} from '../src/config/config.js';
 import {groupModelFamilies, groupModelsForProvider, resolveActualModel} from '../src/config/model-grouping.js';
 import {effortInName, modelLabel} from '../src/config/model-preferences.js';
-import {familyCandidate, normalizeModelId, tablePrice} from '../src/providers/model-table.js';
+import {normalizeModelId, tablePrice} from '../src/providers/model-table.js';
 import {unpricedModels, usageRows} from '../src/context/usage.js';
 import {modelLine, modelsRows} from '../src/commands/models-page.js';
 import {tabDisplay} from '../src/tui/panels/tabbed-page.js';
@@ -55,33 +55,28 @@ test('-xhigh variants resolve to their family price', () => {
   assert.equal(variant.output, base.output);
 });
 
-test('a family guess is offered only when exactly one built-in model shares the family prefix', () => {
-  assert.equal(familyCandidate('gemini-4-hydrogen-low'), 'gemini-4-argon');
-  assert.equal(familyCandidate('totally-unknown-model'), undefined);
-  assert.equal(familyCandidate('gpt-5'), undefined, 'a one-segment family would be a guess');
-});
-
-test('the usage page names unpriced models, the TOML that prices the first, and a catalog alias for a gateway', async () => {
+test('the usage page names unpriced models and the TOML that prices the first, and never suggests aliasing to a sibling model', async () => {
   await withConfig({}, config => {
+    // The antigravity gateway's hydrogen models are priced by the built-in table (default mirror); a model no catalog lists is not.
     const records = [
-      ...Array.from({length: 3}, (_, index) => record('antigravity/gemini-4-hydrogen-high', 'h' + index)),
-      record('antigravity/gemini-4-hydrogen', 'a'), record('google/gemini-4-argon', 'priced'),
+      ...Array.from({length: 3}, (_, index) => record('antigravity/acme-9000-high', 'h' + index)),
+      record('antigravity/acme-9000', 'a'), record('antigravity/gemini-4-hydrogen-high', 'priced-gateway'), record('google/gemini-4-argon', 'priced'),
     ];
-    assert.deepEqual(unpricedModels(records, config), [{model: 'antigravity/gemini-4-hydrogen-high', turns: 3}, {model: 'antigravity/gemini-4-hydrogen', turns: 1}]);
+    assert.deepEqual(unpricedModels(records, config), [{model: 'antigravity/acme-9000-high', turns: 3}, {model: 'antigravity/acme-9000', turns: 1}]);
     const lines = usageRows(records, config).map(rowText);
     const at = lines.findIndex(line => line.startsWith('Unpriced'));
     assert.ok(at >= 0, lines.join('\n'));
-    assert.match(lines[at]!, /antigravity\/gemini-4-hydrogen-high \(3 turns\), antigravity\/gemini-4-hydrogen \(1 turn\)$/);
-    assert.match(lines[at + 1]!, /^To price antigravity\/gemini-4-hydrogen-high, add to config\.toml/);
-    assert.equal(lines[at + 2], '  [models."antigravity/gemini-4-hydrogen-high"]');
+    assert.match(lines[at]!, /antigravity\/acme-9000-high \(3 turns\), antigravity\/acme-9000 \(1 turn\)$/);
+    assert.match(lines[at + 1]!, /^To price antigravity\/acme-9000-high, add to config\.toml/);
+    assert.equal(lines[at + 2], '  [models."antigravity/acme-9000-high"]');
     assert.equal(lines[at + 3], '  prices = {input = 0.0, output = 0.0}');
-    assert.equal(lines[at + 4], 'Or, if it bills like gemini-4-argon: [catalogs.antigravity.aliases] "gemini-4-hydrogen-high" = "gemini-4-argon" (one entry per model id)');
+    assert.ok(!lines.some(line => /catalogs|alias|bills like/.test(line)), 'only the explicit prices form is offered');
     const totals = lines.findIndex(line => line.startsWith('Total input / output'));
     assert.ok(totals >= 0 && totals < at, 'the notice follows the totals');
   });
 });
 
-test('the usage page lists a handful of unpriced models, offers no alias without a unique sibling, and stays silent when everything is priced', async () => {
+test('the usage page lists a handful of unpriced models, offers no alias, and stays silent when everything is priced', async () => {
   await withConfig({'local/priced': {prices: {input: 1, output: 2}}}, config => {
     const many = Array.from({length: 7}, (_, index) => record('local/mystery-' + index, 'm' + index));
     const lines = usageRows([...many, record('local/priced', 'p')], config).map(rowText);
@@ -89,7 +84,7 @@ test('the usage page lists a handful of unpriced models, offers no alias without
     assert.match(unpriced, /, \+3 more$/);
     assert.equal(unpriced.split(' turn').length - 1, 4);
     assert.ok(lines.includes('  [models."local/mystery-0"]'));
-    assert.ok(!lines.some(line => line.includes('catalogs')), 'no sibling, no alias line');
+    assert.ok(!lines.some(line => line.includes('catalogs')), 'no alias line');
     assert.ok(!usageRows([record('local/priced', 'p')], config).map(rowText).some(line => /Unpriced|config\.toml/.test(line)));
   });
 });

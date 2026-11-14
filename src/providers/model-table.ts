@@ -1,10 +1,14 @@
 import {modelTableData} from './model-table.generated.js';
 
-/** `[id, name, contextWindow, maxOutput, input modalities, thinking levels ('' = not reasoning), [input, output, cacheRead, cacheWrite], tiers?]`; prices are USD per 1M tokens. */
+/**
+ * `[id, name, contextWindow, maxOutput (0 = unknown), input modalities, thinking levels ('' = not reasoning, 'fixed' = reasons without a control), [input, output, cacheRead, cacheWrite], tiers?, dated?]`;
+ * prices are USD per 1M tokens. `dated` lists later rate cards `[effectiveFrom (unix ms), input, output, cacheRead, cacheWrite]`, oldest first; `rates` is the card before the first one.
+ */
 export type ModelRow = [id: string, name: string, window: number, maxOutput: number, input: string, levels: string,
-  rates: [number, number, number, number], tiers?: [above: number, input: number, output: number, cacheRead: number, cacheWrite: number][]];
+  rates: [number, number, number, number], tiers?: [above: number, input: number, output: number, cacheRead: number, cacheWrite: number][],
+  dated?: [from: number, input: number, output: number, cacheRead: number, cacheWrite: number][]];
 export interface ModelTableData {
-  source: string; version: string; upstreamDate: string;
+  source: string; version: string;
   providers: Record<string, {subscription: boolean; models: ModelRow[]}>;
 }
 /** User declaration of which catalog a gateway mirrors (`[catalogs.<provider>]` in config). */
@@ -21,7 +25,7 @@ export interface TablePrice {
 export interface CatalogModel {
   catalog: string; id: string; name: string; window: number; maxOutput: number; input: readonly string[];
   reasoning: boolean; levels: readonly string[]; subscription: boolean;
-  rates: readonly [number, number, number, number]; tiers: NonNullable<ModelRow[7]>;
+  rates: readonly [number, number, number, number]; tiers: NonNullable<ModelRow[7]>; dated: NonNullable<ModelRow[8]>;
 }
 export interface Resolution {model: CatalogModel; confidence: Confidence; subscription: boolean; /** Human-readable origin such as `catalog google` or `alias -> gemini-4-argon`. */ via: string}
 export interface ResolveOptions {
@@ -29,6 +33,8 @@ export interface ResolveOptions {
   baseUrl?: string | undefined;
   /** Credential is a subscription OAuth login: prefer the subscription catalog and flag the result. */
   oauth?: boolean | undefined;
+  /** Unix ms at which the price applies (picks the dated rate card in force); defaults to now. */
+  at?: number | undefined;
 }
 
 const HOST_CATALOGS: [RegExp, string][] = [
@@ -39,7 +45,9 @@ const HOST_CATALOGS: [RegExp, string][] = [
   [/(^|\.)githubcopilot\.com$/, 'github-copilot'],
 ];
 /** Order in which catalogs are consulted for a bare-id match: first-party vendors before resellers. */
-const PRIORITY = ['anthropic', 'openai', 'google', 'deepseek', 'xai', 'mistral', 'moonshotai', 'zai', 'minimax', 'openai-codex', 'github-copilot', 'google-vertex', 'openrouter'];
+const PRIORITY = ['anthropic', 'openai', 'google', 'google-antigravity', 'deepseek', 'xai', 'mistral', 'moonshotai', 'zai', 'minimax', 'openai-codex', 'github-copilot', 'google-vertex', 'openrouter'];
+/** Catalogs a known gateway mirrors when the user declares no `[catalogs.<provider>]` for it, most specific first (the Antigravity proxy serves Gemini and Claude). */
+const DEFAULT_MIRRORS: Record<string, readonly string[]> = {antigravity: ['google-antigravity', 'google', 'anthropic']};
 const EFFORT_MAP: Record<string, string> = {off: 'off', minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max', max: 'max'};
 
 /** Comparison key that ignores vendor prefix, `:variant`, date stamps, effort/thinking suffixes and dot-vs-dash version separators. */
@@ -66,7 +74,7 @@ export class ModelTable {
       const byId = new Map<string, CatalogModel>(), byNormal = new Map<string, CatalogModel>(), byBare = new Map<string, CatalogModel>();
       for (const row of entry.models) {
         const model: CatalogModel = {catalog: name, id: row[0], name: row[1], window: row[2], maxOutput: row[3], input: row[4].split(',').filter(Boolean),
-          reasoning: row[5] !== '', levels: row[5].split(',').filter(Boolean), subscription: entry.subscription, rates: row[6], tiers: row[7] ?? []};
+          reasoning: row[5] !== '', levels: row[5].split(',').filter(Boolean), subscription: entry.subscription, rates: row[6], tiers: row[7] ?? [], dated: row[8] ?? []};
         byId.set(model.id.toLowerCase(), model);
         const variant = model.id.includes(':'), normal = normalizeModelId(model.id), bare = bareId(model.id);
         // Rows are sorted by id; a plain id beats a ':variant', and an id already in normalized form beats a dated or suffixed sibling.
@@ -84,12 +92,14 @@ export class ModelTable {
   catalogNames(): string[] {return [...this.catalogs.keys()];}
   /** Ids a catalog lists, sorted; used as an offline model list. */
   modelIds(catalog: string): string[] {return [...(this.catalogs.get(catalog)?.byId.values() ?? [])].map(model => model.id).sort();}
-  /** Catalogs a LOGOX provider maps to, most specific first: declared mirror, same name, base-URL host, then the OpenAI catalogs for OpenAI. */
+  /** Catalogs a LOGOX provider maps to, most specific first: declared mirror, built-in default mirror of a known gateway, same name, base-URL host, then the OpenAI catalogs for OpenAI. */
   catalogsFor(provider: string, options: ResolveOptions = {}): string[] {
     const found: string[] = [];
     const add = (name: string | undefined) => {if (name && this.catalogs.has(name) && !found.includes(name)) found.push(name);};
     const declared = options.catalogs?.[provider]?.mirror;
     for (const name of typeof declared === 'string' ? [declared] : declared ?? []) add(name);
+    if (found.length > 0) return found;
+    for (const name of DEFAULT_MIRRORS[provider.toLowerCase()] ?? []) add(name);
     if (found.length > 0) return found;
     const host = hostOf(options.baseUrl);
     const byHost = host ? HOST_CATALOGS.find(([pattern]) => pattern.test(host))?.[1] : undefined;
@@ -143,18 +153,20 @@ export class ModelTable {
   }
   price(provider: string, model: string, options: ResolveOptions = {}): TablePrice | undefined {
     const hit = this.resolve(provider, model, options);
-    return hit ? priceOf(hit) : undefined;
+    return hit ? priceOf(hit, options.at) : undefined;
   }
 }
-export function priceOf(hit: Resolution): TablePrice {
-  const [input, output, cacheRead, cacheWrite] = hit.model.rates;
+/** Prices a resolved model with the rate card in force at `at` (unix ms, default now): the latest dated card whose `effectiveFrom` has passed, else the base rates. */
+export function priceOf(hit: Resolution, at: number = Date.now()): TablePrice {
+  const card = hit.model.dated.filter(item => item[0] <= at).at(-1);
+  const [input, output, cacheRead, cacheWrite] = card ? [card[1], card[2], card[3], card[4]] as const : hit.model.rates;
   // Upstream writes 0 for "not offered"; when both cache rates are 0 on a paid model they are unknown, so callers fall back to the input rate.
   const cache = input > 0 && cacheRead === 0 && cacheWrite === 0 ? {} : {cache_read: cacheRead, cache_write: cacheWrite};
   return {currency: 'USD', input, output, ...cache,
     ...(hit.model.tiers.length > 0 ? {tiers: hit.model.tiers.map(([above, i, o, r, w]) => ({above, input: i, output: o, cache_read: r, cache_write: w}))} : {}),
     subscription: hit.subscription, confidence: hit.confidence, catalog: hit.model.catalog};
 }
-/** Maps table thinking levels onto LOGOX efforts (`xhigh` and `max` become `max`, `minimal` becomes `low`). Undefined for non-reasoning models. */
+/** Maps table thinking levels onto LOGOX efforts (`xhigh` and `max` become `max`, `minimal` becomes `low`; the effort enum has neither). Undefined for non-reasoning models and for `fixed` ones. */
 export function thinkingHint(hit: Resolution | undefined): ('off' | 'low' | 'medium' | 'high' | 'max')[] | undefined {
   if (!hit || !hit.model.reasoning || hit.confidence === 'inferred') return undefined;
   const efforts = new Set<string>();
@@ -164,27 +176,6 @@ export function thinkingHint(hit: Resolution | undefined): ('off' | 'low' | 'med
 }
 
 export const modelTable = new ModelTable(modelTableData);
-/**
- * The one built-in model a name could plausibly be priced like: the only first-party catalog id that shares the name's family prefix (the normalized id without its last
- * `-segment`, at least two segments, e.g. `gemini-4` for `gemini-4-hydrogen`). Undefined when none or several qualify, because a guess among siblings would mislead.
- */
-export function familyCandidate(model: string): string | undefined {
-  const normal = normalizeModelId(model), cut = normal.lastIndexOf('-');
-  if (cut < 0) return undefined;
-  const prefix = normal.slice(0, cut + 1);
-  if (prefix.split('-').length < 3) return undefined;
-  const found = new Map<string, string>();
-  for (const name of modelTable.catalogNames()) {
-    const entry = modelTable.data.providers[name];
-    if (!entry || entry.subscription || name === 'openrouter' || name === 'google-vertex') continue;
-    for (const id of modelTable.modelIds(name)) {
-      if (id.includes('/') || id.includes(':')) continue;
-      const key = normalizeModelId(id);
-      if (key.startsWith(prefix) && key !== normal) found.set(key, id);
-    }
-  }
-  return found.size === 1 ? [...found.values()][0] : undefined;
-}
 /** True when the provider's prices are subscription-based: declared `subscription`, an OAuth login on the ChatGPT catalog, or a subscription catalog such as github-copilot. */
 export function isSubscriptionProvider(provider: string, options: ResolveOptions = {}): boolean {
   const declared = options.catalogs?.[provider]?.subscription;
