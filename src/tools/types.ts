@@ -1,7 +1,8 @@
 import {z} from 'zod';
 import type {ImageBlock, ToolDefinition} from '../runtime/messages.js';
 
-export const pathArg = z.string().min(1);
+// Models sometimes append a space or newline to a path; no real file name worth reaching ends in whitespace, so it is trimmed before use.
+export const pathArg = z.string().trim().min(1);
 
 export interface ToolResult {
   text: string;

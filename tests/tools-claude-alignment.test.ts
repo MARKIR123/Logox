@@ -167,6 +167,11 @@ test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
     }, context);
     assert.match(readAfter.text, /1: Updated Line 1/);
 
+    // A path with trailing whitespace (some models append a space) still names the file.
+    const padded = await tools.execute({id: 'r-3', name: 'Read', arguments: JSON.stringify({file_path: 'demo.txt \n'})}, context);
+    assert.equal(padded.isError, false, padded.text);
+    assert.match(padded.text, /1: Updated Line 1/);
+
     // 5. Shell
     const shellResult = await tools.execute({
       id: 's-1',
