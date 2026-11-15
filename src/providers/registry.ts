@@ -86,6 +86,9 @@ function recordEntry(record: CustomProviderRecord, existing: ProviderEntry | und
   };
 }
 
+/** In-flight ceiling of an endpoint whose provider sets no `max_concurrent_requests`. */
+const UNLIMITED_REQUESTS = 128;
+
 /** Unifies provider selection and request-time authentication; owns no agent history or task state. */
 export class ProviderRegistry {
   private config: Config;
@@ -282,14 +285,17 @@ export class ProviderRegistry {
       window, ...(maxOutput ? {maxOutput} : {}), ...(maxImages ? {maxImages} : {})};
   }
   /** Gate key is the endpoint only (lowercase origin plus path); credentials, query and fragment are never part of it. */
-  private gateFor(baseUrl: string): RequestGate {
+  private gateFor(baseUrl: string, limit?: number): RequestGate {
     let key: string;
     try {
       const url = new URL(baseUrl);
       key = url.protocol.toLowerCase() + '//' + url.host.toLowerCase() + url.pathname.replace(/\/+$/, '');
     } catch {key = baseUrl.trim().replace(/\/+$/, '').toLowerCase();}
     let gate = this.gates.get(key);
-    if (!gate) {gate = new RequestGate(this.gateOptions); this.gates.set(key, gate);}
+    // Unset `max_concurrent_requests` means no ceiling worth naming: the gate's own AIMD limit starts high and only a rate-limit failure lowers it.
+    const ceiling = limit ?? this.gateOptions.maxConcurrency ?? UNLIMITED_REQUESTS;
+    if (!gate) {gate = new RequestGate({...this.gateOptions, maxConcurrency: ceiling}); this.gates.set(key, gate);}
+    else gate.setMaxConcurrency(ceiling);
     return gate;
   }
   providerFor(name: string, model?: string): Provider {
@@ -313,7 +319,7 @@ export class ProviderRegistry {
       const settings = await this.settings();
       signal.throwIfAborted();
       const inner = createProvider(settings, this.fetcher);
-      return this.gateFor(settings.baseUrl).run(() => inner.respond(request, onDelta, signal), signal);
+      return this.gateFor(settings.baseUrl, this.config.providers[this.config.provider.name]?.max_concurrent_requests).run(() => inner.respond(request, onDelta, signal), signal);
     }};
   }
   async models(signal: AbortSignal = AbortSignal.timeout(15000)): Promise<string[]> {

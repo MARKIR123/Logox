@@ -75,12 +75,18 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     profile: ownerId => actors.find(ownerId)?.automa,
     actorName: ownerId => actors.find(ownerId)?.name,
     maxParallel: () => config.automa.max_parallel,
+    maxPerDispatch: () => config.automa.max_per_dispatch,
+    maxRunning: () => config.automa.max_running,
+    readonlyConcurrency: () => config.permissions.readonly_concurrency,
+    workerDir: sessionId => join(stateDir, 'sessions', sessionId, 'subagents', 'automa'),
     guidelines: () => resources.promptSections().guidelines,
     retries: () => config.kernel.max_retries,
     journalPath: automaJournal,
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
   });
+  // Finished workers end with their dispatcher's task: any store change may be that task settling, and the sweep is cheap while none waits.
+  store.subscribe(() => {void tools.sweepWorkers();});
   // Replays an idle actor's last request just before its short cache expires, only while a wake-up is certain (never while the human is awaited).
   const keepAlive = new CacheKeeper({
     enabled: () => config.kernel.cache_keepalive, pricing: config,

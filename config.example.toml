@@ -23,7 +23,9 @@ low_watermark_ratio = 0.5
 # summary_model = "your-model-id"
 
 [automa]
-max_parallel = 4 # Jobs run at once per dispatch (1-8); a dispatch may ask for more, up to 8.
+max_per_dispatch = 16 # Most jobs one Automa call may carry (1-32).
+max_parallel = 4 # Jobs of one dispatch that run at once (1-32); a call or a worker style may set its own.
+max_running = 24 # Workers running at once across the whole session (1-64); the rest queue.
 
 [anamnesis]
 recap = true # Write a short note for you after the session has been idle for recap_idle_minutes.
@@ -53,6 +55,8 @@ readonly_concurrency = 4
 # base_url = "https://example.com/v1"
 # api_key_env = "WORK_MODEL_API_KEY"
 # default_model = "your-model-id"
+# Requests of this provider in flight at once, actors and Automa workers together (1-256). Unset means no limit.
+# max_concurrent_requests = 8
 # Route some models of this provider through the Anthropic Messages protocol (same base_url, /messages).
 # model_kinds = { "claude-*" = "anthropic" }
 

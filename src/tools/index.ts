@@ -51,7 +51,10 @@ import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {projectRulesSection} from '../prompts/boundary.js';
-import {workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
+import {workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
+import {WorkerShelf} from './orchestration/AutomaTool/workers.js';
+import {Semaphore} from '../kernel/semaphore.js';
+import {isReadOnlyTool} from './catalog.js';
 import {grantTools, isExclusiveCommand, pathDenial, planDispatch} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
@@ -235,6 +238,8 @@ async function resolvedPath(path: string): Promise<string> {
 }
 
 const AUTOMA_DEFAULT_PARALLEL = 4;
+const AUTOMA_DEFAULT_PER_DISPATCH = 16;
+const AUTOMA_DEFAULT_RUNNING = 24;
 
 /** What the application supplies so Automa can run; tests supply fakes. */
 export interface AutomaEnvironment {
@@ -246,7 +251,19 @@ export interface AutomaEnvironment {
   resolveModel(preferred: string | undefined, vision?: boolean): ResolvedAutomaModel;
   profile?(ownerId: string): AutomaProfile | undefined;
   actorName?(ownerId: string): string | undefined;
+  /** Jobs of one dispatch that run at once by default (`[automa] max_parallel`). */
   maxParallel?(): number;
+  /** Most jobs one call may carry (`[automa] max_per_dispatch`). */
+  maxPerDispatch?(): number;
+  /** Workers running at once across the session (`[automa] max_running`); the rest wait as queued. */
+  maxRunning?(): number;
+  /** Read-only calls of one worker turn that run side by side (`permissions.readonly_concurrency`). */
+  readonlyConcurrency?(): number;
+  /** Where parked workers are written: `<dir>/<activityId>/<id>.json` (`state/sessions/<sessionId>/subagents/automa`). */
+  workerDir?(sessionId: string): string;
+  /** Tests inject the clock that decides when an idle worker is parked. */
+  clock?(): number;
+  idleParkMs?(): number;
   /** The project rules every actor's prompt carries; workers append them to their own prompt in the same form. */
   guidelines?(context: ActorContext): readonly {path: string; text: string}[] | Promise<readonly {path: string; text: string}[]>;
   /** Provider retries per worker request (the kernel's `max_retries`). */
@@ -255,8 +272,6 @@ export interface AutomaEnvironment {
   charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
 }
-
-interface OwnedInstance extends RetainedInstance {readonly sessionId: string; readonly ownerId: string; readonly activityId: string}
 
 async function fileVersion(path: string): Promise<string> {
   const bytes = await bytesOrMissing(path);
@@ -306,14 +321,27 @@ export class Tools {
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
   private automa: AutomaEnvironment | undefined;
-  /** In memory only: a kept instance never outlives its task or this process. */
-  private readonly instances = new Map<string, OwnedInstance>();
+  /** Finished workers that can still be continued: in memory, or parked on disk; they end with the dispatcher's task. */
+  private readonly shelf = new WorkerShelf();
+  /** One running-limit semaphore per session (`[automa] max_running`), shared by every dispatcher of it. */
+  private readonly slots = new Map<string, Semaphore>();
   private readonly dispatches = new Map<string, {readonly ownerId: string; readonly files: readonly string[]}>();
   /** Per principal: dispatches refused whole, by their normalised arguments, so an identical retry is answered without planning again. */
   private readonly refusals = new Map<string, Map<string, string>>();
 
   setAutomaEnvironment(environment: AutomaEnvironment): void {
     this.automa = environment;
+    this.shelf.configure({now: environment.clock, idleParkMs: environment.idleParkMs?.(), dir: environment.workerDir});
+    this.shelf.onTick = () => this.sweepWorkers();
+  }
+
+  /** Closes the workers of tasks that have settled and parks those idle for too long; cheap when no worker waits. */
+  async sweepWorkers(): Promise<void> {
+    if (!this.shelf.size) return;
+    await this.shelf.sweep((sessionId, activityId) => {
+      const activity = this.activities?.().find(item => item.sessionId === sessionId && item.activityId === activityId);
+      return activity !== undefined && ['completed', 'failed', 'cancelled'].includes(activity.status);
+    });
   }
 
   /** A write pattern held by someone other than `ownerId`: a peer's active assignment, or a peer's running job. */
@@ -366,34 +394,39 @@ export class Tools {
       refusals.set(fingerprint, text);
       return refuse(text);
     };
-    if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of kept workers.');
+    if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of finished workers.');
+    // The workers this call names are looked up first (a parked one is read back from disk), awaited before the one-dispatch check.
+    const named = new Set([...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? [])]);
+    const retained = (await Promise.all([...named].map(id => this.shelf.find(sessionId, ownerId, activityId, id))))
+      .flatMap(worker => worker ? [{id: worker.id, grant: worker.grant, system: worker.system}] : []);
     if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
-    const mine = (instance: OwnedInstance) => instance.sessionId === sessionId && instance.ownerId === ownerId;
-    // An instance belongs to one task: anything left over from an earlier task of this actor ends here.
-    for (const [id, instance] of this.instances) if (mine(instance) && instance.activityId !== activityId) this.instances.delete(id);
-    const retained = [...this.instances.values()].filter(mine);
     const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
     const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained,
+      maxJobs: environment.maxPerDispatch?.() ?? AUTOMA_DEFAULT_PER_DISPATCH,
       scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: workerSystem(rules, args.context),
       holder: pattern => this.patternHolder(ownerId, pattern)});
     if (!plan.ok) return refuseAndRemember(plan.error);
-    const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
-    const released = plan.release;
-    for (const id of released) this.instances.delete(id);
-    if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, note].filter(Boolean).join('\n'), isError: false};
-    const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
-    const {startTool: _principalStep, reportSwarm, ...principal} = context;
-    const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
     this.dispatches.set(key, {ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
     try {
+      await this.shelf.closeStale(sessionId, ownerId, activityId);
+      const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
+      const released = plan.release;
+      for (const id of released) await this.shelf.close(sessionId, id);
+      if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, note].filter(Boolean).join('\n'), isError: false};
+      const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
+      const {startTool: _principalStep, reportSwarm, ...principal} = context;
+      const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
+      const fresh = await this.shelf.allocate(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length);
+      const jobs = plan.jobs.map(job => ({...job, id: job.job.continue ?? fresh.shift()!}));
+      const slots = this.slots.get(sessionId) ?? this.slots.set(sessionId, new Semaphore(() => this.automa?.maxRunning?.() ?? AUTOMA_DEFAULT_RUNNING)).get(sessionId)!;
       const result = await executeAutomaDispatch({
-        jobs: plan.jobs, parallel, swarmName: profile.name, signal: context.signal,
+        jobs, parallel, swarmName: profile.name, signal: context.signal,
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
         ...(environment.retries ? {retries: environment.retries()} : {}),
-        instance: id => {const found = this.instances.get(id); return found && mine(found) ? found : undefined;},
-        retain: instance => {this.instances.set(instance.id, {...instance, sessionId, ownerId, activityId});},
-        forget: id => {this.instances.delete(id);},
+        workers: this.shelf, slots,
+        ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
+        readOnly: call => isReadOnlyTool(call.name),
         executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
         trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
         journalPath: environment.journalPath?.(sessionId),

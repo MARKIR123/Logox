@@ -62,9 +62,9 @@ export interface AutomaJobArgs {
   readonly acceptance?: readonly string[] | undefined;
   /** Workspace paths or globs this job may edit; absent means read-only. */
   readonly writes?: readonly string[] | undefined;
-  /** Keep this worker's context after the job so a later job can continue it. */
+  /** Accepted for compatibility and ignored: every finished worker can be continued. */
   readonly keep?: boolean | undefined;
-  /** Id of a live kept worker to continue; anything else is ignored with a note. */
+  /** Id of a finished worker of this dispatcher's current task to continue; a closed or unknown id refuses the call. */
   readonly continue?: string | undefined;
   /** The job must look at images: it runs on a model that can see them (the worker model, else the vision fallback) or is refused. */
   readonly vision?: boolean | undefined;
@@ -77,6 +77,8 @@ export interface RetainedGrant {
 }
 
 export interface PlannedJob {
+  /** The readable id (`T1`, `K2`): given when the job is dispatched, kept by a continued job. */
+  readonly id?: string | undefined;
   readonly job: AutomaJobArgs & {readonly title: string};
   readonly grant: JobGrant;
   readonly model?: string | undefined;
@@ -84,8 +86,6 @@ export interface PlannedJob {
   readonly system: string;
   readonly denial?: string | undefined;
 }
-
-export const AUTOMA_MAX_RETAINED = 2;
 
 const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+|\/)$/;
 
@@ -121,7 +121,10 @@ export function planDispatch(input: {
   readonly cwd: string;
   /** The dispatcher's own scratchpad subdirectory. */
   readonly scratch?: string | undefined;
+  /** The finished workers of this dispatcher's current task the call names (to continue or release). */
   readonly retained: readonly RetainedGrant[];
+  /** Most jobs one call may carry (`[automa] max_per_dispatch`). */
+  readonly maxJobs: number;
   /** Who currently holds a write pattern, when it is not the principal. */
   readonly holder: (pattern: string) => string | undefined;
   /** The base worker system prompt; the style flavour is appended. */
@@ -131,19 +134,19 @@ export function planDispatch(input: {
   const refuse = (error: string) => ({ok: false as const, error});
   const live = new Set(input.retained.map(item => item.id));
   const notes: string[] = [];
-  // Only real ids of this dispatcher's kept workers are honoured; anything else is dropped with a note, never an error.
+  if (input.jobs.length > input.maxJobs) return refuse(`Too many jobs: ${input.jobs.length}. This setup allows ${input.maxJobs} per call (\`[automa] max_per_dispatch\`). Send the first ${input.maxJobs} now and the rest in a second call, or merge related slices into one job.`);
+  // A continued job names a finished worker of this dispatcher's current task; a closed or unknown id is refused so the brief is never sent to a worker that does not exist.
   const continuing = new Set<string>();
-  const wantsContinue = (job: AutomaJobArgs): string | undefined => {
-    if (!job.continue) return undefined;
-    const label = job.title ?? titleFrom(job.brief);
-    if (live.has(job.continue) && !continuing.has(job.continue)) {continuing.add(job.continue); return job.continue;}
-    notes.push(continuing.has(job.continue) ? `Kept worker "${job.continue}" is already continued by an earlier job in this dispatch; "${label}" ran as a fresh single-use job.`
-      : `"${job.continue}" is not a live kept worker of yours (they end with your task); "${label}" ran as a fresh single-use job, so its brief must stand alone.`);
-    return undefined;
-  };
-  const resolved = input.jobs.map(job => ({job, resume: wantsContinue(job)}));
+  for (const job of input.jobs) {
+    if (!job.continue) continue;
+    if (!live.has(job.continue)) return refuse(`Worker ${job.continue} is closed or unknown; dispatch a new job.`);
+    if (continuing.has(job.continue)) return refuse(`Worker ${job.continue} is continued by two jobs of this call; continue it once, with one brief.`);
+    continuing.add(job.continue);
+  }
+  const resolved = input.jobs.map(job => ({job, resume: job.continue}));
+  if (input.jobs.some(job => job.keep)) notes.push('keep is no longer needed: every finished worker can be continued.');
   const release = [...new Set(input.release)].filter(id => {
-    if (!live.has(id)) {notes.push(`Release ignored: "${id}" is not a live kept worker of yours.`); return false;}
+    if (!live.has(id)) {notes.push(`Release ignored: "${id}" is not a live worker of yours.`); return false;}
     if (continuing.has(id)) {notes.push(`Release of "${id}" ignored: it is continued in this dispatch.`); return false;}
     return true;
   });
@@ -153,7 +156,6 @@ export function planDispatch(input: {
   const style = profile.styles[choice.name]!;
   const system = input.system + (style.flavor ? '\n\nStyle: ' + style.flavor : '');
   const planned: PlannedJob[] = [];
-  let slots = AUTOMA_MAX_RETAINED - input.retained.filter(item => !release.includes(item.id)).length;
   const heldBy = (files: readonly string[]) => files.flatMap(pattern => {
     const holder = input.holder(pattern);
     return holder ? [`${pattern} is held by ${holder}`] : [];
@@ -164,8 +166,8 @@ export function planDispatch(input: {
     const job = {...base, title: raw.title ?? titleFrom(raw.brief)};
     if (resume) {
       const instance = input.retained.find(item => item.id === resume)!;
-      if (job.writes) notes.push(`Kept worker "${resume}" keeps the writes it was created with; \`writes\` on "${job.title}" was ignored.`);
-      const {writes: _writes, ...rest} = job;
+      if (job.writes) notes.push(`Worker "${resume}" keeps the writes it was created with; \`writes\` on "${job.title}" was ignored.`);
+      const {writes: _writes, keep: _keep, ...rest} = job;
       planned.push({job: {...rest, continue: resume}, grant: instance.grant, system: instance.system, ...coordinate(heldBy(instance.grant.writes))});
       continue;
     }
@@ -177,14 +179,9 @@ export function planDispatch(input: {
       if (found.kind === 'outside') {notes.push(`\`writes\` entry "${entry}" on "${job.title}" is outside the workspace and was dropped (your scratchpad is always writable without a grant).`); continue;}
       if (!writes.includes(found.pattern)) writes.push(found.pattern);
     }
-    let keep = job.keep;
-    if (keep) {
-      if (slots > 0) slots--;
-      else {keep = false; notes.push(`"${job.title}" was not kept: at most ${AUTOMA_MAX_RETAINED} workers may be kept at once. Release one with \`release\`, or let it end with your task.`);}
-    }
-    const {writes: _given, ...rest} = job;
+    const {writes: _given, keep: _keep, ...rest} = job;
     const grant: JobGrant = {writes, exclusive: profile.exclusive ?? []};
-    planned.push({job: {...rest, ...(writes.length ? {writes} : {}), keep}, grant, system, model: style.model ?? profile.model, ...coordinate(heldBy(writes))});
+    planned.push({job: {...rest, ...(writes.length ? {writes} : {})}, grant, system, model: style.model ?? profile.model, ...coordinate(heldBy(writes))});
   }
   for (let left = 0; left < planned.length; left++) {
     for (let right = left + 1; right < planned.length; right++) {

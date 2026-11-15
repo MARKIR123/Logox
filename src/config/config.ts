@@ -57,7 +57,16 @@ export const themeSchema = z.object({
   accent: hexColorSchema.default(legacyThemeDefaults.accent),
 }).default(legacyThemeDefaults);
 export type ThemeConfig = z.infer<typeof themeSchema>;
-const modelKindsSchema = z.record(z.string().min(1), z.enum(['openai_compat', 'anthropic']));
+/** `[automa]`: how wide one dispatch may be and how many workers run at once. `max_parallel` is the older key, still the default concurrency of a dispatch. */
+export const automaConfigSchema = z.object({
+  /** Jobs of one dispatch that run at once when the call and the style set no `parallel`. */
+  max_parallel: z.number().int().min(1).max(32).default(4),
+  /** Most jobs one Automa call may carry. */
+  max_per_dispatch: z.number().int().min(1).max(32).default(16),
+  /** Workers running at once across the whole session; the rest queue. */
+  max_running: z.number().int().min(1).max(64).default(24),
+});
+const modelKindsSchema =z.record(z.string().min(1), z.enum(['openai_compat', 'anthropic']));
 const schema = z.object({
   theme: themeSchema,
   permissions: z.object({mode: z.enum(['default', 'auto', 'creative']).default('auto'), readonly_concurrency: z.number().int().min(1).max(8).default(4)}).default({mode: 'auto', readonly_concurrency: 4}),
@@ -84,9 +93,7 @@ const schema = z.object({
     max_tokens: z.number().int().positive().default(16384),
     timeout: z.number().positive().default(600),
   }).default({thinking_effort: 'auto', name: 'openai', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
-  automa: z.object({
-    max_parallel: z.number().int().min(1).max(8).default(4),
-  }).default({max_parallel: 4}),
+  automa: automaConfigSchema.default({max_parallel: 4, max_per_dispatch: 16, max_running: 24}),
   /** Anamnesis, the idle-time memory keeper: `recap` writes a note for the returning user, `dream` reviews the transcript into memory records. The switches only gate the automatic trigger. */
   anamnesis: z.object({
     recap: z.boolean().default(true),
@@ -112,6 +119,8 @@ const schema = z.object({
     api: z.enum(['completions', 'responses']).optional(),
     base_url: z.string().url(), api_key_env: z.string().optional(), default_model: z.string().optional(),
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
+    /** Requests of this provider in flight at once (actors and workers together); unset means no ceiling. */
+    max_concurrent_requests: z.number().int().min(1).max(256).optional(),
   })).default({}),
 });
 export type Config = z.infer<typeof schema>;

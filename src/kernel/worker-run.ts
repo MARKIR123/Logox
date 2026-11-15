@@ -49,6 +49,9 @@ export interface WorkerRun<T> {
   /** Provider retries per request; a temporary failure waits at least the cooldown it states. */
   readonly retries: number;
   readonly terminal: WorkerTerminal<T>;
+  /** Calls that only observe may run side by side, `concurrency` at a time (`permissions.readonly_concurrency`); absent: strictly in order. */
+  readOnly?(call: ToolCall): boolean;
+  readonly concurrency?: number | undefined;
   /** Runs one business call (permissions, locks and grants live behind it). */
   executeCall(call: ToolCall): Promise<ToolResult>;
   /** As soon as a turn arrives, before cancellation is checked: the tokens were spent either way. */
@@ -119,11 +122,26 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     const closing = truncated ? undefined : calls.find(call => call.name === terminal.name);
     const business = calls.filter(call => call !== closing);
     const results: ToolResult[] = [];
-    for (const call of business) {
-      run.signal.throwIfAborted();
-      // Model-chosen call ids repeat across turns and workers, and they name offloaded output files.
-      const scoped = {...call, id: safeId(`${run.workerId}-${turnNumber}-${call.id}`)};
-      results.push(truncated ? {text: NOT_EXECUTED, isError: true} : await run.executeCall(scoped));
+    // Model-chosen call ids repeat across turns and workers, and they name offloaded output files.
+    const scope = (call: ToolCall): ToolCall => ({...call, id: safeId(`${run.workerId}-${turnNumber}-${call.id}`)});
+    if (truncated) for (const _call of business) results.push({text: NOT_EXECUTED, isError: true});
+    else {
+      // As in an actor's turn: a run of read-only calls goes in parallel groups of `concurrency`, everything else keeps the model's order.
+      const width = Math.max(1, run.concurrency ?? 1);
+      for (let start = 0; start < business.length;) {
+        let end = start + 1;
+        const reading = width > 1 && run.readOnly?.(business[start]!) === true;
+        if (reading) while (end < business.length && run.readOnly!(business[end]!)) end++;
+        for (let offset = start; offset < end; offset += reading ? width : 1) {
+          run.signal.throwIfAborted();
+          const group = business.slice(offset, reading ? Math.min(end, offset + width) : offset + 1);
+          // Every started call finishes before the turn goes on, so a cancellation leaves nothing running.
+          const settledGroup = await Promise.allSettled(group.map(call => run.executeCall(scope(call))));
+          for (const outcome of settledGroup) if (outcome.status === 'rejected') throw outcome.reason;
+          for (const outcome of settledGroup) results.push((outcome as PromiseFulfilledResult<ToolResult>).value);
+        }
+        start = end;
+      }
     }
     const settled = await settleToolResults(business.map((call, index) => ({callId: safeId(`${run.workerId}-${turnNumber}-${call.id}`), text: results[index]!.text, images: results[index]!.images, tool: call.name, arguments: call.arguments})),
       run.cwd, run.sessionId, run.workerId);

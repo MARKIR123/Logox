@@ -156,6 +156,8 @@ export interface Message {
   readonly systemReplay?: boolean;
 }
 const automaJobStateSchema = z.strictObject({
+  /** The worker's readable id (`T1`), which a later `continue` names. */
+  id: z.string().optional(),
   title: z.string(),
   state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted']),
   elapsedMs: z.number().nonnegative(),

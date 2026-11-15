@@ -13,7 +13,7 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - \`writes\` lists workspace paths or globs the job may edit, disjoint across jobs. Leave it out for read-only work: reading, searching, commands and scratch scripts in your scratchpad need no grant.
 - \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 - Workers read whatever you can read and run commands; every call is judged by your permission rules and can never exceed them.
-- \`keep: true\` keeps a worker's context for a follow-up (\`continue: "<id from the result>"\`; at most two, ended by \`release\` or your task).
+- Every finished worker can be continued with \`continue: "<id from the result>"\` and a new \`brief\`; it keeps its context. \`release\` ends workers you no longer need; all of them end with your task.
 
 Unknown fields are ignored with a note; a refused call states its exact fix.`;
 
@@ -30,7 +30,7 @@ export const AUTOMA_NO_TOOL_REMINDER = 'Your last turn called no tool, so your j
 export const AUTOMA_STALLED_SUMMARY = 'The worker stopped without calling Finish.';
 /** Finish arrived together with other calls: those ran, this one is answered with the fix. */
 export const AUTOMA_FINISH_ALONE = 'Finish was not accepted: it came in the same batch as other calls, whose results you have not seen yet. Call Finish alone, after reading those results.';
-/** The answer to an accepted Finish; the worker never needs it except when a kept worker is continued. */
+/** The answer to an accepted Finish; the worker sees it again when it is continued. */
 export const AUTOMA_FINISH_ACCEPTED = 'Result delivered to your dispatcher.';
 
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;

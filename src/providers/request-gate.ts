@@ -1,4 +1,7 @@
-import {isRateLimitFailure} from './http.js';
+import {isRateLimitFailure, ProviderError} from './http.js';
+
+/** Longest cooldown a single stated hint may impose; the same cap as the kernel's retry wait (`model-turn.ts:MAX_HINTED_WAIT_MS`). */
+const MAX_HINTED_WAIT_MS = 120_000;
 
 export interface RequestGateOptions {
   /** In-flight ceiling and starting limit. */
@@ -26,7 +29,7 @@ interface Waiter {
  * The gate never retries: callers own retry budgeting and their retries pass through the gate again.
  */
 export class RequestGate {
-  private readonly max: number;
+  private max: number;
   private readonly baseCooldownMs: number;
   private readonly maxCooldownMs: number;
   private readonly retryAfterCapMs: number;
@@ -44,7 +47,7 @@ export class RequestGate {
     this.max = Math.max(1, options.maxConcurrency ?? defaultMaxConcurrency);
     this.baseCooldownMs = options.baseCooldownMs ?? 1000;
     this.maxCooldownMs = options.maxCooldownMs ?? 30_000;
-    this.retryAfterCapMs = options.retryAfterCapMs ?? 60_000;
+    this.retryAfterCapMs = options.retryAfterCapMs ?? MAX_HINTED_WAIT_MS;
     this.current = this.max;
     this.nextCooldownMs = this.baseCooldownMs;
   }
@@ -57,6 +60,15 @@ export class RequestGate {
   get queued(): number {return this.queue.length;}
   /** Milliseconds until new starts are allowed again; 0 when not cooling down. */
   get cooldownRemainingMs(): number {return Math.max(0, this.cooldownUntil - Date.now());}
+
+  /** Changes the ceiling (a provider's `max_concurrent_requests` edited at runtime); requests in flight finish, new starts obey it. */
+  setMaxConcurrency(value: number): void {
+    const next = Math.max(1, value);
+    if (next === this.max) return;
+    this.max = next;
+    this.current = Math.min(this.current, next);
+    this.schedule();
+  }
 
   run<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -89,6 +101,10 @@ export class RequestGate {
       return value;
     } catch (error) {
       if (isRateLimitFailure(error)) this.rateLimited(error.diagnostic?.retryAfterMs, startedEpoch);
+      else if (error instanceof ProviderError && error.diagnostic?.retryAfterMs !== undefined) {
+        // Any failure that states a cooldown holds every later request of this endpoint, actors and workers alike; the limit stays.
+        this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + Math.min(Math.max(0, error.diagnostic.retryAfterMs), this.retryAfterCapMs));
+      }
       throw error;
     } finally {
       this.running--;

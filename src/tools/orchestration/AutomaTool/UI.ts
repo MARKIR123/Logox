@@ -120,7 +120,8 @@ function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, 
   const {builder, message, accent} = context;
   const bad = job.state === 'failed' || job.state === 'denied';
   const running = jobStep(job);
-  const text = (open ? '▾ ' : '▸ ') + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - job.state.length - 8)) + SEP + job.state;
+  const tag = job.id ? job.id + SEP : '';
+  const text = (open ? '▾ ' : '▸ ') + tag + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - job.state.length - 8 - tag.length)) + SEP + job.state;
   const color = bad ? palette.error : job.state === 'running' ? palette.fg : palette.muted;
   builder.pushOrdinaryCard({
     id, ownerId: message.ownerId, kind: 'Tool', title: text,
