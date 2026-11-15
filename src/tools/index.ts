@@ -6,6 +6,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {z} from 'zod';
 import {ToolModelStorage, type ToolModel, type ToolModelMap} from './tool-models.js';
+import {modelMarkStore, type ModelMarkStore} from '../providers/model-marks.js';
 import {PermissionEngine, shellWords, type PermissionTarget} from '../permissions/engine.js';
 import {PermissionGuard, type GuardOptions} from '../permissions/guard.js';
 import {shellImpact} from '../permissions/shell.js';
@@ -236,8 +237,12 @@ const AUTOMA_DEFAULT_PARALLEL = 4;
 
 /** What the application supplies so Automa can run; tests supply fakes. */
 export interface AutomaEnvironment {
-  /** Picks the model: `/model automa` first, then `preferred` (style, then role) when it resolves, then the session model. */
-  resolveModel(preferred: string | undefined): ResolvedAutomaModel;
+  /**
+   * Picks the model: `/model automa` first, then `preferred` (style, then role) when it resolves, then the session model.
+   * With `vision` set (a job marked `vision: true`) a worker model that cannot see images is replaced by the vision fallback;
+   * the result's `vision` says whether the returned model can see images.
+   */
+  resolveModel(preferred: string | undefined, vision?: boolean): ResolvedAutomaModel;
   profile?(ownerId: string): AutomaProfile | undefined;
   actorName?(ownerId: string): string | undefined;
   maxParallel?(): number;
@@ -259,6 +264,8 @@ const deniedText = (note?: string) => note ? DENIED + ' The user said why: "' + 
 export class Tools {
   readonly snapshots: Snapshots;
   readonly modelStorage: ToolModelStorage;
+  /** Tier and vision marks of models (`~/.logox/model-tiers.json`); the request path reads the vision mark here. */
+  readonly marks: ModelMarkStore;
   /** The user home whose `.logox/memory` folder holds user-level memory records (`permissions/paths.ts:isMemoryRecord()`). */
   private readonly home: string;
   constructor(
@@ -270,6 +277,7 @@ export class Tools {
     this.snapshots = new Snapshots(join(cwd, '.logox', 'snapshots'));
     const home = this.home = options.home ?? homedir();
     this.modelStorage = new ToolModelStorage(join(home, '.logox', 'tool-models.json'));
+    this.marks = modelMarkStore(join(home, '.logox'));
   }
 
   private registry: ToolRegistry | undefined;

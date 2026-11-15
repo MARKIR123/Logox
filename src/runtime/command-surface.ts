@@ -8,7 +8,14 @@ export interface PickerItem {readonly id: string; readonly label: string; readon
   /** A second, muted line under the row (a record's description); rows of such a list take two lines. */
   readonly detail?: string | undefined;
   /** `warning` draws the right-hand text in the warning colour (a value that needs attention). */
-  readonly valueTone?: 'warning' | undefined}
+  readonly valueTone?: 'warning' | undefined;
+  /** A model row: `markKey` (`<provider>/<model>`) names what the marks edit; `marks` are drawn at the end of the row and filtered by the list's filter row. */
+  readonly markKey?: string | undefined;
+  readonly marks?: ItemMarks | undefined}
+/** The tier (1 to 4) and vision mark of a model row; `derived` marks values the runtime guessed (drawn muted) as against values the user set. */
+export interface ItemMarks {readonly tier: 1 | 2 | 3 | 4; readonly vision: boolean; readonly derived: {readonly tier: boolean; readonly vision: boolean}}
+/** An edit of one model's marks made in a picker: set the tier, set the vision mark, or return to the derived values. */
+export type MarkChange = {readonly tier: 1 | 2 | 3 | 4} | {readonly vision: boolean} | {readonly clear: true};
 export interface CommandToggle {readonly id: string; readonly label?: string | undefined; readonly enabled: boolean; readonly value?: string | undefined; readonly options?: readonly string[] | undefined}
 /** Structured page row. Producers choose the kind; the renderer wraps words with a hanging indent and draws rules to the page width. */
 export type TabRow =

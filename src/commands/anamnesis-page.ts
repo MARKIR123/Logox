@@ -12,7 +12,7 @@ import {modelLabel} from '../config/model-preferences.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {CommandResult, PickerItem, TabRow} from '../runtime/command-surface.js';
-import {INHERIT_CHOICE, bindingChoices, type ChoiceModel} from './model-choices.js';
+import {INHERIT_CHOICE, MARKS_HINT, bindingChoices, type ChoiceModel} from './model-choices.js';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions} from './surfaces.js';
 
@@ -26,7 +26,8 @@ export interface AnamnesisPageDeps {
   surfaces: CommandSurfaces;
   anamnesis: AnamnesisApi;
   registry: Pick<ProviderRegistry, 'names' | 'modelCatalog'>;
-  modelPool: Pick<ModelPool, 'snapshot'>;
+  /** `marks` is optional so a test double without a mark store still works; the real pool always has one. */
+  modelPool: Pick<ModelPool, 'snapshot'> & {readonly marks?: ModelPool['marks'] | undefined};
   receipt: Receipt;
 }
 
@@ -85,10 +86,11 @@ export function createAnamnesisCommand(deps: AnamnesisPageDeps) {
 
   const openModel = async (): Promise<void> => {
     const current = anamnesis.anamnesisModel();
-    const choices = bindingChoices(current.inherited ? undefined : {provider: current.provider, model: current.model, ...(current.effort ? {effort: current.effort} : {})});
+    const marks = modelPool.marks;
+    const choices = bindingChoices(current.inherited ? undefined : {provider: current.provider, model: current.model, ...(current.effort ? {effort: current.effort} : {})}, marks);
     const poolModels = modelPool.snapshot();
     const list = (models: readonly ChoiceModel[]): PickerItem[] => choices.items(models).map(item => item.id === INHERIT_CHOICE ? {...item, label: FOLLOW_LOGOX_LABEL} : item);
-    await open({title: 'Select Model for Anamnesis', description: 'Confirm to apply to Anamnesis only; Esc to go back', current: choices.current,
+    await open({title: 'Select Model for Anamnesis', description: 'Confirm to apply to Anamnesis only; Esc to go back · ' + MARKS_HINT, current: choices.current,
       ...(poolModels.length ? {items: list(poolModels)} : {})},
     async signal => {
       let models: readonly ChoiceModel[] = poolModels, warning: string | undefined;
@@ -105,7 +107,7 @@ export function createAnamnesisCommand(deps: AnamnesisPageDeps) {
       receipt(binding ? 'Anamnesis model saved.' : 'Anamnesis follows Logox.', 'status');
       await openPage('model');
       return {};
-    }, undefined, () => openPage('model'));
+    }, undefined, () => openPage('model'), marks?.pickerMarks());
   };
 
   /** The page: six rows, each with its value read now. `focus` keeps the highlight on the row that was just changed. */

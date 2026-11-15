@@ -11,7 +11,7 @@ import {actorModelSchema, parseActor, serializeActor, type ActorModel} from './d
 import type {ContextPolicy} from '../config/config.js';
 import {detectEffortLevels} from '../config/model-grouping.js';
 import {effortInName, modelLabel} from '../config/model-preferences.js';
-import {bindingChoices, type ChoiceModel} from '../commands/model-choices.js';
+import {bindingChoices, MARKS_HINT, type ChoiceModel} from '../commands/model-choices.js';
 
 export interface ActorWriteReview {readonly path: string; readonly content: string; readonly previous: string | undefined; readonly operation: 'craft_actor'}
 export interface CraftResult {readonly status: 'saved' | 'denied'; readonly path: string; readonly revision: number}
@@ -83,10 +83,11 @@ export class ActorManagement {
     this.modelPool?.loadCacheSync();
     const poolModels = this.modelPool?.snapshot() ?? [];
     // The same list Automa's picker shows: see `bindingChoices`.
-    const choices = bindingChoices(actor.defaultModel);
+    const marks = this.modelPool?.marks;
+    const choices = bindingChoices(actor.defaultModel, marks);
     await surfaces.openPicker({
       title: 'Select Model for ' + actor.name,
-      description: 'Confirm to apply to this actor only; Esc to cancel',
+      description: 'Confirm to apply to this actor only; Esc to cancel · ' + MARKS_HINT,
       current: choices.current,
       ...(poolModels.length > 0 ? {items: choices.items(poolModels)} : {}),
     }, async signal => {
@@ -111,7 +112,7 @@ export class ActorManagement {
       if (selectedModel === null) throw new Error('Invalid model selection');
       await this.saveDefaultModel(id, selectedModel, new AbortController().signal);
       return {message: actor.name + ' default model saved', presentation: 'status'};
-    });
+    }, undefined, undefined, marks?.pickerMarks());
   }
   async craftActor(content: string, approve: (review: ActorWriteReview) => Promise<boolean>, signal: AbortSignal): Promise<CraftResult> {
     const actor = parseActor(content), path = this.catalog.projectPath(actor.id), previous = await this.previous(actor.id);

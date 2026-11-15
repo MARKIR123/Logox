@@ -156,7 +156,7 @@ export function createPages(deps: PagesDeps) {
     state.activeCommandPage = '';
     if (id === 'models') {
       return {title: 'Models & pricing', initialTab: 'models', actions: {onSaveToggles: () => ({})} as PageActions,
-        tabs: [{id: 'models', title: 'Models', ...tabContent(modelsRows(config, registry.names(), modelPool.snapshot()))}]};
+        tabs: [{id: 'models', title: 'Models', ...tabContent(modelsRows(config, registry.names(), modelPool.snapshot(), modelPool.marks))}]};
     }
     if (id === 'shortcuts') {
       return {title: 'Shortcuts', initialTab: 'shortcuts', actions: {onSaveToggles: () => ({})} as PageActions,

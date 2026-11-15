@@ -61,7 +61,7 @@ export interface SubmitDeps {
   notice: Notice; receipt: Receipt;
   queryResult(owner: string, title: string, query: () => Promise<string | {text: string; lines: readonly ResultLine[]} | undefined>): Promise<void>;
   input: Pick<InputDelivery, 'beginTask' | 'dispatchInput' | 'ownerIsBusy'>;
-  modelSelection: Pick<ModelSelection, 'isSelecting' | 'saveSelection' | 'saveEffort' | 'openThinking' | 'openModels' | 'modelCommand' | 'typedBinding' | 'rememberProvider' | 'current'>;
+  modelSelection: Pick<ModelSelection, 'isSelecting' | 'saveSelection' | 'saveEffort' | 'openThinking' | 'openModels' | 'modelCommand' | 'typedBinding' | 'rememberProvider' | 'markedList' | 'current'>;
   providers: Pick<ProviderManagement, 'wizardRows' | 'loginWizard' | 'removeProvider'>;
   pages: Pick<Pages, 'openSettings' | 'openTheme' | 'openEnsemble' | 'pageActions'>;
   buildContext: CommandContextBuilder;
@@ -224,7 +224,7 @@ export function createSubmit(deps: SubmitDeps) {
       await queryResult(source, 'Available models', async () => {
         const models = await registry.models(AbortSignal.any([signal, AbortSignal.timeout(15000)]));
         modelSelection.rememberProvider(provider, models);
-        return models.join('\n') || 'Provider returned empty model list';
+        return modelSelection.markedList(provider, models) || 'Provider returned empty model list';
       }); return;
     }
     if (text.startsWith('/providers ')) {

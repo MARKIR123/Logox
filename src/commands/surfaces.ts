@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
 import {immutable} from '../runtime/contracts.js';
-import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../runtime/command-surface.js';
+import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, ItemMarks, MarkChange, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   /** Shown instead of the search box when the list loads empty; say what to do next. */
   readonly emptyText?: string;
@@ -16,6 +16,8 @@ export interface EnsembleActions {
   edit(path: string): Promise<{readonly ok: boolean; readonly message: string}>;
 }
 export interface PickerActions {readonly deleteLabel: string; onDelete(id: string): void | Promise<void>}
+/** Lets a model list edit the marks of its rows: `change` persists an edit, `resolve` reads the marks a row's `markKey` stands for. */
+export interface PickerMarks {change(markKey: string, change: MarkChange): Promise<void>; resolve(markKey: string): ItemMarks}
 export interface PageActions {
   /** Multi-editor settings pages apply one tab without discarding drafts in the others. */
   readonly closeOnSave?: boolean;
@@ -53,6 +55,7 @@ export class CommandSurfaces {
   private select: ((id: string, effort?: string) => CommandResult | Promise<CommandResult>) | undefined;
   private pickerActions: PickerActions | undefined;
   private pickerBack: (() => void | Promise<void>) | undefined;
+  private pickerMarks: PickerMarks | undefined;
   private pageActions: PageActions | undefined;
   private settingsActions: SettingsActions | undefined;
   private ensembleActions: EnsembleActions | undefined;
@@ -276,10 +279,10 @@ export class CommandSurfaces {
     if (state?.kind === 'settings' && state.id === surfaceId && state.sub && !state.sub.saving) this.leavePage();
   }
   async openPicker(spec: PickerSpec, load: (signal: AbortSignal) => Promise<{items: readonly PickerItem[]; warning?: string}>,
-    select: (id: string, effort?: string) => CommandResult | Promise<CommandResult>, actions?: PickerActions, back?: () => void | Promise<void>): Promise<void> {
+    select: (id: string, effort?: string) => CommandResult | Promise<CommandResult>, actions?: PickerActions, back?: () => void | Promise<void>, marks?: PickerMarks): Promise<void> {
     this.assertIdle();
     const id = randomUUID(), controller = new AbortController();
-    this.controller = controller; this.select = select; this.pickerActions = actions; this.pickerBack = back;
+    this.controller = controller; this.select = select; this.pickerActions = actions; this.pickerBack = back; this.pickerMarks = marks;
     const initialItems = spec.items ?? [];
     this.publish({id, kind: 'picker', ...spec, ...this.origin?.(), items: initialItems, status: initialItems.length ? 'ready' : 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
     try {
@@ -301,6 +304,21 @@ export class CommandSurfaces {
     this.publish({...state, status: 'saving', error: ''});
     try {await actions.onDelete(itemId); if (this.state?.id === surfaceId) this.publish({...state, status: 'ready'});}
     catch (error) {if (this.state?.id === surfaceId) this.publish({...state, error: error instanceof Error ? error.message : 'Delete failed'});}
+  }
+  /** Persists an edit of one model row's marks and redraws every row of that model; a failure keeps the list and shows the reason. */
+  async setMark(surfaceId: string, itemId: string, change: MarkChange): Promise<void> {
+    const state = this.state, marks = this.pickerMarks;
+    if (state?.kind !== 'picker' || state.id !== surfaceId || state.status !== 'ready' || !marks) return;
+    const key = state.items.find(item => item.id === itemId)?.markKey;
+    if (!key) return;
+    try {await marks.change(key, change);}
+    catch (error) {
+      if (this.state?.id === surfaceId && this.state.kind === 'picker') this.publish({...this.state, error: error instanceof Error ? error.message : 'Could not save the marks'});
+      return;
+    }
+    const current = this.state;
+    if (current?.kind === 'picker' && current.id === surfaceId)
+      this.publish({...current, error: '', items: current.items.map(item => item.markKey === key ? {...item, marks: marks.resolve(key)} : item)});
   }
   async choose(surfaceId: string, itemId: string, effort?: string): Promise<void> {
     const state = this.state;
@@ -339,6 +357,6 @@ export class CommandSurfaces {
     if (back) {this.dismiss(); void Promise.resolve().then(back).catch(() => {}); return;}
     if (state?.kind === 'page' ? !state.saving : state?.kind !== 'picker' || state.status !== 'saving') this.dismiss();
   }
-  private dismiss(): void {this.restoreTheme(); this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pickerBack = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
+  private dismiss(): void {this.restoreTheme(); this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pickerBack = undefined; this.pickerMarks = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
   close(): void {this.dismiss();}
 }

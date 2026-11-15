@@ -2,6 +2,7 @@ import type {TabRow} from '../runtime/command-surface.js';
 import type {DiscoveredModel} from '../providers/model-pool.js';
 import type {Config} from '../config/config.js';
 import {modelTable} from '../providers/model-table.js';
+import {marksText, type ModelMarkStore} from '../providers/model-marks.js';
 import {row} from './tab-rows.js';
 
 const compact = (value: number | undefined): string => value === undefined ? '?' : value >= 1_000_000 ? +(value / 1_000_000).toFixed(2) + 'M' : value >= 1000 ? Math.round(value / 1000) + 'k' : String(value);
@@ -20,7 +21,7 @@ export function modelLine(config: Pick<Config, 'models' | 'catalogs'>, model: Pi
 }
 
 /** The read-only `Models & pricing` page: configured providers and models, with the catalog source and its confidence. */
-export function modelsRows(config: Pick<Config, 'models' | 'catalogs'>, providers: readonly string[], models: readonly DiscoveredModel[]): TabRow[] {
+export function modelsRows(config: Pick<Config, 'models' | 'catalogs'>, providers: readonly string[], models: readonly DiscoveredModel[], marks?: Pick<ModelMarkStore, 'marks'>): TabRow[] {
   const rows: TabRow[] = [];
   for (const provider of providers) {
     const own = models.filter(model => model.provider === provider);
@@ -29,7 +30,7 @@ export function modelsRows(config: Pick<Config, 'models' | 'catalogs'>, provider
     if (!own.length) rows.push(row.muted('No models cached. Use /providers and press r to fetch them.'));
     // A model nothing can price is drawn muted, so the gap shows before any usage; its line says `no price`.
     for (const model of own) {
-      const line = modelLine(config, model);
+      const line = modelLine(config, model) + (marks ? ' · ' + marksText(marks.marks(model.provider, model.id)) : '');
       rows.push(row.field(model.id + (model.isOffline ? ' [offline]' : ''), line, line.includes(' · no price · ') ? 'muted' : undefined));
     }
   }

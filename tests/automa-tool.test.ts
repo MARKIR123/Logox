@@ -628,7 +628,7 @@ test('The tool contract states keep and continue concisely', () => {
   assert.match(AUTOMA_DESCRIPTION, /`writes` is optional/);
   assert.match(AUTOMA_DESCRIPTION, /Not for one quick command/);
   assert.doesNotMatch(AUTOMA_DESCRIPTION, /preset|`files`/);
-  assert.ok(AUTOMA_DESCRIPTION.length <= 1500, String(AUTOMA_DESCRIPTION.length));
+  assert.ok(AUTOMA_DESCRIPTION.length <= 1700, String(AUTOMA_DESCRIPTION.length));
   const keys = Object.keys((automaSchema.toJSONSchema() as unknown as {properties: {jobs: {items: {properties: object}}}}).properties.jobs.items.properties);
   assert.ok(keys.includes('keep') && keys.includes('continue') && !keys.includes('persistence') && !keys.includes('instance'));
 });

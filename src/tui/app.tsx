@@ -461,6 +461,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
       {...(surface.emptyText !== undefined ? {emptyText: surface.emptyText} : {})} {...(surface.focus !== undefined ? {focus: surface.focus} : {})}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
+      onMark={(id, change) => {void surfaces.setMark(surface.id, id, change);}}
       effort={surface.effort} effortLevels={surface.effortLevels}
       notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/></MouseHost>
       : loginState && authentication && !loginFolded ? loginState.phase === 'wizard' ? null : <MouseHost subscribe={subscribeMouse} color={windowColor}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseHost> : <>

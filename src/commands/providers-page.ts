@@ -6,6 +6,7 @@
  */
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
+import {marksText} from '../providers/model-marks.js';
 import type {ProviderManagement} from '../providers/management.js';
 import type {CommandResult, TabLine} from '../runtime/command-surface.js';
 import {row} from './tab-rows.js';
@@ -68,7 +69,7 @@ export function createProvidersPage(deps: ProvidersPageDeps) {
           ? '✦ ' + m.thinkingLevels.filter((l: string) => l !== 'auto').join(' / ')
           : '-';
         const offlineTag = m.isOffline ? ' [offline]' : '';
-        lines.push(row.bullet(m.id + offlineTag + ' · ' + win + ' · Thinking: ' + eff));
+        lines.push(row.bullet(m.id + offlineTag + ' · ' + win + ' · Thinking: ' + eff + ' · ' + marksText(modelPool.marks.marks(current, m.id))));
       }
     }
     return lines;

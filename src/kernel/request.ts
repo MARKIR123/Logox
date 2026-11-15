@@ -4,6 +4,7 @@ import {normalizeMessages, withoutAnsweredUnexecuted, type ModelRequest, type To
 import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {ProviderError} from '../providers/http.js';
 import {roleCacheRetention} from '../providers/cache.js';
+import {omitImages} from '../providers/vision-fallback.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {askOwedWhileWorking} from '../prompts/runtime/recovery.js';
@@ -117,9 +118,14 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
     .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts')]};
   // A signature belongs only to the model that produced it; keep the full ledger and tool pairing, and do not replay old signed thinking on a switched request.
-  let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: visionEnabled, messages: projected.messages.map(message =>
+  // A task model whose vision mark is false never receives an image: each one becomes a line of text saying why. Resolved per request, so a model switch applies at once.
+  const selected = taskModel?.selection();
+  const blind = selected && options.tools.marks?.vision(selected.provider, selected.model) === false ? omitImages(projected.messages, selected.provider + '/' + selected.model, 'actor') : undefined;
+  const sendable = blind?.messages ?? projected.messages;
+  const sendsImages = visionEnabled && !blind;
+  let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: sendsImages, messages: sendable.map(message =>
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)
-      ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: visionEnabled, messages: projected.messages};
+      ? {role: 'assistant' as const, text: message.text, ...(message.toolCalls ? {toolCalls: message.toolCalls} : {})} : message)} : {...projected, supportsVision: sendsImages, messages: sendable};
   const dumpDir = options.requestDumpDir?.(context);
   const fingerprintFile = options.requestFingerprintFile?.(context);
   request = {...request, cacheKey: promptCacheKey(context.sessionId, context.ownerId),

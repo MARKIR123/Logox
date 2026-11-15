@@ -10,15 +10,17 @@ import type {ActorCatalog} from '../actors/catalog.js';
 import type {ActorServices} from '../actors/services.js';
 import type {Receipt} from '../app/state.js';
 import type {CommandContext} from '../commands.js';
-import {StateFile, preferenceSchema, effortSchema, effortInName, type ThinkingEffort} from '../config/model-preferences.js';
+import {StateFile, preferenceSchema, effortSchema, effortInName, modelLabel, type ThinkingEffort} from '../config/model-preferences.js';
+import {likelyToolCapable, marksText} from '../providers/model-marks.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from '../config/model-grouping.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {Resources} from '../resources/manager.js';
-import type {PickerItem} from '../runtime/command-surface.js';
+import type {CommandResult, PickerItem} from '../runtime/command-surface.js';
 import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {Tools} from '../tools/tools.js';
-import {bindingChoices, type ChoiceModel} from './model-choices.js';
+import {AUTOMA_VISION_KEY} from '../tools/tool-models.js';
+import {INHERIT_CHOICE, MARKS_HINT, bindingChoices, markFields, type ChoiceModel} from './model-choices.js';
 import type {CommandSurfaces} from './surfaces.js';
 
 export interface ModelSelectionDeps {
@@ -69,6 +71,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     }
   };
   const openModels = (forActor = 'Logox') => {
+    const marks = modelPool.marks;
     const groupedMap = new Map<string, GroupedModel>();
     const currentBase = (() => {
       const match = /^(.*?)-(low|medium|high|xhigh|extra-low|max|tiered|thinking)$/.exec(settings.model);
@@ -103,6 +106,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
             effort: currentEffort,
             effortLevels: effortLevels.length > 0 ? effortLevels : undefined,
             group: provider,
+            ...markFields(provider, grouped.baseModel, marks),
           });
         }
       }
@@ -116,7 +120,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
 
     void surfaces.openPicker({
       title: 'Select Model for ' + forActor,
-      description: 'Model families grouped by provider · Tab switches provider',
+      description: 'Model families grouped by provider · Tab switches provider · ' + MARKS_HINT,
       emptyText: 'No models available. Run /login to connect a provider, then /providers and press r to refresh its model list.',
       current: JSON.stringify([settings.provider, currentBase]),
       items,
@@ -161,7 +165,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
         }
         await saveSelection(candidate);
         return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'status'};
-      });
+      }, undefined, undefined, marks.pickerMarks());
   };
   /**
    * A typed model name must name a model: a provider must exist, and when the pool knows that provider's models the name must be one of them.
@@ -187,16 +191,40 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     if (!levels.includes(effort)) throw new Error(provider + '/' + model + ' does not support thinking effort "' + effort + '" (available: ' + levels.join(', ') + ')');
     return {provider, model, effort};
   };
-  const openAutomaModel = async () => {
+  /** Opens a level of the `/model automa` page over whatever is open (a row that changes something replaces its own level). */
+  const openLevel = async (...args: Parameters<typeof surfaces.openPicker>) => {
+    if (surfaces.getSnapshot()) surfaces.close();
+    await surfaces.openPicker(...args);
+  };
+  /**
+   * The model list of one Automa row: the list every actor's model picker shows (`bindingChoices`) with the row's own first item and filter.
+   * Choosing a model saves it under `key`, says so, and returns to the page on the row that changed; Esc returns without saving.
+   */
+  const openAutomaChoice = async (row: 'worker' | 'vision') => {
+    const key = row === 'worker' ? 'automa' : AUTOMA_VISION_KEY, bound = tools.modelStorage.get(key), marks = modelPool.marks;
     modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
-    // The same list every actor's model picker shows: see `bindingChoices`.
-    const choices = bindingChoices(tools.modelStorage.get('automa'));
-    await surfaces.openPicker({
-      title: 'Select Model for Automa',
-      description: 'Select dedicated model for Automa worker; Esc to cancel',
+    const choices = bindingChoices(bound, marks);
+    const session = registry.selection();
+    /** The cheapest T2 model of the session's provider that can run tools, moved to the top and labelled; nothing is bound by it. */
+    const recommend = (items: PickerItem[]): PickerItem[] => {
+      const price = (item: PickerItem) => item.markKey ? marks.price(session.provider, item.markKey.slice(session.provider.length + 1)) : undefined;
+      const best = items.filter(item => item.group === session.provider && item.marks?.tier === 2 && likelyToolCapable(item.label))
+        .sort((a, b) => (price(a) ?? Infinity) - (price(b) ?? Infinity) || a.label.localeCompare(b.label))[0];
+      if (!best) return items;
+      return [items[0]!, {...best, label: best.label + ' · recommended'}, ...items.slice(1).filter(item => item.id !== best.id)];
+    };
+    const list = (models: readonly ChoiceModel[]): PickerItem[] => {
+      const items = choices.items(models).map(item => item.id !== INHERIT_CHOICE ? item : row === 'worker'
+        ? {...item, label: 'Follow Logox (' + session.provider + ' / ' + session.model + ')'}
+        : {...item, label: 'None', description: 'Jobs marked vision fail when the worker model cannot see images'});
+      return row === 'vision' ? items.filter(item => item.id === INHERIT_CHOICE || item.marks?.vision) : bound ? items : recommend(items);
+    };
+    await openLevel({
+      title: row === 'worker' ? 'Select Worker Model for Automa' : 'Select Vision Fallback for Automa',
+      description: (row === 'worker' ? 'Automa workers use this model; Esc to go back · ' : 'Used for jobs marked vision when the worker model cannot see images; Esc to go back · ') + MARKS_HINT,
       current: choices.current,
-      ...(poolModels.length > 0 ? {items: choices.items(poolModels)} : {}),
+      ...(poolModels.length > 0 ? {items: list(poolModels)} : {}),
     }, async pickerSignal => {
       let models: readonly ChoiceModel[] = poolModels;
       let warning: string | undefined;
@@ -205,13 +233,38 @@ export function createModelSelection(deps: ModelSelectionDeps) {
         warning = result.issues.join('; ');
         models = result.models.map(m => ({provider: m.provider, id: m.id, thinkingLevels: [...detectEffortLevels(m.id, m.provider)]}));
       }
-      return {items: choices.items(models), ...(warning ? {warning} : {})};
+      return {items: list(models), ...(warning ? {warning} : {})};
     }, async (choice, chosenEffort) => {
       const chosen = choices.resolve(choice, chosenEffort);
       if (chosen === null) throw new Error('Invalid model selection');
-      await tools.modelStorage.save('automa', chosen, signal);
-      return {message: chosen ? `Automa model set to: ${chosen.provider}/${chosen.model}${chosen.effort ? ' · ' + chosen.effort : ''}` : 'Automa model set to inherit session model', presentation: 'status'};
-    });
+      await tools.modelStorage.save(key, chosen, signal);
+      const shown = chosen ? chosen.provider + '/' + chosen.model + (chosen.effort ? ' · ' + chosen.effort : '') : '';
+      receipt(row === 'worker' ? (chosen ? 'Automa model set to: ' + shown : 'Automa model set to inherit session model')
+        : (chosen ? 'Automa vision fallback set to: ' + shown : 'Automa has no vision fallback.'), 'status');
+      await openAutomaPage(row);
+      return {};
+    }, undefined, () => openAutomaPage(row), marks.pickerMarks());
+  };
+  /** `/model automa`: the worker model and the vision fallback, each row with its value read now. */
+  const openAutomaPage = async (focus?: string): Promise<void> => {
+    const marks = modelPool.marks, worker = tools.modelStorage.get('automa'), vision = tools.modelStorage.get(AUTOMA_VISION_KEY), session = registry.selection();
+    const shownBinding = (binding: {provider: string; model: string; effort?: ThinkingEffort | undefined}) =>
+      binding.provider + ' / ' + modelLabel(binding.model, binding.effort) + ' · ' + marksText(marks.marks(binding.provider, binding.model));
+    const effective = worker ?? (session.model ? {provider: session.provider, model: session.model} : undefined);
+    const workerSees = effective ? marks.vision(effective.provider, effective.model) : true;
+    const workerText = worker ? shownBinding(worker) : 'Follows Logox (' + (session.model ? session.provider + ' / ' + session.model + ' · ' + marksText(marks.marks(session.provider, session.model)) : 'no model selected') + ')';
+    const visionBlind = vision ? !marks.vision(vision.provider, vision.model) : !workerSees;
+    const visionText = vision ? shownBinding(vision) + (visionBlind ? ' · cannot see images' : '') : 'None' + (visionBlind ? ' · vision jobs will fail' : '');
+    const items: PickerItem[] = [
+      {id: 'worker', label: 'Worker model', description: workerText},
+      {id: 'vision', label: 'Vision fallback', description: visionText, ...(visionBlind ? {valueTone: 'warning' as const} : {})},
+    ];
+    await openLevel({title: 'Automa', description: 'Enter changes a row · Esc closes', current: '', ...(focus ? {focus} : {}), items},
+      async () => ({items}), async (id): Promise<CommandResult> => {
+        if (id !== 'worker' && id !== 'vision') throw new Error('Unknown row.');
+        await openAutomaChoice(id);
+        return {};
+      });
   };
   /** `/model` and `/model <actor|automa|model> ...` typed by the human; `source` is the window it came from. */
   const modelCommand = async (text: string, source: string): Promise<void> => {
@@ -242,7 +295,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
         receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
         return;
       }
-      await openAutomaModel();
+      await openAutomaPage();
       return;
     }
 
@@ -289,7 +342,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
   return {
     /** The session selection (provider, model, base URL); replaced by every saved selection. */
     current: () => settings,
-    saveSelection, saveEffort, openThinking, openModels, openAutomaModel, modelCommand, completionContext,
+    saveSelection, saveEffort, openThinking, openModels, openAutomaPage, modelCommand, completionContext,
     /** `<model> [effort]` typed after a target, checked like `/model <actor> <model> [effort]` (for targets owned elsewhere, such as Anamnesis). */
     typedBinding: (text: string) => {const spec = withEffort(text), resolved = modelPool.resolveShorthand(spec.text, settings.provider);
       return bindingFor(resolved.provider, resolved.model, spec.effort);},
@@ -299,6 +352,9 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     selectionDone: () => selectionDone,
     /** Remembers the model ids a `/models` query returned for one provider. */
     rememberProvider: (provider: string, models: readonly string[]) => {modelCandidates.set(provider, models);},
+    /** The `/models` text: one model per line with its `T1`-`T4` and vision marks at the end of the row. */
+    markedList: (provider: string, models: readonly string[]): string =>
+      models.map(model => model + '  ' + marksText(modelPool.marks.marks(provider, model))).join('\n'),
   };
 }
 export type ModelSelection = ReturnType<typeof createModelSelection>;

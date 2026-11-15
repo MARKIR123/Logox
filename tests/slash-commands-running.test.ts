@@ -88,7 +88,7 @@ test('slash commands can be viewed, opened, and executed while tasks are activel
     await app.submit('/model automa');
     let picker = app.surfaces.getSnapshot();
     assert.equal(picker?.kind, 'picker');
-    assert.equal(picker.title, 'Select Model for Automa');
+    assert.equal(picker.title, 'Automa');
 
     // 7. /model automa <model> should configure automa model directly while busy
     await app.submit('/model automa beta/fast-model');

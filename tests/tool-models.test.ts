@@ -66,13 +66,21 @@ test('/model automa configures automa model via slash command, opens picker, and
 
     // 2. Open picker via /model automa
     await app.submit('/model automa');
+    const page = app.surfaces.getSnapshot();
+    assert.ok(page?.kind === 'picker');
+    assert.equal(page.title, 'Automa');
+    assert.deepEqual(page.items.map(item => item.label), ['Worker model', 'Vision fallback']);
+    assert.match(page.items[0]!.description!, /^beta \/ fast-model · T\d/);
+    assert.match(page.items[1]!.description!, /^None/);
+    await app.surfaces.choose(page.id, 'worker');
     const picker = app.surfaces.getSnapshot();
     assert.ok(picker?.kind === 'picker');
-    assert.equal(picker.title, 'Select Model for Automa');
+    assert.equal(picker.title, 'Select Worker Model for Automa');
     assert.equal(picker.current, JSON.stringify({provider: 'beta', model: 'fast-model'}));
+    assert.ok(picker.items.every(item => item.id === 'inherit' || item.marks), 'every model row carries its marks');
 
-    // Cancel picker
-    app.surfaces.cancel();
+    // Close the picker (Esc would go back to the Automa page)
+    app.surfaces.close();
     assert.equal(app.surfaces.getSnapshot(), null);
 
     // 3. Clear automa model via /model automa inherit

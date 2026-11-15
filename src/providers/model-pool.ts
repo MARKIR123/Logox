@@ -6,6 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import type {ProviderRegistry} from './registry.js';
 import {detectEffortLevels} from '../config/model-grouping.js';
+import {modelMarkStore, type ModelMarkStore} from './model-marks.js';
 
 export const discoveredModelSchema = z.object({
   provider: z.string().min(1),
@@ -33,6 +34,9 @@ export class ModelPool {
   ) {
     this.loadCacheSync();
   }
+
+  /** The tier and vision marks beside this pool's store (`model-tiers.json`); one instance per directory. */
+  get marks(): ModelMarkStore {return modelMarkStore(dirname(this.cachePath));}
 
   setMockModels(models: DiscoveredModel[]): void {
     this.models = [...models];

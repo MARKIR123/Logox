@@ -62,6 +62,8 @@ export interface AutomaJobArgs {
   readonly keep?: boolean | undefined;
   /** Id of a live kept worker to continue; anything else is ignored with a note. */
   readonly continue?: string | undefined;
+  /** The job must look at images: it runs on a model that can see them (the worker model, else the vision fallback) or is refused. */
+  readonly vision?: boolean | undefined;
 }
 
 export interface RetainedGrant {

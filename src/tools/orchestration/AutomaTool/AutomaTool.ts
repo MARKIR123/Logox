@@ -7,6 +7,7 @@ import {z} from 'zod';
 import type {AutomaSwarm, AutomaJobState} from '../../../runtime/contracts.js';
 import type {ModelMessage, ModelTurn, Provider, ToolCall, ToolDefinition, TurnUsage} from '../../../runtime/messages.js';
 import {ensureActorScratchpadDir, getActorScratchpadDir, maybePersistLargeOutput, TOOL_OUTPUT_LIMIT} from '../../../kernel/scratchpad.js';
+import {imagesOmittedNote, omitImages} from '../../../providers/vision-fallback.js';
 import type {ToolResult} from '../../types.js';
 import {readSchema} from '../../ReadTool/ReadTool.js';
 import {READ_DESCRIPTION} from '../../ReadTool/prompt.js';
@@ -32,6 +33,7 @@ const automaJobSchema = z.strictObject({
   writes: z.array(z.string().min(1)).min(1).max(64).optional().describe('Workspace paths or globs the job may edit. Omit for read-only work: reading, searching, commands and scratch scripts need no grant'),
   keep: z.boolean().optional().describe('Rare: true keeps this worker\'s context after the job; the receipt gives its id. Omit for single use'),
   continue: z.string().min(1).optional().describe('Rare: id a receipt returned for a kept worker, to give it a next step. Omit for a new job'),
+  vision: z.boolean().optional().describe('Rare: true when the job must look at images (screenshots, mockups, image files). Omit otherwise'),
 });
 
 export const automaArgs = z.strictObject({
@@ -45,7 +47,7 @@ export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const JOB_KEYS = new Set(['brief', 'title', 'writes', 'keep', 'continue']);
+const JOB_KEYS = new Set(['brief', 'title', 'writes', 'keep', 'continue', 'vision']);
 const TOP_KEYS = new Set(['jobs', 'style', 'parallel', 'release']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
@@ -92,6 +94,8 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
       if (typeof job.keep !== 'boolean') delete job.keep;
       if (typeof job.continue !== 'string' || PLACEHOLDER.test(job.continue.trim())) delete job.continue; else job.continue = job.continue.trim();
       if (job.keep === false && !job.continue) delete job.keep;
+      if (job.vision === 'true' || job.vision === 'false') job.vision = job.vision === 'true';
+      if (job.vision !== true) delete job.vision;
       for (const key of Object.keys(job)) {
         if (!JOB_KEYS.has(key)) {drop(key, job[key]); delete job[key];}
         else if (job[key] === undefined) delete job[key];
@@ -148,7 +152,8 @@ const CALLS_SHOWN_PER_JOB = 20;
 const DIFF_COUNT_LIMIT = 512 * 1024;
 
 export type AutomaProvider = Pick<Provider, 'respond'>;
-export interface ResolvedAutomaModel {readonly provider: AutomaProvider; readonly model: string}
+/** `model` is `<provider>/<model>`; `vision` is whether it can see images (absent counts as yes). */
+export interface ResolvedAutomaModel {readonly provider: AutomaProvider; readonly model: string; readonly vision?: boolean}
 
 export interface RetainedInstance {
   readonly id: string;
@@ -172,7 +177,7 @@ export interface DispatchOptions {
   readonly principal: string;
   readonly activityId: string;
   readonly released?: readonly string[];
-  resolveModel(preferred: string | undefined): ResolvedAutomaModel;
+  resolveModel(preferred: string | undefined, vision?: boolean): ResolvedAutomaModel;
   instance(id: string): RetainedInstance | undefined;
   retain(instance: RetainedInstance): void;
   forget(id: string): void;
@@ -329,18 +334,29 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       written.set(file.path, {before: written.has(file.path) ? written.get(file.path)!.before : file.before, after: file.after});
     });
     const ran: string[] = [], refused: string[] = [];
-    let succeeded = 0, lastInput = 0;
+    let succeeded = 0, lastInput = 0, modelName = '', imagesOmitted = false;
     const messages: ModelMessage[] = kept ? [...kept.messages, {role: 'user', text: planned.job.brief}] : [{role: 'user', text: briefText(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal))}];
     states[index] = {...states[index]!, state: 'running', startedAt: started};
     publish();
     await journal(index, 'start', {title: planned.job.title, brief: planned.job.brief, grant, workerId, ...(kept ? {instance: kept.id} : {})});
     try {
-      const resolved = kept?.resolved ?? options.resolveModel(planned.model);
+      const resolved = kept?.resolved ?? options.resolveModel(planned.model, planned.job.vision);
+      modelName = resolved.model;
+      // A vision job never runs on a model that cannot see images: this job is refused, the others of the dispatch still run.
+      if (planned.job.vision && resolved.vision === false) {
+        stopTracking();
+        if (kept) options.forget(kept.id);
+        await finish(index, 'denied', started, [['verdict', `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`]]);
+        return;
+      }
       const tools = automaToolDefinitions(grant);
       let finalText = '', truncated = false;
       for (;;) {
         signal.throwIfAborted();
-        const turn = await respondWithRetry(resolved, {system: planned.system, messages, tools, thinking: false}, signal);
+        // A worker whose model cannot see images gets a line of text where an image would be, and says so under Not verified.
+        const sent = resolved.vision === false ? omitImages(messages, resolved.model, 'worker') : {messages, omitted: 0};
+        if (sent.omitted) imagesOmitted = true;
+        const turn = await respondWithRetry(resolved, {system: planned.system, messages: sent.messages, tools, thinking: false}, signal);
         options.charge?.(turn.usage, resolved.model);
         signal.throwIfAborted();
         lastInput = turn.usage?.input ?? lastInput;
@@ -369,19 +385,20 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
           else if (!result.isError) succeeded++;
           if (/^(?:shell|bash)$/i.test(call.name) && result.disposition !== 'denied') ran.push((JSON.parse(call.arguments) as {command?: string}).command + (result.isError ? ' (failed)' : ' (passed)'));
           const text = await maybePersistLargeOutput(result.text, options.cwd, scoped.id, options.sessionId, undefined, TOOL_OUTPUT_LIMIT, {tool: call.name, arguments: call.arguments});
-          messages.push({role: 'tool', name: call.name, callId: call.id, text, isError: Boolean(result.isError)});
+          messages.push({role: 'tool', name: call.name, callId: call.id, text, isError: Boolean(result.isError), ...(result.images?.length ? {images: [...result.images]} : {})});
           await journal(index, 'tool', {call, isError: Boolean(result.isError), disposition: result.disposition, text});
         }
       }
       stopTracking();
       if (!finalText) {
         if (kept) options.forget(kept.id);
-        await finish(index, 'failed', started, [['verdict', 'The worker returned no report.'], ['changed', changeLine(written, options.root)], ['denied', refused.join(', ')]]);
+        await finish(index, 'failed', started, [['verdict', 'The worker returned no report.'], ['changed', changeLine(written, options.root)], ['denied', refused.join(', ')], ['model', modelName]]);
         return;
       }
       const capped = capReport(parseReport(finalText)), report = capped.report, notes: string[] = [];
       if (truncated) notes.push('The report was cut off at the output limit.');
       if (capped.cut) notes.push(`Report trimmed to the ${REPORT_WORD_LIMIT}-word limit.`);
+      if (imagesOmitted) notes.push(imagesOmittedNote(resolved.model));
       const allDenied = refused.length > 0 && succeeded === 0 && written.size === 0;
       const wantsKeep = kept ? planned.job.keep !== false : planned.job.keep === true;
       let keptLine = '';
@@ -395,13 +412,13 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       }
       await finish(index, allDenied ? 'denied' : 'done', started, [
         ['verdict', report.verdict], ['evidence', report.evidence], ['not verified', [report.notVerified, ...notes].filter(Boolean).join('\n')],
-        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')], ['kept', keptLine]]);
+        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')], ['kept', keptLine], ['model', modelName]]);
     } catch (error) {
       stopTracking();
       if (kept) options.forget(kept.id);
       await finish(index, signal.aborted ? 'cancelled' : 'failed', started, [
         ...(signal.aborted ? [] : [['verdict', error instanceof Error ? error.message : String(error)] as const]),
-        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')]]);
+        ['changed', changeLine(written, options.root)], ['ran', ranLine(ran)], ['denied', refused.join(', ')], ['model', modelName]]);
     }
   };
 

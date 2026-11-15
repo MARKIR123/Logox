@@ -44,6 +44,16 @@
 
 把 `provider/model-id` 换成目录中的实际名称。只写模型简称时，可能按缓存匹配到别的提供商；要明确服务，请使用完整形式。
 
+### 模型档位与视觉标记
+
+每个模型有两个标记，只用来帮你筛选和挑选模型：**档位** `T1`–`T4`（`light`、`standard`、`strong`、`frontier`，参照 Haiku、Sonnet、Opus、Fable）和 **视觉** `◉`（能看图）。**Logox 从不按任务难度自动切换模型**：谁用哪个模型始终是你指定的，标记不参与路由。唯一的自动切换是看图：带 `vision: true` 的 Automa 作业遇到不能看图的工人模型时，改用视觉后备模型（见下）。
+
+- **默认值**：已知系列按名字对应（`haiku` → T1，`sonnet` → T2，`opus` → T3，`fable`、`mythos` → T4，不分大小写，匹配模型 id 或目录里的名称）。其他模型在同一服务商内按输入价格排成四分位（最便宜 T1，最贵 T4）；服务商里有价格的模型少于四个时按绝对价格：低于 $0.8 为 T1，低于 $2.5 为 T2，低于 $8 为 T3，其余 T4。没有价格也不属于已知系列的模型是 T2。模型表的输入类型含 `image` 的算能看图；模型表里查不到的模型当作能看图。
+- **显示**：`/model`（会话、`/model <角色>`、`/model automa`、`/model anamnesis`）的每个模型行末尾显示 `T2 ◉`，`/models`、`/providers` 页和设置里的 Models & pricing 也带同样的标记。灰色是默认值，正常颜色是你改过的；你把视觉标记关掉的模型显示 `○`。
+- **筛选**：列表顶部一行 `All · T1 · T2 · T3 · T4 · ◉ Vision`，单击即选；键盘用 `[` / `]` 前后切换（`Tab` 已用于切换提供商）。切换筛选时，仍然可见的当前选中项保持不变。
+- **修改**：选中模型行后按 `1`–`4` 设定档位，`v` 切换视觉，`0` 清除你的改动、回到默认值；单击行尾的 `T…` 在 T1–T4 间循环，单击视觉位切换视觉。修改立即保存到 `~/.logox/model-tiers.json`（`{"version": 1, "models": {"provider/model": {"tier": 3, "vision": false}}}`）并刷新，你的值优先于默认值；文件损坏时只读默认值，且不会被覆盖。搜索框里已有文字时，这些单键属于输入；此时用 `Alt+1`–`Alt+4`、`Alt+v`、`Alt+0`。
+- **图片兜底**：请求要把图片交给一个视觉标记为否的模型时，图片换成一行 `[Image omitted: <model> cannot see images.]` 和下一步提示（工人：让派遣者带 `vision: true` 重派；角色：请用户为该角色换一个能看图的模型）。工人的回执 `Not verified` 里会多一行 `Images were omitted: <model> cannot see images.`。
+
 两个检查手段的区别：
 
 - `/check-provider` 会发送一次真实请求，可能计费。
@@ -275,6 +285,8 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 - **保留工人**：默认用完即弃。后续步骤依赖工人已读取的材料时（例如反复修改并跑测试直到通过），在作业上写 `keep: true`，回执的 `kept:` 行会给出运行时生成的 id，之后用 `continue: "<id>"` 加下一步的 brief 续跑。工人随派遣者的任务结束而结束，也可以用 `release: ["<id>"]` 提前结束。只有运行时返回的、属于本派遣者的有效 id 才生效；其余的 id 会被忽略，回执里附一条说明，作业按全新的单次作业运行，不报错。保留的工人沿用创建时的 `writes`，每个角色最多 2 个（超出的作业照常运行但不保留，并有说明）；作业失败或取消、进程重启、上下文达到 64000 输入 token 时也会自动结束。
 - **工人风格**：角色 `config.yaml` 的 `automa` 块定义风格（`styles`），例如 Techne 的 `scout`/`edit`、Aletheia 的 `scout`/`probe`、Kalon 的 `scout`/`variant`。风格只决定工人系统提示的口吻（`flavor`）、模型（`model`）和并发（`parallel`），不授予任何权限。运行时自动选择：默认用 `default_style`，作业带 `writes` 时用 `write_style`（如有）；模型也可以用 `style` 指名一个，但从不必须。`exclusive` 列出的命令前缀（如 `npm test`）在同一派遣的各作业之间一次只跑一个。旧的 `default_preset` / `presets` 写法仍可读取（权限字段被丢弃）。已安装到 `~/.logox/actors/` 的旧配置需要运行 `npm run sync:profiles`。
 - **模型**：优先级为 `/model automa` > 风格 `model` > 角色 `automa.model` > 会话模型。用 `/model automa` 选定后，所有角色的工人都用它；`/model automa inherit` 取消选择，回到风格。风格里的名称可以是 `provider/model`、完整模型 id，或当前服务商下的模型族（如 `haiku`）；当前账户没有该模型时自动使用下一级。
+- **`/model automa` 页**：两行。**Worker model** 是工人固定使用的模型，显示 `provider / model · T2 ◉`，未绑定时显示 `Follows Logox (<provider> / <model>)`；回车打开模型选择器，未绑定时选择器的第一个模型行是推荐项（会话服务商里最便宜、能调用工具的 T2 模型，行尾标 `· recommended`），只有你确认选择后才生效。**Vision fallback** 是视觉后备模型，存在 `automa-vision` 下，选择器只列能看图的模型外加 `None`；工人模型不能看图而又没有后备时，这一行以警告色显示 `None · vision jobs will fail`。`/model automa <model> [effort]` 和 `/model automa inherit` 照旧。
+- **`vision: true`**：作业必须看图（截图、设计稿、图片文件）时在作业上写 `vision: true`。工人模型能看图就用它，否则改用视觉后备；两者都不能看图时只拒绝这一个作业，信息为 `Job "<title>" needs a model that can see images. Choose a vision fallback under /model automa.`，同一次派遣的其他作业照常运行。派工书没有“档位”字段：派遣者不能按任务换模型，只能标 `vision`。回执末尾附 `model: <provider>/<model>`，记下该作业实际使用的模型。
 - **并发**：单次派遣默认 4 个（风格的 `parallel` 可覆盖），可在 `[automa] max_parallel` 调整，派遣时也可以指定，上限 8。同一服务地址的请求共用一个闸门，遇到限流会自动降速。
 - **记录**：完整过程写入 `state/sessions/<sessionId>/subagents/automa.jsonl`，费用计入派遣者，在其 `/usage` 中显示为 `automa` 类别。写入有快照，可用 `/undo` 回退。进程重启时未完成的作业标记为 `interrupted`，不会自动重放。
 

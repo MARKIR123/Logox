@@ -127,11 +127,17 @@ test('direct and picker model/effort changes update real status and actor/tool b
   assert.deepEqual(f.app.tools.modelStorage.get('automa'), {provider: 'receipt', model: 'second'});
   await f.app.submit('/model automa');
   picker = await readyPicker(f);
+  assert.equal(picker.title, 'Automa');
+  await f.app.surfaces.choose(picker.id, 'worker');
+  picker = await readyPicker(f);
   const automaChoice = picker.items.find(item => item.label === 'first' && item.group === 'receipt');
   assert.ok(automaChoice);
   await f.app.surfaces.choose(picker.id, automaChoice.id);
   assert.deepEqual(f.app.tools.modelStorage.get('automa'), {provider: 'receipt', model: 'first'});
+  await f.app.surfaces.cancel();
   await f.app.submit('/model automa');
+  picker = await readyPicker(f);
+  await f.app.surfaces.choose(picker.id, 'worker');
   picker = await readyPicker(f);
   await f.app.surfaces.choose(picker.id, 'inherit');
   assert.equal(f.app.tools.modelStorage.get('automa'), undefined);
@@ -214,7 +220,7 @@ test('long command queries open matching read-only result surfaces and cancellat
   const panelIds: string[] = [];
   for (const [command, title, expected] of [
     ['/skills', 'Skills', /skill|No skills/i],
-    ['/models', 'Available models', /first\nsecond/],
+    ['/models', 'Available models', /first +T\d.*\nsecond +T\d/],
     ['/help', 'Help & Commands', /\/help/],
     ['/commands', 'Help & Commands', /\/model/],
     ['/check-provider', 'Provider check', /LOGOX_PROVIDER_READY/],

@@ -11,6 +11,7 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - Workers read whatever you can read and run commands. Every call is judged by your permission rules in your current mode and can never exceed them; what a job could not do is listed under Not verified.
 - \`changed\` in the receipt is measured from real writes (not files changed by shell commands): review it before accepting.
 - \`keep: true\` keeps a worker's context for a follow-up (\`continue: "<id from the receipt>"\`; at most two, ended by \`release\` or your task).
+- \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 
 Unknown fields are ignored with a note; a refused call states its exact fix.`;
 

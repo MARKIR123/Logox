@@ -34,6 +34,7 @@ import {storedMessage, type Journal} from '../store/journal.js';
 import {markInterruptedJobs} from '../tools/orchestration/AutomaTool/AutomaTool.js';
 import {chooseAutomaModel} from '../tools/orchestration/AutomaTool/preset.js';
 import type {ToolRegistry} from '../tools/registry.js';
+import {AUTOMA_MODEL_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
 import type {Tools} from '../tools/tools.js';
 import type {SessionState} from './state.js';
 
@@ -58,12 +59,18 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
   const environment = new EnvironmentState();
   const automaJournal = (sessionId: string) => join(stateDir, 'sessions', sessionId, 'subagents', 'automa.jsonl');
   void markInterruptedJobs(automaJournal(session));
+  // A gateway that mirrors another vendor's catalog (`[catalogs.<provider>]`) gets that catalog's tier and vision defaults.
+  for (const store of new Set([tools.marks, modelPool.marks])) store.configure({catalogs: config.catalogs});
   tools.setAutomaEnvironment({
-    resolveModel: preferred => {
+    resolveModel: (preferred, vision) => {
       const session = registry.selection();
-      const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get('automa'), preferred, session, pool: modelPool.snapshot(),
+      const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get(AUTOMA_MODEL_KEY), preferred, session, pool: modelPool.snapshot(),
         expand: name => modelPool.resolveShorthand(name, session.provider)});
-      return {provider: registry.candidate(chosen.provider, chosen.model, chosen.effort).provider(), model: chosen.provider + '/' + chosen.model};
+      // The one automatic switch: a job that must look at images leaves a worker model that cannot see them for the vision fallback (when it can).
+      const fallback = vision && !tools.marks.vision(chosen.provider, chosen.model) ? tools.modelStorage.get(AUTOMA_VISION_KEY) : undefined;
+      const used = fallback && tools.marks.vision(fallback.provider, fallback.model) ? fallback : chosen;
+      return {provider: registry.candidate(used.provider, used.model, used.effort).provider(), model: used.provider + '/' + used.model,
+        vision: tools.marks.vision(used.provider, used.model)};
     },
     profile: ownerId => actors.find(ownerId)?.automa,
     actorName: ownerId => actors.find(ownerId)?.name,
