@@ -6,28 +6,29 @@ import {tmpdir} from 'node:os';
 import {applyThemePreset, cursorEscapes, applyCursorStyle, DEFAULT_THEME, listThemes, loadThemePresets, resolveTheme, themeIssues} from '../src/config/theme-presets.js';
 import {applyTheme, defaultPalette, palette, resolveThemeColors, themeColorKeys} from '../src/config/theme-palette.js';
 
-// Captured from the old logox-dark root plus the complete mist-dark overlay before migration.
+// Captured from the old logox-dark root plus the complete mist-dark overlay before migration; `muted`, `borderMuted` and `link` were
+// later raised/shifted to pass the legibility check and the retired dream card keys were dropped.
 // This is a fixed appearance/alias contract, not an expectation derived from current shipped data.
 const mergedDefinitions = {
-  bg: '#1C2330', surface: '#242B3A', fg: '#E8E6E0', muted: '#8D95A6', strong: '#ffffff',
+  bg: '#1C2330', surface: '#242B3A', fg: '#E8E6E0', muted: '#969EB0', strong: '#ffffff',
   accent: '#7DA1DE', system: '$muted', user: '#D77757', line: '#333B4A',
   success: '#7ee7c4', warning: '#e5b567', error: '#DA8A93', selectionBg: '#3B4A66', selectionFg: '$fg',
   composerFg: '$fg', composerBorder: '$borderMuted',
   toolExpanded: '$surface', cardBase: '#242B3A', cardCollapsed: '#242B3A', cardExpanded: '#2C3548',
-  dreamCollapsed: '#C9D3E4', dreamExpanded: '#E4EAF5', anamnesis: '#C9D7F2', dreamText: '#22262E', dreamMuted: '#55606F',
-  borderMuted: '#3E4758', question: '#B3A0D4', diffAdded: '#82B89D', diffAddedBg: '#27392C', diffAddedGutter: '#57956B',
+  anamnesis: '#C9D7F2',
+  borderMuted: '#636F83', question: '#B3A0D4', diffAdded: '#82B89D', diffAddedBg: '#27392C', diffAddedGutter: '#57956B',
   diffRemoved: '#DA8A93', diffRemovedBg: '#3E2A2C', diffRemovedGutter: '#B26671', diffContext: '#7A8694',
   checkedFg: '$strong', panelSeparator: '#555555', panelLabel: '#888888', actorPillBg: '#3e4450', actorPillFg: '$strong',
   effortOff: '#8b949e', effortLow: '#7ee7c4', effortMedium: '#5282b5', effortHigh: '#d97757', effortMax: '#e8a8dc', effortAuto: '#e5b567',
   permissionDefault: '#a8adb5', permissionAuto: '#70b7ff', permissionCreative: '#d49aff', directorIntervention: '#d97757',
   automa: '#8a95a0', oauthBg: '#18181b', oauthFg: '#f4f4f5', oauthSuccess: '$success',
-  path: '#A9BFE6', highlight: '#F0D58C', link: '#8FB4F0', syntaxKeyword: '#B3A0D4', syntaxString: '#A9C99A', syntaxNumber: '#E0BE7E',
+  path: '#A9BFE6', highlight: '#F0D58C', link: '#7DC4D8', syntaxKeyword: '#B3A0D4', syntaxString: '#A9C99A', syntaxNumber: '#E0BE7E',
 };
 const mergedPalette = {
   ...mergedDefinitions,
-  system: '#8D95A6', selectionFg: '#E8E6E0', toolExpanded: '#242B3A', checkedFg: '#ffffff',
+  system: '#969EB0', selectionFg: '#E8E6E0', toolExpanded: '#242B3A', checkedFg: '#ffffff',
   actorPillFg: '#ffffff', oauthSuccess: '#7ee7c4',
-  composerFg: '#E8E6E0', composerBorder: '#3E4758',
+  composerFg: '#E8E6E0', composerBorder: '#636F83',
 };
 const builtinNames = ['logox-dark', 'abyss-lantern', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'copper-ink', 'marginalia', 'monokai-pro', 'nord-polar', 'tokyo-night'];
 const legacyNames = ['mist-dark', 'Mist Dark', 'mist_dark'];
@@ -74,7 +75,7 @@ test('all ten shipped themes load with logox-dark first and valid colors', () =>
 test('merged logox-dark preserves old mist colors and adds composer aliases without a root base', () => withThemeHome(() => {
   const data = JSON.parse(readFileSync(new URL('../src/config/themes/logox-dark.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(data), ['colors']);
-  assert.equal(Object.keys(mergedDefinitions).length, 59);
+  assert.equal(Object.keys(mergedDefinitions).length, 55);
   assert.deepEqual(Object.keys(mergedDefinitions).sort(), [...themeColorKeys].sort());
   assert.deepEqual(data.colors, mergedDefinitions);
   assert.deepEqual(defaultPalette, mergedPalette);
@@ -109,7 +110,7 @@ test('legacy base aliases inherit the merged default and resolve color reference
   assert.deepEqual(themeIssues(), []);
   assert.equal(themes.some(theme => theme.name === 'mist-dark'), false);
   for (const index of legacyNames.keys()) {
-    assert.deepEqual(applyThemePreset('legacy-child-' + index), {...mergedPalette, fg: '#102030', selectionFg: '#102030', composerFg: '#102030', panelLabel: '#8D95A6'});
+    assert.deepEqual(applyThemePreset('legacy-child-' + index), {...mergedPalette, fg: '#102030', selectionFg: '#102030', composerFg: '#102030', panelLabel: '#969EB0'});
   }
 }));
 
@@ -164,6 +165,21 @@ test('broken user theme files are skipped instead of aborting startup', () => wi
   assert.ok(!themes.some(theme => theme.name === 'broken'));
   assert.ok(!themes.some(theme => theme.name === 'bad-color'));
   assert.ok(themeIssues().length >= 2);
+}));
+
+test('the retired dream card keys in a user theme are accepted and ignored: no issue, never resolved, never written back', () => withThemeHome(home => {
+  const dir = userThemeDir(home), path = join(dir, 'old-dream.json');
+  const text = JSON.stringify({base: 'logox-dark', colors: {accent: '#123456', dreamCollapsed: '#C9D3E4', dreamExpanded: '#E4EAF5', dreamText: '#22262E', dreamMuted: '#55606F', dream_collapsed: '#101010', dream_expanded: '#202020'}});
+  writeFileSync(path, text);
+  const themes = loadThemePresets(home);
+  assert.deepEqual(themeIssues(), []);
+  const theme = themes.find(item => item.name === 'old-dream')!;
+  assert.deepEqual(theme.colors, {accent: '#123456'}, 'the retired keys are dropped on load');
+  const resolved = applyThemePreset('old-dream');
+  assert.equal(resolved.accent, '#123456');
+  for (const key of ['dreamCollapsed', 'dreamExpanded', 'dreamText', 'dreamMuted']) assert.ok(!(key in resolved), key);
+  assert.equal(readFileSync(path, 'utf8'), text, 'the file is left untouched');
+  assert.ok(!themeColorKeys.some(key => /^dream/.test(key)), 'no dream token remains in the semantic contract');
 }));
 
 test('cursorEscapes provides correct ANSI DECSCUSR sequences', () => {

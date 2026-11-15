@@ -48,7 +48,6 @@ export function loadUiPreferences(homeDir: string, config: Config | undefined): 
   const stockTheme = themeSchema.parse({});
   const themeCustomizedInToml = config?.theme
     ? config.theme.user !== stockTheme.user || config.theme.accent !== stockTheme.accent
-      || config.theme.dream_collapsed !== stockTheme.dream_collapsed || config.theme.dream_expanded !== stockTheme.dream_expanded
     : false;
   void ui.load().then(saved => {
     if (ui.saved) {

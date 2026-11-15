@@ -7,7 +7,7 @@ import {ownerColor, ownerHeader, type ActorStyles} from '../appearance/actor-sty
 import {approvalHint, approvalModel, noteSegments, optionLabelWidth, optionSegments, riskSegments, targetSegments} from '../interactions/approval-view.js';
 import {palette} from '../appearance/theme.js';
 import {cast} from '../../actors/ensemble.js';
-import {compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment, type TurnActivity} from './scene.js';
+import {appendAnamnesisCard, compactParagraphs, createBuilder, insetFrame, type FrameWrap, type RowBuilder, type SceneAction, type SceneRow, type SceneSegment, type TurnActivity} from './scene.js';
 import {CANCELLABLE_TOOLS, expanderId, pushExpander, TOOL_BODY_LINES} from './tool-card.js';
 import {faintColor, windowAccent} from '../appearance/colors.js';
 import wrapAnsi from 'wrap-ansi';
@@ -546,9 +546,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (isDirector(view) || item.ownerId === view))) {
     if (activity.kind === 'anamnesis') {
       builder.pushBlank();
-      builder.pushOrdinaryCard({id: activity.activityId, kind: 'Anamnesis', title: activity.stage,
-        status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail], ownerId: 'anamnesis',
-        open: open(activity.activityId), railColor: palette.accent});
+      appendAnamnesisCard(builder, {id: activity.activityId, title: activity.stage,
+        status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail],
+        open: open(activity.activityId), railColor: viewColor});
     } else if (!grouped.has(activity.activityId) && activity.ownerId === view) {
       failure(activity.activityId);
     }

@@ -166,11 +166,15 @@ test('悬停统一逻辑：默认次要色、悬停主题色、移出恢复，Ac
     }
   }
   const memory = buildDemoSceneRows({...initialDemoSceneState, style: '克制', folds: {'main-memory': true}}, 99);
-  assert.equal(memory.find(r => r.messageId === 'main-memory')!.bg, '#E4EAF5');
-  assert.equal(memory.find(r => r.messageId === 'main-memory-body-0')!.color, palette.dreamText);
-  assert.equal(memory.find(r => r.messageId === 'main-memory')!.segments!.find(s => s.text.includes('Anamnesis'))!.color, palette.dreamText);
-  assert.equal(palette.dreamCollapsed, '#C9D3E4');
-  assert.equal(palette.dreamExpanded, '#E4EAF5');
+  // Anamnesis is an ordinary actor card: the actor's own tint when open, its colour on the name, normal text on the body.
+  const memoryHead = memory.find(r => r.messageId === 'main-memory')!;
+  assert.equal(memoryHead.bg, expandedTint(palette.anamnesis));
+  assert.equal(memoryHead.segments!.find(s => s.text.includes('Anamnesis'))!.color, palette.anamnesis);
+  assert.equal(memoryHead.action?.kind, 'toggle_fold', 'Anamnesis has no window to switch to, so the card only folds');
+  const memoryRows = memory.filter(r => r.messageId.startsWith('main-memory'));
+  assert.ok(memoryRows.some(r => r.messageId === 'main-memory-body-0' && (!r.color || r.color === palette.fg)), 'body text keeps the default foreground');
+  assert.ok(memoryRows.every(r => !r.segments?.some(s => s.color === '#22262E' || s.bg === '#E4EAF5')), 'no light dream card colours');
+  assert.equal(memoryHead.segments!.find(s => s.text.includes('Pending review'))!.color, palette.warning, 'Pending review reads as a warning');
   assert.equal(hoveredCardAt(base.find(r => r.messageId === 'main-techne'), 4), null);
   assert.deepEqual(parseSgrMouse('\x1b[<35;8;12M\x1b[<32;9;13M').map(e => e.action), ['move', 'drag']);
 });

@@ -3,7 +3,7 @@ import {homedir} from 'node:os';
 import {basename, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
-import {applyTheme, isThemeColorKey, canonicalColorKey, resolveThemeColors, themeColorValueSchema, type ThemeOverrides, type ThemePalette} from './theme-palette.js';
+import {applyTheme, isRetiredThemeKey, isThemeColorKey, resolveThemeColors, themeColorValueSchema, type ThemeOverrides, type ThemePalette} from './theme-palette.js';
 
 /**
  * Theme palettes are data, not code: shipped JSON lives in `src/config/themes/`
@@ -56,11 +56,12 @@ function readDirectory(dir: string, strict: boolean): Map<string, ThemeFile> {
       const parsed = themeFileSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
       const colors: Record<string, string> = {};
       for (const [key, value] of Object.entries(parsed.colors)) {
+        if (isRetiredThemeKey(key)) continue; // the old light dream card: accepted, ignored, never reported
         if (!isThemeColorKey(key)) {
           issues.push({file: path, message: 'unknown color key: ' + key});
           continue;
         }
-        colors[canonicalColorKey(key)] = value;
+        colors[key] = value;
       }
       themes.set(name, {name, ...(parsed.base ? {base: parsed.base} : {}), colors, source: strict ? 'shipped' : 'user'});
     } catch (error) {

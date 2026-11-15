@@ -14,6 +14,7 @@ import {
   type RowBuilder,
   createBuilder,
   appendActorCard,
+  appendAnamnesisCard,
   insetFrame,
 } from '../tui/timeline/scene.js';
 
@@ -324,11 +325,9 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
   });
 
   if (state.style) {
-    builder.pushOrdinaryCard({
+    appendAnamnesisCard(builder, {
       id: 'main-memory',
-      ownerId: 'anamnesis',
-      kind: 'Anamnesis',
-      title: 'Anamnesis · Preference candidate',
+      title: 'Preference candidate',
       bodyLines: [`This round's preference is "${state.style}". Based on this round's answer; not yet written to long-term memory.`],
       status: 'Pending review',
       open: isFoldOpen(state, 'main-memory', false),
@@ -371,7 +370,7 @@ export function buildDemoSceneRows(state: DemoSceneState, width: number, hovered
   }
 
   for (const activity of state.runtime?.background ?? []) {
-    builder.pushOrdinaryCard({id: activity.id, ownerId: 'anamnesis', kind: 'Anamnesis', title: activity.title,
+    appendAnamnesisCard(builder, {id: activity.id, title: activity.title,
       bodyLines: [activity.stage, activity.detail].filter(Boolean), status: activity.status,
       open: isFoldOpen(state, activity.id, false), railColor: logoxRail});
     builder.pushBlank();

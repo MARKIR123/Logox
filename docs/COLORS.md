@@ -20,6 +20,17 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 内置主题有 `logox-dark`（默认，完整基准）、`abyss-lantern`、`catppuccin-mocha`、`celadon-pine`、`claude-warm`、`copper-ink`、`marginalia`、`monokai-pro`、`nord-polar`、`tokyo-night`。除默认主题外都通过 `base` 继承 `logox-dark`，只写差异；别名在继承与覆盖合并之后解析，所以继承来的 `$muted`、`$fg` 会自动跟随子主题改过的颜色。`abyss-lantern` 是深海灯笼配色：墨绿黑打底、生物荧光青绿标记焦点、灯笼橙留给用户；`catppuccin-mocha` 采用 Catppuccin Mocha 暗调粉彩（深紫灰底、锦葵紫焦点、蜜桃橙用户轨）；`celadon-pine` 以松烟墨绿打底，青瓷釉色标记焦点，柿木暖橙用于用户轨；`copper-ink` 以暖石墨色打底，琥珀铜色标记焦点，青蓝色用于链接。
 
+`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 是四套各自带完整底色家族的系统主题（不再沿用 `logox-dark` 的石板蓝），连同 `logox-dark` 与 `marginalia` 都通过可读性检查（没有低于阈值的项，也没有易混淆的语义色对）。配色取自各自的公开调色板，对比度或色相不够处按“可读性优先于还原度”调整：
+
+| 主题 | 底色与文字 | 语义色 | 相对公开调色板的调整 |
+|---|---|---|---|
+| `nord-polar` | `bg #2E3440`，`surface #353B49`，卡片 `#3B4252`，`fg #D8DEE9`，`muted #A5B0C4` | 焦点 Frost `#88C0D0`，用户 Aurora 橙 `#D08770`，成功 `#A3BE8C`，警告 `#EBCB8B`，提问 `#B48EAD` | 错误色由 `#BF616A` 偏向粉红 `#C9677A`（与用户橙拉开色相）；链接取更蓝的 `#84A4D8`（Frost 蓝 `#81A1C1` 与焦点色相差仅 17 度）；`muted` 比 Polar Night `#4C566A` 亮得多才能在卡片上达标；`surface` 是 `bg` 与 `#3B4252` 之间的派生色 |
+| `tokyo-night` | `bg #1A1B26`，`surface #24283B`，卡片 `#2F3549`，`fg #C0CAF5`，`muted #9AA5CE` | 焦点 `#7AA2F7`，用户 `#FF9E64`，成功 `#9ECE6A`，警告 `#EBD07A`，错误 `#F7768E`，提问 `#BB9AF7`，链接 `#2AC3DE` | 警告色由 `#E0AF68` 偏向柠檬黄（否则与橙色用户色相差 13 度）；链接用 `#2AC3DE`（原 `#7DCFFF` 与焦点色相差 19 度）；边线取注释色 `#565F89` 的提亮版 `#626D9E` |
+| `monokai-pro` | `bg #2D2A2E`，`surface #373538`，卡片 `#403E41`，`fg #FCFCFA`，`muted #AEACAD` | 焦点青 `#78DCE8`，用户橙 `#FC9867`，成功 `#A9DC76`，警告 `#FFD866`，错误 `#FF6188`，提问 `#AB9DF2` | 链接用调色板里没有的蓝 `#6FB2EE`（青色已给焦点）；灰 `#939293` 提亮到 `#AEACAD` 才能在 `#403E41` 卡片上达标，边线用 `#7C7A7C` |
+| `claude-warm` | `bg #262624`（几乎中性的炭灰），`surface #2F2E2B`，卡片 `#3A3935`，`fg #EFEDE4`（奶油），`muted #A9A598` | 焦点赤陶 `#D97757`，用户鼠尾草绿 `#A8B98A`，成功 `#7FCBA8`，警告 `#E3B65C`，错误 `#DB6C85`，提问 `#B8A4D8`，链接 `#7DB4C8` | 用户色原先与警告色相同，改为鼠尾草绿；与 `copper-ink`（更暗的暖棕底、琥珀焦点、玫瑰用户色）和 `marginalia`（冷石墨底、朱红焦点、青金石用户色）的区别在于：底色更亮且几乎中性、焦点是偏红的赤陶、次要色相是绿与青而不是粉与蓝 |
+
+`logox-dark` 为通过检查只做了最小调整：`muted` 由 `#8D95A6` 提到 `#969EB0`（卡片上达标），`borderMuted` 由 `#3E4758` 提到 `#636F83`，`link` 由 `#8FB4F0` 移向青色 `#7DC4D8`（原先与焦点色相差 1 度）。
+
 默认主题 `logox-dark` 已合并原 `mist-dark` 的配色：Logox 的角色身份色为雾蓝 `#7DA1DE`，用户身份色为 Claude 橙 `#D77757`。角色色由角色 YAML 持有，系统 `accent` 恰好同为雾蓝，但两者互不控制。旧选择名 `mist-dark`（含 `Mist Dark`、`mist_dark`）及旧 `base` 仍可解析到 `logox-dark`；如果用户有同名主题文件，优先使用用户文件。
 
 ## 新建一套主题
@@ -50,7 +61,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 `/theme` 页面左边是主题列表，右边是样例，样例下面是可读性检查（详细操作见[用户手册](USAGE.md)“主题页”）。预览不写文件：移动高亮时只是把该主题应用到当前调色板，页面按打开时的调色板快照在任何关闭路径上还原；Enter 或点击才经偏好文件保存。
 
-样例使用真实的时间线构建器（用户消息、Logox 发言头与回复、运行中的角色卡片及其子标题和计时、折叠的工具行、展开的工具卡片与 Edit 差异、搜索高亮、路径、链接、梦境卡片）；状态符号、思考档位与权限模式色字、选区、`cardExpanded` 上的提问卡（弱化文字和 `question` 色）以及输入框用同一批调色板字段直接绘制。样例画在该主题的 `bg` 上。
+样例使用真实的时间线构建器（用户消息、Logox 发言头与回复、运行中的角色卡片及其子标题和计时、折叠的工具行、展开的工具卡片与 Edit 差异、搜索高亮、路径、链接、展开的 Anamnesis 角色卡片）；状态符号、思考档位与权限模式色字、选区、`cardExpanded` 上的提问卡（弱化文字和 `question` 色）以及输入框用同一批调色板字段直接绘制。样例画在该主题的 `bg` 上。
 
 可读性检查把页面实际使用的颜色配对算 WCAG 对比度（相对亮度比，1 到 21）：
 
@@ -58,7 +69,6 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 |---|---|---|
 | `text` / `muted` | `fg` / `muted` 对 `bg` | 4.5 |
 | `text on card` / `muted on card` | `fg` / `muted` 对 `cardExpanded` | 4.5 |
-| `dream text` / `dream muted` | `dreamText` / `dreamMuted` 对 `dreamCollapsed` | 4.5 |
 | `selection` | `selectionFg` 对 `selectionBg` | 4.5 |
 | `diff +` / `diff −` | 新增/删除文字对各自底色 | 3.0 |
 | `border` | `borderMuted` 对 `bg` | 3.0 |
@@ -69,18 +79,18 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 | 主题 | 低于阈值的项 | 易混淆的色对 |
 |---|---|---|
-| `logox-dark` | `muted on card` 4.08，`dream muted` 4.23，`border` 1.68 | `accent ≈ link` |
+| `logox-dark` | 无 | 无 |
 | `abyss-lantern` | `border` 1.81 | `user ≈ warning` |
-| `catppuccin-mocha` | `muted on card` 3.23，`dream muted` 3.77，`border` 2.45 | `user ≈ warning` |
-| `celadon-pine` | `dream muted` 4.38，`border` 2.17 | `user ≈ warning` |
-| `claude-warm` | `muted on card` 4.08，`border` 1.68 | `user ≈ warning` |
+| `catppuccin-mocha` | `muted on card` 3.23，`border` 2.45 | `user ≈ warning` |
+| `celadon-pine` | `border` 2.17 | `user ≈ warning` |
+| `claude-warm` | 无 | 无 |
 | `copper-ink` | `border` 2.70 | `accent ≈ warning` |
-| `marginalia` | `border` 2.15 | 无 |
-| `monokai-pro` | `muted on card` 4.08，`dream text` 3.08，`dream muted` 1.30，`border` 1.68 | `accent ≈ warning` |
-| `nord-polar` | `muted on card` 4.08，`border` 1.68 | `accent ≈ user`，`user ≈ link` |
-| `tokyo-night` | `muted on card` 4.08，`dream text` 2.45，`dream muted` 1.03，`border` 1.68 | `accent ≈ error`，`user ≈ link` |
+| `marginalia` | 无 | 无 |
+| `monokai-pro` | 无 | 无 |
+| `nord-polar` | 无 | 无 |
+| `tokyo-night` | 无 | 无 |
 
-这是提示，不是错误：边线本来就是弱化的装饰，梦境卡片的浅色底在深色主题里常常需要单独调字色。
+`logox-dark`、`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 与 `marginalia` 由 `tests/theme-legibility.test.ts` 守住（零项低于阈值、零个易混淆色对）；其余四套内置主题尚未调整，表中数字仅是现状。这是提示，不是错误：边线本来就是弱化的装饰。旧的梦境卡片浅色底及其 `dream text` / `dream muted` 两项检查已随该卡片一起取消。
 
 颜色值写 `#RRGGBB` 或 `$token`（引用另一个字段）。引用在所有继承与覆盖合并之后才解析，所以子主题改了 `fg`，继承来的 `selectionFg: "$fg"` 也会跟着变；显式写的十六进制值是独立的。
 
@@ -114,7 +124,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 |---|---|
 | 输入编辑区 | `composerFg` 控制文字，`composerBorder` 控制全屏编辑器的边框。终端提供背景，选区单独填色。 |
 | 系统卡片 | `toolExpanded`、`cardBase`、`cardCollapsed`、`cardExpanded` |
-| Anamnesis | `anamnesis`、`dreamCollapsed`、`dreamExpanded`、`dreamText`、`dreamMuted` |
+| Anamnesis | `anamnesis`：Anamnesis 的角色身份色，卡片与其他角色卡片一样用它作轨道、名称和展开底色来源（不再有独立的浅色卡片） |
 | 其他结构 | `borderMuted`、`panelSeparator`、`panelLabel` |
 | 交互与提问 | `checkedFg`、`question` |
 | 角色标签缺省 | `actorPillBg`、`actorPillFg` |
@@ -157,7 +167,7 @@ card_open: "#2E3850"
 
 ## 兼容与开发约束
 
-- 主题键共 59 个；旧写法 `dream_collapsed`、`dream_expanded` 仍被接受。
+- 主题键共 55 个。旧的 `dreamCollapsed`、`dreamExpanded`、`dreamText`、`dreamMuted`（主题文件）和 `dream_collapsed`、`dream_expanded`（TOML `[theme]`）已退役：旧主题文件和旧配置里仍可带着它们，加载时被接受并忽略，不报错也不会被写回。
 - TOML `[theme]` 的四色兼容入口保留，默认值取自同一份基准数据；它不是覆盖当前已选预设的通用叠加层。
 - 主题解析集中在 `src/config/theme-palette.ts`，TUI 通过 `src/tui/appearance/theme.ts` 读取同一调色板；角色身份与卡片底色读取位于 `src/tui/appearance/actor-style.ts`。完整系统字段以 `themeColorKeys` 为准。
 - 新增颜色先添加语义字段和基准 JSON，再由界面读取；业务 TS/TSX 不直接写十六进制、固定 RGB、命名颜色或固定彩色 SGR。

@@ -7,7 +7,7 @@ import {clipSegments} from './tool-card.js';
 import {palette} from '../appearance/theme.js';
 import {clipLine, safeText} from '../terminal/text.js';
 import {userLabel} from '../../config/user-profile.js';
-import {ownerColor, ownerHeader, ownerSurface, type ActorStyle, type ActorStyles} from '../appearance/actor-style.js';
+import {ownerColor, ownerHeader, ownerStyle, type ActorStyle, type ActorStyles} from '../appearance/actor-style.js';
 import {cast} from '../../actors/ensemble.js';
 import {type Row} from './viewport.js';
 import type {ContentCell} from './selection.js';
@@ -96,7 +96,7 @@ export function compactParagraphs(text: string): string {
 
 function statusColor(status: string, actorColor = palette.accent): string {
   if (/Awaiting|Waiting/.test(status)) return actorColor;
-  if (/Pending review/.test(status)) return palette.dreamText;
+  if (/Pending review/.test(status)) return palette.warning;
   return palette.muted;
 }
 
@@ -398,7 +398,6 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
 
   const pushOrdinaryCard: RowBuilder['pushOrdinaryCard'] = opts => {
     const pf = opts.parentFrame ?? topFrame();
-    const isDream = opts.kind === 'Anamnesis';
     const firstRow = rows.length;
     let subFrom = -1, subTo = -1;
     let headerCols = -1;
@@ -406,19 +405,16 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     const simple = opts.kind === 'Thinking' || opts.kind === 'Tool' || opts.kind === 'Task';
     // Background color only ever means "expanded": the surface owner's color stepped by nesting depth (a child never matches its parent). Folded rows never carry one.
     const depth = (pf.depth ?? 0) + 1;
-    const tinted = opts.open && simple && !isDream;
-    const cardBg = isDream ? (bright ? palette.dreamExpanded : palette.dreamCollapsed) : tinted ? expandedTint(pf.surfaceColor ?? palette.accent, depth) : pf.bg;
+    const tinted = opts.open && simple;
+    const cardBg = tinted ? expandedTint(pf.surfaceColor ?? palette.accent, depth) : pf.bg;
     // Simple cards start right after the rail (header flush, body indented under the title, full width); other cards keep their inset frame.
     const frame = simple ? (cardBg && cardBg !== pf.bg ? {...pf, bg: cardBg, ...(tinted ? {depth} : {})} : pf) : insetFrame(pf, cardBg);
     const bodyFrame = insetFrame(tinted ? frame : pf, cardBg, 2, 2);
     const action: SceneAction = {kind: 'toggle_fold', foldId: opts.id};
-    if (isDream) {
-      pushCardCap(opts.id + '-top', 'top', cardBg, opts.railColor, pf, action);
-    }
     // Hover highlights belong to the surface that hosts the row (the card owner), never to the card's sender or tool owner.
-    const highlightColor = isDream ? palette.dreamText : pf.surfaceColor ?? palette.accent;
-    const labelColor = opts.toneColor ?? (isDream ? palette.dreamText : bright ? highlightColor : palette.muted);
-    const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : opts.open ? palette.fg : palette.muted : isDream ? palette.dreamText : bright ? highlightColor : palette.fg);
+    const highlightColor = pf.surfaceColor ?? palette.accent;
+    const labelColor = opts.toneColor ?? (bright ? highlightColor : palette.muted);
+    const titleColor = opts.toneColor ?? (simple ? hoveredFoldId === opts.id ? highlightColor : opts.open ? palette.fg : palette.muted : bright ? highlightColor : palette.fg);
     if (simple) {
       const thinking = opts.kind === 'Thinking';
       const terminal = opts.step && ['completed', 'failed', 'cancelled'].includes(opts.step.state);
@@ -508,19 +504,16 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         opts.renderAfterHeader(frame);
         subTo = rows.length;
       }
-    } else pushCardHeader(opts.id, [{text: opts.kind, color: labelColor, bold: isDream}],
+    } else pushCardHeader(opts.id, [{text: opts.kind, color: labelColor}],
       opts.title, opts.status ?? '', frame, opts.railColor, action,
-      isDream ? palette.dreamMuted : statusColor(opts.status ?? '', highlightColor), titleColor, false);
+      statusColor(opts.status ?? '', highlightColor), titleColor, false);
     if (opts.open) {
       // Interior blank lines are content (command output); the trailing ones are formatting.
       let bodyEnd = opts.bodyLines.length;
       while (bodyEnd > 0 && !opts.bodyLines[bodyEnd - 1]!.trim()) bodyEnd--;
       const inner = simple ? bodyFrame : frame;
-      opts.bodyLines.slice(0, bodyEnd).forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', inner, action, opts.toneColor ?? (isDream ? palette.dreamText : undefined)));
+      opts.bodyLines.slice(0, bodyEnd).forEach((text, index) => pushProse(opts.id + '-body-' + index, text, opts.railColor, opts.kind === 'Tool' ? 'direction' : 'body', inner, action, opts.toneColor));
       opts.renderBody?.(inner);
-    }
-    if (isDream) {
-      pushCardCap(opts.id + '-bottom', 'bottom', cardBg, opts.railColor, pf, action);
     }
     for (let index = firstRow; index < rows.length && !opts.fixed; index++) {
       const row = rows[index]!;
@@ -529,8 +522,8 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         continue;
       }
       // Open card: the whole tinted block is interactive (blank tint closes it; children's own hits come first). Folded: only the text extent.
-      const startCol = opts.open || isDream ? baseGutterCols + pf.leftCols : row.gutterCols;
-      const endCol = opts.open || isDream ? width - pf.rightCols : row.gutterCols + (index === firstRow && headerCols >= 0 ? headerCols : stringWidth(row.text.trimEnd()));
+      const startCol = opts.open ? baseGutterCols + pf.leftCols : row.gutterCols;
+      const endCol = opts.open ? width - pf.rightCols : row.gutterCols + (index === firstRow && headerCols >= 0 ? headerCols : stringWidth(row.text.trimEnd()));
       rows[index] = {...row, hits: [...row.hits ?? [], {startCol, endCol, action}],
         ...(row.hoverColor ? {} : {hoverColor: highlightColor}),
         ...(!opts.open ? {hover: {foldId: opts.id, startCol, endCol}} : {})};
@@ -591,6 +584,8 @@ export function appendActorCard(
     open: boolean;
     railColor: string;
     active?: boolean;
+    /** The card only folds and unfolds (its owner has no window to switch to). */
+    foldOnly?: boolean;
     /** The live subtitle after `task`: the model's own `⏵` line (clipped first on a narrow card), what is running now, and its live clock. */
     subtitle?: {readonly narration?: string | undefined; readonly activity?: string | undefined; readonly clockStart?: number | undefined};
     stop?: {readonly disabled: boolean; readonly focused: boolean; readonly hovered: boolean};
@@ -599,17 +594,18 @@ export function appendActorCard(
   },
 ) {
   const roles: ActorStyles = opts.roles ?? cast;
-  const role: ActorStyle = roles[opts.owner] ?? {symbol: '◇', name: opts.owner, title: opts.owner, color: palette.accent};
+  const role: ActorStyle = ownerStyle(opts.owner, roles) ?? {symbol: '◇', name: opts.owner, title: opts.owner, color: palette.accent};
   const shortStatus = opts.status.split(' · ')[0]!.replace('Awaiting approval', 'Approval?').replace('Awaiting answer', 'Answer?');
   const firstRow = builder.rows.length;
   const isHovered = builder.hoveredFoldId === opts.id;
   const bright = opts.open || isHovered;
-  const cardBg = opts.open ? (opts.owner === 'anamnesis' ? ownerSurface(opts.owner, true, opts.roles) : expandedTint(role.color)) : undefined;
+  const cardBg = opts.open ? expandedTint(role.color) : undefined;
   const outerFrame: FrameWrap = {leftSegments: [], rightSegments: [], leftCols: 0, rightCols: 0, innerWidth: builder.contentWidth, surfaceColor: role.color};
   // The card starts right after the surface rail: the actor symbol sits in the first content column and the inner `│` rail of an open card runs under it.
   const headFrame: FrameWrap = cardBg ? {...outerFrame, bg: cardBg, depth: 1} : outerFrame;
   const frame: FrameWrap = {...insetFrame(outerFrame, cardBg), ...(cardBg ? {depth: 1} : {})};
-  const action: SceneAction = {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
+  // A card whose owner has no window of its own (Anamnesis) only folds; a double click has nowhere to go.
+  const action: SceneAction = opts.foldOnly ? {kind: 'toggle_fold', foldId: opts.id} : {kind: 'actor_summary', foldId: opts.id, owner: opts.owner};
   const statusText = shortStatus + (opts.stop ? opts.stop.disabled ? ' · Stopping…' : ' · ■ Stop' : '') + ' ' + (opts.open ? '▾' : '▸');
   const live = actorSubtitle(opts.task, opts.subtitle, headFrame.innerWidth - stringWidth(role.symbol + ' ' + role.name) - stringWidth(statusText) - 4);
   builder.pushCardHeader(
@@ -670,4 +666,13 @@ export function appendActorCard(
     };
   }
   if (!opts.open) markHover(builder.rows, firstRow, opts.id, builder.baseGutterCols, builder.width);
+}
+
+/** An Anamnesis (dream) card: the same actor card as any other actor, with the theme's `anamnesis` colour as its identity. */
+export function appendAnamnesisCard(builder: RowBuilder, opts: {id: string; title: string; status: string; bodyLines: readonly string[]; open: boolean; railColor: string}) {
+  appendActorCard(builder, {id: opts.id, owner: 'anamnesis', task: opts.title, status: opts.status, open: opts.open, railColor: opts.railColor, foldOnly: true,
+    renderBody(_frame, actorColor, action, outer) {
+      const tree = insetRailFrame(outer, actorColor);
+      opts.bodyLines.filter(line => line.trim()).forEach((text, index) => builder.pushProse(opts.id + '-body-' + index, text, actorColor, 'body', tree, action));
+    }});
 }

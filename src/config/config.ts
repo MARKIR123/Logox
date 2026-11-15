@@ -50,15 +50,11 @@ export const contextPolicySchema = z.object({
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
 export type ContextPolicy = z.infer<typeof contextPolicySchema>;
-const legacyThemeDefaults = {
-  user: defaultPalette.user, accent: defaultPalette.accent,
-  dream_collapsed: defaultPalette.dreamCollapsed, dream_expanded: defaultPalette.dreamExpanded,
-};
+const legacyThemeDefaults = {user: defaultPalette.user, accent: defaultPalette.accent};
+/** `[theme]` keeps `user` and `accent`. The retired `dream_collapsed` / `dream_expanded` (the old light dream card) are accepted and dropped on load like any unknown key; they are never read or written. */
 export const themeSchema = z.object({
   user: hexColorSchema.default(legacyThemeDefaults.user),
   accent: hexColorSchema.default(legacyThemeDefaults.accent),
-  dream_collapsed: hexColorSchema.default(legacyThemeDefaults.dream_collapsed),
-  dream_expanded: hexColorSchema.default(legacyThemeDefaults.dream_expanded),
 }).default(legacyThemeDefaults);
 export type ThemeConfig = z.infer<typeof themeSchema>;
 const modelKindsSchema = z.record(z.string().min(1), z.enum(['openai_compat', 'anthropic']));

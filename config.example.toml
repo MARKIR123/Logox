@@ -39,8 +39,6 @@ readonly_concurrency = 4
 # [theme]
 # user = "#D77757"
 # accent = "#7DA1DE"
-# dream_collapsed = "#C9D3E4"
-# dream_expanded = "#E4EAF5"
 
 # Custom OpenAI-compatible service. Select it with /provider work.
 # Do not save api_key in TOML; use api_key_env or /login.

@@ -387,12 +387,11 @@ playwright = false
 |---|---|---|
 | `text`、`muted` | `fg`、`muted` / `bg` | 4.5 |
 | `text on card`、`muted on card` | `fg`、`muted` / `cardExpanded` | 4.5 |
-| `dream text`、`dream muted` | `dreamText`、`dreamMuted` / `dreamCollapsed` | 4.5 |
 | `selection` | `selectionFg` / `selectionBg` | 4.5 |
 | `diff +`、`diff −` | `diffAdded` / `diffAddedBg`，`diffRemoved` / `diffRemovedBg` | 3.0 |
 | `border` | `borderMuted` / `bg` | 3.0 |
 
-随后列出容易混淆的语义色：在 `accent`、`user`、`success`、`warning`、`error`、`question`、`link` 中，色相相差不到 20 度的两种颜色各占一行，例如 `accent ≈ warning`（`warning` 色）。灰色没有色相，不参与。这是提示而不是错误：不少内置主题的 `border` 只有 1.7 到 2.7，因为边线本来就是弱化的装饰。
+随后列出容易混淆的语义色：在 `accent`、`user`、`success`、`warning`、`error`、`question`、`link` 中，色相相差不到 20 度的两种颜色各占一行，例如 `accent ≈ warning`（`warning` 色）。灰色没有色相，不参与。这是提示而不是错误：部分内置主题的 `border` 只有 1.8 到 2.7，因为边线本来就是弱化的装饰。
 
 ## 设置页
 

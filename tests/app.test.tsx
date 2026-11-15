@@ -161,7 +161,8 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
 
     // 3. 确认 Kalon 审美提问 -> 浮现 Anamnesis 入梦候选卡与收尾结语
     await key('\r');
-    assert.match(output.text, /Anamnesis · Preference candidate/);
+    // The Anamnesis card is an ordinary actor card now: its name, separator and title are separate coloured segments.
+    assert.match(output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''), /◇ Anamnesis · Preference candidate/);
     await act(async () => {await waitForSnapshot(store, snapshot => snapshot.activities.some(activity => activity.activityId === accepted.activityId && activity.status === 'completed'));});
     await flushRender(instance);
     assert.match(output.text, /Structure and aesthetic tuning are both wrapped up/);

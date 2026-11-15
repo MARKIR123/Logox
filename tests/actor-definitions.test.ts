@@ -264,14 +264,13 @@ dream_expanded = "#aabbcc"
     const config = await loadConfig(f.cwd, {}, process.env, f.home);
     assert.equal(config.theme.user, '#112233');
     assert.equal(config.theme.accent, '#445566');
-    assert.equal(config.theme.dream_collapsed, '#778899');
-    assert.equal(config.theme.dream_expanded, '#aabbcc');
+    // The retired light dream card keys are accepted and dropped: no error, no value.
+    assert.deepEqual(Object.keys(config.theme).sort(), ['accent', 'user']);
 
     applyTheme(config.theme);
     assert.equal(palette.user, '#112233');
     assert.equal(palette.accent, '#445566');
-    assert.equal(palette.dreamCollapsed, '#778899');
-    assert.equal(palette.dreamExpanded, '#aabbcc');
+    assert.ok(!('dreamCollapsed' in palette) && !('dreamExpanded' in palette));
 
     // 恢复默认配置
     applyTheme();

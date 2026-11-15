@@ -22,9 +22,8 @@ export function approvalBody(request: Extract<Interaction, {kind: 'permission'}>
 }
 
 export const InteractionCard = memo(function InteractionCard({request, draft, focused, height}: {request: Interaction; draft: QuestionDraft; focused: boolean; height?: number}) {
-  const isDream = request.ownerId === 'anamnesis';
-  const color = isDream ? palette.dreamText : ownerColor(request.ownerId);
-  const mutedColor = isDream ? palette.dreamMuted : palette.muted;
+  const color = ownerColor(request.ownerId);
+  const mutedColor = palette.muted;
   const bg = ownerSurface(request.ownerId, focused) ?? (focused ? palette.cardExpanded : palette.cardCollapsed);
   if (request.kind === 'permission') {
     const header = ownerHeader(request.ownerId), actorName = header.replace(/^\S+\s+/, '');

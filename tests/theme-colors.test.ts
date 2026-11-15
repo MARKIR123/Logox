@@ -25,8 +25,9 @@ test('complete default palette comes from shipped data and legacy TOML shares it
   const data = JSON.parse(readFileSync(new URL('../src/config/themes/logox-dark.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(data.colors).sort(), [...themeColorKeys].sort());
   assert.deepEqual(resolveThemeColors(), defaultPalette);
-  assert.deepEqual(themeSchema.parse(undefined), {user: defaultPalette.user, accent: defaultPalette.accent,
-    dream_collapsed: defaultPalette.dreamCollapsed, dream_expanded: defaultPalette.dreamExpanded});
+  assert.deepEqual(themeSchema.parse(undefined), {user: defaultPalette.user, accent: defaultPalette.accent});
+  assert.deepEqual(themeSchema.parse({user: '#112233', dream_collapsed: '#778899', dream_expanded: '#aabbcc'}), {user: '#112233', accent: defaultPalette.accent},
+    'the retired [theme] dream keys parse without error and are dropped');
 });
 
 test('aliases follow final overrides; sparse switches reset all tokens and invalid overlays are atomic', () => withPalette(() => {
@@ -43,8 +44,9 @@ test('aliases follow final overrides; sparse switches reset all tokens and inval
   assert.equal(palette, identity); assert.equal(palette.checkedFg, defaultPalette.checkedFg);
   assert.equal(palette.selectionFg, defaultPalette.fg);
   assert.equal(themeRevision(), version + 1);
-  applyTheme({dream_collapsed: '#506070', dream_expanded: '#607080'});
-  assert.equal(palette.dreamCollapsed, '#506070'); assert.equal(palette.dreamExpanded, '#607080');
+  // Retired keys handed to applyTheme (an old saved overlay) are ignored, never an error and never part of the palette.
+  applyTheme({dream_collapsed: '#506070', dreamText: '#607080'} as never);
+  assert.ok(!('dreamCollapsed' in palette) && !('dream_collapsed' in palette) && !('dreamText' in palette));
 }));
 
 test('user inheritance resolves aliases after child overlays and rejects broken graphs without touching files', () => withPalette(() => {

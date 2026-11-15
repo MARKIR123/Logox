@@ -17,6 +17,7 @@ import {ThemePage} from '../src/tui/panels/theme-page.js';
 import {themeLayout, stepSelectable, normalizeSelection} from '../src/tui/panels/theme-layout.js';
 import {directRows, rowText, sampleRows, sampleScene} from '../src/tui/panels/theme-sample.js';
 import {sample} from '../src/tui/panels/theme-sample-data.js';
+import {expandedTint} from '../src/tui/appearance/colors.js';
 import {CommandSurfaces} from '../src/commands/surfaces.js';
 import {applyTheme, palette} from '../src/config/theme-palette.js';
 import {applyThemePreset, listThemes, loadThemePresets, themeListing} from '../src/config/theme-presets.js';
@@ -273,7 +274,7 @@ test('the legibility block sits under the sample and follows the highlighted the
   const f = await setup();
   try {
     assert.match(f.screen(), /(Legible|\d+ below threshold)\n/);
-    for (const label of ['text ', 'muted ', 'muted on card', 'text on card', 'dream text', 'dream muted', 'selection', 'diff +', 'diff −', 'border']) assert.ok(f.screen().includes(label), label);
+    for (const label of ['text ', 'muted ', 'muted on card', 'text on card', 'selection', 'diff +', 'diff −', 'border']) assert.ok(f.screen().includes(label), label);
     const ratios = () => f.output.lines.map(line => /(?:^|\s)text +(\d+\.\d\d)/.exec(line)?.[1]).find(Boolean);
     const before = ratios(); assert.ok(before, 'the text pair shows its ratio');
     await f.key('\x1b[F'); // my-plain: accent only differs, text contrast equals logox-dark; my-night changes fg and bg
@@ -295,7 +296,7 @@ test('the sample contains every required region, from the real timeline where it
     ['diff gutter and lines', /\d +[−] {1,3}while \(!ok\) \{[\s\S]*\d +\+ {1,3}while \(!ok && attempts < MAX_ATTEMPTS\)/],
     ['search hit with a path', /src\/sample\/login\.ts +2 *\n[^\n]*12 +let attempts/],
     ['link', /https:\/\/example\.com\/docs\/retry/],
-    ['dream card', /Anamnesis · Recapping the session/],
+    ['Anamnesis actor card', /◇ Anamnesis · Recapping the session/],
     ['success mark', /✓ Tests passed/], ['warning mark', /▲ One test skipped/], ['error mark', /✗ Build failed/],
     ['effort colours', /effort off low medium high max auto/], ['permission colours', /mode +default auto creative/],
     ['selection', / selected /], ['question prompt', /Which branch should I use\?/], ['secondary text on a card', /secondary text on the card/], ['composer', /❯ Ask Logox to continue…/],
@@ -310,8 +311,8 @@ test('the sample is painted from palette tokens: diff, dream, card, question, se
   assert.ok(has(seg => seg.bg === palette.diffAddedBg && seg.color === palette.diffAdded), 'added line: text and background');
   assert.ok(has(seg => seg.bg === palette.diffRemovedBg && seg.color === palette.diffRemoved), 'removed line: text and background');
   assert.ok(has(seg => seg.color === palette.diffAddedGutter) && has(seg => seg.color === palette.diffRemovedGutter), 'both gutters');
-  assert.ok(has(seg => seg.bg === palette.dreamCollapsed && seg.color === palette.dreamText), 'dream card text on dreamCollapsed');
-  assert.ok(has(seg => seg.bg === palette.dreamCollapsed && seg.color === palette.dreamMuted), 'dream card status in dreamMuted');
+  assert.ok(has(seg => seg.color === palette.anamnesis && seg.bold === true && seg.text.includes('Anamnesis')), 'the Anamnesis card names itself in the anamnesis colour like any actor');
+  assert.ok(has(seg => seg.bg === expandedTint(palette.anamnesis)), 'an open Anamnesis card carries its actor tint');
   assert.ok(has(seg => seg.bg === palette.cardExpanded && seg.color === palette.muted), 'muted secondary text on cardExpanded');
   assert.ok(has(seg => seg.bg === palette.cardExpanded && seg.color === palette.question), 'question-coloured prompt');
   assert.ok(has(seg => seg.bg === palette.selectionBg && seg.color === palette.selectionFg), 'selection colours');

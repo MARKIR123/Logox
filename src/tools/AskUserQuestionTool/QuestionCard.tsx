@@ -10,10 +10,9 @@ export function QuestionCard({request, draft, focused}: {request: Interaction; d
   if (request.kind !== 'question') return null;
   const question = request.questions[draft.questionIndex];
   if (!question) return null;
-  const dream = request.ownerId === 'anamnesis';
-  const color = dream ? palette.dreamText : ownerColor(request.ownerId);
-  const textColor = dream ? palette.dreamText : palette.fg;
-  const muted = dream ? palette.dreamMuted : palette.muted;
+  const color = ownerColor(request.ownerId);
+  const textColor = palette.fg;
+  const muted = palette.muted;
   const bg = ownerSurface(request.ownerId, focused) ?? (focused ? palette.cardExpanded : palette.cardCollapsed);
   const options = question.options ?? [];
   const multi = question.multiSelect === true;

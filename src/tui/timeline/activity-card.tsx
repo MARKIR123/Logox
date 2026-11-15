@@ -9,11 +9,11 @@ import {safeText} from '../terminal/text.js';
 
 const labels = {queued: 'Queued', running: 'Running', waiting_input: 'Awaiting answer', paused: 'Paused', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled'};
 export const ActivityCard = memo(function ActivityCard({activity, expanded = false, hovered = false}: {activity: Activity; expanded?: boolean; hovered?: boolean}) {
-  const isDream = activity.kind === 'anamnesis' || activity.ownerId === 'anamnesis', bright = expanded || hovered;
-  const color = isDream ? palette.dreamText : ownerColor(activity.ownerId);
-  const textColor = isDream ? palette.dreamText : bright ? color : palette.fg;
-  const mutedColor = isDream ? palette.dreamMuted : palette.muted;
-  const bg = isDream ? ownerSurface('anamnesis', bright) : activity.kind === 'actor' ? ownerSurface(activity.ownerId, bright) : undefined;
+  const bright = expanded || hovered;
+  const color = ownerColor(activity.ownerId);
+  const textColor = bright ? color : palette.fg;
+  const mutedColor = palette.muted;
+  const bg = activity.kind === 'actor' || activity.kind === 'anamnesis' ? ownerSurface(activity.ownerId, bright) : undefined;
   const prefix = Object.hasOwn(cast, activity.ownerId) ? `${cast[activity.ownerId as keyof typeof cast].symbol} ` : '';
   const heading = activity.title.startsWith(prefix.trim()) ? activity.title : prefix + activity.title;
   return <Card title={`${heading} · ${labels[activity.status]}`} paddingY={0} color={color} {...(bg ? {bg} : {})}>

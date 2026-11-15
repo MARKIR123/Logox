@@ -347,7 +347,7 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   // Full text contains SendMessage to ✧ Kalon · Polish skyline · queued
   assert.ok(row.text.includes('SendMessage to ✧ Kalon · inform'));
   // Icon is gray for success
-  assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#8D95A6');
+  assert.equal(row.segments?.find(s => s.selectionKey === successId + ':icon')?.color, '#969EB0');
   // Actor name kalon is rendered with kalon color (#e8a8dc) and bold
   const targetSeg = row.segments?.find(s => s.selectionKey === successId + ':title_1');
   assert.ok(targetSeg);
@@ -361,7 +361,7 @@ test('SendMessage card formats as SendMessage to <actor> · description · queue
   assert.ok(hoveredRow);
   const hoveredTitleSeg = hoveredRow.segments?.find(s => s.selectionKey === successId + ':title');
   assert.ok(hoveredTitleSeg);
-  assert.notEqual(hoveredTitleSeg.color, '#8D95A6');
+  assert.notEqual(hoveredTitleSeg.color, '#969EB0');
 });
 
 test('SendMessage card turns leading square icon red on failure', () => {

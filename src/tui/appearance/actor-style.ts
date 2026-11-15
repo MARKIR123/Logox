@@ -23,22 +23,28 @@ export interface ActorStyle {
 }
 export type ActorStyles = Readonly<Record<string, ActorStyle>>;
 
+/** Anamnesis is an actor like any other whose identity colour is the theme's `anamnesis` token (read live). */
+export function anamnesisStyle(): ActorStyle {
+  return {symbol: '◇', name: 'Anamnesis', title: 'Anamnesis', color: palette.anamnesis};
+}
+/** The style of an owner: its profile, or the Anamnesis identity. */
+export function ownerStyle(ownerId: string, roles: ActorStyles = cast): ActorStyle | undefined {
+  return roles[ownerId] ?? (ownerId === 'anamnesis' ? anamnesisStyle() : undefined);
+}
+
 /** Read profile-owned identity/surfaces; never overwrite them with system theme data. */
 export function ownerSurface(ownerId: string, expanded: boolean, roles: ActorStyles = cast): string | undefined {
-  if (ownerId === 'anamnesis') return expanded ? palette.dreamExpanded : palette.dreamCollapsed;
-  const role = roles[ownerId];
+  const role = ownerStyle(ownerId, roles);
   if (!role) return undefined;
   const colors = deriveActorCardColors(role.color, role.cardClosed, role.cardOpen);
   return expanded ? colors.open : colors.closed;
 }
 export function ownerColor(ownerId: string, roles: ActorStyles = cast): string {
   if (ownerId === 'user') return palette.user;
-  if (ownerId === 'anamnesis') return palette.anamnesis;
-  return roles[ownerId]?.color ?? palette.accent;
+  return ownerStyle(ownerId, roles)?.color ?? palette.accent;
 }
 export function ownerHeader(ownerId: string, roles: ActorStyles = cast): string {
   if (ownerId === 'user') return userLabel();
-  if (ownerId === 'anamnesis') return 'Anamnesis';
-  const actor = roles[ownerId];
+  const actor = ownerStyle(ownerId, roles);
   return actor ? `${actor.symbol} ${actor.name}` : ownerId;
 }

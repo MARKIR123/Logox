@@ -70,8 +70,6 @@ const pairSpecs: readonly (readonly [label: string, foreground: keyof ThemePalet
   ['muted', 'muted', 'bg', TEXT_CONTRAST],
   ['muted on card', 'muted', 'cardExpanded', TEXT_CONTRAST],
   ['text on card', 'fg', 'cardExpanded', TEXT_CONTRAST],
-  ['dream text', 'dreamText', 'dreamCollapsed', TEXT_CONTRAST],
-  ['dream muted', 'dreamMuted', 'dreamCollapsed', TEXT_CONTRAST],
   ['selection', 'selectionFg', 'selectionBg', TEXT_CONTRAST],
   ['diff +', 'diffAdded', 'diffAddedBg', GRAPHIC_CONTRAST],
   ['diff −', 'diffRemoved', 'diffRemovedBg', GRAPHIC_CONTRAST],

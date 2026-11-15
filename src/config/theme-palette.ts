@@ -7,7 +7,7 @@ export const themeColorKeys = [
   'success', 'warning', 'error', 'selectionBg', 'selectionFg',
   'composerFg', 'composerBorder',
   'toolExpanded', 'cardBase', 'cardCollapsed', 'cardExpanded',
-  'dreamCollapsed', 'dreamExpanded', 'anamnesis', 'dreamText', 'dreamMuted',
+  'anamnesis',
   'borderMuted', 'question', 'diffAdded', 'diffAddedBg', 'diffAddedGutter',
   'diffRemoved', 'diffRemovedBg', 'diffRemovedGutter', 'diffContext',
   'checkedFg', 'panelSeparator', 'panelLabel', 'actorPillBg', 'actorPillFg',
@@ -19,15 +19,18 @@ export const themeColorKeys = [
 export type ThemeColorKey = typeof themeColorKeys[number];
 export type ThemePalette = Record<ThemeColorKey, string>;
 export type ThemeDefinitions = Partial<Record<ThemeColorKey, string>>;
-export type ThemeOverrides = ThemeDefinitions & {dream_collapsed?: string; dream_expanded?: string};
+export type ThemeOverrides = ThemeDefinitions;
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 export const themeColorValueSchema = z.string().regex(/^(?:#[0-9a-fA-F]{6}|\$[a-zA-Z][a-zA-Z0-9]*)$/);
 const colorKeys = new Set<string>(themeColorKeys);
-export function isThemeColorKey(key: string): boolean {
-  return colorKeys.has(key) || key === 'dream_collapsed' || key === 'dream_expanded';
+/** Colour keys of the retired light dream card. Theme files that still carry them load unchanged: the keys are accepted, ignored and never written. */
+export const RETIRED_THEME_KEYS = ['dreamCollapsed', 'dreamExpanded', 'dreamText', 'dreamMuted', 'dream_collapsed', 'dream_expanded'] as const;
+const retiredKeys = new Set<string>(RETIRED_THEME_KEYS);
+export function isRetiredThemeKey(key: string): boolean {
+  return retiredKeys.has(key);
 }
-export function canonicalColorKey(key: string): string {
-  return key === 'dream_collapsed' ? 'dreamCollapsed' : key === 'dream_expanded' ? 'dreamExpanded' : key;
+export function isThemeColorKey(key: string): boolean {
+  return colorKeys.has(key);
 }
 
 const root = z.strictObject({colors: z.record(z.string(), themeColorValueSchema)})
@@ -44,7 +47,7 @@ const defaultDefinitions = Object.freeze(root.colors);
 export function resolveThemeColors(overrides: ThemeOverrides = {}): ThemePalette {
   const definitions: Record<string, string> = {...defaultDefinitions};
   for (const [key, value] of Object.entries(overrides)) {
-    if (isThemeColorKey(key) && value !== undefined) definitions[canonicalColorKey(key)] = themeColorValueSchema.parse(value);
+    if (isThemeColorKey(key) && value !== undefined) definitions[key] =themeColorValueSchema.parse(value);
   }
   const resolved: Partial<ThemePalette> = {}, resolving = new Set<string>();
   const resolve = (key: string): string => {

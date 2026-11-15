@@ -44,8 +44,8 @@ function sampleStore(now: number): {store: RuntimeStore; open: Record<string, bo
   const runningId = actorSteps.tool({id: 'c-run', name: running.name, arguments: JSON.stringify(running.args)});
   actorSteps.start(runningId);
   store.activities.create({sessionId: S, activityId: 'sample-dream', ownerId: 'anamnesis', kind: 'anamnesis', title: sample.dream.stage, status: 'completed', stage: sample.dream.stage, detail: sample.dream.detail});
-  // Glob stays a folded row; the Edit card, the Grep group (with its card) and the fetch card are open so the diff, the path, the highlight and the link show.
-  return {store, open: {[edit]: true, [grep + '-group']: true, [grep]: true, [fetched]: true}};
+  // Glob stays a folded row; the Edit card, the Grep group (with its card), the fetch card and the Anamnesis card are open so the diff, the path, the highlight, the link and the actor tint show.
+  return {store, open: {[edit]: true, [grep + '-group']: true, [grep]: true, [fetched]: true, 'sample-dream': true}};
 }
 
 /** The real timeline rows of the fake session at `width`; the running clock reads `sample.companion.seconds`. */
