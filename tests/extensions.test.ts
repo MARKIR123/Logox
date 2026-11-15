@@ -273,10 +273,10 @@ test('外层项目扩展跨会话保留 MCP 连接，最终关闭才回收', asy
     const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, mcp: {servers: {fixture: f.config}}}, {}, f.cwd, f.cwd);
     const extensions = new ProjectExtensions(f.cwd, config, {home: f.cwd, boundary: f.cwd}, async () => true);
     await extensions.initialize();
-    const first = await createApplication({cwd: f.cwd, config, extensions, authPath: join(f.cwd, 'auth.json')});
+    const first = await createApplication({cwd: f.cwd, config, extensions, resourceOptions: {home: f.cwd, boundary: f.cwd}, authPath: join(f.cwd, 'auth.json')});
     await extensions.mcp.execute(invoke({value: 1}), context()); await first.close();
     assert.equal(extensions.mcp.status()[0]?.state, 'connected');
-    const second = await createApplication({cwd: f.cwd, config, extensions, authPath: join(f.cwd, 'auth.json')});
+    const second = await createApplication({cwd: f.cwd, config, extensions, resourceOptions: {home: f.cwd, boundary: f.cwd}, authPath: join(f.cwd, 'auth.json')});
     assert.equal((await extensions.mcp.execute(invoke({value: 2}), context())).text, 'echo:2');
     assert.equal((await f.events()).filter(item => item.pid).length, 1); await second.close();
     await extensions.close(); assert.equal(extensions.mcp.status()[0]?.state, 'closed');

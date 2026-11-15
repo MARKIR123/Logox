@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {migrateOpenAiAccount} from '../src/providers/account-migration.js';
@@ -9,6 +9,7 @@ import {CustomProviderStorage} from '../src/providers/custom-storage.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {createProvider} from '../src/providers/http.js';
 import {loadConfig} from '../src/config/config.js';
+import {projectDataDir} from '../src/config/project-data.js';
 import {createApplication} from '../src/application.js';
 import {parseActor, serializeActor} from '../src/actors/definitions.js';
 import {builtinActors} from '../src/actors/builtins.js';
@@ -22,15 +23,15 @@ const actorFile = (id: string, provider: string) => serializeActor({...builtinAc
 
 /** A temp user home and project; every path the migration may touch lives under it. */
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'logox-migration-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'logox-migration-')));
   const home = join(root, 'home'), project = join(root, 'project'), other = join(root, 'other-project');
   const logox = join(home, '.logox');
-  for (const directory of [logox, join(logox, 'actors'), join(project, '.logox', 'state'), join(project, '.logox', 'actors'), join(other, '.logox', 'state')]) await mkdir(directory, {recursive: true});
+  for (const directory of [logox, join(logox, 'actors'), join(projectDataDir(project, home), 'state'), join(project, '.logox', 'actors'), join(projectDataDir(other, home), 'state')]) await mkdir(directory, {recursive: true});
   const auth = new AuthStorage(join(logox, 'auth.json')), customStorage = new CustomProviderStorage(join(logox, 'custom-providers.json'));
   const write = (path: string, value: unknown) => writeFile(path, typeof value === 'string' ? value : JSON.stringify(value));
   const files = {
-    userPref: join(logox, 'model-preferences.json'), projectPref: join(project, '.logox', 'state', 'model-preferences.json'),
-    otherPref: join(other, '.logox', 'state', 'model-preferences.json'), actorModels: join(logox, 'actor-models.json'),
+    userPref: join(logox, 'model-preferences.json'), projectPref: join(projectDataDir(project, home), 'state', 'model-preferences.json'),
+    otherPref: join(projectDataDir(other, home), 'state', 'model-preferences.json'), actorModels: join(logox, 'actor-models.json'),
     toolModels: join(logox, 'tool-models.json'), store: join(logox, 'models-store.json'),
     projectActor: join(project, '.logox', 'actors', 'techne.md'), userActor: join(logox, 'actors', 'kalon.md'), otherActor: join(project, '.logox', 'actors', 'aletheia.md'),
   };

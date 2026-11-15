@@ -10,7 +10,7 @@ import type {ActorContext} from '../src/actors/ensemble.js';
 const call = (name: string, args: unknown) => ({id: name, name, arguments: JSON.stringify(args)});
 async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-creative-reading-'));
-  const engine = new PermissionEngine(cwd, 'creative'), tools = new Tools(cwd, undefined, engine);
+  const engine = new PermissionEngine(cwd, 'creative'), tools = new Tools(cwd, undefined, engine, {home: cwd});
   let questions = 0;
   const context: ActorContext = {sessionId: 'session', activityId: 'task', ownerId: 'logox', history: [], signal: new AbortController().signal,
     say() {}, report() {}, record: async () => {}, permission: async () => {questions++; return false;}, ask: async () => ({status: 'cancelled', reason: 'test'})};

@@ -25,7 +25,7 @@ const call = (name: string, args: unknown) => ({id: 'tool', name, arguments: JSO
 const turn = (decision: 'allow' | 'danger' = 'allow'): ModelTurn => ({stop: 'complete', message: {role: 'assistant', text: JSON.stringify({decision, reason: '已核对具体目标和授权'})}, usage: {input: 20, output: 5}});
 async function fixture(mode: 'default' | 'auto' | 'creative' = 'auto') {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-modes-'));
-  const modeFile = join(cwd, 'mode', 'permission-mode.json'), engine = new PermissionEngine(cwd, mode, undefined, undefined, modeFile), tools = new Tools(cwd, undefined, engine), controller = new AbortController();
+  const modeFile = join(cwd, 'mode', 'permission-mode.json'), engine = new PermissionEngine(cwd, mode, undefined, undefined, modeFile), tools = new Tools(cwd, undefined, engine, {home: cwd}), controller = new AbortController();
   const requests: string[] = [], messages: ModelMessage[] = [{role: 'user', text: '在当前项目完成指定任务'}];
   const context: ActorContext = {sessionId: 'session', activityId: 'task', ownerId: 'logox', history: [], signal: controller.signal,
     reviewMessages: () => messages, say() {}, report() {}, record: async () => {},

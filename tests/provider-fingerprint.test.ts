@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createTestApplication as createApplication, projectData} from './runtime-fixture.js';
 import {loadConfig, type ModelSettings} from '../src/config/config.js';
 import {anthropicMessages, createProvider, openaiMessages} from '../src/providers/http.js';
 import {buildFingerprint, fingerprintBlocks, flushFingerprints, messageLabel, shortHash, type FingerprintRecord} from '../src/providers/fingerprint.js';
@@ -159,7 +159,7 @@ async function runActor(fingerprints: boolean): Promise<{files: string[]; reques
     const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'fp', config, provider});
     try {await app.ensemble.dispatch('techne', 'build the page').done;} finally {await app.close();}
     await flushFingerprints();
-    const dir = join(cwd, '.logox', 'state', 'sessions', 'fp', 'requests');
+    const dir = join(await projectData(cwd), 'state', 'sessions', 'fp', 'requests');
     const files = await readdir(dir).catch(() => [] as string[]);
     const rows = files.includes('techne.fingerprints.jsonl') ? await lines(join(dir, 'techne.fingerprints.jsonl')) : [];
     return {files, requests, rows};

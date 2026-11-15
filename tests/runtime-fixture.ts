@@ -3,6 +3,8 @@ import type {RuntimeStore} from '../src/runtime/store.js';
 import {createApplication as productionApplication} from '../src/application.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
 import {summarizeRound} from '../src/context/contracts.js';
+import {realpath} from 'node:fs/promises';
+import {projectDataDir} from '../src/config/project-data.js';
 
 /** Adapt legacy successful fixtures to the new terminal protocol, never recovery/error turns. */
 export function finalizingProvider(provider: Provider): Provider {
@@ -14,6 +16,10 @@ export function finalizingProvider(provider: Provider): Provider {
     return {...turn, stop: 'tools', message: {...turn.message, toolCalls: [{id: 'fixture-finish-' + ++ordinal, name: '_FinishRound',
       arguments: JSON.stringify({title: summary.title.slice(0, 120), summary: summary.report.slice(0, 200) || 'Round outcome.'})}]}} satisfies ModelTurn;
   }};
+}
+/** The project data folder (`<home>/.logox/projects/<key>`) an application started on `cwd` with `resourceOptions.home = home` uses; `home` defaults to `cwd`, the usual test isolation. */
+export async function projectData(cwd: string, home: string = cwd): Promise<string> {
+  return projectDataDir(await realpath(cwd), home);
 }
 export function createTestApplication(options: Parameters<typeof productionApplication>[0]) {
   return productionApplication({...options, ...(options.provider ? {provider: finalizingProvider(options.provider)} : {})});

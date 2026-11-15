@@ -16,7 +16,7 @@ import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 import {sendMessageTool} from '../src/tools/coordination/SendMessageTool/SendMessageTool.js';
 import {pairSendMessages} from '../src/tools/coordination/SendMessageTool/pairing.js';
-import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createTestApplication as createApplication, projectData} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 
 const call = (id: string, name: string, args: unknown): ToolCall => ({id, name, arguments: JSON.stringify(args)});
@@ -107,7 +107,7 @@ test('resume closes a step the ledger left running (an old ask, an unfinished th
   try {
     await app.submit('hello');
     while (app.ensemble.isBusy()) await delay(10);
-    const root = join(cwd, '.logox', 'state', 'sessions');
+    const root = join(await projectData(cwd), 'state', 'sessions');
     const base = {version: 1, sessionId: 'first', ownerId: 'logox', activityId: 'old-activity', source: 'logox'};
     const askCall = call('call_old', 'SendMessage', {to: 'techne', type: 'ask', message: 'Verify', wake: true});
     const startedAt = Date.now() - 318 * 60_000;

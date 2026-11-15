@@ -14,6 +14,7 @@ import {isMemoryRecord, pathDanger, riskyPath} from '../permissions/paths.js';
 import type {ActorContext} from '../actors/ensemble.js';
 import type {ToolCall, ToolDefinition, TurnUsage} from '../runtime/messages.js';
 import {Snapshots, bytesOrMissing} from './snapshots.js';
+import {projectDataDir} from '../config/project-data.js';
 
 import type {ToolRegistry} from './registry.js';
 import {pathArg, toolAliases, canonicalToolName, type ToolResult, type CanonicalToolName} from './types.js';
@@ -292,10 +293,11 @@ export class Tools {
     readonly cwd: string,
     private readonly report: (context: ActorContext, text: string) => void = () => {},
     readonly permissions = new PermissionEngine(cwd),
-    readonly options: {home?: string} = {}
+    /** `dataDir` is the project data folder holding `snapshots/` (default `projectDataDir(cwd, home)`). */
+    readonly options: {home?: string; dataDir?: string} = {}
   ) {
-    this.snapshots = new Snapshots(join(cwd, '.logox', 'snapshots'));
     const home = this.home = options.home ?? homedir();
+    this.snapshots = new Snapshots(join(options.dataDir ?? projectDataDir(cwd, home), 'snapshots'));
     this.modelStorage = new ToolModelStorage(join(home, '.logox', 'tool-models.json'));
     this.marks = modelMarkStore(join(home, '.logox'));
   }

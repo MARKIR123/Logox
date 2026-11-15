@@ -4,7 +4,7 @@ import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createTestApplication, waitForSnapshot} from './runtime-fixture.js';
+import {createTestApplication, projectData, waitForSnapshot} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ProviderError} from '../src/providers/http.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
@@ -95,7 +95,7 @@ test('queuing a continuation does not reset recovery budgets in the still-runnin
   try {
     await f.app.submit('original recovery goal'); await secondStarted.promise;
     const root = f.app.store.activities.list()[0]!.activityId;
-    const path = join(f.cwd, '.logox', 'state', 'actor-coordination', createHash('sha256').update('s').digest('hex') + '.json');
+    const path = join(await projectData(f.cwd), 'state', 'actor-coordination', createHash('sha256').update('s').digest('hex') + '.json');
     const state = () => readFile(path, 'utf8').then(text => JSON.parse(text));
     assert.equal((await state()).execution[root].noDelivery.used, 1);
     // This is the existing natural-language continuation routing fixture.

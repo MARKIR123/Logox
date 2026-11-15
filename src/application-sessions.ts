@@ -2,7 +2,9 @@ import {DIRECTOR_ID} from './runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import {homedir} from 'node:os';
 import {join, resolve} from 'node:path';
+import {realpath} from 'node:fs/promises';
 import {z} from 'zod';
+import {migrateProjectData} from './store/project-migration.js';
 import {ActorCatalog} from './actors/catalog.js';
 import {assertActorProfiles, seedActorProfiles} from './actors/profiles.js';
 import {loadConfig} from './config/config.js';
@@ -22,15 +24,17 @@ import type {createSessionApplication, ApplicationOptions, SubmitDelivery} from 
 
 /** Project services stay stable; the session runtime is replaced as a whole once the candidate loads successfully. */
 export async function createManagedApplication(options: ApplicationOptions, createSession: typeof createSessionApplication) {
-  const manager = await SessionManager.open(options.cwd), cwd = manager.project;
+  const home = options.resourceOptions?.home ?? homedir();
+  // Before anything reads state: runtime state written under `<project>/.logox/` by older versions moves to the project data folder.
+  const dataMigration = await migrateProjectData({project: await realpath(options.cwd), home});
+  const manager = await SessionManager.open(options.cwd, {dataDir: dataMigration.dataDir}), cwd = manager.project;
   if (options.sessionId !== undefined && !options.sessionId.trim()) throw new Error('Session ID must not be empty');
   const recent = options.sessionId === undefined ? await manager.recent() : undefined;
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
   if (!sessionId) throw new Error('No session to resume');
-  const home = options.resourceOptions?.home ?? homedir();
   const auth = new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json')), customStorage = new CustomProviderStorage(join(home, '.logox', 'custom-providers.json'));
   // Before the config reads the saved selection: the account sign-in used to live under the provider `openai`.
-  const migration = await migrateOpenAiAccount({auth, customStorage, home, project: cwd}).catch(() => undefined);
+  const migration = await migrateOpenAiAccount({auth, customStorage, home, project: cwd, dataDir: dataMigration.dataDir}).catch(() => undefined);
   const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
   const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher, auth, customStorage);
   await registry.syncCustom();
@@ -43,17 +47,18 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const owners = async (id: string) => [...new Set([...actors.list().map(actor => actor.id), ...(await journal.tasks(id)).map(task => task.ownerId)])];
   let current: Awaited<ReturnType<typeof createSession>>;
   const preferences = new StateFile(join(manager.directory, 'model-preferences.json'), preferenceSchema);
-  const permissions = new PermissionEngine(cwd, config.permissions.mode, undefined, join(home, '.logox', 'user-permissions.json'), join(home, '.logox', 'permission-mode.json'));
+  const permissions = new PermissionEngine(cwd, config.permissions.mode, join(dataMigration.dataDir, 'permissions.json'), join(home, '.logox', 'user-permissions.json'), join(home, '.logox', 'permission-mode.json'));
   await permissions.load();
   const earlyNotices: string[] = [];
   const diagnose = (text: string) => {if (current) current.systemNotice(text); else earlyNotices.push(text);};
   if (migration?.notice) earlyNotices.push(migration.notice);
+  earlyNotices.push(...dataMigration.notices);
   const usage = new UsageLedger(join(manager.directory, 'usage'), diagnose);
   const approveExtension: ExtensionApproval = options.approveExtension ?? ((request, context) => tools.authorizeExtension({
     id: request.callId, name: 'mcp:' + request.server + ':' + request.tool, arguments: JSON.stringify(request.arguments),
   }, context, request.action === 'list' ? 'read' : 'unknown'));
   const extensions = options.extensions ?? new ProjectExtensions(cwd, config, options.resourceOptions, approveExtension, diagnose);
-  const tools = observeTools(new Tools(cwd, undefined, permissions, {home}), extensions.hooks);
+  const tools = observeTools(new Tools(cwd, undefined, permissions, {home, dataDir: dataMigration.dataDir}), extensions.hooks);
   let lease: SessionLease;
   let closed = false, transition: Promise<void> | undefined;
   let entry: Promise<void> = Promise.resolve();
@@ -78,7 +83,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       })();
       try {await saving;} finally {saving = undefined;}
     }};
-    const application = await createSession({...options, cwd, config, sessionId: id, registry, tools, preferences, permissions,
+    const application = await createSession({...options, cwd, config, sessionId: id, dataDir: dataMigration.dataDir, registry, tools, preferences, permissions,
       usage, extensions, actors, sessionCommand, beforeTask: () => state.save(), isPersistent: () => state.saved});
     persistence.set(application, state);
     return application;

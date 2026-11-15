@@ -21,7 +21,7 @@ export class SessionTrash {
     if (record.id !== id || record.project !== this.project || !record.archive.startsWith(key(id) + '-')) throw new Error('Deleted session identity mismatch; original record preserved');
     return true;
   }
-  async assertAvailable(id: string): Promise<void> {if (await this.isDeleted(id)) throw new Error('This session was deleted; the recoverable copy is in .logox/state/trash: ' + id);}
+  async assertAvailable(id: string): Promise<void> {if (await this.isDeleted(id)) throw new Error('This session was deleted; the recoverable copy is in ' + join(this.directory, 'trash') + ': ' + id);}
   protected async publishRemoval(id: string, archive: string): Promise<void> {
     await this.safe(this.marker(id));
     await atomicWrite(this.marker(id), Buffer.from(JSON.stringify({version: 1, id, project: this.project, time: Date.now(), archive})));

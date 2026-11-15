@@ -3,8 +3,9 @@
 //
 //   node scripts/score-session.mjs <path> [<path> ...] [--json]
 //
-// <path> is a session directory (state/sessions/<id>/), a project `.logox` directory (newest session is scored, the others
-// are listed) or a project directory that contains `.logox`. Several paths print one comparison table, one column per session.
+// <path> is a session directory (state/sessions/<id>/), a project directory (its data folder
+// ~/.logox/projects/<key>/ is found from the path; the newest session is scored, the others are listed), a project data folder, or a
+// project `.logox` directory or sessions folder of the older in-project layout. Several paths print one comparison table, one column per session.
 //
 // Data read (all optional; a metric whose data is missing prints `n/a`):
 //   tasks.json            activities: owner, status, error, parent/root ids, coordinationWake, stopReason, progress.stageHistory
@@ -42,7 +43,7 @@
 //                  records, per actor, per root task (by the record's activity) and in total. Sessions without it print n/a.
 //                  Also counted: Automa worker turns (`usage` on automa.jsonl `message` events, attributed to the dispatching actor and its
 //                  activity) and summary/compaction/approval calls (session-level usage.jsonl, attributed to the owner's latest activity).
-//                  Per actor they also get their own rows (automa, compaction, approval). A project total (a `.logox` directory or project directory) sums every session in it and lists them.
+//                  Per actor they also get their own rows (automa, compaction, approval). A project total (a project directory, its data folder or an older `.logox` directory) sums every session in it and lists them.
 //   Wall time      Root task: first ledger record under the root to the last record (any actor or Automa worker) under that root.
 //   Cache          From `requests/<actor>.fingerprints.jsonl` (always-on request fingerprints; definitions in scripts/cache-analysis.mjs, full report
 //                  from scripts/cache-report.mjs): per actor the pure-append share of consecutive task requests, cache-read share of input and
@@ -50,8 +51,10 @@
 //   Interruptions  User interrupts = activities with stopReason `user` or `interrupted`; Director stops = activities stopped with
 //                  `director_cancel` plus CancelActor calls (reported side by side); interventions = inputs of kind `collaboration_interrupt`.
 import {existsSync, readdirSync, readFileSync, statSync} from 'node:fs';
+import {homedir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {sessionsCandidates} from './project-data.mjs';
 import {analyzeSession} from './cache-analysis.mjs';
 
 const EMPTY_REPLY = 'Model returned only thinking or an empty reply';
@@ -84,11 +87,11 @@ const parseArgs = text => {try {const value = JSON.parse(text); return value && 
 const realValue = value => typeof value === 'string' ? !PLACEHOLDER.test(value.trim()) : Array.isArray(value) ? value.some(realValue) : value === true;
 
 /** Resolves a user path into the session directory to score plus the other sessions found next to it. */
-export function resolveSession(path) {
+export function resolveSession(path, home = homedir()) {
   const root = resolve(path);
   const isSession = dir => existsSync(join(dir, 'director.jsonl')) || existsSync(join(dir, 'tasks.json'));
   if (isSession(root)) return {dir: root, others: []};
-  const base = [join(root, 'state', 'sessions'), join(root, '.logox', 'state', 'sessions')].find(existsSync);
+  const base = sessionsCandidates(root, home).find(existsSync);
   if (!base) throw new Error('No LOGOX session found at ' + root);
   const stamp = dir => Math.max(0, ...['director.jsonl', 'tasks.json'].map(file => { try {return statSync(join(dir, file)).mtimeMs;} catch {return 0;} }));
   const sessions = readdirSync(base, {withFileTypes: true}).filter(entry => entry.isDirectory() && isSession(join(base, entry.name)))
@@ -339,9 +342,11 @@ export function scoreSession(dir, {others = []} = {}) {
   const cache = cacheAnalysis ? {recorded: true, byActor: Object.fromEntries(Object.entries(cacheAnalysis).map(([actor, {summary}]) => [actor, summary]))} : {recorded: false, byActor: {}};
   if (!cache.recorded) missing.push('cache: no requests/<actor>.fingerprints.jsonl (sessions recorded before request fingerprints, or kernel.request_fingerprints = false)');
 
-  // dir is <project>/.logox/state/sessions/<id> for real runs; a bare session directory falls back to its id.
+  // dir is ~/.logox/projects/<key>/state/sessions/<id> for real runs (older runs: <project>/.logox/state/sessions/<id>); a bare session directory falls back to its id.
   const id = basename(dir);
-  const project = basename(dirname(dirname(dirname(dir)))) === '.logox' ? basename(dirname(dirname(dirname(dirname(dir))))) : id.slice(0, 8);
+  const data = dirname(dirname(dirname(dir)));
+  const project = basename(dirname(data)) === 'projects' ? basename(data)
+    : basename(data) === '.logox' ? basename(dirname(data)) : id.slice(0, 8);
   return {session: {id, project, label: project, dir, wallMs, actors, others}, roots,
     finalReports: {total: sum(roots.map(root => root.finalReports))},
     stages, roundClosing: closing, roundSummaries, failures, writes, preview, messaging, automa: automaStats, usage, cache, interruptions, missing};
@@ -462,18 +467,18 @@ export function renderTable(scores) {
 }
 
 /** Lists the session directories of a project: `null` when the path is itself a session directory. */
-function projectSessions(path) {
+function projectSessions(path, home = homedir()) {
   const root = resolve(path);
   if (existsSync(join(root, 'director.jsonl')) || existsSync(join(root, 'tasks.json'))) return null;
-  const base = [join(root, 'state', 'sessions'), join(root, '.logox', 'state', 'sessions')].find(existsSync);
+  const base = sessionsCandidates(root, home).find(existsSync);
   if (!base) return null;
   return readdirSync(base, {withFileTypes: true}).filter(entry => entry.isDirectory()).map(entry => join(base, entry.name))
     .filter(dir => existsSync(join(dir, 'director.jsonl')) || existsSync(join(dir, 'tasks.json'))).sort();
 }
 
-/** Sums the usage of every session under a project `.logox` directory (or the project directory); null for a session directory. */
-export function projectUsage(path) {
-  const dirs = projectSessions(path);
+/** Sums the usage of every session of a project (given as the project directory, its data folder or an older `.logox` directory); null for a session directory. */
+export function projectUsage(path, home = homedir()) {
+  const dirs = projectSessions(path, home);
   if (!dirs) return null;
   const sessions = dirs.map(dir => ({id: basename(dir), usage: scoreSession(dir).usage}));
   const total = {turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costTurns: 0};
@@ -499,11 +504,11 @@ function renderProject(project) {
 export function main(argv) {
   const paths = argv.filter(arg => !arg.startsWith('--'));
   if (!paths.length || argv.includes('--help')) {
-    console.error('Usage: node scripts/score-session.mjs <path> [<path> ...] [--json]\n  <path>: a session directory, a project .logox directory (newest session) or a project directory.');
+    console.error('Usage: node scripts/score-session.mjs <path> [<path> ...] [--json]\n  <path>: a session directory, a project directory or its data folder (~/.logox/projects/<key>), or an older project .logox directory (newest session).');
     return paths.length ? 0 : 2;
   }
   const scores = paths.map(path => {const {dir, others} = resolveSession(path); return scoreSession(dir, {others});});
-  const projects = paths.map(projectUsage);
+  const projects = paths.map(path => projectUsage(path));
   if (argv.includes('--json')) {
     const out = scores.map((score, index) => projects[index] ? {...score, project: projects[index]} : score);
     console.log(JSON.stringify(out.length === 1 ? out[0] : out, null, 2));

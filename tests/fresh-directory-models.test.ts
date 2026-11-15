@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, readFile, writeFile, rm} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, realpath, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
+import {projectDataDir} from '../src/config/project-data.js';
 
 const bindings = {techne: {provider: 'openai', model: 'dedicated-builder'}, aletheia: {provider: 'antigravity', model: 'dedicated-scout'}, kalon: {provider: 'antigravity', model: 'dedicated-designer'}};
 
@@ -47,9 +48,15 @@ test('new project config reads canonical global preferences and ignores the reti
     await writeFile(join(home, '.logox', 'model-preferences.json'), JSON.stringify({version: 1, provider: 'openai', model: 'main-model', effort: 'auto'}));
     await writeFile(join(home, '.logox-ts', 'model-preferences.json'), JSON.stringify({version: 1, provider: 'antigravity', model: 'old-model', effort: 'auto'}));
     assert.equal((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'main-model');
-    await mkdir(join(cwd, '.logox', 'state'), {recursive: true});
-    await writeFile(join(cwd, '.logox', 'state', 'model-preferences.json'), JSON.stringify({version: 1, provider: 'openai', model: 'project-model', effort: 'auto'}));
+    const stored = join(projectDataDir(await realpath(cwd), home), 'state', 'model-preferences.json');
+    await mkdir(join(stored, '..'), {recursive: true});
+    await writeFile(stored, JSON.stringify({version: 1, provider: 'openai', model: 'project-model', effort: 'auto'}));
     assert.equal((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'project-model');
+    await rm(stored);
+    // The in-project location of older versions is still read until the startup move has run.
+    await mkdir(join(cwd, '.logox', 'state'), {recursive: true});
+    await writeFile(join(cwd, '.logox', 'state', 'model-preferences.json'), JSON.stringify({version: 1, provider: 'openai', model: 'older-project-model', effort: 'auto'}));
+    assert.equal((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'older-project-model');
     await rm(join(cwd, '.logox', 'state', 'model-preferences.json'));
     await rm(join(home, '.logox', 'model-preferences.json'));
     assert.notEqual((await loadConfig(cwd, {}, {}, home, cwd)).provider.model, 'old-model');

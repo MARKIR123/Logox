@@ -85,7 +85,7 @@
 6. `LOGOX__` 环境变量
 7. CLI 参数
 
-高层覆盖低层，同一物理文件只加载一次。旧目录 `~/.logox-ts` 已不再读取，`logox --doctor` 会提示迁移。模型偏好以项目状态为主，其次是 `~/.logox`。切换提供商不会继承上一家的地址、模型或认证设置。
+高层覆盖低层，同一物理文件只加载一次。旧目录 `~/.logox-ts` 已不再读取，`logox --doctor` 会提示迁移。模型偏好以项目数据目录（见“数据位置与构建”）为主，其次是 `~/.logox`。切换提供商不会继承上一家的地址、模型或认证设置。
 
 环境变量用双下划线分层，例如 `LOGOX__PROVIDER__MODEL`、`LOGOX__KERNEL__MAX_ITERATIONS`。启动时会尝试读取当前目录的 `.env`。配置文件不接受直接保存 `api_key`，请用 `/login` 或 `api_key_env`。
 
@@ -178,7 +178,7 @@ cache_keepalive = true     # 默认开启
 
 ### 请求转储（调试）
 
-设置环境变量 `LOGOX_DUMP_REQUESTS=1` 后，每个发给模型的请求体（经最终序列化器，与实际发送的字节一致）会写入 `.logox/state/sessions/<会话>/requests/<角色>/<序号>-<时间>.json`；缓存保活请求带 `-keepalive` 后缀。只写请求体，不含请求头、密钥或认证信息，但请求体本身包含对话内容，分享前请检查。
+设置环境变量 `LOGOX_DUMP_REQUESTS=1` 后，每个发给模型的请求体（经最终序列化器，与实际发送的字节一致）会写入项目数据目录下的 `state/sessions/<会话>/requests/<角色>/<序号>-<时间>.json`；缓存保活请求带 `-keepalive` 后缀。只写请求体，不含请求头、密钥或认证信息，但请求体本身包含对话内容，分享前请检查。
 
 `node scripts/diff-requests.mjs <requests 目录或单个角色目录> [--context N] [--keepalive]` 对同一角色的相邻请求打印首个不同字节的偏移，以及两侧各约 200 个字符的上下文（默认跳过保活请求）。用它定位为什么前缀缓存没有命中：前缀应当逐字节不变，差异出现得越靠前，缓存损失越大。
 
@@ -187,7 +187,7 @@ cache_keepalive = true     # 默认开启
 提示缓存只在请求前缀（工具、系统提示、再按顺序的消息）与上一次请求逐字节相同时才会命中。为了事后能解释一次未命中，每个发给模型的请求都会默认记录一条很小的“指纹”，追加到 `.logox/state/sessions/<会话>/requests/<角色>.fingerprints.jsonl`（`[kernel] request_fingerprints = false` 可关闭）。指纹只有短哈希、标签、估算 token 和缓存相关字段（`max_tokens`、思考配置、缓存保留与时长、是否带缓存键），不含任何消息文本、密钥或请求头；请求结束后另写一行 `result`（同一个 `id`），记录 `input` / `cacheRead` / `cacheWrite` / `output`，失败请求记录错误类别。写入是异步的，错误一律吞掉，不会拖慢或打断请求；每条记录约每个消息块 40 字节，长会话的指纹文件会随之增长，目前没有上限。
 
 ```bash
-node scripts/cache-report.mjs <会话目录 | 项目 .logox 目录 | 项目目录> [--all] [--json]
+node scripts/cache-report.mjs <会话目录 | 项目目录 | 项目数据目录 | 旧版项目 .logox 目录> [--all] [--json]
 ```
 
 报告按角色分段。每段先给出请求数、纯追加比例、缓存读取占输入的比例和各类未命中的数量，再给出各类别（工具、系统、用户、助手文本、思考回放、工具参数、按工具名的工具结果、图片、宿主消息）的平均 token 与最大请求；随后是相邻 `task` 请求的对比表（默认只列出前缀被破坏或未命中的行，`--all` 列出全部）：
@@ -305,7 +305,7 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 | `/undo` | 撤销受支持的文件工具造成的近期修改，不覆盖你之后的手工改动 |
 | `/rewind` | 回退有效对话分支和相应的文件快照；原始记录仍保留 |
 
-会话列表中按 Ctrl+X 进入删除确认，默认取消。当前会话和被其他进程占用的会话不能删除；删除前内容会备份到项目的 `.logox/state/trash/`。
+会话列表中按 Ctrl+X 进入删除确认，默认取消。当前会话和被其他进程占用的会话不能删除；删除前内容会备份到项目数据目录的 `state/trash/`。
 
 `/undo` 与 `/rewind` **不会回滚 Shell、MCP 或其他外部系统的副作用**。多文件恢复也不是操作系统事务，部分失败时需要按提示处理。上下文整理与存储边界见[上下文模块](modules/context.md)。
 
@@ -317,7 +317,7 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 - **规则列表**：按作用域（`user` / `project` / `session`）分组，每条显示决定（`allow` 绿、`ask` 琥珀、`deny` 红）、工具、匹配模式、命中次数和最近命中时间。`↑` `↓` 选择，`d` 或 Del 删除（行内 `y / n` 确认），`a` 打开新增表单（决定、工具、模式、作用域；输入会先校验，shell 模式必须是静态词元前缀）。
 - **This run**：本次运行的审批统计（审批次数、询问你的次数、审查模型次数、审查用的 token）。
 
-权限模式是用户级选择，所有项目共用：在任何项目里切换一次，保存到 `~/.logox/permission-mode.json`，其他项目下次启动时沿用。启动时的优先级：用户级已保存的模式，其次旧版本留在项目 `.logox/permissions.json` 里的 `mode`（仅在用户级还没有值时读取，且不再写入），再其次配置文件的 `[permissions] mode`，最后是内置默认值 `auto`。目前没有命令行参数。两个同时运行的实例互不实时同步，切换在对方下次启动时生效。规则和允许列表仍按作用域保存（项目规则在 `.logox/permissions.json`），只有模式移到了用户级。
+权限模式是用户级选择，所有项目共用：在任何项目里切换一次，保存到 `~/.logox/permission-mode.json`，其他项目下次启动时沿用。启动时的优先级：用户级已保存的模式，其次旧版本留在项目权限规则文件（`permissions.json`，现位于项目数据目录）里的 `mode`（仅在用户级还没有值时读取，且不再写入），再其次配置文件的 `[permissions] mode`，最后是内置默认值 `auto`。目前没有命令行参数。两个同时运行的实例互不实时同步，切换在对方下次启动时生效。规则和允许列表仍按作用域保存（项目规则在项目数据目录的 `permissions.json`），只有模式移到了用户级。
 
 也可以用 `/permissions mode [default|auto|creative]` 直接选择，或用 `/permissions add <session|project|user> <allow|ask|deny> <工具> <模式>`、`/permissions revoke <id>` 管理规则。
 
@@ -344,7 +344,7 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 
 ### 规则
 
-规则有三种决定：`allow`、`ask`（即使模式或允许规则会放行也一定询问你）、`deny`。优先级与作用域无关：**`deny` > `ask` > `allow`**；`forbidden` 命令和 `creative` 对凭据的拒绝仍在其上。作用域有三层：`user`（`~/.logox/user-permissions.json`，所有项目共享）、`project`（`.logox/permissions.json`）、`session`（仅内存）。规则对所有角色一视同仁，不存在按角色的规则；Automa 的授权仍只收窄派遣者已有的权限。每条规则记录命中次数和最近命中时间（项目和用户规则会落盘，会话规则只在内存）。
+规则有三种决定：`allow`、`ask`（即使模式或允许规则会放行也一定询问你）、`deny`。优先级与作用域无关：**`deny` > `ask` > `allow`**；`forbidden` 命令和 `creative` 对凭据的拒绝仍在其上。作用域有三层：`user`（`~/.logox/user-permissions.json`，所有项目共享）、`project`（项目数据目录的 `permissions.json`）、`session`（仅内存）。规则对所有角色一视同仁，不存在按角色的规则；Automa 的授权仍只收窄派遣者已有的权限。每条规则记录命中次数和最近命中时间（项目和用户规则会落盘，会话规则只在内存）。
 
 项目规则绑定项目的真实路径，所以移动项目后不能把旧路径当作同一个安全身份。会话临时目录（scratchpad）内的操作自动放行；`ask` 规则同样适用于它。
 
@@ -563,9 +563,13 @@ npm start -- <参数>
 | 位置 | 内容 |
 |---|---|
 | `~/.logox/` | 认证、自定义提供商、模型目录、角色模型绑定、状态栏偏好、首次引导状态、称呼（`user-profile.json`）及用户资源 |
-| 项目 `.logox/` | 配置、权限、角色覆盖、技能、模板与 bulletin |
-| 项目 `.logox/state/` | 会话索引、原始账本、上下文检查点、用量和删除备份 |
+| 项目 `.logox/` | 你会阅读、编辑或提交的内容：`config.toml`、`actors/`、`skills/`、`hooks/`、`commands/`、`bulletin.md`、`memory/`（Anamnesis 项目记忆）。Logox 自动写入的运行状态不再放在这里，新项目的 `.logox/` 里只会出现 `bulletin.md` |
+| 项目数据目录 `~/.logox/projects/<键>/` | 自动写入的运行状态：`state/`（会话索引、原始账本、上下文检查点、用量、删除备份、模型偏好、Automa 停放的工人、请求指纹与转储、Anamnesis 水位）、`snapshots/`（`/undo` 与 `/rewind` 快照）、`permissions.json`（项目权限规则）、`demo/`（`--demo` 的记录）。`logox --doctor` 会打印当前项目的这个目录 |
 | 系统临时目录的 `logox-scratchpad/` | 按项目与会话隔离的临时工作资料；每个角色（含 Director）在会话目录下有自己的子目录，互不覆盖，彼此仍可读取 |
+
+**目录键**：项目的绝对路径（解析符号链接后）里，每个不是字母或数字的字符都换成 `-`。Windows 的 `G:\hz\codes\Logox` 得到 `G--hz-codes-Logox`，POSIX 的 `/home/a/b` 得到 `-home-a-b`。同一路径总是同一个目录，不同路径可能（极少）撞上同一个键，此时两个项目会共享数据，请避免。
+
+**一次性迁移**：旧版本把运行状态写在项目的 `.logox/` 里。升级后第一次在某个项目启动时（在读取任何状态之前），Logox 会把 `state/`、`snapshots/`、`permissions.json` 和 `demo/` 移到项目数据目录：先复制，核对文件清单和字节数一致，再删除旧的；用跨进程锁保证两个 Logox 不会同时迁移同一个项目。成功后时间线里有一条 `Moved runtime state to <目标>.`。任何一步失败，会删掉复制到一半的目标，旧数据原样保留，本次运行继续使用旧位置，并提示 `Could not move runtime state to <目标>: <原因>. Using <旧位置> for now.`，下次启动会再试。如果两边都已有同名内容，只搬目标里没有的文件；冲突的文件留在原处，并提示 `Runtime state exists in both <旧> and <目标>; kept <目标>. Left in place: <n> entries.`。迁移后项目 `.logox/` 里的配置、角色、技能、hooks、bulletin 和 memory 不动。
 
 不要把认证和运行目录提交到公共仓库。项目会话可能包含源码、工具输出和任务内容，保存或分享前请先检查。
 

@@ -130,7 +130,7 @@ test('WebFetch 实际 HTTP 获取与执行', async () => {
 test('大驼峰 Read/Write/Edit/Shell 工具端到端执行', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-tools-exec-'));
   try {
-    const tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'default'));
+    const tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'default'), {home: cwd});
     const context = mockContext(cwd);
 
     // 1. Write

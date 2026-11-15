@@ -106,7 +106,7 @@ test('npm run demo 场景接线：内联思考/工具卡、三角色卡、内联
   output.columns = 100;
   output.rows = 42;
   const directory = await mkdtemp(join(tmpdir(), 'logox-scene-'));
-  const runtime = createDemo('demo', directory);
+  const runtime = createDemo('demo', directory, directory);
   await runtime.ready;
   const store = runtime.store;
   let instance!: ReturnType<typeof render>;
@@ -283,7 +283,7 @@ test('真实 Ink 鼠标悬停：全移动报告、纯色变亮与恢复，点击
 test('demo 实际请求：Ctrl+X 取消许可后继续提问，自由回答从输入区进入运行时', {timeout: 8000}, async () => {
   const actWarnings = captureActWarnings();
   const directory = await mkdtemp(join(tmpdir(), 'logox-scene-answer-'));
-  const runtime = createDemo('answer', directory);
+  const runtime = createDemo('answer', directory, directory);
   await runtime.ready;
   const input = new TerminalInput();
   const output = new TerminalOutput();

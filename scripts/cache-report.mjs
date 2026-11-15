@@ -3,8 +3,8 @@
 //
 //   node scripts/cache-report.mjs <path> [--json] [--all]
 //
-// <path> is a session directory (state/sessions/<id>/), a project `.logox` directory (newest session) or a project directory,
-// resolved like scripts/score-session.mjs. Per actor, each consecutive pair of `task` requests is compared block by block
+// <path> is a session directory (state/sessions/<id>/), a project directory or its data folder (~/.logox/projects/<key>/; newest session)
+// or an older in-project `.logox` directory, resolved like scripts/score-session.mjs. Per actor, each consecutive pair of `task` requests is compared block by block
 // (tools, system, messages): kept prefix, pure append or the first differing block, and every request whose usage shows an almost
 // empty cache read is classified (prefix changed / idle / fields changed / unexplained). Definitions: scripts/cache-analysis.mjs.
 // Default output lists only pairs that broke the prefix or missed; --all lists every pair; --json prints machine-readable data.
@@ -16,7 +16,7 @@ import {resolveSession} from './score-session.mjs';
 export function main(argv) {
   const paths = argv.filter(arg => !arg.startsWith('--'));
   if (!paths.length || argv.includes('--help')) {
-    console.error('Usage: node scripts/cache-report.mjs <path> [--json] [--all]\n  <path>: a session directory, a project .logox directory (newest session) or a project directory.');
+    console.error('Usage: node scripts/cache-report.mjs <path> [--json] [--all]\n  <path>: a session directory, a project directory or its data folder (~/.logox/projects/<key>), or an older project .logox directory (newest session).');
     return paths.length ? 0 : 2;
   }
   const {dir, others} = resolveSession(paths[0]);

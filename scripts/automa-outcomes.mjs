@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 // Success rates of Automa workers per model, from the journals of a state directory.
-// Usage: node scripts/automa-outcomes.mjs <path to a .logox/state/sessions directory>
+// Usage: node scripts/automa-outcomes.mjs <project directory | project data folder (~/.logox/projects/<key>) | state/sessions directory>
+// An older in-project `<project>/.logox/state/sessions` layout is accepted as well.
+import {existsSync} from 'node:fs';
 import {readdir, readFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename, join, resolve} from 'node:path';
+import {sessionsCandidates} from './project-data.mjs';
 
-const root = process.argv[2];
-if (!root) {
-  console.error('Usage: node scripts/automa-outcomes.mjs <.logox/state/sessions directory>');
+const given = process.argv[2];
+if (!given) {
+  console.error('Usage: node scripts/automa-outcomes.mjs <project directory | project data folder (~/.logox/projects/<key>) | state/sessions directory>');
   process.exit(2);
 }
+const root = basename(resolve(given)) === 'sessions' ? resolve(given) : sessionsCandidates(given).find(existsSync) ?? given;
 
 const models = new Map();
 for (const session of await readdir(root, {withFileTypes: true}).catch(() => [])) {

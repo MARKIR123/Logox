@@ -39,7 +39,7 @@ Logox 把终端显示、任务执行、模型请求和持久化分开，让每�
 
 ## 存储与恢复的边界
 
-- **权威记录**：项目 `.logox/state/` 保存会话索引、记录、检查点与用量。恢复以 `Journal` 的哈希命名原始文件和分支记录为准。
+- **权威记录**：项目数据目录 `~/.logox/projects/<键>/state/`（键见 [USAGE](../USAGE.md)）保存会话索引、记录、检查点与用量。恢复以 `Journal` 的哈希命名原始文件和分支记录为准。
 - **可读镜像**：`sessions/<sessionId>/` 下有 `director.jsonl`、`tasks.json`、`events.json`、`deliveries.json` 和 `subagents/`，方便人工查看；镜像写入失败不影响权威记录。
 - **恢复**：恢复会话不会重放工具。`/clear` 只清显示；`/undo` 与 `/rewind` 基于文件工具的快照，不回滚 Shell 或 MCP 的副作用。
 - **删除与并发**：删除会话先备份到回收区；进程租约防止多个实例同时操作同一会话。

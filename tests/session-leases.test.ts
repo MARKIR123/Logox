@@ -20,7 +20,7 @@ async function worker(cwd: string, pauseBeforePublish = false) {
       };
       syncBuiltinESMExports();
     }
-    const manager = await SessionManager.open(process.argv[1]);
+    const manager = await SessionManager.open(process.argv[1], {home: process.argv[1]});
     try {await manager.acquire('same'); process.stdout.write('READY\\n'); setInterval(() => {}, 1000);}
     catch(e) {process.stdout.write('BLOCKED\\n'); if (!e.message.includes('in use by another process')) {console.error(e); process.exitCode=1;}}`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, cwd], {stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
@@ -41,7 +41,7 @@ async function worker(cwd: string, pauseBeforePublish = false) {
 }
 
 test('真实申请在原子发布前强杀：短期锁自动回收，没有半租约；持有长期租约强杀也能恢复', async () => {
-  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-lease-kill-'))), manager = await SessionManager.open(cwd);
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-lease-kill-'))), manager = await SessionManager.open(cwd, {home: cwd});
   const file = join(manager.directory, 'locks', createHash('sha256').update('same').digest('hex') + '.lock');
   const before = await worker(cwd, true);
   try {
@@ -62,7 +62,7 @@ test('真实申请在原子发布前强杀：短期锁自动回收，没有半�
 });
 
 test('四个真实进程并发申请只有一个持有者；旧释放不删除替换租约，重复释放安全', async () => {
-  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-lease-race-'))), manager = await SessionManager.open(cwd);
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-lease-race-'))), manager = await SessionManager.open(cwd, {home: cwd});
   const workers = await Promise.all(Array.from({length: 4}, () => worker(cwd)));
   const file = join(manager.directory, 'locks', createHash('sha256').update('same').digest('hex') + '.lock');
   try {

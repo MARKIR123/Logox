@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
-import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createTestApplication as createApplication, projectData} from './runtime-fixture.js';
 import {loadConfig, modelSettings, type Config} from '../src/config/config.js';
 import {preferenceSchema, StateFile} from '../src/config/model-preferences.js';
 import {createProvider} from '../src/providers/http.js';
@@ -18,7 +18,7 @@ async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-preferences-'));
   await mkdir(join(cwd, '.logox'));
   await writeFile(join(cwd, '.logox', 'config.toml'), '[provider]\nname="local"\nmodel="first"\n[providers.local]\nbase_url="http://127.0.0.1:7777/v1"\n[models."local/first"]\ncontext_window=8192\nthinking_protocol="deepseek"\n[models."local/second"]\ncontext_window=8192\nthinking_protocol="deepseek"\n');
-  const file = join(cwd, '.logox', 'state', 'model-preferences.json');
+  const file = join(await projectData(cwd), 'state', 'model-preferences.json');
   const load = (overrides = {}, env = {}) => loadConfig(cwd, overrides, env, cwd, cwd);
   const app = async (config?: Config, sessionId = 'one') => createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config: config ?? await load(), sessionId, env: {}, authPath: join(cwd, 'auth.json')});
   return {cwd, file, load, app, cleanup: () => rm(cwd, {recursive: true, force: true})};

@@ -5,6 +5,7 @@ import {join, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
+import {projectDataDir} from '../src/config/project-data.js';
 import {UsageLedger} from '../src/context/usage.js';
 import {acquireFileLock} from '../src/store/file-lock.js';
 import {waitForSnapshot} from './runtime-fixture.js';
@@ -64,7 +65,7 @@ test('实际应用切换保持模型档位；每会话/角色用量独立恢复�
     await f.app.submit('/resume first'); await rewind(f.app);
     assert.deepEqual(f.app.contexts.meter(identities('logox')).usageRecords(), expected);
     assert.deepEqual(f.app.contexts.meter(identities('techne')).usageRecords(), actor);
-    const ledger = new UsageLedger(join(f.cwd, '.logox', 'state', 'usage'), text => {throw new Error(text);});
+    const ledger = new UsageLedger(join(projectDataDir(f.cwd, f.cwd), 'state', 'usage'), text => {throw new Error(text);});
     assert.deepEqual(await ledger.read('first', 'logox'), expected);
     assert.equal(f.requests.length, 2, '切换和回退不请求模型、不重算历史');
   } finally {await f.cleanup();}
@@ -83,8 +84,8 @@ test('候选失败保留规则；成功切换和回退清会话许可，项目�
     await f.app.submit('/resume first'); assert.equal(f.app.permissions.snapshot().length, 1);
     await f.app.submit('/permissions add session allow read sample.txt'); await submit(f.app, '空轮'); await rewind(f.app);
     assert.equal(f.app.permissions.snapshot().length, 1);
-    for (const [path, command] of [[join(f.cwd, '.logox', 'permissions.json'), '/permissions add project deny edit *.txt'],
-      [join(f.cwd, '.logox', 'state', 'model-preferences.json'), '/model second']] as const) {
+    for (const [path, command] of [[join(projectDataDir(f.cwd, f.cwd), 'permissions.json'), '/permissions add project deny edit *.txt'],
+      [join(projectDataDir(f.cwd, f.cwd), 'state', 'model-preferences.json'), '/model second']] as const) {
       const release = await acquireFileLock(path), saving = f.app.submit(command);
       // Side-effect-free probe: a missing session fails with 'No session' until the save is in flight.
       await waitFor(() => f.app.submit('/resume missing').then(() => 'accepted', (error: Error) => error.message), message => !/No session/.test(message), {label: 'app rejects commands while saving ' + command});

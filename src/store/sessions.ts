@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createInterface} from 'node:readline';
 import {z} from 'zod';
 import {atomicWrite} from '../tools/snapshots.js';
+import {projectDataDir} from '../config/project-data.js';
 import {withFileLock} from './file-lock.js';
 import {Journal} from './journal.js';
 import {SessionTrash, type SessionRemoval} from './session-trash.js';
@@ -25,9 +26,10 @@ async function readOptional(path: string): Promise<string | undefined> {
 }
 export class SessionManager {
   private constructor(readonly directory: string, readonly project: string) {}
-  static async open(cwd: string): Promise<SessionManager> {
+  /** `dataDir` is the project data folder (`config/project-data.ts:projectDataDir()` under `home`); sessions live in its `state/`. */
+  static async open(cwd: string, options: {home?: string; dataDir?: string} = {}): Promise<SessionManager> {
     const project = await realpath(cwd);
-    return new SessionManager(join(project, '.logox', 'state'), project);
+    return new SessionManager(join(options.dataDir ?? projectDataDir(project, options.home), 'state'), project);
   }
   private get trash(): SessionTrash {return new SessionTrash(this.directory, this.project);}
   private metadataPath(id: string): string {return join(this.directory, 'catalog', key(id) + '.json');}

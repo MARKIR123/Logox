@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
+import {projectDataDir} from '../src/config/project-data.js';
 import {Journal} from '../src/store/journal.js';
 import {SessionManager} from '../src/store/sessions.js';
 import {Snapshots} from '../src/tools/snapshots.js';
@@ -67,7 +68,7 @@ test('两个会话创建、列表取消、选择、项目模型保持与 --resum
     try {assert.equal(restored.sessionId, 'first'); assert.equal(restored.store.getSnapshot().activities[0]?.status, 'completed');}
     finally {await restored.close();}
     const other = await mkdtemp(join(tmpdir(), 'logox-other-project-'));
-    try {assert.deepEqual((await (await SessionManager.open(other)).list()).sessions, []);} finally {await rm(other, {recursive: true, force: true});}
+    try {assert.deepEqual((await (await SessionManager.open(other, {home: other})).list()).sessions, []);} finally {await rm(other, {recursive: true, force: true});}
   } finally {await f.cleanup();}
 });
 
@@ -226,7 +227,7 @@ test('应用多文件部分失败不提交历史；原目标重试成功后才�
   }
   try {
     await seed(f.app.journal, 'first', 'target', '回退', 1);
-    const snapshots = new FailingSnapshots(join(f.cwd, '.logox', 'snapshots'));
+    const snapshots = new FailingSnapshots(join(projectDataDir(f.cwd, f.cwd), 'snapshots'));
     for (const name of ['a.txt', 'b.txt']) {
       const path = join(f.cwd, name); await writeFile(path, 'before');
       await snapshots.apply(path, Buffer.from('before'), Buffer.from('after'), 'target', new AbortController().signal);
@@ -315,11 +316,11 @@ test('分支保留有效前缀压缩状态，剪掉未来摘要后从有效原�
 test('跨进程会话锁竞争、退出释放和死亡锁恢复；损坏锁不覆盖', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-lock-'));
   const module = new URL('../src/store/sessions.js', import.meta.url).href;
-  const script = `import {SessionManager} from ${JSON.stringify(module)}; const manager = await SessionManager.open(process.argv[1]); const lease = await manager.acquire('shared'); process.stdout.write('locked\\n'); process.stdin.once('data', async () => {await lease.release(); process.exit(0);});`;
+  const script = `import {SessionManager} from ${JSON.stringify(module)}; const manager = await SessionManager.open(process.argv[1], {home: process.argv[1]}); const lease = await manager.acquire('shared'); process.stdout.write('locked\\n'); process.stdin.once('data', async () => {await lease.release(); process.exit(0);});`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, cwd], {stdio: ['pipe', 'pipe', 'pipe']});
   try {
     await new Promise<void>((resolve, reject) => {child.stdout.once('data', () => resolve()); child.once('error', reject); child.once('exit', code => {if (code) reject(new Error('锁测试子进程失败'));});});
-    const manager = await SessionManager.open(cwd);
+    const manager = await SessionManager.open(cwd, {home: cwd});
     await assert.rejects(manager.acquire('shared'), /in use by another process/);
     const exit = new Promise<void>(resolve => child.once('exit', () => resolve())); child.stdin.write('release'); await exit;
     const lease = await manager.acquire('shared'); await lease.release();

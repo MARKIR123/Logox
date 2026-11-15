@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {Resources} from '../src/resources/manager.js';
 import {agentRequestBase} from '../src/kernel/agent.js';
-import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createTestApplication as createApplication, projectData} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
@@ -122,14 +122,14 @@ test('处理中拒绝 reload；项目扩展由外层拥有，可跨会话重用'
     const provider: Provider = {async respond() {await new Promise<void>(resolve => {release = resolve;}); return {message: {role: 'assistant', text: '完成'}, stop: 'complete'};}};
     const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, f.home, f.root);
     const extensions = new ProjectExtensions(f.cwd, config, {home: f.home, boundary: f.root}); await extensions.initialize();
-    const app = await createApplication({cwd: f.cwd, config, provider, extensions, authPath: join(f.root, 'auth.json')});
+    const app = await createApplication({cwd: f.cwd, config, provider, extensions, resourceOptions: {home: f.home, boundary: f.root}, authPath: join(f.root, 'auth.json')});
     const handle = app.ensemble.dispatch('logox', '测试');
     await assert.rejects(app.submit('/reload'), /Tasks are running/);
     while (!release) await new Promise<void>(resolve => setImmediate(resolve));
     release(); await handle.done; await app.close();
     assert.equal(app.extensions, extensions);
-    const second = await createApplication({cwd: f.cwd, config, extensions, authPath: join(f.root, 'auth.json')});
+    const second = await createApplication({cwd: f.cwd, config, extensions, resourceOptions: {home: f.home, boundary: f.root}, authPath: join(f.root, 'auth.json')});
     assert.equal(second.resources, app.resources); await second.close(); await extensions.close();
-    assert.ok(await readFile(join(f.cwd, '.logox', 'state', 'last-session'), 'utf8'));
+    assert.ok(await readFile(join(await projectData(f.cwd, f.home), 'state', 'last-session'), 'utf8'));
   } finally {await f.cleanup();}
 });

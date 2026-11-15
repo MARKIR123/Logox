@@ -21,7 +21,7 @@ Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 const key = (id: string) => createHash('sha256').update(id).digest('hex');
 type Application = Awaited<ReturnType<typeof createApplication>>;
 async function fixture() {
-  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-delete-'))), manager = await SessionManager.open(cwd);
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-delete-'))), manager = await SessionManager.open(cwd, {home: cwd});
   const journal = new Journal(join(manager.directory, 'sessions'));
   const seed = async (id: string, owner = 'logox') => {
     const activityId = id + '-' + owner;

@@ -3,6 +3,7 @@ import {readdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {parseDocument} from 'yaml';
 import {presets} from '../config/config.js';
+import {projectDataDir} from '../config/project-data.js';
 import type {AuthStorage} from './auth.js';
 import type {CustomProviderStorage} from './custom-storage.js';
 
@@ -14,8 +15,10 @@ export interface AccountMigrationOptions {
   readonly customStorage: CustomProviderStorage;
   /** The user home that holds `.logox/`. */
   readonly home: string;
-  /** The project root whose `.logox/state` and `.logox/actors` are rewritten; other projects are never touched. */
+  /** The project root whose saved model preference (in its data folder) and `.logox/actors` are rewritten; other projects are never touched. */
   readonly project?: string | undefined;
+  /** The project data folder whose `state/model-preferences.json` is rewritten (default `projectDataDir(project, home)`). */
+  readonly dataDir?: string | undefined;
 }
 export interface AccountMigrationResult {
   readonly status: 'none' | 'migrated' | 'skipped' | 'failed';
@@ -157,7 +160,7 @@ export async function migrateOpenAiAccount(options: AccountMigrationOptions): Pr
   const logox = join(home, '.logox');
   const jobs: Array<[string, (value: unknown) => boolean, number?]> = [
     [join(logox, 'model-preferences.json'), moveBinding],
-    ...(project ? [[join(project, '.logox', 'state', 'model-preferences.json'), moveBinding] as [string, (value: unknown) => boolean]] : []),
+    ...(project ? [[join(options.dataDir ?? projectDataDir(project, home), 'state', 'model-preferences.json'), moveBinding] as [string, (value: unknown) => boolean]] : []),
     [join(logox, 'actor-models.json'), moveBindings, 2],
     [join(logox, 'tool-models.json'), moveBindings, 2],
     ...['models-store.json', 'models-cache.json'].map((name): [string, (value: unknown) => boolean, number] => [join(logox, name), value => {

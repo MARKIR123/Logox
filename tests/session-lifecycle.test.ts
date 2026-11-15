@@ -111,7 +111,7 @@ test('首次登记失败拒绝派发，重试可以保存；失败和取消都�
 test('旧空白清理索引保留文件；失败、排队和没有成功回复的 Actor 任务保留', async () => {
   const f = await fixture();
   try {
-    const manager = await SessionManager.open(f.cwd), journal = new Journal(join(manager.directory, 'sessions'));
+    const manager = await SessionManager.open(f.cwd, {home: f.cwd}), journal = new Journal(join(manager.directory, 'sessions'));
     await manager.touch('old-empty'); await manager.remember('old-empty');
     await journal.append({version: 1, sessionId: 'old-empty', ownerId: 'logox', role: 'assistant', text: '旧展示通知'});
     const file = journal.path('old-empty', 'logox'), bytes = await readFile(file, 'utf8');
@@ -190,7 +190,7 @@ test('最近坏账本保留原文并打开列表；显式 ID 不隐藏错误；�
 test('无索引旧 TS 账本从正式用户输入识别历史，Actor 独立提交也在执行前登记', async () => {
   const f = await fixture();
   try {
-    const manager = await SessionManager.open(f.cwd), journal = new Journal(join(manager.directory, 'sessions'));
+    const manager = await SessionManager.open(f.cwd, {home: f.cwd}), journal = new Journal(join(manager.directory, 'sessions'));
     await journal.append({version: 1, sessionId: 'uncatalogued', ownerId: 'kalon', role: 'assistant', text: '先前显示信息'});
     await journal.append({version: 1, sessionId: 'uncatalogued', ownerId: 'kalon', role: 'user', text: '实际任务'});
     assert.equal((await manager.list()).sessions[0]?.title, '实际任务');
@@ -205,7 +205,7 @@ test('无索引旧 TS 账本从正式用户输入识别历史，Actor 独立提�
 test('索引扫描在元数据读取变慢时仍能结束，不遗漏已经流出的记录', {timeout: 15000}, async () => {
   const f = await fixture();
   try {
-    const manager = await SessionManager.open(f.cwd), journal = new Journal(join(manager.directory, 'sessions'));
+    const manager = await SessionManager.open(f.cwd, {home: f.cwd}), journal = new Journal(join(manager.directory, 'sessions'));
     await journal.append({version: 1, sessionId: 'slow-stat', ownerId: 'logox', role: 'user', text: '扫描任务'});
     const module = new URL('../src/store/sessions.js', import.meta.url).href;
     // 内置 fs 的延迟替身隔离在子进程，稳定扩大读取流与 stat 之间的竞态窗口。
@@ -215,7 +215,7 @@ test('索引扫描在元数据读取变慢时仍能结束，不遗漏已经流�
       fs.promises.stat = async (...args) => {const result = await stat(...args); if (String(args[0]).endsWith('.jsonl')) await delay(80); return result;};
       syncBuiltinESMExports();
       const timeout = setTimeout(() => {process.stderr.write('索引扫描没有结束'); process.exit(1);}, 5000);
-      try {const manager = await SessionManager.open(process.argv[1]); const result = await manager.list();
+      try {const manager = await SessionManager.open(process.argv[1], {home: process.argv[1]}); const result = await manager.list();
         process.stdout.write(JSON.stringify(result.sessions.map(info => info.id)));}
       finally {clearTimeout(timeout);}`;
     const {stdout} = await run(process.execPath, ['--input-type=module', '-e', script, f.cwd], {windowsHide: true, timeout: 10000});

@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {effortInName, effortSchema, isOpenAiReasoningModel, preferenceSchema, StateFile} from './model-preferences.js';
 import {hooksSchema, mcpServerSchema} from '../extensions/config.js';
 import {defaultPalette, hexColorSchema} from './theme-palette.js';
+import {projectDataDir} from './project-data.js';
 import {modelTable, thinkingHint} from '../providers/model-table.js';
 
 export const priceSchema = z.object({currency: z.string().min(1).default('USD'),
@@ -232,6 +233,8 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   }
   try {
     const prefPaths = [
+      join(projectDataDir(await realpath(cwd).catch(() => cwd), home), 'state', 'model-preferences.json'),
+      // The location before the project data folder existed; read until the startup move has run.
       join(cwd, '.logox', 'state', 'model-preferences.json'),
       join(home, '.logox', 'model-preferences.json'),
     ];

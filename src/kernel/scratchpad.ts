@@ -143,7 +143,7 @@ export function persistedIndex(text: string, file: string, source?: OutputSource
 export async function maybePersistLargeOutput(text: string, cwd: string, callId: string, sessionId?: string, ownerId?: string, limit = TOOL_OUTPUT_LIMIT, source?: OutputSource): Promise<string> {
   if (text.length <= limit || text.includes('<persisted-output>')) return text;
   try {
-    const dir = sessionId ? join(ownerId ? getActorScratchpadDir(cwd, sessionId, ownerId) : getScratchpadDir(cwd, sessionId), 'tool-results') : join(cwd, '.logox', 'tool-results');
+    const dir = sessionId ? join(ownerId ? getActorScratchpadDir(cwd, sessionId, ownerId) : getScratchpadDir(cwd, sessionId), 'tool-results') : join(getScratchpadDir(cwd, 'unscoped'), 'tool-results');
     await mkdir(dir, {recursive: true});
     const file = join(dir, `${callId || randomUUID()}.txt`);
     await writeFile(file, text, 'utf8');
@@ -163,7 +163,7 @@ const IMAGE_EXTENSIONS: Record<string, string> = {'image/png': 'png', 'image/jpe
 export async function saveToolImages(text: string, images: readonly ImageBlock[] | undefined, cwd: string, callId: string, sessionId?: string, ownerId?: string):
   Promise<{text: string; images?: ImageBlock[]}> {
   if (!images?.length) return {text};
-  const dir = sessionId ? join(ownerId ? getActorScratchpadDir(cwd, sessionId, ownerId) : getScratchpadDir(cwd, sessionId), 'images') : join(cwd, '.logox', 'images');
+  const dir = sessionId ? join(ownerId ? getActorScratchpadDir(cwd, sessionId, ownerId) : getScratchpadDir(cwd, sessionId), 'images') : join(getScratchpadDir(cwd, 'unscoped'), 'images');
   const saved: ImageBlock[] = [];
   const notes: string[] = [];
   for (const [index, image] of images.entries()) {

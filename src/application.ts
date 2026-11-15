@@ -87,6 +87,8 @@ export interface ApplicationOptions {
 export interface SessionApplicationOptions extends ApplicationOptions {
   sessionId: string;
   config: Config;
+  /** The project data folder holding `state/` (see `src/config/project-data.ts:projectDataDir()`). */
+  dataDir: string;
   registry: ProviderRegistry;
   preferences: StateFile<z.infer<typeof preferenceSchema>>;
   permissions: PermissionEngine;
@@ -101,7 +103,7 @@ export interface SessionApplicationOptions extends ApplicationOptions {
 export async function createSessionApplication(options: SessionApplicationOptions) {
   const {cwd, config, registry, preferences, permissions, tools, usage, extensions, actors} = options;
   if (config?.theme) applyTheme(config.theme);
-  const stateDir = join(cwd, '.logox', 'state'), session = options.sessionId;
+  const stateDir = join(options.dataDir, 'state'), session = options.sessionId;
   const initialSelection = registry.selection();
   const commands = new AbortController();
   const store = new RuntimeStore(), journal = new Journal(join(stateDir, 'sessions'));

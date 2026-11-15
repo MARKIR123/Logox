@@ -1,6 +1,8 @@
 import {setTimeout as delay} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
+import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {projectDataDir} from './config/project-data.js';
 import {RuntimeStore} from './runtime/store.js';
 import {Ensemble, type ActorId, type ActorExecutor} from './actors/ensemble.js';
 import {Anamnesis} from './anamnesis/service.js';
@@ -14,7 +16,7 @@ const actorReplies = {
   kalon: '（notes the color requirements, leaves the source alone）\nOkay, no file changes yet. The main colors go to soft charcoal and warm white, with the accent reserved for work titles. I will start once you sign off.',
 };
 
-export function createDemo(sessionId: string, cwd: string) {
+export function createDemo(sessionId: string, cwd: string, home: string = homedir()) {
   const store = new RuntimeStore();
   let scenario: PortfolioActivities;
   const executor: ActorExecutor = async (prompt, context) => {
@@ -62,7 +64,7 @@ export function createDemo(sessionId: string, cwd: string) {
     }
     context.report('Wrap-up', 'All role tasks are done and status is synced.');
   };
-  const ensemble = new Ensemble(sessionId, store, new Journal(join(cwd, '.logox', 'demo', 'actors')), executor);
+  const ensemble = new Ensemble(sessionId, store, new Journal(join(projectDataDir(cwd, home), 'demo', 'actors')), executor);
   const aletheia = randomUUID();
   store.activities.create({sessionId, activityId: aletheia, ownerId: 'aletheia', kind: 'actor',
     title: 'Survey homepage structure and pinpoint problem locations', status: 'completed', stage: 'Sample result', detail: 'Hero component tree and visual structure survey complete and ready.'});

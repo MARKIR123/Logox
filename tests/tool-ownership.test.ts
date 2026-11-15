@@ -42,7 +42,7 @@ test('ownsPath matches exact files, directories and globs relative to the projec
 test('non-owner edits get one note per (editor, file, activity) while the owner is active', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-own-'));
   try {
-    const store = new RuntimeStore(), tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'auto'));
+    const store = new RuntimeStore(), tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'auto'), {home: cwd});
     tools.setActivityProbe(() => store.getSnapshot().activities);
     store.activities.create({sessionId: 's', activityId: 'techne-act', ownerId: 'techne', kind: 'actor', title: 'Build page', taskTitle: 'Build page',
       status: 'running', stage: 'x', detail: 'x', ownedFiles: ['index.html']});

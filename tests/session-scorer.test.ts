@@ -4,6 +4,7 @@ import {appendFile, mkdir, mkdtemp, rm, utimes, writeFile} from 'node:fs/promise
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {techneRequests, writeFingerprints} from './fingerprint-fixture.js';
+import {projectDataDir, projectKey} from '../src/config/project-data.js';
 
 interface Score {
   session: {label: string; others: {id: string}[]; wallMs: number | null};
@@ -24,9 +25,9 @@ interface Score {
 }
 const scorer = await import(new URL('../../scripts/score-session.mjs', import.meta.url).href) as {
   scoreSession(dir: string, options?: {others?: unknown[]}): Score;
-  resolveSession(path: string): {dir: string; others: {id: string}[]};
+  resolveSession(path: string, home?: string): {dir: string; others: {id: string}[]};
   renderTable(scores: Score[]): string;
-  projectUsage(path: string): {sessions: {id: string; usage: Score['usage']}[]; recorded: number; total: Score['usage']['total']} | null;
+  projectUsage(path: string, home?: string): {sessions: {id: string; usage: Score['usage']}[]; recorded: number; total: Score['usage']['total']} | null;
   main(argv: string[]): number;
 };
 
@@ -165,6 +166,24 @@ test('Cost reports tokens and cost per actor, per root task and in total when le
     assert.match(table, /tokens in [/] out +1200 [/] 120/);
     assert.match(table, /techne cost +2[.]5000 USD/);
     assert.match(table, /root #1 cost +6[.]0000 USD/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('a project directory resolves to its data folder under the home; the data folder itself and the old in-project layout still work', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'logox-scorer-'));
+  try {
+    const home = join(root, 'home'), project = join(root, 'proj'), data = projectDataDir(project, home);
+    await writeSession(join(data, 'state', 'sessions', 'a'), true);
+    await writeSession(join(data, 'state', 'sessions', 'b'), true);
+    assert.deepEqual([scorer.resolveSession(project, home).dir, ...scorer.resolveSession(project, home).others.map(item => item.id)].map(item => item.split(/[\\/]/).at(-1)).sort(), ['a', 'b']);
+    assert.equal(scorer.resolveSession(data).dir.startsWith(join(data, 'state', 'sessions')), true, 'the data folder given directly');
+    assert.equal(scorer.resolveSession(join(project, '.logox'), home).dir.startsWith(join(data, 'state', 'sessions')), true, 'a .logox folder maps to its project');
+    assert.equal(scorer.scoreSession(join(data, 'state', 'sessions', 'a')).session.label, projectKey(project), 'the label is the folder key');
+    assert.equal(scorer.projectUsage(project, home)?.sessions.length, 2);
+    await writeSession(join(root, 'old', '.logox', 'state', 'sessions', 'x'));
+    assert.ok(scorer.resolveSession(join(root, 'old'), home).dir.endsWith('x'), 'older layout');
   } finally {
     await rm(root, {recursive: true, force: true});
   }

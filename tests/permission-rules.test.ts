@@ -279,7 +279,7 @@ test('拒绝说明到达模型：Tools 的拒绝结果带上用户说明，无�
   const {Tools} = await import('../src/tools/index.js');
   const f = await fixture('default');
   try {
-    const tools = new Tools(f.cwd, undefined, f.engine), a = guardFixture('default', [{decision: 'deny', note: 'run the tests first'}, {decision: 'deny'}]);
+    const tools = new Tools(f.cwd, undefined, f.engine, {home: f.cwd}), a = guardFixture('default', [{decision: 'deny', note: 'run the tests first'}, {decision: 'deny'}]);
     const first = await tools.execute({id: '1', name: 'shell', arguments: JSON.stringify({command: 'make deploy'})}, a.context);
     assert.equal(first.isError, true); assert.match(first.text, /Operation denied/); assert.match(first.text, /The user said why: "run the tests first"/);
     const second = await tools.execute({id: '2', name: 'shell', arguments: JSON.stringify({command: 'make other'})}, a.context);

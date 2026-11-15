@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadConfig} from '../src/config/config.js';
 import {markInterruptedJobs} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
-import {createTestApplication, waitForSnapshot} from './runtime-fixture.js';
+import {createTestApplication, projectData, waitForSnapshot} from './runtime-fixture.js';
 import type {Provider} from '../src/runtime/messages.js';
 
 /** A real application: the Director is scripted, and the worker goes through the production registry, gate and HTTP client against a fake endpoint. */
@@ -49,7 +49,7 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
       assert.equal(swarm.jobs[0]!.state, 'done');
       assert.equal(swarm.jobs[0]!.calls[0]!.state, 'completed');
       assert.match(swarm.jobs[0]!.receipt!, /^Evidence:\n- notes\.txt:1$/m);
-      const journal = join(cwd, '.logox', 'state', 'sessions', 'automa-session', 'subagents', 'automa.jsonl');
+      const journal = join(await projectData(cwd), 'state', 'sessions', 'automa-session', 'subagents', 'automa.jsonl');
       const events = (await readFile(journal, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as {event: string; principal: string});
       assert.deepEqual(events.map(event => event.event), ['start', 'message', 'tool', 'message', 'end']);
       assert.ok(events.every(event => event.principal === 'logox'));

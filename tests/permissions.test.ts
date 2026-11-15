@@ -17,6 +17,7 @@ import {shellImpact} from '../src/permissions/shell.js';
 import {createTestApplication as createApplication, finalizingProvider} from './runtime-fixture.js';
 
 import {loadConfig} from '../src/config/config.js';
+import {projectDataDir} from '../src/config/project-data.js';
 
 import {fork} from 'node:child_process';
 import {once} from 'node:events';
@@ -47,7 +48,7 @@ async function fixture() {
 
     async ask() {return {status: 'cancelled', reason: '测试取消'};}};
 
-  const modeFile = join(cwd, 'mode', 'permission-mode.json'), permissions = new PermissionEngine(cwd, 'default', undefined, undefined, modeFile), tools = new Tools(cwd, undefined, permissions);
+  const modeFile = join(cwd, 'mode', 'permission-mode.json'), permissions = new PermissionEngine(cwd, 'default', undefined, undefined, modeFile), tools = new Tools(cwd, undefined, permissions, {home: cwd});
 
   return {cwd, modeFile, tools, permissions, context, controller, messages, requests, async close() {await rm(cwd, {recursive: true, force: true});}};
 
@@ -150,6 +151,19 @@ test('exactly <project>/.logox/bulletin.md is an ordinary project file for path 
     assert.equal(pathDanger(bulletin, 'write'), RUNTIME_WRITE_DANGER);
     assert.equal(new PermissionEngine(cwd, 'auto').evaluate({tool: 'write', paths: [bulletin], effect: 'write', risky: true, danger: RUNTIME_WRITE_DANGER}).decision, 'ask');
   } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
+test('a write into the project data folder under the home is still a runtime write; the project bulletin and memory exemptions stay project-relative', () => {
+  const cwd = join(tmpdir(), 'logox-data-protect-project'), home = join(tmpdir(), 'logox-data-protect-home');
+  const data = projectDataDir(cwd, home);
+  for (const path of [join(data, 'state', 'sessions', 's', 'director.jsonl'), join(data, 'snapshots', 'a.json'), join(data, 'permissions.json')]) {
+    assert.equal(pathDanger(path, 'write', cwd, home), RUNTIME_WRITE_DANGER, path);
+    assert.equal(riskyPath(path, 'write', cwd, home), true, path);
+    assert.equal(pathDanger(path, 'read', cwd, home), undefined, 'reads stay possible');
+  }
+  assert.equal(pathDanger(join(cwd, '.logox', 'bulletin.md'), 'write', cwd, home), undefined);
+  assert.equal(pathDanger(join(cwd, '.logox', 'memory', 'note.md'), 'write', cwd, home), undefined);
+  assert.equal(pathDanger(join(data, 'memory', 'note.md'), 'write', cwd, home), RUNTIME_WRITE_DANGER, 'no memory exemption inside the data folder');
 });
 
 test('the bulletin exemption is exact: everything else under .logox, other locations and the user-level file stay protected', async () => {

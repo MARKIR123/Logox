@@ -11,7 +11,7 @@ import {projectPortfolioScene} from '../src/demo/scene-state.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'logox-demo-test-'));
-  const runtime = createDemo('s', directory);
+  const runtime = createDemo('s', directory, directory);
   await runtime.ready;
   return {...runtime, async cleanup() {await runtime.close(); await rm(directory, {recursive: true, force: true});}};
 }

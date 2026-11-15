@@ -3,6 +3,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {resolveRgPath} from './tools/GrepTool/rg-path.js';
+import {projectDataDir} from './config/project-data.js';
 import type {ResultLine} from './runtime/command-surface.js';
 
 export interface DoctorCheckItem {
@@ -224,7 +225,16 @@ export function runDoctorChecks(cwd = process.cwd(), home = homedir()): DoctorRe
     });
   }
 
-  // 7. Retired legacy directory
+  // 7. Where this project's runtime state (sessions, snapshots, project permission rules) is kept
+  const dataDir = projectDataDir(cwd, home);
+  checks.push({
+    name: 'Project Data Folder',
+    status: 'pass',
+    message: dataDir,
+    ...(existsSync(join(cwd, '.logox', 'state')) ? {detail: 'Older runtime state still sits in ' + join(cwd, '.logox') + '; it moves to the folder above the next time Logox starts here.'} : {}),
+  });
+
+  // 8. Retired legacy directory
   if (existsSync(join(home, '.logox-ts'))) {
     checks.push({
       name: 'Legacy Directory',
