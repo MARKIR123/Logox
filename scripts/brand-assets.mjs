@@ -88,14 +88,121 @@ function wordmark(ink, palette) {
   return [parts.join(''), x + w];
 }
 
-function banner(palette, bg, ink, muted, rule) {
-  const W = 1280, H = 400, left = 492;
-  const [word, width] = wordmark(ink, palette), s = Math.min(1, (W - left - 84) / width), top = (H - (100 * s + 114)) / 2;
+// ---- Monospace text (Maple Mono CN outlines) for the ensemble row and the README stage ----------------------------
+const scene = read('scene.json');
+// Actor identity colours from src/actors/profiles/*/config.yaml (dark) and darker cuts of the same hues for paper.
+const CAST_DARK = {logox: '#7DA1DE', techne: '#E5C07B', kalon: '#B3A0D4', aletheia: '#7FAE99', anamnesis: '#C9D7F2'};
+const CAST_LIGHT = {logox: '#3F64AE', techne: '#8F6512', kalon: '#6B55A0', aletheia: '#2F6B52', anamnesis: '#4A5F8A'};
+// The stage is drawn in the logox-dark theme (src/config/themes/logox-dark.json).
+const SCENE_TONES = {...CAST_DARK, fg: '#E8E6E0', muted: '#969EB0', user: '#D77757', success: '#8CC59E', running: '#E5C07B'};
+
+// Symbol geometry: centre (300, 300), half-size R; strokes of weight S.
+const R = 320, S = 72, C = 300, CY = 330;
+const diamond = r => `M${C} ${CY + r}L${C + r} ${CY}L${C} ${CY - r}L${C - r} ${CY}Z`;
+const circle = r => `M${C - r} ${CY}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z`;
+const box = (x0, y0, x1, y1) => `M${x0} ${y0}H${x1}V${y1}H${x0}Z`;
+const star = (r, w) => `M${C} ${CY + r}Q${C + w} ${CY + w} ${C + r} ${CY}Q${C + w} ${CY - w} ${C} ${CY - r}Q${C - w} ${CY - w} ${C - r} ${CY}Q${C - w} ${CY + w} ${C} ${CY + r}Z`;
+const SYMBOLS = {
+  '◈': diamond(R + 20) + diamond(R + 20 - S * 1.3) + diamond(R * 0.42),
+  '⊞': (() => {const a = R - 40, i = a - S, h = S / 2; return box(C - a, CY - a, C + a, CY + a) + box(C - i, CY - i, C + i, CY + i)
+    + box(C - h, CY - i, C + h, CY + i) + box(C - i, CY - h, C - h, CY + h) + box(C + h, CY - h, C + i, CY + h);})(),
+  '✧': star(R + 20, 52) + star(R + 20 - S * 1.6, 22),
+  '◎': circle(R) + circle(R - S) + circle(R * 0.36),
+  '◇': diamond(R + 20) + diamond(R + 20 - S * 1.3),
+  '⏵': `M${C - 170} ${CY + R - 70}L${C + 230} ${CY}L${C - 170} ${CY - R + 70}Z`,
+};
+
+/** Glyph paths go into <defs> once per file and are placed with <use>, so a repeated character costs one short element. */
+function monoWriter(prefix) {
+  const defs = new Map();
+  const id = (face, ch) => {
+    const key = prefix + (face === outlines.monoBold ? 'b' : 'r') + ch.codePointAt(0).toString(16);
+    if (!defs.has(key)) defs.set(key, `<path id="${key}" d="${face.glyphs[ch].d}"/>`);
+    return key;
+  };
+  /** The actor symbols and ⏵, drawn at one size in a 600 × 1000 cell (font units, y up, baseline 0): the font's own are small and uneven. */
+  const drawn = Object.fromEntries(Object.entries(SYMBOLS).map(([ch, d]) => [ch, () => `<path fill-rule="evenodd" d="${d}"/>`]));
+  /** Spans [[text, colour, bold?]] from left edge x on baseline y at `size` px; returns [svg, width]. */
+  const line = (spans, size, x, y) => {
+    const k = size / outlines.mono.upm, out = [];
+    let pen = 0;
+    for (const [value, fill, bold] of spans) {
+      const face = bold ? outlines.monoBold : outlines.mono, cells = [];
+      for (const ch of value) {
+        const at = +(x + pen).toFixed(2);
+        if (drawn[ch]) cells.push(`<g transform="matrix(${k} 0 0 ${-k} ${at} ${+y.toFixed(2)})">${drawn[ch]()}</g>`);
+        else if (ch !== ' ') {
+          if (!face.glyphs[ch]) throw new Error(`outlines.json has no mono glyph for ${JSON.stringify(ch)}; rerun scripts/brand-outlines.py`);
+          if (face.glyphs[ch].d) cells.push(`<use href="#${id(face, ch)}" transform="matrix(${k} 0 0 ${-k} ${at} ${+y.toFixed(2)})"/>`);
+        }
+        pen += (drawn[ch] || ch === ' ' ? 600 : face.glyphs[ch].advance) * k;
+      }
+      if (cells.length) out.push(`<g fill="${fill}">${cells.join('')}</g>`);
+    }
+    return [out.join(''), pen];
+  };
+  return {line, defs: () => `<defs>${[...defs.values()].join('')}</defs>`};
+}
+
+/** The ensemble row of the banner: one tag per actor, separated by hairlines like the TUI's actor bar. */
+function ensembleRow(writer, cast, rule, x, y, size, maxWidth) {
+  const tags = scene.pills.map(([symbol, name, key]) => writer.line([[symbol + ' ' + name, cast[key], true]], size, 0, 0));
+  const natural = tags.reduce((sum, [, w]) => sum + w, 0), gap = (maxWidth - natural) / (tags.length - 1);
+  let pen = x;
+  const out = [];
+  tags.forEach(([, w], i) => {
+    const [svg] = writer.line([[scene.pills[i][0] + ' ' + scene.pills[i][1], cast[scene.pills[i][2]], true]], size, pen, y);
+    out.push(svg);
+    if (i < tags.length - 1) out.push(`<line x1="${+(pen + w + gap / 2).toFixed(1)}" y1="${+(y - size * 0.82).toFixed(1)}" x2="${+(pen + w + gap / 2).toFixed(1)}" y2="${+(y + size * 0.22).toFixed(1)}" stroke="${rule}"/>`);
+    pen += w + gap;
+  });
+  return out.join('');
+}
+
+function banner(palette, bg, ink, muted, rule, cast, prefix) {
+  const W = 1280, H = 400, left = 492, writer = monoWriter(prefix);
+  const [word, width] = wordmark(ink, palette), s = Math.min(1, (W - left - 84) / width), top = (H - (100 * s + 128)) / 2;
   const [tagline] = text(outlines.tagline, outlines.tagline.text, 34, left, top + 100 * s + 58, ink);
-  const [subtitle] = text(outlines.subtitle, outlines.subtitle.text, 21, left, top + 100 * s + 114, muted, 0.06);
-  return [`<rect width="${W}" height="${H}" rx="22" fill="${bg}"/>${pixels(shade(master), palette, 92, (H - 52 * 6) / 2, 6)}`
+  const ruleY = top + 100 * s + 82, row = ensembleRow(writer, cast, rule, left, top + 100 * s + 128, 22, width * s);
+  return [`${writer.defs()}<rect width="${W}" height="${H}" rx="22" fill="${bg}"/>${pixels(shade(master), palette, 92, (H - 52 * 6) / 2, 6)}`
     + `<g transform="translate(${left} ${top.toFixed(1)}) scale(${s.toFixed(4)})">${word}</g>${tagline}`
-    + `<line x1="${left}" y1="${(top + 100 * s + 80).toFixed(1)}" x2="${(left + width * s).toFixed(1)}" y2="${(top + 100 * s + 80).toFixed(1)}" stroke="${rule}"/>${subtitle}`, W, H];
+    + `<line x1="${left}" y1="${ruleY.toFixed(1)}" x2="${(left + width * s).toFixed(1)}" y2="${ruleY.toFixed(1)}" stroke="${rule}"/>${row}`, W, H];
+}
+
+/** The README stage: a terminal window with one round of the ensemble at work, drawn in the logox-dark theme. */
+function stage() {
+  const W = 1200, size = 19, lh = 33, pad = 44, writer = monoWriter('s'), T = SCENE_TONES;
+  const spans = line => line.map(([value, tone]) => [value, T[tone], ['logox', 'techne', 'kalon', 'aletheia', 'anamnesis'].includes(tone) && /[A-Za-z]/.test(value)]);
+  const bar = 46, bodyTop = bar + 40, rows = scene.stage.length, composerY = bodyTop + rows * lh + 30, statusY = composerY + 64, H = statusY + 40;
+  const out = [];
+  // Window, title bar and a soft shadow (no gradients on the mark; the window is an illustration).
+  out.push(`<rect x="6" y="10" width="${W - 12}" height="${H - 12}" rx="16" fill="#0B0E14" opacity="0.55"/>`);
+  out.push(`<rect width="${W}" height="${H - 8}" rx="16" fill="#1C2330" stroke="#2C3546"/>`);
+  out.push(`<path d="M16 0h${W - 32}a16 16 0 0 1 16 16v${bar - 16}h-${W}v-${bar - 16}a16 16 0 0 1 16 -16z" fill="#161C27"/><line x1="0" y1="${bar}" x2="${W}" y2="${bar}" stroke="#2C3546"/>`);
+  out.push(pixels(draft, DARK, 22, 10, 1));
+  const [title, tw] = writer.line([[scene.title, '#8E97A8']], 15, 0, 0);
+  out.push(`<g transform="translate(${((W - tw) / 2).toFixed(1)} ${bar / 2 + 5})">${title}</g>`);
+  // Body: one rail per card in the owner's colour, as in the timeline.
+  scene.stage.forEach((line, i) => {
+    const y = bodyTop + i * lh, rail = scene.rails[i];
+    // A card's rail runs unbroken over its lines and stops 4 px short of the next card.
+    const first = rail && scene.rails[i - 1] !== rail, last = rail && scene.rails[i + 1] !== rail;
+    if (rail) out.push(`<rect x="${pad}" y="${y - lh + 9 + (first ? 2 : 0)}" width="3" height="${lh - (first ? 2 : 0) - (last ? 4 : 0)}" fill="${T[rail]}" opacity="${rail === 'logox' ? 0.9 : 0.75}"/>`);
+    out.push(writer.line(spans(line), size, pad + (rail ? 22 : 0), y)[0]);
+  });
+  // Composer and the actor bar.
+  out.push(`<line x1="${pad}" y1="${composerY - 34}" x2="${W - pad}" y2="${composerY - 34}" stroke="#2C3546"/>`);
+  out.push(writer.line(spans(scene.composer), size, pad, composerY)[0]);
+  out.push(`<rect x="${pad + writer.line(spans(scene.composer), size, 0, 0)[1] + 2}" y="${composerY - size * 0.85}" width="${size * 0.55}" height="${size * 1.1}" fill="#E8E6E0" opacity="0.85"/>`);
+  out.push(`<line x1="${pad}" y1="${statusY - 30}" x2="${W - pad}" y2="${statusY - 30}" stroke="#2C3546"/>`);
+  let pen = pad;
+  scene.status.forEach((cell, i) => {
+    const [svg, w] = writer.line(spans(cell), 16, pen, statusY);
+    out.push(svg);
+    pen += w + 28;
+    if (i < scene.status.length - 1) {out.push(`<line x1="${pen - 14}" y1="${statusY - 14}" x2="${pen - 14}" y2="${statusY + 4}" stroke="#3A4558"/>`); }
+  });
+  return [writer.defs() + out.join(''), W, H];
 }
 
 function lockup(palette, ink) {
@@ -122,7 +229,8 @@ for (const [name, palette, ink] of [['wordmark.svg', DARK, BONE], ['wordmark-lig
   svg(name, 'LOGOX', `<g transform="translate(0 4)">${body}</g>`, w, 108);
 }
 for (const [name, palette, ink] of [['logo.svg', DARK, BONE], ['logo-light.svg', LIGHT, INK]]) svg(name, 'LOGOX', ...lockup(palette, ink));
-svg('banner.svg', 'LOGOX: A terminal coding ensemble', ...banner(DARK, NIGHT, BONE, '#8E97A8', '#2A3446'));
-svg('banner-light.svg', 'LOGOX: A terminal coding ensemble', ...banner(LIGHT, PAPER, INK, '#6B7385', '#D9D5CB'));
+svg('banner.svg', 'LOGOX: A terminal coding ensemble', ...banner(DARK, NIGHT, BONE, '#8E97A8', '#2A3446', CAST_DARK, 'd'));
+svg('banner-light.svg', 'LOGOX: A terminal coding ensemble', ...banner(LIGHT, PAPER, INK, '#6B7385', '#D9D5CB', CAST_LIGHT, 'l'));
+svg('stage.svg', 'Logox at work: the Director splits a request and three actors work on it in parallel', ...stage());
 for (const [name, content] of Object.entries(files)) writeFileSync(join(assets, name), content);
 console.log(`wrote ${Object.keys(files).length} files to assets/`);

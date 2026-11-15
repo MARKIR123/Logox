@@ -6,7 +6,8 @@ LOGOX 的标志是一朵像素花：上下两片雾蓝花瓣、左右两片骨�
 
 | 文件 | 用途 |
 |---|---|
-| `assets/banner.svg`、`assets/banner-light.svg` | README 横幅（1280 × 400），README 按 GitHub 的深浅主题自动切换 |
+| `assets/banner.svg`、`assets/banner-light.svg` | README 横幅（1280 × 400），README 按 GitHub 的深浅主题自动切换；标语下方是四位角色的名牌 |
+| `assets/stage.svg` | README 的舞台示意图：一个终端窗口里的一轮协作，按 `logox-dark` 主题绘制 |
 | `assets/logo.svg`、`assets/logo-light.svg` | 横版组合：标志加字标 |
 | `assets/wordmark.svg`、`assets/wordmark-light.svg` | 字标：Cinzel 的 LOG 与 X，第二个 O 换成像素花心 |
 | `assets/logo-mark.svg`、`assets/logo-mark-light.svg` | 标志母版（52 格），带克制的边缘光影 |
@@ -37,8 +38,11 @@ LOGOX 的标志是一朵像素花：上下两片雾蓝花瓣、左右两片骨�
 ## 字体
 
 - 字标：[Cinzel](https://fonts.google.com/specimen/Cinzel) Medium，字距 0.12 em。
-- 横幅标语：[EB Garamond](https://fonts.google.com/specimen/EB+Garamond) 斜体（A terminal coding ensemble）与正体（λόγος · reason, word, account）。
-- 两款都是 OFL 许可。所有文字都已转成轮廓，不依赖系统字体。
+- 横幅标语：[EB Garamond](https://fonts.google.com/specimen/EB+Garamond) 斜体（A terminal coding ensemble）。
+- 横幅名牌与舞台图：[Maple Mono CN](https://github.com/subframe7536/maple-font)，名字用 SemiBold，其余用 Regular。角色符号 `◈ ⊞ ✧ ◎ ◇` 和 `⏵` 由生成脚本按同一尺寸绘制，不取字体自带的字形。
+- 三款都是 OFL 许可。所有文字都已转成轮廓，不依赖系统字体。
+
+名牌上的角色颜色在深色横幅上取自 `src/actors/profiles/*/config.yaml`，浅色横幅用同色相的深一档颜色（见 `scripts/brand-assets.mjs` 的 `CAST_LIGHT`）。
 - 终端字体只是推荐，见[终端操作](UI-SPEC.md)。
 
 ## 修改与重新生成
@@ -46,7 +50,8 @@ LOGOX 的标志是一朵像素花：上下两片雾蓝花瓣、左右两片骨�
 1. 用浏览器打开 `scripts/brand-pixel-editor.html`，把 `assets/brand/` 里的 JSON 粘进文本框导入，编辑后导出 JSON 覆盖原文件。`b` 是蓝，`w` 是骨白。
 2. 运行 `node scripts/brand-assets.mjs`，重新生成 `assets/` 下全部 SVG。光影在生成时计算，源数据只画平涂。
 3. 改了 `assets/brand/draft-26.json` 后，同步更新 `src/tui/appearance/emblem.ts` 里的 `EMBLEM_PIXELS`；`npm test` 会检查两者一致。
-4. 只有改字标字母或横幅文字时，才需要运行 `scripts/brand-outlines.py` 重新提取轮廓，它依赖 fontTools 和上面两款字体。
+4. 只有改字标字母、横幅文字或舞台图文字时，才需要运行 `scripts/brand-outlines.py` 重新提取轮廓，它依赖 fontTools 和上面三款字体。字体目录里缺哪款，就保留那一项现有的轮廓，所以只改舞台图时有 Maple Mono 就够了。
+5. 舞台图和名牌的文字都在 `assets/brand/scene.json`：每行是若干 `[文字, 色调]` 片段，色调对应 `SCENE_TONES`。改完先跑第 4 步，再跑第 2 步。
 
 ## 不要这样用
 

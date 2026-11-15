@@ -1,0 +1,34 @@
+{
+  "note": "Text of the README illustrations, read by scripts/brand-assets.mjs (layout) and scripts/brand-outlines.py (which glyphs to outline). Each line is a list of [text, tone] spans; tones are keys of SCENE_TONES in brand-assets.mjs. The symbols the mono font lacks (⊞ ✧ ⏵) are drawn as shapes.",
+  "pills": [
+    ["◈", "Logox", "logox"],
+    ["⊞", "Techne", "techne"],
+    ["✧", "Kalon", "kalon"],
+    ["◎", "Aletheia", "aletheia"]
+  ],
+  "title": "logox — ~/projects/atelier",
+  "stage": [
+    [["❯ ", "user"], ["给设置页加一个主题预览，要能看出对比度够不够", "fg"]],
+    [],
+    [["◈ Logox", "logox"]],
+    [["拆成三块：Techne 写预览页，Kalon 定样张和配色，Aletheia 核对比度算法。", "fg"]],
+    [["⏵ ", "muted"], ["Dispatched 3 tasks · they report back here", "muted"]],
+    [],
+    [["⊞ Techne", "techne"], [" · Theme preview page · ", "muted"], ["Edit theme-page.tsx", "fg"], ["  1:42", "muted"]],
+    [["✧ Kalon", "kalon"], [" · Sample rows and palette · ", "muted"], ["Thinking", "fg"], ["  0:37", "muted"]],
+    [["◎ Aletheia", "aletheia"], [" · Contrast check · ", "muted"], ["Done", "success"]],
+    [["  ✓ ", "success"], ["8 pairs checked against 4.5 / 3.0 · 0 failing", "fg"]],
+    [["◇ Anamnesis", "anamnesis"], [" · Saved 1 memory record", "muted"]],
+    [["  + ", "success"], ["project/theme-contrast (feedback): 主题首先要看得清", "fg"]]
+  ],
+  "rails": ["", "", "logox", "logox", "logox", "", "techne", "kalon", "aletheia", "aletheia", "anamnesis", "anamnesis"],
+  "composer": [["❯ ", "user"], ["@kalon 样张里加一段 diff", "fg"]],
+  "status": [
+    [["◈ Logox", "logox"]],
+    [["⊞ Techne ", "techne"], ["●", "running"]],
+    [["✧ Kalon ", "kalon"], ["●", "running"]],
+    [["◎ Aletheia ", "aletheia"], ["✓", "success"]],
+    [["opus-5.5 · high", "muted"]],
+    [["$0.84 · cache 92%", "muted"]]
+  ]
+}
