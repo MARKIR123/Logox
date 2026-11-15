@@ -10,7 +10,7 @@ import {join} from 'node:path';
 
 import {PermissionEngine, shellWords} from '../src/permissions/engine.js';
 
-import {RUNTIME_WRITE_DANGER, pathDanger, riskyPath, searchablePath, searchExclusions} from '../src/permissions/paths.js';
+import {RUNTIME_WRITE_DANGER, isMemoryRecord, pathDanger, riskyPath, searchablePath, searchExclusions} from '../src/permissions/paths.js';
 
 import {shellImpact} from '../src/permissions/shell.js';
 
@@ -204,6 +204,103 @@ test('real tools: the project bulletin needs no approval in auto mode, other run
     await f.tools.execute(call('write', {file_path: '.logox/bulletin.md', content: 'x'}), f.context);
     assert.deepEqual(f.requests, ['write'], 'a bulletin path that really leads outside the project asks');
   } finally {await f.close(); await rm(elsewhere, {recursive: true, force: true});}
+});
+
+test('exactly a Markdown record directly inside <project>/.logox/memory or <home>/.logox/memory is ordinary for path risk; everything near it stays protected', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-memory-perm-')), home = await mkdtemp(join(tmpdir(), 'logox-memory-home-'));
+  try {
+    const allowed = [join(cwd, '.logox', 'memory', 'prefers-tabs.md'), join(home, '.logox', 'memory', 'who-i-am.md'), join(cwd, '.logox', 'memory', 'MEMORY.md'),
+      join(cwd, '.logox', 'memory', '..', 'memory', 'x.md'), join(cwd, '.logox', 'memory', 'UPPER.MD')];
+    for (const path of allowed) {
+      assert.equal(isMemoryRecord(path, cwd, home), true, path);
+      assert.equal(pathDanger(path, 'write', cwd, home), undefined, path);
+      assert.equal(riskyPath(path, 'write', cwd, home), false, path);
+    }
+    assert.equal(pathDanger('.logox/memory/a.md', 'write', cwd, home), undefined, 'the workspace-relative twin');
+    const protectedPaths = [
+      join(cwd, '.logox', 'memory', 'sub', 'a.md'), join(cwd, '.logox', 'memory', 'a.txt'), join(cwd, '.logox', 'memory', 'a'), join(cwd, '.logox', 'memory', '.md'),
+      join(cwd, '.logox', 'memory-x', 'a.md'), join(cwd, '.logox', 'memoryx.md'), join(cwd, '.logox', 'memory.md'),
+      join(cwd, '.logox', 'memory', '..', 'permissions.json'), join(cwd, '.logox', 'memory', '..', 'memory-x', 'a.md'), join(cwd, '.logox', 'memory', '..', '..', '.logox', 'actors', 'x.md'),
+      join(cwd, 'sub', '.logox', 'memory', 'a.md'), join(cwd, '.logox-ts', 'memory', 'a.md'),
+      join(home, '.logox', 'auth.json'), join(home, '.logox', 'user-permissions.json'), join(home, '.logox', 'memory', 'sub', 'a.md'), join(home, '.logox', 'memory-x', 'a.md'),
+      join(home, '.logox', 'memory', '..', 'auth.json'), join(home, '.logox', 'actor-models.json'), join(home, 'other', '.logox', 'memory', 'a.md'),
+    ];
+    for (const path of protectedPaths) {
+      assert.equal(isMemoryRecord(path, cwd, home), false, path);
+      assert.notEqual(pathDanger(path, 'write', cwd, home), undefined, path);
+      assert.equal(riskyPath(path, 'write', cwd, home), true, path);
+    }
+    assert.equal(pathDanger(join(home, '.logox', 'auth.json'), 'write', cwd, home), 'Target involves credentials or private keys');
+    // The home is judged only when the caller names it, and only as an absolute path.
+    assert.equal(pathDanger(join(home, '.logox', 'memory', 'a.md'), 'write', cwd), RUNTIME_WRITE_DANGER);
+    assert.equal(isMemoryRecord('.logox/memory/a.md', undefined, home), false);
+    assert.equal(isMemoryRecord(join(home, '.logox', 'memory', 'a.md'), cwd, [join(home, 'elsewhere'), home]), true, 'several spellings of the home');
+    // Glob and Grep keep hiding the runtime tree.
+    assert.equal(searchablePath(join(cwd, '.logox', 'memory', 'a.md'), false), false);
+    assert.ok(searchExclusions(false).includes('**/.logox/**'));
+  } finally {await rm(cwd, {recursive: true, force: true}); await rm(home, {recursive: true, force: true});}
+});
+
+test('the engine allows a memory record without asking in every mode, but explicit deny and ask rules and any danger still win', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-memory-engine-'));
+  try {
+    const path = join(cwd, '.logox', 'memory', 'a.md');
+    const target = {tool: 'write', paths: [path], effect: 'write' as const, risky: false, memoryRecord: true as const};
+    for (const mode of ['default', 'auto', 'creative'] as const) {
+      assert.equal(new PermissionEngine(cwd, mode).evaluate(target).decision, 'allow', mode);
+      assert.equal(new PermissionEngine(cwd, mode).evaluate({...target, effect: 'read'}).decision, 'allow', mode + ' read');
+      assert.notEqual(new PermissionEngine(cwd, mode).evaluate({...target, danger: 'Target involves credentials or private keys'}).decision, 'allow', mode + ' with a danger');
+    }
+    const {memoryRecord: _flag, ...plain} = target;
+    assert.equal(new PermissionEngine(cwd, 'default').evaluate(plain).decision, 'ask', 'without the flag a default-mode write still asks');
+    const engine = new PermissionEngine(cwd, 'auto');
+    await engine.add({scope: 'session', decision: 'deny', tool: 'write', pattern: '**/memory/**'});
+    assert.equal(engine.evaluate(target).decision, 'deny');
+    const asking = new PermissionEngine(cwd, 'auto');
+    await asking.add({scope: 'session', decision: 'ask', tool: 'write', pattern: '*'});
+    assert.equal(asking.evaluate(target).decision, 'ask');
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
+test('real tools: Write and Edit of memory records need no approval in any mode; subfolders, other extensions and other runtime files still ask', async () => {
+  const f = await fixture(), home = await mkdtemp(join(tmpdir(), 'logox-memory-tools-home-'));
+  try {
+    const tools = new Tools(f.cwd, undefined, f.permissions, {home});
+    const record = '---\nname: n\ndescription: d\nmetadata:\n  type: project\n---\n\nFact.\n';
+    for (const mode of ['default', 'auto', 'creative'] as const) {
+      f.permissions.mode = mode;
+      f.requests.length = 0;
+      const project = '.logox/memory/note-' + mode + '.md', user = join(home, '.logox', 'memory', 'user-' + mode + '.md');
+      for (const file of [project, user]) {
+        const written = await tools.execute(call('write', {file_path: file, content: record}), f.context);
+        assert.equal(written.isError, false, mode + ' ' + file + ': ' + written.text);
+        const edited = await tools.execute(call('edit', {file_path: file, old_string: 'Fact.', new_string: 'Changed.'}), f.context);
+        assert.equal(edited.isError, false, mode + ' ' + file + ': ' + edited.text);
+        assert.equal((await tools.execute(call('read', {file_path: file}), f.context)).isError, false, mode + ' read');
+      }
+      assert.deepEqual(f.requests, [], mode + ': no approval prompt');
+      assert.match(await readFile(join(f.cwd, project), 'utf8'), /Changed\./);
+      assert.match(await readFile(user, 'utf8'), /Changed\./);
+    }
+    f.permissions.mode = 'default';
+    const asking = ['.logox/memory/sub/a.md', '.logox/memory/a.txt', '.logox/memory-x/a.md', '.logox/memory/../permissions.json', join(home, '.logox', 'auth.json'),
+      join(home, '.logox', 'memory', 'sub', 'a.md'), join(home, '.logox', 'actor-models.json'), join(home, '.logox', 'memory', '..', 'auth.json')];
+    for (const file of asking) {
+      f.requests.length = 0;
+      // A fresh Tools each time: the guard remembers denials, and these are asked about one by one.
+      await new Tools(f.cwd, undefined, f.permissions, {home}).execute(call('write', {file_path: file, content: 'x'}), f.context);
+      assert.deepEqual(f.requests, ['write'], file + ' still asks');
+    }
+    // A memory folder that is really a link to somewhere else is judged by where it points.
+    const elsewhere = await mkdtemp(join(tmpdir(), 'logox-memory-elsewhere-'));
+    try {
+      await rm(join(f.cwd, '.logox', 'memory'), {recursive: true, force: true});
+      await symlink(elsewhere, join(f.cwd, '.logox', 'memory'), 'junction');
+      f.requests.length = 0;
+      await tools.execute(call('write', {file_path: '.logox/memory/linked.md', content: 'x'}), f.context);
+      assert.deepEqual(f.requests, ['write'], 'a linked folder leaves the exemption');
+    } finally {await rm(elsewhere, {recursive: true, force: true});}
+  } finally {await f.close(); await rm(home, {recursive: true, force: true});}
 });
 
 test('项目规则持久、撤销、项目身份隔离与保存失败不生效', async () => {

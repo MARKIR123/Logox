@@ -48,7 +48,7 @@ Logox 把终端显示、任务执行、模型请求和持久化分开，让每�
 
 - 没有 PDF 或 Notebook 的专门读取工具；图片通过 `Read` 读取。
 - 权限模式是应用内的裁决，不是操作系统沙箱。
-- 入梦（`src/anamnesis/`）只有空闲触发与生命周期（`service.ts`）、记忆存储（`memory.ts`）和会话回顾生成（`runner.ts`）几个部件，只有 `--demo` 接入了 `service.ts`，正式应用还没有装配。
+- 入梦（`src/anamnesis/`）已由 `src/app/anamnesis.ts` 装配进正式应用（空闲回顾与入梦、记忆记录、提示词记忆段）；`/anamnesis` 页面尚未提供，随下一次改动到来。
 - 没有磁盘插件的正式加载器。
 
 ## 开发验证

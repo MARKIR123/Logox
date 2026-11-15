@@ -77,17 +77,21 @@ export function createDemo(sessionId: string, cwd: string) {
       }
     });
   });
-  const dream = new Anamnesis(sessionId, store, async context => {
-    for (const stage of ['Review materials', 'Research topics', 'Verify candidates']) {
-      context.report(stage, 'Lifecycle demo: no project materials were read and no memory was committed.');
-      await delay(900, undefined, {signal: context.signal});
-    }
+  const dream = new Anamnesis(sessionId, store, {
+    material: async () => false,
+    async run(context) {
+      for (const stage of ['Review materials', 'Research topics', 'Verify candidates']) {
+        context.report(stage, 'Lifecycle demo: no project materials were read and no memory was committed.');
+        await delay(900, undefined, {signal: context.signal});
+      }
+      return {stage: 'Nothing new to remember', detail: 'Lifecycle demo: no project materials were read and no memory was committed.'};
+    },
   }, () => ensemble.isBusy());
   const submit = async (text: string, source: ActorId = 'logox') => {
     const raw = text.trim();
     if (!raw) return;
     if (raw === '/anamnesis stop') {await dream.pause(); return;}
-    if (raw === '/anamnesis start') {dream.start(); return;}
+    if (raw === '/anamnesis start') {dream.runNow('dream'); return;}
     const match = /^@(logox|aletheia|techne|kalon)\s+([\s\S]+)$/i.exec(raw);
     if (raw.startsWith('@') && !match) throw new Error('Enter a known role and task, for example @kalon take a look at the homepage colors');
     await dream.foregroundSubmitted();

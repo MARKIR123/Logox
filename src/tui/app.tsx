@@ -214,7 +214,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
   const inlineRequest = stage && request || demoScene && request && (request.activityId === scenario?.techne || request.activityId === scenario?.kalon);
   const response = request ? responses[request.requestId] ?? initialResponse(request) : undefined;
   const activities = snapshot.activities.filter(activity =>
-    activity.sessionId === sessionId &&
+    activity.sessionId === sessionId && activity.kind !== 'anamnesis' &&
     (isDirector(currentView) || activity.ownerId === currentView)
   );
   const activity = activities.find(item => item.activityId === selectedActivityId) ??

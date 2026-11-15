@@ -47,11 +47,13 @@ export interface RequestAssemblyDeps {
   /** The Director's open task reports by activity id, written by the ensemble hooks and drained here. */
   directorReports: ReadonlyMap<string, string>;
   configureMeter(ownerId: string): Promise<void>;
+  /** The static memory section (read at session start and on /reload); the same string for every request of every actor between those moments. */
+  memoryPrompt(): string;
 }
 
 export function createRequestAssembly(deps: RequestAssemblyDeps) {
   const {session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry, modelPool, actors, actorServices,
-    taskModels, contexts, permissions, extensions, profileReady, directorReports, configureMeter} = deps;
+    taskModels, contexts, permissions, extensions, profileReady, directorReports, configureMeter, memoryPrompt} = deps;
   const resources = extensions.resources;
   const environment = new EnvironmentState();
   const automaJournal = (sessionId: string) => join(stateDir, 'sessions', sessionId, 'subagents', 'automa.jsonl');
@@ -104,7 +106,7 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
       ...(language ? {language} : {}), ...(state.userName ? {userName: state.userName} : {})}, history);
     const base = await agentRequestBase(cwd, context.ownerId, mcpRegistrations(extensions.mcp),
       resources, {prompt: role.prompt, execution: role.execution, collaboration: role.collaboration,
-        compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history});
+        compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history}, memoryPrompt());
     const contextUpdates: RuntimeContextMessage[] = [...effective.updates, ...base.contextUpdates ?? []];
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     const pending = directorReports.get(context.activityId);

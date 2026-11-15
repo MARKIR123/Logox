@@ -70,6 +70,8 @@ export const activitySchema = z.strictObject({
   summary: roundSummarySchema.optional(),
   progress: taskProgressSchema.optional(),
   taskModel: taskModelSchema.optional(),
+  /** Wall-clock creation time (ms). Set only by Anamnesis, whose card is placed among the messages by it; other activities are placed by their messages. */
+  createdAt: z.number().optional(),
   ...taskOriginSchema.shape,
 });
 export type Activity = z.infer<typeof activitySchema>;

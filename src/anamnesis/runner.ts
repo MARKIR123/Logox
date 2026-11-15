@@ -1,210 +1,112 @@
+/**
+ * What one Anamnesis run does: read the session, ask the model once (no tools), and apply the answer.
+ * A run changes nothing until the model has answered, so an aborted run leaves memory and watermarks as they were.
+ */
 import {promisify} from 'node:util';
 import {execFile as execFileCb} from 'node:child_process';
-import type {Journal, HistoryEntry} from '../store/journal.js';
-import type {MemoryStore} from './memory.js';
-import type {ModelMessage, Provider} from '../runtime/messages.js';
+import type {Journal} from '../store/journal.js';
+import type {ModelTurn} from '../runtime/messages.js';
+import type {MemoryRecord, MemoryStore} from './memory.js';
+import type {ResolvedModel} from './model.js';
+import {applyOperations, dreamDetail, dreamStage, parseDreamAnswer} from './operations.js';
+import {DREAM_MAX_TOKENS, DREAM_SYSTEM_PROMPT, RECAP_MAX_TOKENS, RECAP_SYSTEM_PROMPT, RECORD_CONTENT_CAP} from './prompts.js';
+import type {AnamnesisDriver, RunContext, RunKind, RunOutcome} from './service.js';
+import {DREAM_TRANSCRIPT_CAP, RECAP_TRANSCRIPT_CAP, buildTranscript, hasNewMaterial, marksOf, type OwnerEntries} from './transcript.js';
+import type {WatermarkStore} from './watermark.js';
 
 const execFile = promisify(execFileCb);
 
-export interface RecapSummary {
-  oneLineSummary: string;
-  whatWasDone: string;
-  workingTreeState: string;
-  recommendedNextStep: string;
-  fullMarkdown: string;
-}
-
+/** Branch and the first uncommitted files, in a few lines; never throws. */
 export async function getGitStatus(cwd: string): Promise<string> {
   try {
     const {stdout: branch} = await execFile('git', ['branch', '--show-current'], {cwd, timeout: 5000}).catch(() => ({stdout: ''}));
     const {stdout: status} = await execFile('git', ['status', '--porcelain'], {cwd, timeout: 5000}).catch(() => ({stdout: ''}));
-
     const branchName = branch.trim() || 'detached';
     const lines = status.trim().split('\n').filter(Boolean);
-    if (lines.length === 0) {
-      return `Branch ${branchName} (clean working tree)`;
-    }
+    if (lines.length === 0) return `Branch ${branchName} (clean working tree)`;
     return `Branch ${branchName} (${lines.length} uncommitted changes):\n${lines.slice(0, 10).map(l => '  ' + l).join('\n')}${lines.length > 10 ? `\n  ... and ${lines.length - 10} more` : ''}`;
   } catch {
     return 'Git status unavailable';
   }
 }
 
-export const RECAP_SYSTEM_PROMPT = `You are Anamnesis, the autonomous context guardian in LOGOX.
-Your task is to summarize the working context for a human developer who just returned to their terminal.
-Produce a concise, high-density summary strictly following this 3-part Markdown structure:
-
-### What Was Done
-(1-3 bullet points on the latest accomplished tasks and conclusions)
-
-### Working Tree State
-(Brief overview of uncommitted modifications or clean state)
-
-### Recommended Next Step
-(1-2 clear, actionable recommendations on what to do next)
-
-Keep tone objective, purely technical, and strictly in English.`;
-
-export async function executeRecap(
-  options: {
-    cwd: string;
-    sessionId: string;
-    journal: Journal;
-    provider?: {
-      respond(
-        params: {system: string; messages: readonly ModelMessage[]},
-        onDelta?: (chunk: any) => void,
-        signal?: AbortSignal
-      ): Promise<{message: Extract<ModelMessage, {role: 'assistant'}>}>;
-    };
-  },
-  signal: AbortSignal = new AbortController().signal
-): Promise<RecapSummary> {
-  const gitStatus = await getGitStatus(options.cwd);
-
-  // Gather recent entries from the journal
-  const defaultOwners = ['logox', 'techne', 'kalon', 'aletheia'];
-  const entries: HistoryEntry[] = [];
-  try {
-    const tasks = await options.journal.activeTasks?.(options.sessionId) ?? [];
-    const allOwners = new Set([...defaultOwners, ...tasks.map(t => t.ownerId)]);
-    for (const owner of allOwners) {
-      const records = await options.journal.load(options.sessionId, owner);
-      entries.push(...records);
-    }
-  } catch {}
-
-  const recentLines = entries.slice(-15).map(e => `[${e.role.toUpperCase()}]: ${e.text.slice(0, 300)}`).join('\n\n');
-
-  let fullMarkdown = '';
-
-  if (options.provider) {
-    const prompt = `Current Working Tree:\n${gitStatus}\n\nRecent Activity History:\n${recentLines || 'No recent transcript entries.'}\n\nPlease generate the 3-part Recap.`;
-    const response = await options.provider.respond({
-      system: RECAP_SYSTEM_PROMPT,
-      messages: [{role: 'user', text: prompt}],
-    }, undefined, signal);
-    fullMarkdown = response.message.text.trim();
-  } else {
-    // Fast fallback if provider not supplied
-    fullMarkdown = `### What Was Done\nCompleted recent session tasks.\n\n### Working Tree State\n${gitStatus}\n\n### Recommended Next Step\nContinue with next objective.`;
-  }
-
-  // Parse 3 parts from markdown
-  const doneMatch = /### What Was Done\r?\n([\s\S]*?)(?=### Working Tree State|$)/i.exec(fullMarkdown);
-  const treeMatch = /### Working Tree State\r?\n([\s\S]*?)(?=### Recommended Next Step|$)/i.exec(fullMarkdown);
-  const nextMatch = /### Recommended Next Step\r?\n([\s\S]*?)$/i.exec(fullMarkdown);
-
-  const whatWasDone = doneMatch?.[1]?.trim() ?? 'Recent tasks completed.';
-  const workingTreeState = treeMatch?.[1]?.trim() ?? gitStatus;
-  const recommendedNextStep = nextMatch?.[1]?.trim() ?? 'Ready for user input.';
-
-  const firstBullet = whatWasDone.split('\n')[0]?.replace(/^[-*•\d.]\s*/, '').trim() ?? 'Recent work';
-  const oneLineSummary = `${firstBullet.slice(0, 50)} · ${workingTreeState.split('\n')[0]?.slice(0, 30)}`;
-
-  return {
-    oneLineSummary,
-    whatWasDone,
-    workingTreeState,
-    recommendedNextStep,
-    fullMarkdown,
-  };
+export interface RunnerDeps {
+  sessionId: string;
+  cwd: string;
+  journal: Pick<Journal, 'load'>;
+  /** Every owner with a journal in this session: the actor catalog plus the owners of the session's tasks. */
+  owners(): Promise<readonly string[]>;
+  memory: MemoryStore;
+  watermarks: WatermarkStore;
+  /** Resolved for each run, so a model chosen later is used at once. Throws the "no usable model" error. */
+  model(): Promise<ResolvedModel>;
+  /** Records the usage of one request under the owner `anamnesis`. */
+  charge(usage: ModelTurn['usage'], identity: string): Promise<void> | void;
+  gitStatus?(cwd: string): Promise<string>;
+  /** `YYYY-MM-DD` of today. */
+  today?(): string;
 }
 
-export const DREAM_SYSTEM_PROMPT = `You are Anamnesis, the autonomous memory consolidation unit in LOGOX.
-Your task is to analyze recent session transcripts and extract high-confidence, persistent facts.
-Categories to extract:
-- 'user': Explicit user preferences, roles, or communication habits.
-- 'feedback': Technical corrections, negative rules, or confirmed approaches.
-- 'project': Architecture facts, goals, constraints not derivable from code alone.
-- 'reference': Important URLs, issue tickets, or dashboard links.
+export const recapMessage = (git: string, transcript: string) => 'Working tree:\n' + git + '\n\nConversation:\n' + transcript;
+const recordBlock = (record: MemoryRecord) => '## ' + record.scope + '/' + record.name + ' (' + record.type + ')\n' + record.description + '\n' + record.content.slice(0, RECORD_CONTENT_CAP);
+export const dreamMessage = (today: string, records: readonly MemoryRecord[], transcript: string) =>
+  'Today: ' + today + '\n\nCurrent memory records:\n' + (records.length ? records.map(recordBlock).join('\n\n') : '(none)') + '\n\nUnreviewed transcript:\n' + transcript;
+/** First line of a recap is the one-sentence summary (the card title); the rest is the card body. */
+export function splitRecap(text: string): {stage: string; detail: string} {
+  const lines = text.trim().split(/\r?\n/);
+  const first = lines.findIndex(line => line.trim());
+  if (first < 0) return {stage: '', detail: ''};
+  return {stage: lines[first]!.trim().replace(/^⏵\s*/u, '').slice(0, 160), detail: lines.slice(first + 1).join('\n').trim()};
+}
 
-Rules:
-1. ONLY extract high-confidence, lasting facts. Do NOT record ephemeral code edits or temporary calculations.
-2. Return strictly a JSON array of objects with fields:
-   [
-     {
-       "name": "short-kebab-slug",
-       "description": "one-line description",
-       "type": "user" | "feedback" | "project" | "reference",
-       "content": "detailed fact explanation"
-     }
-   ]
-3. If there are no high-confidence lasting facts, return: []`;
-
-export async function executeAutoDream(
-  options: {
-    cwd: string;
-    sessionId: string;
-    journal: Journal;
-    memoryStore: MemoryStore;
-    provider?: {
-      respond(
-        params: {system: string; messages: readonly ModelMessage[]},
-        onDelta?: (chunk: any) => void,
-        signal?: AbortSignal
-      ): Promise<{message: Extract<ModelMessage, {role: 'assistant'}>}>;
-    };
-  },
-  signal: AbortSignal = new AbortController().signal
-): Promise<{consolidated: number; records: string[]}> {
-  if (!options.provider) {
-    return {consolidated: 0, records: []};
+export class AnamnesisRunner implements AnamnesisDriver {
+  constructor(private readonly deps: RunnerDeps) {}
+  private async load(): Promise<OwnerEntries[]> {
+    const ids = [...new Set(await this.deps.owners())];
+    return Promise.all(ids.map(async ownerId => ({ownerId, entries: await this.deps.journal.load(this.deps.sessionId, ownerId)})));
   }
-
-  // Gather recent entries
-  const defaultOwners = ['logox', 'techne', 'kalon', 'aletheia'];
-  const entries: HistoryEntry[] = [];
-  try {
-    const tasks = await options.journal.activeTasks?.(options.sessionId) ?? [];
-    const allOwners = new Set([...defaultOwners, ...tasks.map(t => t.ownerId)]);
-    for (const owner of allOwners) {
-      const records = await options.journal.load(options.sessionId, owner);
-      entries.push(...records);
-    }
-  } catch {}
-
-  const transcript = entries.slice(-30).map(e => `[${e.role.toUpperCase()}]: ${e.text}`).join('\n\n');
-  if (!transcript.trim()) {
-    return {consolidated: 0, records: []};
+  async material(kind: RunKind): Promise<boolean> {
+    return hasNewMaterial(await this.load(), await this.deps.watermarks.marks(kind));
   }
-
-  const response = await options.provider.respond({
-    system: DREAM_SYSTEM_PROMPT,
-    messages: [{role: 'user', text: `Please analyze this transcript and extract persistent memory facts:\n\n${transcript}`}],
-  }, undefined, signal);
-
-  let rawJson = response.message.text.trim();
-  // Strip markdown code fences if present
-  if (rawJson.startsWith('```')) {
-    rawJson = rawJson.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  run(context: RunContext): Promise<RunOutcome> {
+    return context.kind === 'recap' ? this.recap(context) : this.dream(context);
   }
-
-  let items: any[] = [];
-  try {
-    items = JSON.parse(rawJson);
-    if (!Array.isArray(items)) items = [];
-  } catch {
-    return {consolidated: 0, records: []};
-  }
-
-  const recordedNames: string[] = [];
-  for (const item of items) {
+  /** One plain request: the system prompt, one user message, no tools. Thinking stays off unless the chosen model carries an effort of its own. */
+  private async ask(system: string, text: string, maxTokens: number, signal: AbortSignal): Promise<string> {
+    const model = await this.deps.model();
     signal.throwIfAborted();
-    if (!item.name || !item.description || !item.content) continue;
-    const type = ['user', 'feedback', 'project', 'reference'].includes(item.type) ? item.type : 'project';
-    const scope = type === 'user' ? 'user' : 'project';
-    await options.memoryStore.save({
-      name: String(item.name).toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 64),
-      description: String(item.description).slice(0, 200),
-      type,
-      content: String(item.content),
-    }, scope);
-    recordedNames.push(item.name);
+    const turn = await model.respond.respond({system, messages: [{role: 'user', text}], tools: [], maxTokens, ...(model.effort ? {} : {thinking: false as const})}, () => {}, signal);
+    await this.deps.charge(turn.usage, model.identity);
+    return turn.message.text;
   }
-
-  return {
-    consolidated: recordedNames.length,
-    records: recordedNames,
-  };
+  private async recap(context: RunContext): Promise<RunOutcome> {
+    const owners = await this.load();
+    context.signal.throwIfAborted();
+    const transcript = buildTranscript(owners, {}, RECAP_TRANSCRIPT_CAP);
+    if (!transcript) return {stage: 'Nothing to recap yet', detail: ''};
+    const git = await (this.deps.gitStatus ?? getGitStatus)(this.deps.cwd);
+    context.signal.throwIfAborted();
+    const note = splitRecap(await this.ask(RECAP_SYSTEM_PROMPT, recapMessage(git, transcript), RECAP_MAX_TOKENS, context.signal));
+    if (!note.stage) throw new Error('Anamnesis received an empty note.');
+    await this.deps.watermarks.save('recap', marksOf(owners));
+    return note;
+  }
+  private async dream(context: RunContext): Promise<RunOutcome> {
+    const owners = await this.load();
+    const transcript = buildTranscript(owners, await this.deps.watermarks.marks('dream'), DREAM_TRANSCRIPT_CAP);
+    context.signal.throwIfAborted();
+    if (!transcript) {
+      await this.deps.watermarks.save('dream', marksOf(owners));
+      return {stage: dreamStage({saved: [], deleted: []}), detail: '', empty: true};
+    }
+    const records = await this.deps.memory.list();
+    const today = this.deps.today?.() ?? new Date().toISOString().slice(0, 10);
+    const operations = parseDreamAnswer(await this.ask(DREAM_SYSTEM_PROMPT, dreamMessage(today, records, transcript), DREAM_MAX_TOKENS, context.signal));
+    if (!operations) throw new Error('Anamnesis could not read the dream answer; this part of the session will be reviewed again.');
+    // The model has answered: from here the run finishes without yielding to an abort, so a dream never half-applies.
+    context.signal.throwIfAborted();
+    const result = await applyOperations(this.deps.memory, operations);
+    await this.deps.watermarks.save('dream', marksOf(owners));
+    return {stage: dreamStage(result), detail: dreamDetail(result), empty: !result.saved.length && !result.deleted.length};
+  }
 }

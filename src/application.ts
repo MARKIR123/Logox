@@ -62,6 +62,7 @@ import {createSessionStatus} from './app/status.js';
 import {createRequestAssembly} from './app/request.js';
 import {createInput} from './app/input.js';
 import {createSubmit} from './app/submit.js';
+import {ANAMNESIS_TICK_MS, createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
 import {recoverCheckpoints, replaySession} from './app/restore.js';
 import type {SessionState} from './app/state.js';
 
@@ -80,6 +81,8 @@ export interface ApplicationOptions {
   extensions?: ProjectExtensions;
   approveExtension?: ExtensionApproval;
   statusbarPath?: string;
+  /** Test hook: clocks, idle thresholds and the idle-check interval of Anamnesis (no interval runs in tests unless `tickMs` is given). */
+  anamnesis?: AnamnesisAppOptions;
 }
 export interface SessionApplicationOptions extends ApplicationOptions {
   sessionId: string;
@@ -276,9 +279,11 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const extraTools = [...actorServices.definitionsForValidation(), ...extensions.mcp.definitions()];
   const sessionStatus = createSessionStatus({session, cwd, stateDir, config, store, actors, registry, taskModels, contexts, permissions, statusbar, usage});
+  const anamnesis = await createAnamnesis({session, cwd, homeDir, stateDir, config, store, journal, actors, registry, provider: options.provider, busy,
+    configureMeter: sessionStatus.configureMeter, contexts, options: options.anamnesis});
   const {requestBase, keepAlive} = createRequestAssembly({session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry,
     modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, profileReady, directorReports,
-    configureMeter: sessionStatus.configureMeter});
+    configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt});
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,
@@ -331,7 +336,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;
       notice(text, 'task_notice', DIRECTOR_ID);
     },
-    settled: async (activityId, status) => {directorReports.delete(activityId); await actorServices.settled(activityId, status);},
+    settled: async (activityId, status) => {directorReports.delete(activityId); anamnesis.lifecycle.foregroundFinished(); await actorServices.settled(activityId, status);},
   });
   const recovered = await recoverCheckpoints({session, journal, actors, actorServices, taskModels, taskModelLedger, configureMeter: sessionStatus.configureMeter});
   const {checkpoints, owners} = recovered;
@@ -385,11 +390,13 @@ export async function createSessionApplication(options: SessionApplicationOption
   const input = createInput({session, state, store, ensemble, actorServices, systems, notice, beforeTask: options.beforeTask});
   const submitCommand = createSubmit({session, cwd, homeDir, state, env: options.env ?? process.env, resourceOptions: options.resourceOptions, store, journal,
     surfaces, authentication, ensemble, permissions, tools, toolRegistry, actors, actorServices, resources, contexts, registry, modelPool, owners,
-    profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
+    memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
     sessionCommand: options.sessionCommand, requireIdle});
   return {
     sendPendingNow: input.sendPendingNow, discardPending: input.discardPending,
     sessionId: session, store, ensemble, journal, tools, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar,
+    /** Anamnesis: `runNow`, `memories`, `forget`, `anamnesisModel`, `setAnamnesisModel`, `settings`, `setAuto` (see `app/anamnesis.ts`). */
+    anamnesis: anamnesis.api,
     status: sessionStatus.status, isBusy: busy,
     systemNotice: notice,
     getInputQueue: (ownerId?: string) => ({queued: ensemble.queuedInputs(ownerId), steering: deliveries.snapshot().filter(item =>
@@ -404,6 +411,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       extensions.hooks.emit('session_start', {session_id: session, model: modelSelection.current().model});
       const isTest = typeof (globalThis as any).IS_REACT_ACT_ENVIRONMENT !== 'undefined' ||
         process.execArgv.some(arg => arg.startsWith('--test'));
+      // The idle check is a real timer: tests start it only by giving `tickMs`.
+      anamnesis.lifecycle.start(isTest ? undefined : ANAMNESIS_TICK_MS);
       const onboardingPrefs = readOnboardingPrefs(homeDir);
       if (shouldOfferOnboarding(onboardingPrefs) && !modelSelection.current().model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
         void (async () => {
@@ -425,7 +434,8 @@ export async function createSessionApplication(options: SessionApplicationOption
       }
     },
     commandContext: (): CommandContext => modelSelection.completionContext(),
-    noteDraft() {},
+    /** A keystroke in the composer: the session is not idle. */
+    noteDraft() {anamnesis.lifecycle.noteDraft();},
     /** Stops one running tool call (its child process) without ending the owner's step; false when the call is not cancellable or already done. */
     cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user');},
     cancel(activityId: string) {if (state.compactTask?.activityId === activityId) state.compactTask.controller.abort(); else {
@@ -440,11 +450,13 @@ export async function createSessionApplication(options: SessionApplicationOption
     async close() {
       state.closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
       try {
-        await Promise.all([authentication.close(), ensemble.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
+        await Promise.all([authentication.close(), ensemble.close(), anamnesis.lifecycle.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
         await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail();
       } finally {replayed.stopHeld(); await sessionStatus.closeGit(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); input.stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = DIRECTOR_ID, inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
+      // The user spoke: a running recap or dream stops (and applies nothing) before the task starts.
+      if (raw.trim()) await anamnesis.lifecycle.foregroundSubmitted();
       await submitCommand(raw, source, inputDelivery);
     },
   };

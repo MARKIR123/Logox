@@ -50,6 +50,8 @@ export interface SubmitDeps {
   resources: Resources; contexts: ContextManager; registry: ProviderRegistry; modelPool: ModelPool;
   /** Every owner the session has a ledger for; `/undo` walks them. */
   owners: readonly string[];
+  /** The static memory prompt section: `/compact` builds its prefix with it and `/reload` reads it again. */
+  memory: {prompt(): string; refresh(): Promise<void>};
   profileReady: Promise<void>;
   signal: AbortSignal;
   notice: Notice; receipt: Receipt;
@@ -65,7 +67,7 @@ export interface SubmitDeps {
 
 export function createSubmit(deps: SubmitDeps) {
   const {session, cwd, homeDir, state, env, resourceOptions, store, journal, surfaces, authentication, ensemble, permissions, tools, toolRegistry,
-    actors, actorServices, resources, contexts, registry, owners, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
+    actors, actorServices, resources, contexts, registry, owners, memory, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
     providers, pages, buildContext, sessionCommand, requireIdle} = deps;
   const {beginTask, dispatchInput, ownerIsBusy} = input;
   /** `/providers check` and `/check-provider`: one request against the session provider, reported in a result panel. */
@@ -185,7 +187,7 @@ export function createSubmit(deps: SubmitDeps) {
           resourceOptions?.home, resourceOptions?.boundary));
         if (report.prefixChanged) contexts.invalidatePrefix();
         await toolRegistry.reloadUserConfigs();
-        const actorState = await actors.reload(); contexts.invalidatePrefix();
+        const actorState = await actors.reload(); await memory.refresh(); contexts.invalidatePrefix();
         for (const issue of actorState.issues) notice('Actor failed to load: ' + issue.path + ' · ' + issue.reason, 'command_error', source);
         return report.text;
       });
@@ -233,7 +235,8 @@ export function createSubmit(deps: SubmitDeps) {
           const role = actors.find(source);
           const identity = {sessionId: session, ownerId: source, activityId};
           const base = await agentRequestBase(cwd, source, actorServices.tools(source), resources,
-            role ? {prompt: role.prompt, compression: role.compression, visibility: {actorId: source, skills: role.skills}} : undefined, true, getActorScratchpadDir(cwd, session, source));
+            role ? {prompt: role.prompt, compression: role.compression, visibility: {actorId: source, skills: role.skills}} : undefined, true, getActorScratchpadDir(cwd, session, source),
+            undefined, undefined, undefined, memory.prompt());
           await contexts.prepare(identity, contexts.requestBase(identity, base), controller.signal, true);
           controller.signal.throwIfAborted();
           store.activities.update(session, activityId, {status: 'completed', stage: 'Compacted'});

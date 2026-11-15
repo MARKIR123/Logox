@@ -431,7 +431,19 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     if (last.action?.owner) return !card;
     return !last.action;
   };
+  // An Anamnesis card sits where it began among the messages (by `createdAt`, on the same wall clock as `message.time`); one without a time goes last.
+  const notes = isDirector(view) ? snapshot.activities.filter(item => item.sessionId === sessionId && item.kind === 'anamnesis')
+    .sort((a, b) => (a.createdAt ?? Infinity) - (b.createdAt ?? Infinity)) : [];
+  let notesPlaced = 0;
+  const placeNote = (activity: (typeof notes)[number]) => {
+    flushRound(activity.createdAt);
+    builder.pushBlank();
+    appendAnamnesisCard(builder, {id: activity.activityId, title: activity.stage,
+      status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail],
+      open: open(activity.activityId), railColor: viewColor});
+  };
   for (const message of messages) {
+    while (notesPlaced < notes.length && message.time !== undefined && notes[notesPlaced]!.createdAt !== undefined && notes[notesPlaced]!.createdAt! <= message.time) placeNote(notes[notesPlaced++]!);
     const activity = message.activityId ? activities.get(message.activityId) : undefined;
     const actor = activity?.kind === 'actor';
     const source = message.role === 'user' ? inputKind(message) : undefined;
@@ -543,15 +555,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   flushRound();
   finalRound = false;
   for (const request of pending.filter(item => !seen.has(item.activityId))) interaction(request);
+  while (notesPlaced < notes.length) placeNote(notes[notesPlaced++]!);
   for (const activity of snapshot.activities.filter(item => item.sessionId === sessionId && (isDirector(view) || item.ownerId === view))) {
-    if (activity.kind === 'anamnesis') {
-      builder.pushBlank();
-      appendAnamnesisCard(builder, {id: activity.activityId, title: activity.stage,
-        status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail],
-        open: open(activity.activityId), railColor: viewColor});
-    } else if (!grouped.has(activity.activityId) && activity.ownerId === view) {
-      failure(activity.activityId);
-    }
+    if (activity.kind !== 'anamnesis' && !grouped.has(activity.activityId) && activity.ownerId === view) failure(activity.activityId);
   }
   // The timeline never opens with spacer rows (a gap only separates content).
   let lead = 0;

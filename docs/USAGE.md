@@ -445,10 +445,31 @@ playwright = false
 
 `/usage`（别名 `/cost`）把“本会话花了多少”和“套餐还剩多少”放在一页，页签可用鼠标点击，滚轮滚动；页面随用量增长自动刷新。
 
-- **Session 页签**（默认）：会话总计（费用、输入/输出/缓存读/缓存写 token、缓存命中率 = 缓存读 ÷ 输入、墙钟时间、请求数；有模型没有价格时费用标为 partial 并列出无价格模型），然后按角色顺序（Director、各伙伴）各一块，`Automa` 单独一块并归到派遣它的角色名下（用量本来就记在派遣者的计量器里，类别 `automa`；角色块不重复计入它），再是按模型和按类别（task / summary / approval / automa / keepalive，只列出现过的）。
+- **Session 页签**（默认）：会话总计（费用、输入/输出/缓存读/缓存写 token、缓存命中率 = 缓存读 ÷ 输入、墙钟时间、请求数；有模型没有价格时费用标为 partial 并列出无价格模型），然后按角色顺序（Director、各伙伴）各一块，`Automa` 单独一块并归到派遣它的角色名下（用量本来就记在派遣者的计量器里，类别 `automa`；角色块不重复计入它），再是按模型和按类别（task / summary / approval / automa / keepalive / anamnesis，只列出现过的）。
 - **Plan 页签**：只在使用订阅账号（ChatGPT 账号、Copilot 等 OAuth 登录）时出现。LOGOX 目前不读取套餐额度或限流窗口，所以只显示本会话在该账号上的用量、API 等价费用估算，以及一行说明“额度与重置时间由该提供商未报告”，不编造数字。
 
 数字全部来自同一套用量与价格函数（`src/context/usage.ts`、`src/context/cost.ts`）。`/status` 的用量页签只显示会话总计和 `Details: /usage`。
+
+## Anamnesis：回顾与长期记忆
+
+会话空闲时，后台角色 Anamnesis 做两件事，各以一张 Anamnesis 卡片显示在它发生的位置：
+
+- **回顾（recap）**：空闲满 `recap_idle_minutes`（默认 5 分钟）且有新内容时，写一段给回来的你看的短笔记：第一行一句话说明进度，其后是 Done / Open / Next。只读，除了这张卡片什么都不改。
+- **入梦（dream）**：空闲满 `dream_idle_minutes`（默认 30 分钟）且有未审阅的内容时，审阅这段对话，把值得长期保留的事实存成记忆记录，或删除已不成立的记录。没有新东西时自动入梦不留卡片。
+
+“空闲”指没有任务在跑、没有待回答的提问、没有压缩或重载，且你一段时间没有输入、提交或结束任务。你一动手，正在进行的回顾或入梦立即中止并且什么都不写，下次空闲时重新开始。已审阅的位置按会话记在 `state/sessions/<sessionId>/anamnesis.json`，重启后不会重复审阅。
+
+记忆是两个文件夹里的 Markdown 记录（带 YAML 头：`name`、`description`、`metadata.type`，类型为 `user`、`feedback`、`project`、`reference`）：项目的 `.logox/memory/` 与你所有项目共用的 `~/.logox/memory/`。`user` 类型总是存到用户文件夹；看起来像密钥的内容不会写入。每个会话开始时（以及 `/reload` 时）读取一次记录，列在每个角色系统提示的 Memory 段里，所以会话中途新存的记录要到下个会话或 `/reload` 才出现。你明确要求“记住某事”时，角色可直接写入这两个文件夹里的 `.md` 文件，无需审批；这两个文件夹以外的 `.logox` 内容仍受保护。
+
+```toml
+[anamnesis]
+recap = true             # 自动回顾；false 只关闭自动触发，手动运行仍可用
+dream = true             # 自动入梦
+recap_idle_minutes = 5
+dream_idle_minutes = 30
+```
+
+两个自动开关也可以保存为用户偏好（`~/.logox/anamnesis.json`），优先于配置文件。Anamnesis 的模型默认跟随 Director 当前选择（不改变思考档位）；也可以为它单独选定模型，选定的模型不可用时本次运行失败并提示，不会悄悄换别的模型。它的用量记在 `/usage` 的 `anamnesis` 类别下。`/anamnesis` 页面（手动运行、浏览与删除记录、选择模型）随下一次改动提供。
 
 ## 全部斜杠命令
 

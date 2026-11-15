@@ -44,7 +44,7 @@ Paths under `src/`. "Inherits" means no local signpost; use the named one.
 | `store/` | Inherits `runtime/` and `config/` | `.lock-v2` file locks, journals, sessions, session trash, system history, atomic replace |
 | `extensions/` | Inherits `tools/` | MCP client (`mcp.ts`, `mcp-client.ts`), Playwright controller, hooks, external processes, extension config |
 | `commands/`, `commands.ts` | Inherits `tui/` | Command surface descriptors and slash commands |
-| `anamnesis/` | Inherits `context/` | Idle-triggered dream lifecycle (`service.ts`), recap and AutoDream runners (`runner.ts`), memory store (`memory.ts`); not yet wired into the main app |
+| `anamnesis/` | [`src/anamnesis/AGENTS.md`](src/anamnesis/AGENTS.md) | Idle recap and dream lifecycle (`service.ts`), runs (`runner.ts`), memory records and operations (`memory.ts`, `operations.ts`), wired by `src/app/anamnesis.ts` |
 | `demo/`, `demo.ts` | Inherits `tui/` | Scripted demo scenes behind `--demo` |
 | `doctor.ts` | Inherits `tests/` | Environment, dependency and config diagnostics behind `--doctor` |
 | `application*.ts`, `cli.tsx` | Root | Application container, bootstrap, sessions, status, command wiring, CLI entry |

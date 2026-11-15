@@ -27,7 +27,9 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export type NewPermissionRule = Omit<PermissionRule, 'id' | 'hits' | 'lastHit'>;
 const modeFileSchema = z.strictObject({version: z.literal(1), mode: permissionModeSchema});
 const userFileSchema = z.strictObject({version: z.literal(1), rules: z.array(permissionRuleSchema)});
-export interface PermissionTarget {tool: string; paths: readonly string[]; risky: boolean; command?: string; effect?: 'read' | 'write' | 'unknown'; danger?: string}
+export interface PermissionTarget {tool: string; paths: readonly string[]; risky: boolean; command?: string; effect?: 'read' | 'write' | 'unknown'; danger?: string;
+  /** Set by the tools only when every path is a Markdown record of a memory folder (`paths.ts:isMemoryRecord()`); such a Write or Edit needs no approval in any mode. */
+  memoryRecord?: true}
 function globMatch(pattern: string, value: string): boolean {
   let source = '';
   for (let i = 0; i < pattern.length; i++) {
@@ -254,6 +256,7 @@ export class PermissionEngine {
     const refused = this.mode === 'creative' && danger !== undefined && danger !== RUNTIME_WRITE_DANGER && !inScratchpad;
     if (!refused && decided('ask')) return {decision: 'ask', reason: 'Matched an ask rule'};
     if (inScratchpad) return {decision: 'allow', reason: 'Scratchpad directory is allowed for temporary operations'};
+    if (target.memoryRecord && !target.danger && target.effect !== 'unknown') return {decision: 'allow', reason: 'A Markdown record of a memory folder needs no approval'};
     // Development mode (creative) may write its own runtime tree — skills, prompts,
     // journals. Credential and VCS-internal protection are separate dangers and stay.
     if (danger === RUNTIME_WRITE_DANGER && this.mode === 'creative') {

@@ -22,6 +22,8 @@ export interface ActorSystemPromptInput {
   collaboration?: string | undefined;
   memoryFocus?: string | undefined;
   guidelines: readonly {path: string; text: string}[];
+  /** The memory section built once at session start (`prompts/memory.ts:memorySection()`); absent for requests that carry none. */
+  memory?: string | undefined;
   toolsIndex: string;
   skillsIndex: string;
   environmentBaseline: string;
@@ -37,6 +39,7 @@ export interface BasePromptOptions {
   memoryFocus?: string | undefined;
   rulesContext?: string | undefined;
   guidelines?: readonly {path: string; text: string}[] | undefined;
+  memory?: string | undefined;
   toolsIndex?: string | undefined;
   skillsIndex?: string | undefined;
   environmentBaseline?: string | undefined;
@@ -64,6 +67,8 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   if (input.collaboration) add('role_collaboration', 'collaboration', 'role', input.collaboration);
   for (const guideline of input.guidelines) add('guidelines', 'guidelines', 'resource',
     'Source: ' + guideline.path + '\n\n' + nested(guideline.text), 'revisioned');
+  // After the project rules: fixed for the whole session, so it never moves what comes after it.
+  if (input.memory) add('memory', 'guidelines', 'resource', input.memory, 'revisioned');
   add('tools', 'tools-skills', 'resource', input.toolsIndex ? '## Tools\n' + input.toolsIndex : '', 'revisioned');
   add('skills', 'tools-skills', 'resource', input.skillsIndex ? '## Skills\n' + input.skillsIndex : '', 'revisioned');
   add('environment', 'environment', 'runtime', input.environmentBaseline, 'revisioned');
@@ -85,6 +90,7 @@ export function composeBaseSystemPrompt(options: BasePromptOptions): {system: st
   return composeActorSystemPrompt({ownerId: options.ownerId, persona, execution: options.execution, collaboration: options.collaboration,
     memoryFocus: options.memoryFocus,
     guidelines: options.guidelines ?? (options.rulesContext ? [{path: 'request', text: options.rulesContext}] : []),
+    memory: options.memory,
     toolsIndex: options.toolsIndex ?? '', skillsIndex: options.skillsIndex ?? '', environmentBaseline: environment,
     includeSummary: options.includeSummary});
 }

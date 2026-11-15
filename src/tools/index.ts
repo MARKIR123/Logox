@@ -9,7 +9,7 @@ import {ToolModelStorage, type ToolModel, type ToolModelMap} from './tool-models
 import {PermissionEngine, shellWords, type PermissionTarget} from '../permissions/engine.js';
 import {PermissionGuard, type GuardOptions} from '../permissions/guard.js';
 import {shellImpact} from '../permissions/shell.js';
-import {pathDanger, riskyPath} from '../permissions/paths.js';
+import {isMemoryRecord, pathDanger, riskyPath} from '../permissions/paths.js';
 import type {ActorContext} from '../actors/ensemble.js';
 import type {ToolCall, ToolDefinition, TurnUsage} from '../runtime/messages.js';
 import {Snapshots, bytesOrMissing} from './snapshots.js';
@@ -259,6 +259,8 @@ const deniedText = (note?: string) => note ? DENIED + ' The user said why: "' + 
 export class Tools {
   readonly snapshots: Snapshots;
   readonly modelStorage: ToolModelStorage;
+  /** The user home whose `.logox/memory` folder holds user-level memory records (`permissions/paths.ts:isMemoryRecord()`). */
+  private readonly home: string;
   constructor(
     readonly cwd: string,
     private readonly report: (context: ActorContext, text: string) => void = () => {},
@@ -266,7 +268,7 @@ export class Tools {
     readonly options: {home?: string} = {}
   ) {
     this.snapshots = new Snapshots(join(cwd, '.logox', 'snapshots'));
-    const home = options.home ?? homedir();
+    const home = this.home = options.home ?? homedir();
     this.modelStorage = new ToolModelStorage(join(home, '.logox', 'tool-models.json'));
   }
 
@@ -546,8 +548,12 @@ export class Tools {
         ? 'read'
         : ['Write', 'Edit'].includes(name) ? 'write' : 'unknown';
       const targets = [originalPath, path, ...shellPaths.flatMap(item => [item.original, item.canonical])];
-      const danger = targets.map(p => pathDanger(p, effect, [this.cwd, root])).find(Boolean);
+      const homes = [this.home, await realpath(this.home).catch(() => this.home)];
+      const danger = targets.map(p => pathDanger(p, effect, [this.cwd, root], homes)).find(Boolean);
       const targetTool = name.toLowerCase();
+      // A Write, Edit or Read of one Markdown record of a memory folder: both spellings (as typed and canonical) must be one, so a link out of the folder is not.
+      const memoryRecord = ['Read', 'Write', 'Edit'].includes(name) && effect !== 'unknown' && !shellPaths.length &&
+        [originalPath, path].every(p => isMemoryRecord(p, [this.cwd, root], homes));
       const target: PermissionTarget = {
         tool: targetTool,
         effect,
@@ -563,7 +569,8 @@ export class Tools {
             relative(root, item.canonical).replaceAll('\\', '/'),
           ]),
         ],
-        risky: !inside(root, path) || targets.some(p => riskyPath(p, effect, [this.cwd, root])) || shellPaths.some(item => !inside(root, item.canonical)),
+        risky: !memoryRecord && (!inside(root, path) || targets.some(p => riskyPath(p, effect, [this.cwd, root], homes)) || shellPaths.some(item => !inside(root, item.canonical))),
+        ...(memoryRecord ? {memoryRecord: true as const} : {}),
         ...(danger ? {danger} : {}),
         ...(name === 'Shell' ? {command: schemas.Shell.parse(parsed).command} : {}),
       };

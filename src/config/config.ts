@@ -87,6 +87,13 @@ const schema = z.object({
   automa: z.object({
     max_parallel: z.number().int().min(1).max(8).default(4),
   }).default({max_parallel: 4}),
+  /** Anamnesis, the idle-time memory keeper: `recap` writes a note for the returning user, `dream` reviews the transcript into memory records. The switches only gate the automatic trigger. */
+  anamnesis: z.object({
+    recap: z.boolean().default(true),
+    dream: z.boolean().default(true),
+    recap_idle_minutes: z.number().positive().default(5),
+    dream_idle_minutes: z.number().positive().default(30),
+  }).default({recap: true, dream: true, recap_idle_minutes: 5, dream_idle_minutes: 30}),
   kernel: z.object({
     max_iterations: z.number().int().nonnegative().default(0),
     max_retries: z.number().int().nonnegative().max(10).default(3),

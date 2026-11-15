@@ -25,6 +25,12 @@ low_watermark_ratio = 0.5
 [automa]
 max_parallel = 4 # Jobs run at once per dispatch (1-8); a dispatch may ask for more, up to 8.
 
+[anamnesis]
+recap = true # Write a short note for you after the session has been idle for recap_idle_minutes.
+dream = true # Review the session into long-term memory records after dream_idle_minutes of idleness. The model follows the Director unless one is chosen.
+recap_idle_minutes = 5
+dream_idle_minutes = 30
+
 [kernel]
 max_iterations = 0 # Unlimited round trips; cancellation still applies.
 max_retries = 3

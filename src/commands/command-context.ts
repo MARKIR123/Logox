@@ -61,7 +61,7 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
     const meters = contexts.sessionMeters(session), known = [DIRECTOR_ID, ...deps.actors.list().map(item => item.id).filter(id => id !== DIRECTOR_ID)];
     const ids = [...known, ...[...meters.keys()].filter(id => !known.includes(id))];
     const times = store.getSnapshot().messages.flatMap(message => message.time === undefined ? [] : [message.time]);
-    return {owners: ids.map(id => ({id, name: deps.actors.find(id)?.name ?? id, records: meters.get(id)?.usageRecords() ?? []})), config, now: Date.now(),
+    return {owners: ids.map(id => ({id, name: deps.actors.find(id)?.name ?? (id === 'anamnesis' ? 'Anamnesis' : id), records: meters.get(id)?.usageRecords() ?? []})), config, now: Date.now(),
       startedAt: Math.min(opened, ...times), subscriptions: status.options.subscriptions?.() ?? new Set<string>()};
   };
   return (): ApplicationCommandContext => {

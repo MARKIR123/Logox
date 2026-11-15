@@ -82,7 +82,7 @@ export interface AgentOptions {
 }
 export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly (ToolDefinition | ToolRegistration)[] = [], resources?: Resources,
   role?: {prompt: string; execution?: string | undefined; collaboration?: string | undefined; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string, environmentBaseline?: string,
-  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}): Promise<AgentRequestBase> {
+  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}, memory?: string): Promise<AgentRequestBase> {
   const extras = extraTools.map(item => {
     if ('metadata' in item) return item;
     const metadata = registry.getMetadata(item.name);
@@ -105,6 +105,7 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     collaboration: role?.collaboration ?? builtin?.collaboration,
     memoryFocus: role?.compression,
     guidelines: rules.guidelines,
+    memory,
     skillsIndex: rules.skills,
     toolsIndex: catalog.catalog,
     includeSummary,

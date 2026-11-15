@@ -65,7 +65,7 @@ export function usageRows(records: readonly UsageRecord[], config: Config): TabR
   for (const [key, total] of groups) {
     const [model, category] = z.tuple([z.string(), z.string()]).parse(JSON.parse(key));
     const cost = costOf([{id: 'group', model, category: 'task', ...total}], config);
-    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa', 'keepalive'].includes(category) ? category : 'summary')),
+    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa', 'keepalive', 'anamnesis'].includes(category) ? category : 'summary')),
       row.field('Input / output', total.input + ' / ' + total.output + ' token'),
       row.field('Cache read / write', total.cacheRead + ' / ' + total.cacheWrite + ' token'),
       row.field('Estimated cost', cost === undefined ? 'unknown (no price)' : (cost.partial ? '~' : '') + cost.amount.toFixed(6) + ' ' + cost.currency + (cost.partial ? ' (partial: cache rate billed as input)' : '')));
@@ -83,8 +83,8 @@ export interface UsagePageInput {
   /** Providers billed by subscription: their cost is an API-equivalent estimate. */
   subscriptions?: ReadonlySet<string> | undefined;
 }
-const CATEGORIES = ['task', 'summary', 'approval', 'automa', 'keepalive'] as const;
-const CATEGORY_NAMES: Record<typeof CATEGORIES[number], string> = {task: 'Task', summary: 'Summary', approval: 'Approval', automa: 'Automa', keepalive: 'Keep-alive'};
+const CATEGORIES = ['task', 'summary', 'approval', 'automa', 'keepalive', 'anamnesis'] as const;
+const CATEGORY_NAMES: Record<typeof CATEGORIES[number], string> = {task: 'Task', summary: 'Summary', approval: 'Approval', automa: 'Automa', keepalive: 'Keep-alive', anamnesis: 'Anamnesis'};
 interface Sums {input: number; output: number; cacheRead: number; cacheWrite: number; requests: number}
 function sums(records: readonly UsageRecord[]): Sums {
   const total: Sums = {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: records.length};

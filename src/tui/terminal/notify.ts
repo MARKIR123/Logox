@@ -23,7 +23,7 @@ export class RoundNotifier {
   }) {}
   observe(snapshot: RuntimeSnapshot): boolean {
     const now = this.options.now?.() ?? Date.now();
-    const active = snapshot.activities.some(activity => activity.sessionId === this.options.sessionId && busy.has(activity.status));
+    const active = snapshot.activities.some(activity => activity.sessionId === this.options.sessionId && activity.kind !== 'anamnesis' && busy.has(activity.status));
     if (active) {this.startedAt ??= now; return false;}
     if (this.startedAt === undefined) return false;
     const elapsed = now - this.startedAt;

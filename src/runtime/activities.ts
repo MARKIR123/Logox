@@ -33,7 +33,16 @@ export class Activities {
     this.onChange();
     return record;
   }
-  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'phase' | 'progress'>>): Activity {
+  /** Drops an Anamnesis card (an automatic dream that found nothing leaves none behind). Other activities are history and cannot be removed. */
+  remove(sessionId: string, activityId: string): boolean {
+    const key = activityKey(sessionId, activityId), current = this.records.get(key);
+    if (!current) return false;
+    if (current.kind !== 'anamnesis') throw new Error('Only an Anamnesis card can be removed');
+    this.records.delete(key);
+    this.onChange();
+    return true;
+  }
+  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'phase' | 'progress' | 'createdAt'>>): Activity {
     const key = activityKey(sessionId, activityId);
     const current = this.records.get(key);
     if (!current) throw new Error('Activity not found');
