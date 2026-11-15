@@ -25,7 +25,7 @@ function reader(requests: {messages: readonly ModelMessage[]}[]): AutomaProvider
   return {async respond(request) {
     requests.push({messages: [...request.messages]});
     return request.messages.some(message => message.role === 'tool')
-      ? {message: {role: 'assistant', text: 'Verdict: saw it\nEvidence: shot.png\nNot verified: none'}, stop: 'complete', usage: {input: 10, output: 5}}
+      ? {message: {role: 'assistant', text: '', toolCalls: [{id: 'fin', name: 'Finish', arguments: JSON.stringify({status: 'done', summary: 'saw it', evidence: ['shot.png']})}]}, stop: 'tools', usage: {input: 10, output: 5}}
       : {message: {role: 'assistant', text: '', toolCalls: [{id: 'c1', name: 'Read', arguments: JSON.stringify({file_path: 'shot.png'})}]}, stop: 'tools', usage: {input: 10, output: 5}};
   }};
 }
@@ -38,8 +38,8 @@ async function project() {
 const toolMessage = (requests: readonly {messages: readonly ModelMessage[]}[]) => requests.at(-1)!.messages.find(message => message.role === 'tool');
 
 test('the vision field is optional, kept only when true, and described in the tool description', () => {
-  assert.equal(automaSchema.safeParse({jobs: [{brief: 'x', vision: true}]}).success, true);
-  assert.equal(automaSchema.safeParse({jobs: [{brief: 'x'}]}).success, true);
+  assert.equal(automaSchema.safeParse({jobs: [{brief: 'x', scope: 'exact', vision: true}]}).success, true);
+  assert.equal(automaSchema.safeParse({jobs: [{brief: 'x', scope: 'exact'}]}).success, true);
   assert.ok(AUTOMA_DESCRIPTION.includes('`vision: true` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.'));
   const jobs = (normalizeAutomaInput({jobs: [{brief: 'a', vision: 'true'}, {brief: 'b', vision: false}, {brief: 'c', vision: 'n/a'}]}) as {jobs: {vision?: boolean}[]}).jobs;
   assert.deepEqual(jobs.map(job => job.vision), [true, undefined, undefined]);
@@ -55,8 +55,8 @@ test('a worker on a model that cannot see images gets the placeholder and a Not 
     const tool = toolMessage(requests);
     assert.equal(tool?.role === 'tool' && tool.images, undefined);
     assert.match(tool!.text, /\[Image omitted: p\/blind cannot see images\.\] The dispatcher should resend the job with vision: true\./);
-    assert.match(result.text, /Images were omitted: p\/blind cannot see images\./);
-    assert.match(result.text, /model: p\/blind/);
+    assert.match(result.text, /^Not verified:\n- Images were omitted: p\/blind cannot see images\./m);
+    assert.match(result.text, /model="p\/blind"/);
   } finally {await done();}
 });
 
@@ -82,8 +82,8 @@ test('a vision job is refused alone when no model can see images; the other jobs
     tools.setAutomaEnvironment(environment);
     const result = await tools.execute(dispatch({jobs: [{brief: 'Compare the mockup', title: 'Mockup', vision: true}, {brief: 'Inspect shot.png', title: 'Plain'}]}), principal());
     assert.match(result.text, /Job "Mockup" needs a model that can see images\. Choose a vision fallback under \/model automa\./);
-    assert.match(result.text, /\[job 1\/2 · denied/);
-    assert.match(result.text, /\[job 2\/2 · done/);
+    assert.match(result.text, /title="Mockup" status="denied"/);
+    assert.match(result.text, /title="Plain" status="done"/);
     assert.deepEqual(asked.sort(), [undefined, true].sort(), 'only the vision job asks for a model that can see');
     assert.equal(requests.length, 2, 'the refused job never reached a model; the other job took two turns');
   } finally {await done();}

@@ -50,7 +50,8 @@ import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
-import {AUTOMA_SYSTEM_PROMPT, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
+import {projectRulesSection} from '../prompts/boundary.js';
+import {workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel, type RetainedInstance} from './orchestration/AutomaTool/AutomaTool.js';
 import {grantTools, isExclusiveCommand, pathDenial, planDispatch} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
@@ -246,6 +247,10 @@ export interface AutomaEnvironment {
   profile?(ownerId: string): AutomaProfile | undefined;
   actorName?(ownerId: string): string | undefined;
   maxParallel?(): number;
+  /** The project rules every actor's prompt carries; workers append them to their own prompt in the same form. */
+  guidelines?(context: ActorContext): readonly {path: string; text: string}[] | Promise<readonly {path: string; text: string}[]>;
+  /** Provider retries per worker request (the kernel's `max_retries`). */
+  retries?(): number;
   journalPath?(sessionId: string): string;
   charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
@@ -347,6 +352,8 @@ export class Tools {
     const environment = this.automa;
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
+    // Awaited before the one-dispatch check: from that check to `dispatches.set()` nothing may yield, or two calls of one actor would both pass.
+    const rules = projectRulesSection(await environment.guidelines?.(context) ?? []);
     const {sessionId, ownerId, activityId} = context;
     const key = JSON.stringify([sessionId, ownerId]);
     // An identical call that was already refused gets the same answer at once: nothing changed, so nothing can run differently.
@@ -367,7 +374,7 @@ export class Tools {
     const retained = [...this.instances.values()].filter(mine);
     const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
     const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained,
-      scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: AUTOMA_SYSTEM_PROMPT,
+      scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: workerSystem(rules, args.context),
       holder: pattern => this.patternHolder(ownerId, pattern)});
     if (!plan.ok) return refuseAndRemember(plan.error);
     const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
@@ -383,6 +390,7 @@ export class Tools {
         jobs: plan.jobs, parallel, swarmName: profile.name, signal: context.signal,
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
+        ...(environment.retries ? {retries: environment.retries()} : {}),
         instance: id => {const found = this.instances.get(id); return found && mine(found) ? found : undefined;},
         retain: instance => {this.instances.set(instance.id, {...instance, sessionId, ownerId, activityId});},
         forget: id => {this.instances.delete(id);},

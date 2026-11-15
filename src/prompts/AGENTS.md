@@ -9,6 +9,7 @@
 | If you need to... | Start at | Then check |
 |---|---|---|
 | See topic order, section owner or cache stability | `boundary.ts:composeActorSystemPrompt()` | `boundary.ts:PromptSection` |
+| See the project rules block an Automa worker appends to its own prompt | `boundary.ts:projectRulesSection()` | `../tools/orchestration/AutomaTool/AutomaTool.ts:workerSystem()` |
 | See how a request assembles its prompt | `../kernel/agent.ts:agentRequestBase()` | `boundary.ts:composeBaseSystemPrompt()` |
 | Change shared execution, status-line, vision or round-memory text | `charter.ts:SHARED_EXECUTION_RULES` | `src/actors/profiles/<id>/execution.md`, `src/actors/profiles/<id>/compression.md` |
 | Change peer messaging etiquette | `collaboration/common.ts` | `collaboration/index.ts:TEAM_COLLABORATION`, `src/actors/profiles/<id>/collaboration.md` |

@@ -21,17 +21,16 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
     const fetcher: typeof fetch = async (_url, init) => {
       models.push((JSON.parse(String(init?.body)) as {model: string}).model);
       const first = requests++ === 0;
-      const delta = first
-        ? {tool_calls: [{index: 0, id: 'worker-1', type: 'function', function: {name: 'Read', arguments: JSON.stringify({file_path: 'notes.txt'})}}]}
-        : {content: 'summary: the answer is 42\nevidence: notes.txt:1'};
-      const body = sse({choices: [{index: 0, delta, finish_reason: first ? 'tool_calls' : 'stop'}]}) + sse({choices: [], usage: {prompt_tokens: 100, completion_tokens: 7}}) + 'data: [DONE]\n\n';
+      const delta = {tool_calls: [{index: 0, id: first ? 'worker-1' : 'worker-2', type: 'function', function: first ? {name: 'Read', arguments: JSON.stringify({file_path: 'notes.txt'})}
+        : {name: 'Finish', arguments: JSON.stringify({status: 'done', summary: 'the answer is 42', evidence: ['notes.txt:1']})}}]};
+      const body = sse({choices: [{index: 0, delta, finish_reason: 'tool_calls'}]}) + sse({choices: [], usage: {prompt_tokens: 100, completion_tokens: 7}}) + 'data: [DONE]\n\n';
       return new Response(body, {status: 200, headers: {'content-type': 'text/event-stream'}});
     };
     let turn = 0;
     const director: Provider = {async respond() {
       turn++;
       return turn === 1
-        ? {message: {role: 'assistant', text: '', toolCalls: [{id: 'd1', name: 'Automa', arguments: JSON.stringify({jobs: [{title: 'Find the answer', brief: 'Find the answer in notes.txt'}]})}]}, stop: 'tools'}
+        ? {message: {role: 'assistant', text: '', toolCalls: [{id: 'd1', name: 'Automa', arguments: JSON.stringify({jobs: [{title: 'Find the answer', brief: 'Find the answer in notes.txt', scope: 'exact'}]})}]}, stop: 'tools'}
         : {message: {role: 'assistant', text: 'The answer is 42.'}, stop: 'complete'};
     }};
     const app = await createTestApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: director, fetcher, sessionId: 'automa-session'});
@@ -49,7 +48,7 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
       assert.equal(swarm.name, 'runners');
       assert.equal(swarm.jobs[0]!.state, 'done');
       assert.equal(swarm.jobs[0]!.calls[0]!.state, 'completed');
-      assert.match(swarm.jobs[0]!.receipt!, /evidence: notes\.txt:1/);
+      assert.match(swarm.jobs[0]!.receipt!, /^Evidence:\n- notes\.txt:1$/m);
       const journal = join(cwd, '.logox', 'state', 'sessions', 'automa-session', 'subagents', 'automa.jsonl');
       const events = (await readFile(journal, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as {event: string; principal: string});
       assert.deepEqual(events.map(event => event.event), ['start', 'message', 'tool', 'message', 'end']);

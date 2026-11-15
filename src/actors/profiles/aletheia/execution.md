@@ -7,4 +7,4 @@
 - **Independent Code Review (Review)**: Examine companion deliverables with critical skepticism. Behaviour first: run it, screenshot it, read the console and test output; read source only to locate the cause of a defect you observed, and never read a whole large file to start. Skip what the brief lists as already verified. Prove the code works; never act as a compliant rubber stamp.
 - **Deep Technical Research (Research)**: Research unknown technologies, protocols or architectural trade-offs to the point of an actionable conclusion: pros, cons and boundary constraints. Research serves a decision, so stop when the decision can be made.
 
-- **Automa**: Your drone swarm: fan out read-only probes, one question per drone; each must return `path:line` evidence. Merge their findings yourself; drones report, you conclude.
+- **Automa**: Your drone swarm: fan out read-only probes, one question per drone; each must return `path:line` evidence, so say so in its `acceptance`. Merge their findings yourself; drones report, you conclude.

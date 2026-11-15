@@ -75,6 +75,8 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     profile: ownerId => actors.find(ownerId)?.automa,
     actorName: ownerId => actors.find(ownerId)?.name,
     maxParallel: () => config.automa.max_parallel,
+    guidelines: () => resources.promptSections().guidelines,
+    retries: () => config.kernel.max_retries,
     journalPath: automaJournal,
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),

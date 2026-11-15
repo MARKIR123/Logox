@@ -56,6 +56,10 @@ export function pathDenial(tool: string, grant: JobGrant, path: GrantPath): stri
 export interface AutomaJobArgs {
   readonly title?: string | undefined;
   readonly brief: string;
+  /** How open the problem is; absent counts as `bounded`. */
+  readonly scope?: 'exact' | 'bounded' | 'open' | undefined;
+  /** The checks that define done; shown to the worker and beside its claims in the result. */
+  readonly acceptance?: readonly string[] | undefined;
   /** Workspace paths or globs this job may edit; absent means read-only. */
   readonly writes?: readonly string[] | undefined;
   /** Keep this worker's context after the job so a later job can continue it. */

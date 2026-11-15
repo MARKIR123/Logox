@@ -47,6 +47,13 @@ export interface BasePromptOptions {
   scratchpadDir?: string | undefined;
 }
 const nested = (text: string) => text.trim().replace(/^# /gm, '## ');
+/** One project rules file as every system prompt holds it: its source, then its text with headings demoted. */
+const guidelineText = (guideline: {path: string; text: string}) => 'Source: ' + guideline.path + '\n\n' + nested(guideline.text);
+/** The Project Guidelines block exactly as an actor's prompt renders it (same heading, same per-file text); empty when no rules are loaded. Automa workers append it to their own prompt. */
+export function projectRulesSection(guidelines: readonly {path: string; text: string}[]): string {
+  const sections = guidelines.map(guidelineText);
+  return sections.length ? '# Project Guidelines\n\n' + sections.map(text => nested(text)).join('\n\n') : '';
+}
 
 export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system: string; sections: readonly PromptSection[]} {
   if (!input.persona.trim()) throw new Error('Actor has no valid persona.');
@@ -65,8 +72,7 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   if (input.execution) add('role_execution', 'execution', 'role', input.execution);
   add('collaboration', 'collaboration', 'shared', collaborationFor(input.ownerId));
   if (input.collaboration) add('role_collaboration', 'collaboration', 'role', input.collaboration);
-  for (const guideline of input.guidelines) add('guidelines', 'guidelines', 'resource',
-    'Source: ' + guideline.path + '\n\n' + nested(guideline.text), 'revisioned');
+  for (const guideline of input.guidelines) add('guidelines', 'guidelines', 'resource', guidelineText(guideline), 'revisioned');
   // After the project rules: fixed for the whole session, so it never moves what comes after it.
   if (input.memory) add('memory', 'guidelines', 'resource', input.memory, 'revisioned');
   add('tools', 'tools-skills', 'resource', input.toolsIndex ? '## Tools\n' + input.toolsIndex : '', 'revisioned');

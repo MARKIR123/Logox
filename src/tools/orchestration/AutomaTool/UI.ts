@@ -69,10 +69,11 @@ function renderSwarm(context: ToolRenderContext): void {
   const returned = jobs.filter(job => job.state !== 'queued' && job.state !== 'running').length;
   const failed = jobs.filter(job => job.state === 'failed').length;
   const denied = jobs.filter(job => job.state === 'denied').length;
+  const blocked = jobs.filter(job => job.state === 'blocked').length;
   const parentWidth = frame?.innerWidth ?? builder.contentWidth;
   const lead = open ? '▾ ' : '▸ ';
   const summary = [capitalize(swarm.name), `${jobs.length} ${noun(swarm.name, jobs.length)}`, `${returned} returned`,
-    ...(failed ? [`${failed} failed`] : []), ...(denied ? [`${denied} denied`] : [])].join(SEP);
+    ...(blocked ? [`${blocked} blocked`] : []), ...(failed ? [`${failed} failed`] : []), ...(denied ? [`${denied} denied`] : [])].join(SEP);
   const reserve = SEP.length + 7;
   const text = lead + fit(summary, Math.max(1, parentWidth - 4 - reserve - lead.length));
   const titleSegments: SceneSegment[] = [{text, color: live ? palette.fg : palette.muted, italic: true, selectionKey: message.id + ':title', selectionOffset: 0}];

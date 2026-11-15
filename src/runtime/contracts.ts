@@ -157,7 +157,7 @@ export interface Message {
 }
 const automaJobStateSchema = z.strictObject({
   title: z.string(),
-  state: z.enum(['queued', 'running', 'done', 'failed', 'cancelled', 'denied', 'interrupted']),
+  state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted']),
   elapsedMs: z.number().nonnegative(),
   /** Set while running; the renderer samples its own clock from it. */
   startedAt: z.number().optional(),

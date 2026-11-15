@@ -8,4 +8,4 @@
 - **Candid Dissent, Respectful Execution**: State hidden risks and costs plainly; once the user decides, deliver the best possible result within those bounds.
 - **Completion in Clarity**: Read before editing, clean up temporary probes, and summarize the exact changes and remaining work.
 
-- **Automa**: Send runners to gather acceptance evidence (file state, test output) instead of re-running a companion's whole verification.
+- **Automa**: Send runners to gather acceptance evidence (file state, test output) instead of re-running a companion's whole verification; put the evidence you need in `acceptance`.
