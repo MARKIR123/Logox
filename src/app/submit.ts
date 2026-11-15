@@ -61,7 +61,7 @@ export interface SubmitDeps {
   notice: Notice; receipt: Receipt;
   queryResult(owner: string, title: string, query: () => Promise<string | {text: string; lines: readonly ResultLine[]} | undefined>): Promise<void>;
   input: Pick<InputDelivery, 'beginTask' | 'dispatchInput' | 'ownerIsBusy'>;
-  modelSelection: Pick<ModelSelection, 'isSelecting' | 'saveSelection' | 'saveEffort' | 'openThinking' | 'openModels' | 'modelCommand' | 'rememberProvider' | 'current'>;
+  modelSelection: Pick<ModelSelection, 'isSelecting' | 'saveSelection' | 'saveEffort' | 'openThinking' | 'openModels' | 'modelCommand' | 'typedBinding' | 'rememberProvider' | 'current'>;
   providers: Pick<ProviderManagement, 'wizardRows' | 'loginWizard' | 'removeProvider'>;
   pages: Pick<Pages, 'openSettings' | 'openTheme' | 'openEnsemble' | 'pageActions'>;
   buildContext: CommandContextBuilder;
@@ -150,6 +150,17 @@ export function createSubmit(deps: SubmitDeps) {
       return;
     }
     if (text.startsWith('/model ') || text === '/model') {
+    // `/model anamnesis [model [effort] | inherit]`: Anamnesis is no actor, so its binding goes through the Anamnesis page's API.
+    const anamnesisModel = /^\/model\s+anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
+    if (anamnesisModel) {
+      const spec = anamnesisModel[1]?.trim() ?? '';
+      if (!spec) {await anamnesisCommand.openModel(); return;}
+      if (['inherit', 'follow', 'logox'].includes(spec.toLowerCase())) {await anamnesis.setAnamnesisModel(undefined); receipt('Anamnesis follows Logox.', 'status', undefined, source); return;}
+      const binding = modelSelection.typedBinding(spec);
+      await anamnesis.setAnamnesisModel(binding);
+      receipt('Anamnesis model set to: ' + binding.provider + '/' + binding.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
+      return;
+    }
       await modelSelection.modelCommand(text, source);
       return;
     }

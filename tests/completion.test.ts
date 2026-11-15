@@ -20,7 +20,7 @@ test('命令目录补全现有命令、参数及中文模型，保留光标后�
   assert.ok(commandCatalog.some(command => command.name === 'providers'));
   assert.deepEqual(commandSuggestions(draft('/pro'), context).map(item => item.label), ['/providers']);
   assert.deepEqual(commandSuggestions(draft('/model 模'), context), []);
-  assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia', 'automa']);
+  assert.deepEqual(commandSuggestions(draft('/model '), context).map(item => item.label), ['logox', 'techne', 'kalon', 'aletheia', 'automa', 'anamnesis']);
   const modelItems = commandSuggestions(draft('/model '), context);
   assert.equal(modelItems.find(item => item.label === 'aletheia')?.description, 'Scout');
   assert.equal(modelItems.find(item => item.label === 'kalon')?.description, 'Polisher');

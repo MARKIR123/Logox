@@ -147,6 +147,8 @@ export function createAnamnesisCommand(deps: AnamnesisPageDeps) {
       start(word, source);
     },
     openPage,
+    /** The model picker alone (`/model anamnesis`); Esc goes back to the Anamnesis page. */
+    openModel,
   };
 }
 export type AnamnesisCommand = ReturnType<typeof createAnamnesisCommand>;

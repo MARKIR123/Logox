@@ -87,6 +87,7 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
           name: 'automa',
           description: 'Stateless Worker',
         },
+        {name: 'anamnesis', description: 'Recap and memory'},
       ];
       return actorList
         .filter(item => item.name.toLowerCase().startsWith(currentPrefix.toLowerCase()))

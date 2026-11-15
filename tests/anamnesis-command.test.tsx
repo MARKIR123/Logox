@@ -332,3 +332,22 @@ test('with the real screen every level works with the mouse: click to activate r
     await instance?.waitUntilExit(); input.destroy(); output.destroy(); await f.close();
   }
 });
+
+test('/model anamnesis binds the Anamnesis model, never the session model; an unknown model name is refused', async () => {
+  const f = await fixture();
+  try {
+    const app = await f.open();
+    const before = app.status('logox').model;
+    await app.submit('/model anamnesis openai/model-a');
+    assert.deepEqual(app.anamnesis.anamnesisModel(), {provider: 'openai', model: 'model-a', inherited: false});
+    assert.deepEqual(app.status('logox').model, before, 'the session model is untouched');
+    await app.submit('/model anamnesis inherit');
+    assert.equal(app.anamnesis.anamnesisModel().inherited, true);
+    await app.submit('/model anamnesis');
+    assert.equal(surface(app)?.title, 'Select Model for Anamnesis');
+    app.surfaces.cancel();
+    await assert.rejects(app.submit('/model anamnesis openai/ghost'), /Unknown model "ghost"/);
+    await assert.rejects(app.submit('/model ghost-model'), /Unknown model "ghost-model"/);
+    assert.deepEqual(app.status('logox').model, before);
+  } finally {await f.close();}
+});

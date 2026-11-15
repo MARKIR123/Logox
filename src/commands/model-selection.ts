@@ -163,6 +163,17 @@ export function createModelSelection(deps: ModelSelectionDeps) {
         return {message: 'Current model: ' + provider + ' / ' + actualModel + (effort ? ' · Thinking effort: ' + effort : ''), presentation: 'status'};
       });
   };
+  /**
+   * A typed model name must name a model: a provider must exist, and when the pool knows that provider's models the name must be one of them.
+   * Without this a typo (or a word such as an unknown target) became the session model of the active provider.
+   */
+  const requireKnown = (resolved: {provider: string; model: string}): void => {
+    if (!registry.names().includes(resolved.provider)) throw new Error('Unknown provider "' + resolved.provider + '". Use /model to pick a model.');
+    modelPool.loadCacheSync();
+    const listed = modelPool.snapshot().filter(model => model.provider === resolved.provider);
+    if (listed.length && !listed.some(model => model.id === resolved.model))
+      throw new Error('Unknown model "' + resolved.model + '" for ' + resolved.provider + '. Use /model to pick one, or /models to list them.');
+  };
   /** `/model <actor|automa> <model> [effort]`: a trailing thinking level is split off the model text. */
   const withEffort = (text: string): {text: string; effort?: ThinkingEffort} => {
     const parts = text.trim().split(/\s+/), last = parts.length > 1 ? effortSchema.safeParse(parts[parts.length - 1]!.toLowerCase()) : undefined;
@@ -170,6 +181,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
   };
   /** The binding to store; an effort the model does not declare is an error here (the picker only offers declared ones), and a model id that names its level stores none. */
   const bindingFor = (provider: string, model: string, effort: ThinkingEffort | undefined): {provider: string; model: string; effort?: ThinkingEffort} => {
+    requireKnown({provider, model});
     if (!effort || effortInName(model)) return {provider, model};
     const levels = registry.candidate(provider, model).thinking().levels;
     if (!levels.includes(effort)) throw new Error(provider + '/' + model + ' does not support thinking effort "' + effort + '" (available: ' + levels.join(', ') + ')');
@@ -255,6 +267,7 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     const model = rawArg;
     if (!model) throw new Error('Please specify a model name');
     const resolved = modelPool.resolveShorthand(model, settings.provider);
+    requireKnown(resolved);
     await saveSelection(registry.candidate(resolved.provider, resolved.model));
     receipt('Current model: ' + resolved.provider + '/' + resolved.model, 'status', undefined, source);
   };
@@ -277,6 +290,9 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     /** The session selection (provider, model, base URL); replaced by every saved selection. */
     current: () => settings,
     saveSelection, saveEffort, openThinking, openModels, openAutomaModel, modelCommand, completionContext,
+    /** `<model> [effort]` typed after a target, checked like `/model <actor> <model> [effort]` (for targets owned elsewhere, such as Anamnesis). */
+    typedBinding: (text: string) => {const spec = withEffort(text), resolved = modelPool.resolveShorthand(spec.text, settings.provider);
+      return bindingFor(resolved.provider, resolved.model, spec.effort);},
     /** True while a selection is being saved; part of the application's busy test. */
     isSelecting: () => selecting,
     /** The latest save, awaited on close. */
