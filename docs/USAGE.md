@@ -469,7 +469,16 @@ recap_idle_minutes = 5
 dream_idle_minutes = 30
 ```
 
-两个自动开关也可以保存为用户偏好（`~/.logox/anamnesis.json`），优先于配置文件。Anamnesis 的模型默认跟随 Director 当前选择（不改变思考档位）；也可以为它单独选定模型，选定的模型不可用时本次运行失败并提示，不会悄悄换别的模型。它的用量记在 `/usage` 的 `anamnesis` 类别下。`/anamnesis` 页面（手动运行、浏览与删除记录、选择模型）随下一次改动提供。
+两个自动开关也可以保存为用户偏好（`~/.logox/anamnesis.json`），优先于配置文件。Anamnesis 的模型默认跟随 Director 当前选择（不改变思考档位）；也可以为它单独选定模型，选定的模型不可用时本次运行失败并提示，不会悄悄换别的模型。它的用量记在 `/usage` 的 `anamnesis` 类别下。
+
+`/anamnesis recap` 和 `/anamnesis dream` 立即开始对应的运行（状态行提示 `Anamnesis is writing a recap.` 或 `Anamnesis is reviewing the session.`，结果显示在卡片上）；有任务在跑时会报错，参数写错时提示 `Usage: /anamnesis [recap|dream]`。输入 `/anamnesis` 打开 Anamnesis 页面，六行每行左边是名称、右边是当前值：
+
+- **Recap now / Dream now**：Enter 或点击立即运行并关闭页面；运行中值显示 `Running…`。
+- **Memory records**：值为本项目与用户级记录的数量。进入后每条记录占两行（名称加 `<类型> · <project|user>` 标记，下面是弱化的描述），项目记录在前；选中一条打开详情（描述、文件路径、可滚动的内容），按 `d` 或点击 `Delete record` 并确认后删除文件，Esc 返回列表。没有记录时列表给出提示。
+- **Model**：跟随 Director 时显示 `Follows Logox (…)`；进入后与 `/ensemble` 相同的模型与思考档位选择器，第一项 `Follow Logox (default)` 取消专用模型。所选提供商已不存在时值以警告色显示 `· unavailable`。
+- **Recap when idle / Dream when idle**：Enter 或点击切换自动触发（`On · after <n> min` / `Off`），保存为用户偏好，停留在页面上。
+
+每一层都支持键盘与鼠标（点击选中、再点击确认，悬停高亮，滚轮移动），Esc 返回上一层，最外层再按 Esc 关闭。打开页面本身算一次提交，会中止正在进行的自动回顾或入梦。
 
 ## 全部斜杠命令
 
@@ -495,7 +504,8 @@ dream_idle_minutes = 30
 | | `/providers <name> [model]` | 切换提供商 |
 | | `/providers check`、`/check-provider` | 发送真实请求检查当前提供商，可能计费 |
 | | `/providers logout <name>`（同 `unregister`） | 删除已保存的提供商 |
-| 角色 | `/ensemble` | 每个角色一个标签页：模型、上下文、工具、技能、本会话用量和提示词 |
+| 角色 | `/anamnesis [recap\|dream]` | 回顾与记忆：立即运行回顾或入梦，浏览和删除记忆记录，选择 Anamnesis 的模型（见“Anamnesis：回顾与长期记忆”） |
+| | `/ensemble` | 每个角色一个标签页：模型、上下文、工具、技能、本会话用量和提示词 |
 | | `/cast <task>` | 把同一任务交给三个内置角色 |
 | | `@actor <task>` | 交给指定角色 |
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |

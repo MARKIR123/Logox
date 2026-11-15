@@ -459,7 +459,7 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     {loginState?.phase === 'wizard' && authentication && <MouseHost subscribe={subscribeMouse} color={windowColor}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseHost>}
     {surface?.kind === 'picker' && surfaces ? <MouseHost subscribe={subscribeMouse} color={windowColor}><Picker key={surface.id} title={surface.title} description={surface.description}
       items={surface.items} current={surface.current} status={surface.status} error={surface.error} width={width} height={pickerHeight} y={timelineHeight}
-      {...(surface.emptyText !== undefined ? {emptyText: surface.emptyText} : {})}
+      {...(surface.emptyText !== undefined ? {emptyText: surface.emptyText} : {})} {...(surface.focus !== undefined ? {focus: surface.focus} : {})}
       {...(surface.deleteLabel !== undefined ? {deleteLabel: surface.deleteLabel} : {})} onDelete={id => {void surfaces.deleteItem(surface.id, id);}}
       effort={surface.effort} effortLevels={surface.effortLevels}
       notice={notice} onSelect={(id, effort) => {void surfaces.choose(surface.id, id, effort);}} onCancel={() => surfaces.cancel()}/></MouseHost>

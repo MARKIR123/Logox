@@ -19,7 +19,7 @@ export function screenHeights({loginState, loginFolded, surface, screenRows, inp
       )
     : 0;
   const groupedPicker = surface?.kind === 'picker' && new Set(surface.items.map(item => item.group).filter(Boolean)).size > 1;
-  const pickerListRows = surface?.kind === 'picker' ? Math.min(6, surface.items.length) : 0;
+  const pickerListRows = surface?.kind === 'picker' ? Math.min(6, surface.items.length) * (surface.items.some(item => item.detail) ? 2 : 1) : 0;
   const pickerHasEffort = surface?.kind === 'picker' && surface.items.some(item => (item.effortLevels?.length ?? 0) > 0);
   const pickerHeight = surface?.kind === 'picker'
     ? Math.min(screenRows, (groupedPicker ? (pickerHasEffort ? 10 : 8) : (pickerHasEffort ? 7 : 5)) + pickerListRows)

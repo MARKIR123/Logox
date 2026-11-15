@@ -94,15 +94,13 @@ test('入梦命令接入场景：同一活动暂停、续做和关闭，白底�
     await runtime.submit('/anamnesis start');
     const activity = runtime.store.activities.list().find(item => item.kind === 'anamnesis')!;
     assert.ok(activity);
-    await runtime.submit('/anamnesis stop');
-    assert.equal(runtime.store.activities.get('s', activity.activityId)!.status, 'paused');
     const scene = projectPortfolioScene(initialDemoSceneState, runtime.store.getSnapshot(), 's', runtime.scenario);
-    const rows = buildDemoSceneRows({...scene, folds: {[activity.activityId]: true}}, 99);
-    assert.ok(rows.some(row => row.messageId === activity.activityId && row.text.includes('Paused')));
-    assert.ok(rows.some(row => row.text.includes('Waiting to resume')));
+    assert.ok(buildDemoSceneRows({...scene, folds: {[activity.activityId]: true}}, 99).some(row => row.messageId === activity.activityId), 'the running card is drawn');
+    await runtime.submit('/anamnesis stop');
+    assert.equal(runtime.store.activities.get('s', activity.activityId), undefined, 'an interrupted run leaves no card');
     await runtime.submit('/anamnesis start');
-    assert.equal(runtime.store.activities.list().filter(item => item.kind === 'anamnesis').length, 1);
+    assert.equal(runtime.store.activities.list().filter(item => item.kind === 'anamnesis').length, 1, 'a fresh card');
     await runtime.close();
-    assert.equal(runtime.store.activities.get('s', activity.activityId)!.status, 'cancelled');
+    assert.equal(runtime.store.activities.list().filter(item => item.kind === 'anamnesis').length, 0, 'a close removes it');
   } finally {await runtime.cleanup();}
 });

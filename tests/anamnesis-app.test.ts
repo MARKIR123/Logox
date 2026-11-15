@@ -6,6 +6,8 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {MemoryStore} from '../src/anamnesis/memory.js';
 import {loadConfig} from '../src/config/config.js';
+import {PermissionEngine} from '../src/permissions/engine.js';
+import {Tools} from '../src/tools/index.js';
 import {AUTOMA_SYSTEM_PROMPT} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
 import {agentRequestBase} from '../src/kernel/agent.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
@@ -212,5 +214,28 @@ test('the idle interval starts only when asked: an injected clock and interval r
     await app.submit('stop that');
     assert.equal(f.control.aborted >= 1, true, 'the in-flight request was aborted');
     assert.equal((await app.anamnesis.memories()).length, before);
+    assert.deepEqual(app.store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis' && activity.status === 'running'), [], 'the interrupted run left no card');
   } finally {await f.close();}
+});
+
+test('an Automa worker request carries no memory section even when records exist', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-anamnesis-automa-'));
+  try {
+    await new MemoryStore(cwd, cwd).save({name: 'prefers-tabs', description: 'The user wants tabs', type: 'feedback', content: 'Tabs.'}, 'project');
+    const tools = new Tools(cwd, undefined, new PermissionEngine(cwd, 'creative'), {home: cwd});
+    const requests: {system: string; text: string}[] = [];
+    const worker: Provider = {async respond(request) {
+      requests.push({system: request.system, text: request.messages.map(message => message.text).join('\n')});
+      return {message: {role: 'assistant', text: 'Verdict: done'}, stop: 'complete', usage: {input: 10, output: 5}};
+    }};
+    tools.setAutomaEnvironment({resolveModel: () => ({provider: worker, model: 'mock/worker'}), profile: () => ({name: 'crew', default_style: 'scout', styles: {scout: {flavor: 'Scout.'}}})});
+    const context = {sessionId: 's', activityId: 'act', ownerId: 'techne', history: [], signal: new AbortController().signal, report() {}, say() {}, async record() {},
+      async ask() {return {status: 'cancelled' as const, reason: 'Unused'};}, async permission() {return false;}};
+    await tools.execute({id: 'd', name: 'Automa', arguments: JSON.stringify({jobs: [{title: 'look', brief: 'look around'}]})}, context);
+    assert.ok(requests.length > 0, 'the worker was asked');
+    for (const request of requests) {
+      assert.ok(request.system.startsWith(AUTOMA_SYSTEM_PROMPT));
+      assert.ok(!/Long-term memory|## Memory|prefers-tabs/.test(request.system + '\n' + request.text), 'no memory section in the worker request');
+    }
+  } finally {await rm(cwd, {recursive: true, force: true});}
 });

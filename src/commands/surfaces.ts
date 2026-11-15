@@ -5,6 +5,7 @@ import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggl
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   /** Shown instead of the search box when the list loads empty; say what to do next. */
   readonly emptyText?: string;
+  readonly focus?: string;
   readonly items?: readonly PickerItem[];
   readonly effort?: string;
   readonly effortLevels?: readonly string[];
@@ -20,6 +21,8 @@ export interface PageActions {
   readonly closeOnSave?: boolean;
   onSaveToggles(tabId: string, items: readonly CommandToggle[], appearance?: import('../config/statusbar-preferences.js').StatusbarAppearance): CommandResult | Promise<CommandResult>;
   onTabAction?(tabId: string, action: string): CommandResult | Promise<CommandResult>;
+  /** Esc on a page opened from another page: the page closes, then this runs (it opens the parent again). */
+  onBack?(): void | Promise<void>;
 }
 /** Callbacks of the /settings page; drafts live in the page, only Enter reaches `save`. */
 export interface SettingsActions {
@@ -49,6 +52,7 @@ export class CommandSurfaces {
   private controller: AbortController | undefined;
   private select: ((id: string, effort?: string) => CommandResult | Promise<CommandResult>) | undefined;
   private pickerActions: PickerActions | undefined;
+  private pickerBack: (() => void | Promise<void>) | undefined;
   private pageActions: PageActions | undefined;
   private settingsActions: SettingsActions | undefined;
   private ensembleActions: EnsembleActions | undefined;
@@ -272,10 +276,10 @@ export class CommandSurfaces {
     if (state?.kind === 'settings' && state.id === surfaceId && state.sub && !state.sub.saving) this.leavePage();
   }
   async openPicker(spec: PickerSpec, load: (signal: AbortSignal) => Promise<{items: readonly PickerItem[]; warning?: string}>,
-    select: (id: string, effort?: string) => CommandResult | Promise<CommandResult>, actions?: PickerActions): Promise<void> {
+    select: (id: string, effort?: string) => CommandResult | Promise<CommandResult>, actions?: PickerActions, back?: () => void | Promise<void>): Promise<void> {
     this.assertIdle();
     const id = randomUUID(), controller = new AbortController();
-    this.controller = controller; this.select = select; this.pickerActions = actions;
+    this.controller = controller; this.select = select; this.pickerActions = actions; this.pickerBack = back;
     const initialItems = spec.items ?? [];
     this.publish({id, kind: 'picker', ...spec, ...this.origin?.(), items: initialItems, status: initialItems.length ? 'ready' : 'loading', error: '', ...(actions ? {deleteLabel: actions.deleteLabel} : {})});
     try {
@@ -330,8 +334,11 @@ export class CommandSurfaces {
       this.settingsActions?.revert?.();
       this.dismiss(); return;
     }
+    // A list or page opened from another page goes back one level before it closes.
+    const back = state?.kind === 'picker' && state.status !== 'saving' ? this.pickerBack : state?.kind === 'page' && !state.saving ? this.pageActions?.onBack : undefined;
+    if (back) {this.dismiss(); void Promise.resolve().then(back).catch(() => {}); return;}
     if (state?.kind === 'page' ? !state.saving : state?.kind !== 'picker' || state.status !== 'saving') this.dismiss();
   }
-  private dismiss(): void {this.restoreTheme(); this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
+  private dismiss(): void {this.restoreTheme(); this.controller?.abort(); this.controller = undefined; this.select = undefined; this.pickerActions = undefined; this.pickerBack = undefined; this.pageActions = undefined; this.settingsActions = undefined; this.ensembleActions = undefined; this.subActions = undefined; this.publish(null);}
   close(): void {this.dismiss();}
 }

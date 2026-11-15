@@ -26,7 +26,7 @@ export const effortStyles: Record<string, EffortStyle> = {
 
 export interface PickerProps {
   title: string; description?: string; items: readonly PickerItem[]; current?: string;
-  status?: 'loading' | 'ready' | 'saving'; error?: string; emptyText?: string;
+  status?: 'loading' | 'ready' | 'saving'; error?: string; emptyText?: string; focus?: string;
   width: number; height: number; y?: number;
   notice?: string;
   deleteLabel?: string | undefined; onDelete?(id: string): void;
@@ -35,9 +35,9 @@ export interface PickerProps {
 }
 /** Grouped entries are paged by provider; ungrouped entries (such as inherit) show on every page. */
 export function Picker({title, description = '', items, current = '', status = 'ready', error = '',
-  emptyText = 'No matching options', width, height, y = 0, notice = '', deleteLabel, onDelete, effort, effortLevels, onSelect, onCancel}: PickerProps) {
+  emptyText = 'No matching options', focus = '', width, height, y = 0, notice = '', deleteLabel, onDelete, effort, effortLevels, onSelect, onCancel}: PickerProps) {
   const [search, setSearch] = useState<Draft>(emptyDraft);
-  const [focused, setFocused] = useState(current);
+  const [focused, setFocused] = useState(focus || current);
   const tabs = [...new Set(items.map(item => item.group).filter((group): group is string => Boolean(group)))];
   const tabbed = tabs.length > 1;
   const currentGroup = items.find(item => item.id === current)?.group;
@@ -47,7 +47,7 @@ export function Picker({title, description = '', items, current = '', status = '
     : currentGroup && tabs.includes(currentGroup) ? currentGroup : (tabs[0] ?? '');
   const filter = search.text.toLocaleLowerCase();
   const scoped = tabbed ? items.filter(item => !item.group || item.group === activeTab) : items;
-  const matches = scoped.filter(item => (item.label + ' ' + (item.description ?? '')).toLocaleLowerCase().includes(filter));
+  const matches = scoped.filter(item => (item.label + ' ' + (item.description ?? '') + ' ' + (item.detail ?? '')).toLocaleLowerCase().includes(filter));
   const enabled = matches.filter(item => !item.disabled);
   const selected = enabled.find(item => item.id === focused) ?? enabled.find(item => item.id === current) ?? enabled[0];
   const index = matches.findIndex(item => item.id === selected?.id);
@@ -68,7 +68,9 @@ export function Picker({title, description = '', items, current = '', status = '
   const showDescription = !tabbed && contentRows >= 3;
   const count = Math.max(0, contentRows - (showTabs ? 1 : 0) - (showSearch ? 1 : 0)
     - (showSearchGap ? 1 : 0) - (showDescription ? 1 : 0));
-  const start = Math.max(0, Math.min(index - Math.floor(count / 2), matches.length - count));
+  // An item with a `detail` takes two rows (name and badge, then the muted detail); the list is then paged in pairs.
+  const rowHeight = items.some(item => item.detail) ? 2 : 1, visible = Math.max(1, Math.floor(count / rowHeight));
+  const start = Math.max(0, Math.min(index - Math.floor(visible / 2), matches.length - visible));
   const padding = panePadding(width), columns = Math.max(1, width - 2 * padding);
   const searchWidth = Math.max(1, columns - 9);
   let tail = search.text;
@@ -114,7 +116,7 @@ export function Picker({title, description = '', items, current = '', status = '
     const at = enabled.findIndex(item => item.id === selected?.id);
     let next: number | undefined;
     if (key.upArrow || key.downArrow) next = at + (key.upArrow ? -1 : 1);
-    if (key.pageUp || key.pageDown) next = at + (key.pageUp ? -count : count);
+    if (key.pageUp || key.pageDown) next = at + (key.pageUp ? -visible : visible);
     if (key.home || key.end) next = key.home ? 0 : enabled.length - 1;
     if (next !== undefined) {setFocused(enabled[Math.max(0, Math.min(enabled.length - 1, next))]?.id ?? ''); return;}
     if (!showSearch) return;
@@ -170,7 +172,7 @@ export function Picker({title, description = '', items, current = '', status = '
     if (level && selected) {setItemEfforts(prev => ({...prev, [selected.id]: level.tier})); return;}
     const row = event.y - listY;
     if (row < 0 || row >= count) return;
-    const item = matches[start + row];
+    const item = matches[start + Math.floor(row / rowHeight)];
     if (!item || item.disabled) return;
     if (item.id === selected?.id) onSelect(item.id, currentEffort); else setFocused(item.id);
   });
@@ -186,7 +188,7 @@ export function Picker({title, description = '', items, current = '', status = '
     {showSearch && <Box height={1} flexShrink={0}><Text color={palette.fg} wrap="truncate">{'Search: ' + tail}</Text></Box>}
     {showSearchGap ? <Box height={1} flexShrink={0} /> : null}
     <Box height={count} flexShrink={0} flexDirection="column" overflow="hidden">
-      {status === 'loading' ? <Text color={palette.muted}>Searching...</Text> : matches.length ? matches.slice(start, start + count).map(item => {
+      {status === 'loading' ? <Text color={palette.muted}>Searching...</Text> : matches.length ? matches.slice(start, start + visible).map(item => {
         const active = item.id === selected?.id;
         const itemEffort = active ? currentEffort : (itemEfforts[item.id] ?? item.effort);
         const effortBadge = itemEffort && item.effortLevels && item.effortLevels.length > 1 ? ' · ✦ ' + itemEffort : '';
@@ -194,15 +196,20 @@ export function Picker({title, description = '', items, current = '', status = '
         const labelColumns = Math.max(1, columns - 2 - (detail ? stringWidth(detail) + 2 : 0));
         const label = clipLine(safeText(item.label + (item.id === current ? ' · current' : '') + effortBadge), labelColumns);
         const highlight = active && !item.disabled;
-        const hovered = !item.disabled && !active && pointer !== null && pointer.y === listY + matches.indexOf(item) - start && pointer.x >= 0 && pointer.x < width;
-        return <Box key={item.id} height={1} flexShrink={0}><Text wrap="truncate">
-          <Text bold={highlight || hovered} color={highlight ? palette.accent : hovered ? hoverColor : item.disabled ? palette.muted : palette.fg}>
-            {(active ? '❯ ' : '  ') + label}
+        const rowTop = listY + (matches.indexOf(item) - start) * rowHeight;
+        const hovered = !item.disabled && !active && pointer !== null && pointer.y >= rowTop && pointer.y < rowTop + rowHeight && pointer.x >= 0 && pointer.x < width;
+        const valueColor = highlight ? palette.accent : hovered ? hoverColor : item.valueTone === 'warning' ? palette.warning : palette.muted;
+        return <Box key={item.id} height={rowHeight} flexShrink={0} flexDirection="column">
+          <Text wrap="truncate">
+            <Text bold={highlight || hovered} color={highlight ? palette.accent : hovered ? hoverColor : item.disabled ? palette.muted : palette.fg}>
+              {(active ? '❯ ' : '  ') + label}
+            </Text>
+            {detail ? <Text color={valueColor}>
+              {' '.repeat(Math.max(2, labelColumns - stringWidth(label) + 2)) + detail}
+            </Text> : null}
           </Text>
-          {detail ? <Text color={highlight ? palette.accent : hovered ? hoverColor : palette.muted}>
-            {' '.repeat(Math.max(2, labelColumns - stringWidth(label) + 2)) + detail}
-          </Text> : null}
-        </Text></Box>;
+          {item.detail ? <Text wrap="truncate" color={highlight ? palette.accent : hovered ? hoverColor : palette.muted}>{'  ' + clipLine(safeText(item.detail), Math.max(1, columns - 2))}</Text> : null}
+        </Box>;
       }) : <Text color={palette.muted} wrap="wrap">{error || emptyText}</Text>}
     </Box>
     {hasEffortBar && <>

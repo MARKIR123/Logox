@@ -135,7 +135,7 @@ test('runNow ignores the idle clock and the material check but refuses while the
   assert.equal(r.cards().length, 2);
 });
 
-test('user activity aborts a run: nothing is applied, the same card waits and the run starts over on the next idle period', async () => {
+test('user activity aborts a run: nothing is applied, the card is removed and the next idle period starts a fresh run with a fresh card', async () => {
   let applied = 0, attempts = 0;
   const r = rig({run: async context => {
     attempts++;
@@ -153,16 +153,16 @@ test('user activity aborts a run: nothing is applied, the same card waits and th
   assert.equal(stopped, 'stopped');
   assert.equal(applied, 0);
   assert.equal(r.service.running(), undefined);
-  assert.deepEqual([r.cards()[0]!.status, r.cards()[0]!.stage], ['paused', 'Waiting to resume']);
+  assert.deepEqual(r.cards(), [], 'an interrupted run leaves no card');
   r.state.now = 10 * MIN + 1;
   await r.service.tick();
   while (attempts < 2) await delay(1);
-  assert.equal(r.cards().length, 1, 'the same card continues');
-  assert.equal(r.cards()[0]!.activityId, card.activityId);
+  assert.equal(r.cards().length, 1);
+  assert.notEqual(r.cards()[0]!.activityId, card.activityId, 'a fresh card');
   assert.equal(r.cards()[0]!.status, 'running');
-  assert.ok(r.cards()[0]!.createdAt! > card.createdAt!, 'and moves to where the new run began');
+  assert.ok(r.cards()[0]!.createdAt! > card.createdAt!, 'placed where the new run began');
   await r.service.close();
-  assert.equal(r.cards()[0]!.status, 'cancelled');
+  assert.deepEqual(r.cards(), [], 'a run aborted by close is just removed');
   assert.equal(applied, 0);
 });
 

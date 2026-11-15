@@ -15,6 +15,7 @@
 | Change the card text | `service.ts:RUNNING_STAGE` | `operations.ts:dreamStage()`, `runner.ts:splitRecap()` |
 | Change the model rule | `model.ts:resolveModel()` | `../actors/actor-models-storage.ts` |
 | Call it from a command page | `../app/anamnesis.ts:createAnamnesis()` (`api`) | `../application.ts` (`anamnesis`) |
+| Change `/anamnesis` (arguments, rows, values, record list and page, model picker) | `../commands/anamnesis-page.ts:createAnamnesisCommand()` | `../app/submit.ts` (the `/anamnesis` branch), `../commands.ts:commandCatalog`, `tests/anamnesis-command.test.tsx` |
 
 ## 3. Common Changes
 ### Add an operation kind to the dream
@@ -23,12 +24,13 @@
 - Tests: `tests/anamnesis-memory.test.ts`, `tests/anamnesis-runner.test.ts`.
 
 ## 4. Hard Boundaries
-- **A run applies nothing until the model answered, and an aborted run applies nothing**: user activity aborts it; memory writes (each atomic) and the watermark come after the answer. Enforced by `tests/anamnesis-runner.test.ts`, `tests/anamnesis.test.ts`.
+- **A run applies nothing until the model answered, and an aborted run applies nothing**: user activity aborts it and removes its card (the next idle period starts a fresh run with a fresh card; a close does the same); memory writes (each atomic) and the watermark come after the answer. Enforced by `tests/anamnesis-runner.test.ts`, `tests/anamnesis.test.ts`.
 - **One run at a time, never while the foreground works**; `runNow` refuses with an error, the automatic trigger waits. A failed run is not retried before the next idle period. Enforced by `tests/anamnesis.test.ts`.
 - **Watermarks live beside the journals** (`state/sessions/<sessionId>/anamnesis.json`), one per kind; a restart does not review covered material and an unreadable answer does not move them. Enforced by `tests/anamnesis-runner.test.ts`.
 - **Model answers are data**: at most 6 operations, invalid ones and anything that looks like a secret are dropped, a `user` record always goes to the user folder, a missing record is never deleted. Enforced by `tests/anamnesis-memory.test.ts`.
 - **No silent model substitution**: a binding whose provider is gone or has no credentials fails with `Anamnesis has no usable model (<provider>/<model>). Choose one under /anamnesis.`; the id `anamnesis` is a binding key, never an actor. Enforced by `tests/anamnesis-runner.test.ts`, `tests/anamnesis-app.test.ts`.
 - **The prompt section is read once per session and on `/reload`**, so records saved mid-session do not change the prompt prefix. Enforced by `tests/anamnesis-app.test.ts`.
+- **`/anamnesis` is built from the existing surfaces**: rows are a picker (`current` empty, `focus` keeps the row just changed), the record list is a picker whose rows take two lines (`PickerItem.detail`), a record is a page whose tab carries `actions` (`d` and the footer) and uses the page confirmation, and Esc goes back one level through `CommandSurfaces.openPicker`'s `back` argument and `PageActions.onBack`. Opening the page is a submit, so it stops a run in flight. Enforced by `tests/anamnesis-command.test.tsx`.
 - **An automatic dream with nothing to save leaves no card**; the card is placed by `createdAt`. Enforced by `tests/anamnesis.test.ts`, `tests/stage-anamnesis.test.ts`.
 
 ## 5. Dependencies
@@ -37,4 +39,5 @@
 
 ## 6. Verification & Gaps
 - Fast run: `node --test dist/tests/anamnesis*.test.js dist/tests/stage-anamnesis.test.js`
-- Not covered offline: the quality of real recaps and dreams, live provider behaviour with an effort on the binding. The `/anamnesis` page arrives with the next change.
+- Also: `node --test dist/tests/anamnesis-command.test.js` for the `/anamnesis` page (keyboard and mouse).
+- Not covered offline: the quality of real recaps and dreams, live provider behaviour with an effort on the binding.

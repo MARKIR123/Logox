@@ -1,6 +1,6 @@
 /**
  * Anamnesis lifecycle: when the session has been idle long enough it writes a recap note or reviews the transcript into memory (a dream), one run at a time,
- * shown as one actor card. Any user activity aborts the run; the same card continues on the next idle period and the run starts over.
+ * shown as one actor card. Any user activity aborts the run and removes its card; the next idle period starts a fresh run with a fresh card.
  * What a run does is the driver's business (`runner.ts`); this class owns the clocks, the single-flight rule and the card.
  */
 import {randomUUID} from 'node:crypto';
@@ -54,7 +54,6 @@ export class Anamnesis {
   private readonly empty = new Map<RunKind, number>();
   private readonly failedAt = new Map<RunKind, number>();
   private failedCard: string | undefined;
-  private resumeId: string | undefined;
   private readonly clock: () => number;
   private readonly wall: () => number;
   private readonly idleMs: Record<RunKind, number>;
@@ -109,15 +108,11 @@ export class Anamnesis {
     return this.begin(kind, true);
   }
   private begin(kind: RunKind, manual: boolean): {runId: string; done: Promise<RunResult>} {
-    const runId = this.resumeId ?? randomUUID();
-    this.resumeId = undefined;
+    const runId = randomUUID();
     // A failure card gives way to the next attempt, so a long outage does not pile cards up.
-    if (this.failedCard && this.failedCard !== runId) {this.store.activities.remove(this.sessionId, this.failedCard); this.failedCard = undefined;}
+    if (this.failedCard) {this.store.activities.remove(this.sessionId, this.failedCard); this.failedCard = undefined;}
     const controller = new AbortController();
-    const resumed = this.store.activities.get(this.sessionId, runId);
-    // The resumed card moves to where the new run began, so it never sits above messages that came after it was first shown.
-    if (resumed) this.store.activities.update(this.sessionId, runId, {status: 'running', stage: RUNNING_STAGE[kind], detail: '', createdAt: this.wall()});
-    else this.store.activities.create({sessionId: this.sessionId, activityId: runId, ownerId: ANAMNESIS_OWNER, kind: 'anamnesis',
+    this.store.activities.create({sessionId: this.sessionId, activityId: runId, ownerId: ANAMNESIS_OWNER, kind: 'anamnesis',
       title: 'Anamnesis', status: 'running', stage: RUNNING_STAGE[kind], detail: '', createdAt: this.wall()});
     // Deferring the driver ensures current is installed even when it fails synchronously.
     const done = Promise.resolve().then(() => this.execute(runId, kind, manual, controller));
@@ -153,11 +148,9 @@ export class Anamnesis {
       return {kind, status: 'completed', outcome};
     } catch (error) {
       if (signal.aborted) {
-        const paused = signal.reason === 'pause';
-        if (paused) this.resumeId = runId;
-        this.store.activities.update(this.sessionId, runId, {status: paused ? 'paused' : 'cancelled',
-          stage: paused ? 'Waiting to resume' : 'Closed', detail: ''});
-        return {kind, status: 'aborted', reason: paused ? 'pause' : 'close'};
+        // An interrupted run leaves nothing behind: the next idle period starts a fresh run with a fresh card.
+        this.store.activities.remove(this.sessionId, runId);
+        return {kind, status: 'aborted', reason: signal.reason === 'pause' ? 'pause' : 'close'};
       }
       const message = error instanceof Error ? error.message : String(error);
       this.failedAt.set(kind, this.clock());

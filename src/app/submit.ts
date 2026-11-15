@@ -40,6 +40,8 @@ import type {Journal} from '../store/journal.js';
 import type {ToolRegistry} from '../tools/registry.js';
 import type {Tools} from '../tools/tools.js';
 import {palette} from '../tui/appearance/theme.js';
+import {createAnamnesisCommand} from '../commands/anamnesis-page.js';
+import type {AnamnesisApi} from './anamnesis.js';
 import type {InputDelivery} from './input.js';
 import type {Notice, Receipt, SessionState} from './state.js';
 
@@ -52,6 +54,8 @@ export interface SubmitDeps {
   owners: readonly string[];
   /** The static memory prompt section: `/compact` builds its prefix with it and `/reload` reads it again. */
   memory: {prompt(): string; refresh(): Promise<void>};
+  /** The Anamnesis API behind `/anamnesis`. */
+  anamnesis: AnamnesisApi;
   profileReady: Promise<void>;
   signal: AbortSignal;
   notice: Notice; receipt: Receipt;
@@ -67,9 +71,10 @@ export interface SubmitDeps {
 
 export function createSubmit(deps: SubmitDeps) {
   const {session, cwd, homeDir, state, env, resourceOptions, store, journal, surfaces, authentication, ensemble, permissions, tools, toolRegistry,
-    actors, actorServices, resources, contexts, registry, owners, memory, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
+    actors, actorServices, resources, contexts, registry, modelPool, owners, memory, anamnesis, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
     providers, pages, buildContext, sessionCommand, requireIdle} = deps;
   const {beginTask, dispatchInput, ownerIsBusy} = input;
+  const anamnesisCommand = createAnamnesisCommand({surfaces, anamnesis, registry, modelPool, receipt});
   /** `/providers check` and `/check-provider`: one request against the session provider, reported in a result panel. */
   const checkProvider = async (source: string) => {
     if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
@@ -171,6 +176,8 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
     if (text === '/theme') {pages.openTheme(); return;}
+    const anamnesisArgs = /^\/anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
+    if (anamnesisArgs) {await anamnesisCommand.command(anamnesisArgs[1] ?? '', source); return;}
     const pageSpec = createCommandTabsFor(text, buildContext());
     if (pageSpec) {
       state.activeCommandPage = text;

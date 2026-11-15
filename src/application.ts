@@ -390,7 +390,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const input = createInput({session, state, store, ensemble, actorServices, systems, notice, beforeTask: options.beforeTask});
   const submitCommand = createSubmit({session, cwd, homeDir, state, env: options.env ?? process.env, resourceOptions: options.resourceOptions, store, journal,
     surfaces, authentication, ensemble, permissions, tools, toolRegistry, actors, actorServices, resources, contexts, registry, modelPool, owners,
-    memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
+    memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, anamnesis: anamnesis.api, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
     sessionCommand: options.sessionCommand, requireIdle});
   return {
     sendPendingNow: input.sendPendingNow, discardPending: input.discardPending,

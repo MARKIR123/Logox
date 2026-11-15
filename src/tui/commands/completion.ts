@@ -103,6 +103,13 @@ export function commandSuggestions(draft: Draft, context: CommandContext): reado
     return [];
   }
 
+  if (command.name === 'anamnesis') {
+    if (argIndex !== 1) return [];
+    return ([['recap', 'Write a note on where the work stands'], ['dream', 'Review the session and update memory']] as const)
+      .filter(([name]) => name.startsWith(currentPrefix.toLowerCase()))
+      .map(([name, description]) => ({label: name, description, replacement: name, start, end, kind: 'argument' as const, execute: true}));
+  }
+
   if (argIndex === 1) {
     const candidates = command.argument === 'provider' ? context.providers
       : command.argument === 'loginProvider' ? context.loginProviders

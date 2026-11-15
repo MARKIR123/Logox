@@ -278,6 +278,8 @@ export function TabbedPage({title, tabs, initialTab, width, height, y = 0, onClo
       }
     }
 
+    const tabAction = tab?.actions?.find(item => item.key === input.toLowerCase());
+    if (tab && tabAction && !key.meta) {onAction?.(tab.id, tabAction.id); return;}
     let next: number | undefined;
     if (key.upArrow || key.downArrow) next = offset + (key.upArrow ? -1 : 1);
     if (key.pageUp || key.pageDown) next = offset + (key.pageUp ? -contentHeight : contentHeight);
@@ -292,6 +294,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, y = 0, onClo
     : confirm ? 'y Confirm · any other key Cancel'
     : permissionsView_ ? permissionsView_.footer
     : modeTab ? (draftMode ? 'Enter Apply and save · Space / ←→ Change · Esc Discard' : 'Space / m / ←→ Change mode · ↑↓ Scroll · Esc Back')
+    : tab?.actions?.length ? tab.actions.map(item => item.key + ' ' + item.label).join(' · ') + ' · ↑↓ Scroll · Esc Back'
     : tab?.id === 'providers' ? '[t] Test   [r] Refresh   [x] Logout   [←→] Provider   [↑↓] Scroll   [Esc] Back'
     : items ? `${hasTabBar ? focusArea === 'tabs' ? '←→ / Tab Switch · ↓ Edit · ' : 'Tab Switch · ' : ''}↑↓ Select · Enter ${hasTabBar ? 'Apply tab' : 'Save'} · Esc ${hasTabBar ? 'Close / discard unsaved' : 'Discard'}`
     : `${hasTabBar ? '←→ / Tab Switch · ' : ''}↑↓ / PgUp PgDn Scroll · Esc Back`;
@@ -331,6 +334,7 @@ export function TabbedPage({title, tabs, initialTab, width, height, y = 0, onClo
       : permDirty ? [{label: 'Enter Save mode', run: () => activate({kind: 'save-mode'})}, {label: 'Esc Discard', run: onClose}]
       : [{label: 'a Add', run: () => activate({kind: 'add'})}, ...(ruleIndex >= 0 ? [{label: 'd / Del Delete', run: () => activate({kind: 'delete', index: ruleIndex})}] : []), {label: 'Esc Back', run: onClose}])
     : modeTab ? (draftMode ? [{label: 'Enter Apply and save', run: saveMode}, {label: 'Esc Discard', run: onClose}] : [{label: 'Esc Back', run: onClose}])
+    : tab?.actions?.length ? [...tab.actions.map(item => ({label: item.key + ' ' + item.label, run: () => onAction?.(tab.id, item.id)})), {label: 'Esc Back', run: onClose}]
     : tab?.id === 'providers' ? [{label: '[t] Test', run: () => onAction?.('providers', 'test')}, {label: '[r] Refresh', run: () => onAction?.('providers', 'refresh')},
       {label: '[x] Logout', run: () => onAction?.('providers', 'logout')}, {label: '[←', run: () => onAction?.('providers', 'prev_provider')},
       {label: '→]', run: () => onAction?.('providers', 'next_provider')}, {label: '[Esc] Back', run: onClose}]
