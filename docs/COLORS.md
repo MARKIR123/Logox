@@ -20,7 +20,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 内置主题有 `logox-dark`（默认，完整基准）、`abyss-lantern`、`catppuccin-mocha`、`celadon-pine`、`claude-warm`、`copper-ink`、`marginalia`、`monokai-pro`、`nord-polar`、`tokyo-night`。除默认主题外都通过 `base` 继承 `logox-dark`，只写差异；别名在继承与覆盖合并之后解析，所以继承来的 `$muted`、`$fg` 会自动跟随子主题改过的颜色。`abyss-lantern` 是深海灯笼配色：墨绿黑打底、生物荧光青绿标记焦点、灯笼橙留给用户；`catppuccin-mocha` 采用 Catppuccin Mocha 暗调粉彩（深紫灰底、锦葵紫焦点、蜜桃橙用户轨）；`celadon-pine` 以松烟墨绿打底，青瓷釉色标记焦点，柿木暖橙用于用户轨；`copper-ink` 以暖石墨色打底，琥珀铜色标记焦点，青蓝色用于链接。
 
-`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 是四套各自带完整底色家族的系统主题（不再沿用 `logox-dark` 的石板蓝），连同 `logox-dark` 与 `marginalia` 都通过可读性检查（没有低于阈值的项，也没有易混淆的语义色对）。配色取自各自的公开调色板，对比度或色相不够处按“可读性优先于还原度”调整：
+`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 是四套各自带完整底色家族的系统主题（不再沿用 `logox-dark` 的石板蓝），连同 `logox-dark`、`marginalia` 与 `abyss-lantern` 都通过可读性检查（没有低于阈值的项，也没有易混淆的语义色对）。配色取自各自的公开调色板，对比度或色相不够处按“可读性优先于还原度”调整：
 
 | 主题 | 底色与文字 | 语义色 | 相对公开调色板的调整 |
 |---|---|---|---|
@@ -80,17 +80,17 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 | 主题 | 低于阈值的项 | 易混淆的色对 |
 |---|---|---|
 | `logox-dark` | 无 | 无 |
-| `abyss-lantern` | `border` 1.81 | `user ≈ warning` |
-| `catppuccin-mocha` | `muted on card` 3.23，`border` 2.45 | `user ≈ warning` |
-| `celadon-pine` | `border` 2.17 | `user ≈ warning` |
+| `abyss-lantern` | 无（`border` 3.87） | 无 |
+| `catppuccin-mocha` | 无 | 无 |
+| `celadon-pine` | 无 | 无 |
 | `claude-warm` | 无 | 无 |
-| `copper-ink` | `border` 2.70 | `accent ≈ warning` |
+| `copper-ink` | 无（`border` 3.62） | 无 |
 | `marginalia` | 无 | 无 |
 | `monokai-pro` | 无 | 无 |
 | `nord-polar` | 无 | 无 |
 | `tokyo-night` | 无 | 无 |
 
-`logox-dark`、`claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 与 `marginalia` 由 `tests/theme-legibility.test.ts` 守住（零项低于阈值、零个易混淆色对）；其余四套内置主题尚未调整，表中数字仅是现状。这是提示，不是错误：边线本来就是弱化的装饰。旧的梦境卡片浅色底及其 `dream text` / `dream muted` 两项检查已随该卡片一起取消。
+通过检查的主题由 `tests/theme-legibility.test.ts` 覆盖。`copper-ink` 用更亮的暖灰棕画边线，用浅柠檬黄区分警告和铜色焦点；`abyss-lantern` 把边线提亮到 `#5C7682`，并把用户橙移到 `#F08A46`、警告金移到 `#EACF6E`，两者色相差约 23°。旧梦境卡片的 `dream text` / `dream muted` 两项检查已随该卡片退役。
 
 颜色值写 `#RRGGBB` 或 `$token`（引用另一个字段）。引用在所有继承与覆盖合并之后才解析，所以子主题改了 `fg`，继承来的 `selectionFg: "$fg"` 也会跟着变；显式写的十六进制值是独立的。
 

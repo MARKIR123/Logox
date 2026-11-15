@@ -97,14 +97,24 @@ test('every shipped theme can be reported (the table the page and the docs refer
   } finally {Object.assign(palette, original);}
 });
 
-test('the system themes and marginalia pass the legibility check: every pair at its threshold and no confusable semantic colours', () => {
+test('the validated shipped themes have no low-contrast pairs or confusable semantic colours', () => {
   const original = {...palette};
   try {
-    for (const name of ['logox-dark', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night', 'marginalia']) {
+    for (const name of ['logox-dark', 'abyss-lantern', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night', 'marginalia', 'copper-ink']) {
       const report = legibilityReport(applyThemePreset(name));
       const failing = report.pairs.filter(pair => !pair.ok).map(pair => pair.label + ' ' + pair.ratio.toFixed(2) + ' < ' + pair.threshold);
       assert.deepEqual(failing, [], name + ' pairs below threshold');
       assert.deepEqual(report.confusable.map(pair => pair.a + '≈' + pair.b + ' (' + pair.distance.toFixed(0) + '°)'), [], name + ' confusable semantic colours');
     }
+  } finally {Object.assign(palette, original);}
+});
+
+test('abyss-lantern keeps its border legible and its user orange distinct from the warning gold', () => {
+  const original = {...palette};
+  try {
+    const report = legibilityReport(applyThemePreset('abyss-lantern'));
+    const failing = report.pairs.filter(pair => !pair.ok).map(pair => pair.label + ' ' + pair.ratio.toFixed(2) + ' < ' + pair.threshold);
+    assert.deepEqual(failing, [], 'abyss-lantern pairs below threshold');
+    assert.deepEqual(report.confusable.map(pair => pair.a + '≈' + pair.b + ' (' + pair.distance.toFixed(0) + '°)'), [], 'abyss-lantern confusable semantic colours');
   } finally {Object.assign(palette, original);}
 });
