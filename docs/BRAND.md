@@ -6,7 +6,8 @@ LOGOX 的标志是一朵像素花：上下两片雾蓝花瓣、左右两片骨�
 
 | 文件 | 用途 |
 |---|---|
-| `assets/banner.svg`、`assets/banner-light.svg` | README 横幅（1280 × 400），README 按 GitHub 的深浅主题自动切换；标语下方是四位角色的名牌 |
+| `assets/banner.svg`、`assets/banner-light.svg` | README 横幅（1280 × 392，微凸立体卡片与四色并行轨迹），README 按 GitHub 的深浅主题自动切换 |
+| `assets/banner-classic.svg`、`assets/banner-classic-light.svg` | 原版扁平横幅备份（1280 × 400），标语下方带四位角色名牌 |
 | `assets/stage.svg` | README 的舞台示意图：一个终端窗口里的一轮协作，按 `logox-dark` 主题绘制 |
 | `assets/logo.svg`、`assets/logo-light.svg` | 横版组合：标志加字标 |
 | `assets/wordmark.svg`、`assets/wordmark-light.svg` | 字标：Cinzel 的 LOG 与 X，第二个 O 换成像素花心 |
@@ -51,7 +52,7 @@ LOGOX 的标志是一朵像素花：上下两片雾蓝花瓣、左右两片骨�
 2. 运行 `node scripts/brand-assets.mjs`，重新生成 `assets/` 下全部 SVG。光影在生成时计算，源数据只画平涂。
 3. 改了 `assets/brand/draft-26.json` 后，同步更新 `src/tui/appearance/emblem.ts` 里的 `EMBLEM_PIXELS`；`npm test` 会检查两者一致。
 4. 只有改字标字母、横幅文字或舞台图文字时，才需要运行 `scripts/brand-outlines.py` 重新提取轮廓，它依赖 fontTools 和上面三款字体。字体目录里缺哪款，就保留那一项现有的轮廓，所以只改舞台图时有 Maple Mono 就够了。
-5. 舞台图和名牌的文字都在 `assets/brand/scene.json`：每行是若干 `[文字, 色调]` 片段，色调对应 `SCENE_TONES`。改完先跑第 4 步，再跑第 2 步。
+5. 舞台图和经典横幅名牌的文字都在 `assets/brand/scene.json`：每行是若干 `[文字, 色调]` 片段，色调对应 `SCENE_TONES`。改完先跑第 4 步，再跑第 2 步。
 
 ## 不要这样用
 

@@ -144,7 +144,7 @@ function monoWriter(prefix) {
   return {line, defs: () => `<defs>${[...defs.values()].join('')}</defs>`};
 }
 
-/** The ensemble row of the banner: one tag per actor, separated by hairlines like the TUI's actor bar. */
+/** The ensemble row of the classic banner: one tag per actor, separated by hairlines like the TUI's actor bar. */
 function ensembleRow(writer, cast, rule, x, y, size, maxWidth) {
   const tags = scene.pills.map(([symbol, name, key]) => writer.line([[symbol + ' ' + name, cast[key], true]], size, 0, 0));
   const natural = tags.reduce((sum, [, w]) => sum + w, 0), gap = (maxWidth - natural) / (tags.length - 1);
@@ -159,7 +159,7 @@ function ensembleRow(writer, cast, rule, x, y, size, maxWidth) {
   return out.join('');
 }
 
-function banner(palette, bg, ink, muted, rule, cast, prefix) {
+function bannerClassic(palette, bg, ink, muted, rule, cast, prefix) {
   const W = 1280, H = 400, left = 492, writer = monoWriter(prefix);
   const [word, width] = wordmark(ink, palette), s = Math.min(1, (W - left - 84) / width), top = (H - (100 * s + 128)) / 2;
   const [tagline] = text(outlines.tagline, outlines.tagline.text, 34, left, top + 100 * s + 58, ink);
@@ -167,6 +167,136 @@ function banner(palette, bg, ink, muted, rule, cast, prefix) {
   return [`${writer.defs()}<rect width="${W}" height="${H}" rx="22" fill="${bg}"/>${pixels(shade(master), palette, 92, (H - 52 * 6) / 2, 6)}`
     + `<g transform="translate(${left} ${top.toFixed(1)}) scale(${s.toFixed(4)})">${word}</g>${tagline}`
     + `<line x1="${left}" y1="${ruleY.toFixed(1)}" x2="${(left + width * s).toFixed(1)}" y2="${ruleY.toFixed(1)}" stroke="${rule}"/>${row}`, W, H];
+}
+
+function banner(palette, ink, cast, mode) {
+  const isDark = mode === 'd';
+  const railBg = isDark ? '#182131' : '#E8E4DA';
+  const tick = isDark ? '#3A4862' : '#C8C2B5';
+
+  const W = 1280, H = 392;
+  const padX = 10, padTop = 6, padBot = 12;
+  const cardW = W - padX * 2, cardH = H - padTop - padBot, cardR = 22;
+  const cy = padTop + cardH / 2;
+
+  const cell = 6, gridSize = 52 * cell, visFlower = 48 * cell, mPad = 2 * cell;
+  const [word, wordW] = wordmark(ink, palette);
+  const scale = 0.78, scaledWordW = wordW * scale, wordH = 100 * scale;
+
+  const gap = 88;
+  const visLeft = Math.round((W - (visFlower + gap + scaledWordW)) / 2);
+  const markGridX = visLeft - mPad, markGridY = Math.round(cy - gridSize / 2);
+  const rightX = visLeft + visFlower + gap;
+
+  const taglineSize = 29, taglineOffset = 39, tracksOffset = 65;
+  const trackH = 4, trackStep = 9, tracksTotalH = 3 * trackStep + trackH;
+  const stackTotalH = wordH + tracksOffset + tracksTotalH;
+
+  const wordTop = Math.round(cy - stackTotalH / 2);
+  const wordBase = wordTop + wordH;
+  const taglineY = wordBase + taglineOffset;
+  const scoreY = wordBase + tracksOffset;
+
+  const [taglineSvg] = text(outlines.tagline, outlines.tagline.text, taglineSize, rightX, taglineY, ink);
+
+  const defs = `<defs>`
+    + `<clipPath id="card-clip-${mode}"><rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" rx="${cardR}"/></clipPath>`
+    + `<filter id="card-elev-${mode}" x="-3%" y="-6%" width="106%" height="118%">`
+    + `<feDropShadow dx="0" dy="3" stdDeviation="3.5" flood-color="${isDark ? '#04060A' : '#2B3447'}" flood-opacity="${isDark ? '0.38' : '0.075'}"/>`
+    + `</filter>`
+    + `<radialGradient id="dome-${mode}" cx="46%" cy="38%" r="76%" fx="42%" fy="30%">`
+    + `<stop offset="0%" stop-color="${isDark ? '#1A2334' : '#FCFBF8'}"/>`
+    + `<stop offset="40%" stop-color="${isDark ? '#161E2D' : '#F8F6F1'}"/>`
+    + `<stop offset="75%" stop-color="${isDark ? '#121825' : '#F3F0E9'}"/>`
+    + `<stop offset="100%" stop-color="${isDark ? '#0F141F' : '#ECE8DF'}"/>`
+    + `</radialGradient>`
+    + `<linearGradient id="edge-v-${mode}" x1="0" y1="0" x2="0" y2="1">`
+    + `<stop offset="0%" stop-color="${isDark ? '#43587E' : '#FFFFFF'}" stop-opacity="${isDark ? '0.24' : '0.75'}"/>`
+    + `<stop offset="4.5%" stop-color="${isDark ? '#324361' : '#FFFFFF'}" stop-opacity="0"/>`
+    + `<stop offset="93%" stop-color="${isDark ? '#070A10' : '#B8B0A0'}" stop-opacity="0"/>`
+    + `<stop offset="100%" stop-color="${isDark ? '#070A10' : '#AFA694'}" stop-opacity="${isDark ? '0.24' : '0.18'}"/>`
+    + `</linearGradient>`
+    + `<linearGradient id="edge-h-${mode}" x1="0" y1="0" x2="1" y2="0">`
+    + `<stop offset="0%" stop-color="${isDark ? '#090C14' : '#BDB5A4'}" stop-opacity="${isDark ? '0.14' : '0.10'}"/>`
+    + `<stop offset="3.5%" stop-color="${isDark ? '#090C14' : '#BDB5A4'}" stop-opacity="0"/>`
+    + `<stop offset="96.5%" stop-color="${isDark ? '#080B12' : '#B3AA98'}" stop-opacity="0"/>`
+    + `<stop offset="100%" stop-color="${isDark ? '#080B12' : '#ADA492'}" stop-opacity="${isDark ? '0.18' : '0.12'}"/>`
+    + `</linearGradient>`
+    + `<linearGradient id="sheen-${mode}" x1="0.10" y1="0.0" x2="0.72" y2="1.0">`
+    + `<stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>`
+    + `<stop offset="28%" stop-color="${isDark ? '#9DBAE8' : '#FFFFFF'}" stop-opacity="${isDark ? '0.02' : '0.18'}"/>`
+    + `<stop offset="44%" stop-color="${isDark ? '#C5DAFA' : '#FFFFFF'}" stop-opacity="${isDark ? '0.065' : '0.45'}"/>`
+    + `<stop offset="58%" stop-color="${isDark ? '#9DBAE8' : '#FFFFFF'}" stop-opacity="${isDark ? '0.02' : '0.15'}"/>`
+    + `<stop offset="78%" stop-color="#FFFFFF" stop-opacity="0"/>`
+    + `<stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>`
+    + `</linearGradient>`
+    + `<linearGradient id="top-catch-${mode}" x1="0" y1="0" x2="1" y2="0">`
+    + `<stop offset="0%" stop-color="${isDark ? '#8AB0EB' : '#FFFFFF'}" stop-opacity="0"/>`
+    + `<stop offset="20%" stop-color="${isDark ? '#8AB0EB' : '#FFFFFF'}" stop-opacity="${isDark ? '0.32' : '0.88'}"/>`
+    + `<stop offset="50%" stop-color="${isDark ? '#B7D0F5' : '#FFFFFF'}" stop-opacity="${isDark ? '0.45' : '1.00'}"/>`
+    + `<stop offset="80%" stop-color="${isDark ? '#8AB0EB' : '#FFFFFF'}" stop-opacity="${isDark ? '0.26' : '0.82'}"/>`
+    + `<stop offset="100%" stop-color="${isDark ? '#8AB0EB' : '#FFFFFF'}" stop-opacity="0"/>`
+    + `</linearGradient>`
+    + `<linearGradient id="rim-${mode}" x1="0.08" y1="0" x2="0.92" y2="1">`
+    + `<stop offset="0%" stop-color="${isDark ? '#5A739E' : '#FFFFFF'}" stop-opacity="${isDark ? '0.52' : '0.95'}"/>`
+    + `<stop offset="45%" stop-color="${isDark ? '#28344A' : '#E2DDD2'}" stop-opacity="${isDark ? '0.42' : '0.65'}"/>`
+    + `<stop offset="100%" stop-color="${isDark ? '#0B0F17' : '#C9C2B3'}" stop-opacity="${isDark ? '0.72' : '0.65'}"/>`
+    + `</linearGradient>`
+    + `<pattern id="dotgrid-${mode}" width="20" height="20" patternUnits="userSpaceOnUse">`
+    + `<circle cx="10" cy="10" r="0.85" fill="${isDark ? '#3B4A66' : '#CFC8BA'}" opacity="${isDark ? '0.28' : '0.38'}"/>`
+    + `</pattern>`
+    + `<radialGradient id="dotmask-grad-${mode}" cx="50%" cy="50%" r="50%">`
+    + `<stop offset="60%" stop-color="#FFFFFF" stop-opacity="1"/><stop offset="96%" stop-color="#FFFFFF" stop-opacity="0"/>`
+    + `</radialGradient>`
+    + `<mask id="dotmask-${mode}"><rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" fill="url(#dotmask-grad-${mode})"/></mask>`
+    + `</defs>`;
+
+  const mX = padX + 26, mY = padTop + 24, tLen = 10;
+  const ticks = [
+    `M${mX} ${mY + tLen}V${mY}H${mX + tLen}`,
+    `M${padX + cardW - 26 - tLen} ${mY}H${padX + cardW - 26}V${mY + tLen}`,
+    `M${mX} ${padTop + cardH - 24 - tLen}V${padTop + cardH - 24}H${mX + tLen}`,
+    `M${padX + cardW - 26 - tLen} ${padTop + cardH - 24}H${padX + cardW - 26}V${padTop + cardH - 24 - tLen}`,
+  ].map(d => `<path d="${d}" fill="none" stroke="${tick}" stroke-width="1.2" opacity="0.52"/>`).join('');
+
+  const promptSize = 16, promptGlyph = outlines.mono.glyphs['❯'], pk = promptSize / outlines.mono.upm;
+  const promptY = scoreY + tracksTotalH / 2 + (730 * pk) / 2;
+  const promptSvg = `<path transform="matrix(${pk} 0 0 ${-pk} ${rightX} ${promptY.toFixed(1)})" d="${promptGlyph.d}" fill="${cast.logox}"/>`;
+
+  const trackX = rightX + 24, trackW = Math.round(scaledWordW) - 24;
+  const tracks = [
+    [cast.logox, [[0.00, 0.16, 0.95], [0.22, 0.28, 0.45], [0.56, 0.34, 0.95], [0.94, 0.06, 0.55]]],
+    [cast.techne, [[0.08, 0.36, 0.90], [0.50, 0.19, 0.85], [0.74, 0.14, 0.40]]],
+    [cast.kalon, [[0.14, 0.22, 0.88], [0.42, 0.31, 0.92], [0.79, 0.17, 0.55]]],
+    [cast.aletheia, [[0.24, 0.15, 0.70], [0.46, 0.18, 0.90], [0.70, 0.26, 0.92]]],
+  ];
+  const tracksSvg = tracks.map(([color, segs], idx) => {
+    const ty = scoreY + idx * trackStep;
+    const base = `<rect x="${trackX}" y="${ty}" width="${trackW}" height="${trackH}" rx="1.5" fill="${railBg}"/>`;
+    const bars = segs.map(([s, w, op]) =>
+      `<rect x="${+(trackX + s * trackW).toFixed(1)}" y="${ty}" width="${+(w * trackW).toFixed(1)}" height="${trackH}" rx="1.5" fill="${color}" opacity="${op}"/>`
+    ).join('');
+    return base + bars;
+  }).join('');
+
+  return [
+    defs
+    + `<rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="url(#dome-${mode})" filter="url(#card-elev-${mode})"/>`
+    + `<g clip-path="url(#card-clip-${mode})">`
+    + `<rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="url(#edge-v-${mode})"/>`
+    + `<rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="url(#edge-h-${mode})"/>`
+    + `<rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" rx="${cardR}" fill="url(#sheen-${mode})"/>`
+    + `<rect x="${padX}" y="${padTop}" width="${cardW}" height="${cardH}" fill="url(#dotgrid-${mode})" mask="url(#dotmask-${mode})"/>`
+    + ticks
+    + `<rect x="${padX + 0.75}" y="${padTop + 0.75}" width="${cardW - 1.5}" height="${cardH - 1.5}" rx="${cardR - 0.5}" fill="none" stroke="url(#rim-${mode})" stroke-width="1.5"/>`
+    + `<rect x="${padX + cardR}" y="${padTop + 1.5}" width="${cardW - cardR * 2}" height="1.2" fill="url(#top-catch-${mode})"/>`
+    + `</g>`
+    + pixels(shaded, palette, markGridX, markGridY, cell)
+    + `<g transform="translate(${rightX} ${wordTop}) scale(${scale})">${word}</g>`
+    + taglineSvg + promptSvg + tracksSvg,
+    W,
+    H,
+  ];
 }
 
 /** The README stage: a terminal window with one round of the ensemble at work, drawn in the logox-dark theme. */
@@ -229,8 +359,10 @@ for (const [name, palette, ink] of [['wordmark.svg', DARK, BONE], ['wordmark-lig
   svg(name, 'LOGOX', `<g transform="translate(0 4)">${body}</g>`, w, 108);
 }
 for (const [name, palette, ink] of [['logo.svg', DARK, BONE], ['logo-light.svg', LIGHT, INK]]) svg(name, 'LOGOX', ...lockup(palette, ink));
-svg('banner.svg', 'LOGOX: A terminal coding ensemble', ...banner(DARK, NIGHT, BONE, '#8E97A8', '#2A3446', CAST_DARK, 'd'));
-svg('banner-light.svg', 'LOGOX: A terminal coding ensemble', ...banner(LIGHT, PAPER, INK, '#6B7385', '#D9D5CB', CAST_LIGHT, 'l'));
+svg('banner.svg', 'LOGOX: A terminal coding ensemble', ...banner(DARK, BONE, CAST_DARK, 'd'));
+svg('banner-light.svg', 'LOGOX: A terminal coding ensemble', ...banner(LIGHT, INK, CAST_LIGHT, 'l'));
+svg('banner-classic.svg', 'LOGOX: A terminal coding ensemble', ...bannerClassic(DARK, NIGHT, BONE, '#8E97A8', '#2A3446', CAST_DARK, 'cd'));
+svg('banner-classic-light.svg', 'LOGOX: A terminal coding ensemble', ...bannerClassic(LIGHT, PAPER, INK, '#6B7385', '#D9D5CB', CAST_LIGHT, 'cl'));
 svg('stage.svg', 'Logox at work: the Director splits a request and three actors work on it in parallel', ...stage());
 for (const [name, content] of Object.entries(files)) writeFileSync(join(assets, name), content);
 console.log(`wrote ${Object.keys(files).length} files to assets/`);
