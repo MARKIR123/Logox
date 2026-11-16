@@ -1,7 +1,8 @@
 import type {ModelRequest, ModelTurn} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
 import type {Step} from '../runtime/contracts.js';
-import {TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
+import {ECHO_REMINDER, ECHO_STOP_ERROR, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
+import {LOOP_STREAK} from './repeat-guard.js';
 import {isTextToolCall} from './turn-outcome.js';
 import type {ModelTurnResult} from './model-turn.js';
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
@@ -79,7 +80,19 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
     run.context.signal.throwIfAborted();
     return 'done';
   };
+  if (kind.kind !== 'echo') state.echoEnded();
   switch (kind.kind) {
+    case 'echo': {
+      // Nothing was delivered: the turn is kept (usage, reasoning), its text is already empty, and the model is told once per turn what it did.
+      await persist(turn.message, thinkingStep);
+      if (state.echoed() >= LOOP_STREAK) {
+        if (await drainInbox(true)) return 'again';
+        run.context.signal.throwIfAborted();
+        throw new Error(ECHO_STOP_ERROR);
+      }
+      await ready.appendUpdate(createRuntimeContextMessage('reminder', ECHO_REMINDER, {slot: 'echo'}));
+      return 'again';
+    }
     case 'finish_round_outside_round': {
       // Where this activity does not close a round, round memory is not asked for and a `_FinishRound` call is answered normally and otherwise ignored.
       const calls = turn.message.toolCalls ?? [];
@@ -144,6 +157,8 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       // Delivered after the results as a request-only note, so the tool results stay clean in history.
       if (result.automaNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.automaNote, {slot: 'automa'}));
       if (result.loopNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.loopNote, {slot: 'loop'}));
+      // Once per recovered turn: the call ran, and the model is told how it should have been written.
+      if (turn.recovered) await ready.appendUpdate(createRuntimeContextMessage('reminder', TEXT_CALL_RECOVERED_NOTE, {slot: 'text-call'}));
       if (truncated) await recoverOutput('truncated_tools', thinkingId);
       else state.batchRan();
       // A refused batch is answered once. A second one in a row ends the exchange without another request, so a model that ignores the refusal cannot loop.

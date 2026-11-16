@@ -4,7 +4,8 @@ import {normalizeMessages, type ModelMessage, type ModelRequest, type ModelTurn,
 import {createRuntimeContextMessage, withoutAnsweredTransient} from '../runtime/context-updates.js';
 import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {omitImages} from '../providers/vision-fallback.js';
-import {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
+import {ECHO_REMINDER, ECHO_STOP_ERROR, TEXT_CALL_RECOVERED_NOTE, executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
+import {refineTurn} from './turn-refine.js';
 import type {ToolResult} from '../tools/types.js';
 import {settleToolResults} from './scratchpad.js';
 import {LOOP_STREAK, RepeatGuard} from './repeat-guard.js';
@@ -89,7 +90,7 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
   const {messages, terminal} = run;
   const repeat = new RepeatGuard(run.cwd);
   const note = (text: string, slot: string) => messages.push(createRuntimeContextMessage('reminder', text, {slot, activityId: run.workerId}));
-  let imagesOmitted = false, silent = 0, truncatedBefore = false;
+  let imagesOmitted = false, silent = 0, echoes = 0, truncatedBefore = false;
   for (let turnNumber = 1;; turnNumber++) {
     run.signal.throwIfAborted();
     const capabilities = await run.provider.resolveCapabilities?.(run.signal) ?? run.provider.capabilities ?? FALLBACK_CAPABILITIES;
@@ -99,8 +100,10 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     const request: ModelRequest = {system: run.system, messages: blind?.messages ?? projected,
       tools: run.tools.map(tool => {const {$schema: _schema, ...parameters} = tool.parameters; return {...tool, parameters};}),
       supportsVision: run.vision !== false, cacheKey: run.cacheKey, cacheRetention: {role: 'short'}};
-    const turn = await respondWithRetries(run, request);
-    run.onUsage?.(turn);
+    const answered = await respondWithRetries(run, request);
+    run.onUsage?.(answered);
+    // The same step as an actor's turn: a call written as text becomes a real one, repeated runtime text leaves the reply.
+    const turn = refineTurn(answered, request);
     run.signal.throwIfAborted();
     // A call id is unique in the history: a missing or repeated one (models reuse "call_1") is replaced, as actors' calls are.
     const seen = new Set(messages.flatMap(message => message.role === 'assistant' ? (message.toolCalls ?? []).map(call => call.id) : []));
@@ -113,11 +116,12 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     const calls = turn.message.toolCalls ?? [];
     if (!calls.length) {
       // A turn with no tool call leaves the job open; only a streak of them is a stall.
-      if (++silent >= LOOP_STREAK) return {kind: 'stalled', lastText: turn.message.text.trim(), imagesOmitted};
-      note(terminal.reminder, 'no-tool');
+      echoes = turn.echo ? echoes + 1 : 0;
+      if (++silent >= LOOP_STREAK) return {kind: 'stalled', lastText: echoes >= LOOP_STREAK ? ECHO_STOP_ERROR : turn.message.text.trim(), imagesOmitted};
+      note(turn.echo ? ECHO_REMINDER : terminal.reminder, turn.echo ? 'echo' : 'no-tool');
       continue;
     }
-    silent = 0;
+    silent = 0; echoes = 0;
     const truncated = turn.stop === 'length';
     const closing = truncated ? undefined : calls.find(call => call.name === terminal.name);
     const business = calls.filter(call => call !== closing);
@@ -170,5 +174,6 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
       messages.push({role: 'tool', callId: closing.id, name: closing.name, text: decision.text, isError: true});
     }
     if (loopNote) note(loopNote, 'loop');
+    if (turn.recovered) note(TEXT_CALL_RECOVERED_NOTE, 'text-call');
   }
 }

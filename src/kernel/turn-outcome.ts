@@ -6,6 +6,8 @@ import {textToolCallName} from './text-tool-call.js';
 export interface TurnShape {
   readonly stop: ModelTurn['stop'];
   readonly message: {readonly text: string; readonly toolCalls?: readonly {readonly name: string; readonly arguments: string}[] | undefined};
+  /** The reply was only runtime text the model repeated (`turn-refine.ts`); its text is already empty. */
+  readonly echo?: true | undefined;
 }
 
 export interface TurnFacts {
@@ -27,6 +29,7 @@ export interface TurnFacts {
  * - `finish_round`: the closing follow-up came back with calls, or a round-closing activity called `_FinishRound` (alone or with others).
  * - `tools`: a business tool batch; `truncated` when the stop was not `tools` or an argument is not JSON.
  * - `text_tool_call`: a call written as plain text; nothing ran.
+ * - `echo`: the reply only repeated runtime text; nothing is delivered and the loop continues with a reminder.
  * - `closing_without_call`: the closing follow-up came back without a call.
  * - `empty_awaiting_peer`: empty reply while a peer wait is pending or a reply is owed.
  * - `empty_director_waiting`: empty reply from a Director waiting on companions.
@@ -40,6 +43,7 @@ export type TurnOutcome =
   | {readonly kind: 'finish_round'; readonly truncated: boolean; readonly only: boolean}
   | {readonly kind: 'tools'; readonly truncated: boolean}
   | {readonly kind: 'text_tool_call'}
+  | {readonly kind: 'echo'}
   | {readonly kind: 'closing_without_call'}
   | {readonly kind: 'empty_awaiting_peer'}
   | {readonly kind: 'empty_director_waiting'}
@@ -66,6 +70,7 @@ export function classifyTurn(turn: TurnShape, facts: TurnFacts): TurnOutcome {
   }
   if (calls.length) return {kind: 'tools', truncated};
   if (isTextToolCall(turn, facts.closing, facts.offered)) return {kind: 'text_tool_call'};
+  if (turn.echo && !facts.closing) return {kind: 'echo'};
   if (facts.closing) return {kind: 'closing_without_call'};
   const empty = !turn.message.text.trim();
   if (turn.stop === 'complete' && empty && facts.peerPending) return {kind: 'empty_awaiting_peer'};

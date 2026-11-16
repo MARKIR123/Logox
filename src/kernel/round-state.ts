@@ -25,6 +25,8 @@ export class RoundState {
   private ownedReminders = 0;
   private refused = 0;
   private imagesRetried = false;
+  /** Consecutive replies that only repeated runtime text. */
+  private echoes = 0;
   private readonly owedSightings = new Map<string, number>();
   private usage: TurnUsage | undefined;
   /** Signatures minted by a model that has since been replaced. */
@@ -89,6 +91,11 @@ export class RoundState {
     this.refused = 0;
     return true;
   }
+
+  /** A reply that only repeated runtime text: counts the streak and returns its length. */
+  echoed(): number {return ++this.echoes;}
+  /** Any other reply ends the echo streak. */
+  echoEnded(): void {this.echoes = 0;}
 
   /** One image-downgrade retry per failure streak: false when it was already spent. */
   imageRetry(): boolean {

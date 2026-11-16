@@ -27,10 +27,9 @@ import {DIRECTOR_ID} from './runtime/director-id.js';
 import type {Provider} from './runtime/messages.js';
 import type {Activity, Message} from './runtime/contracts.js';
 
-/** What a permission request that would ask the user is answered with. */
-export const HEADLESS_DENIAL = 'Headless run: nobody can approve this. Use --permission-mode auto or creative to let it proceed.';
-/** What every question to the user is answered with. */
-export const HEADLESS_ANSWER = 'No user is available in this headless run. Decide yourself from the task and the code, and state your assumption.';
+// The two answers are model-visible runtime text, so they live with the other prompt constants (`src/kernel/echo-guard.ts` recognises them).
+import {HEADLESS_ANSWER, HEADLESS_DENIAL} from './prompts/runtime/headless.js';
+export {HEADLESS_ANSWER, HEADLESS_DENIAL};
 export const HEADLESS_NO_MODEL = 'No usable model: run logox interactively and /login first.';
 
 export const HEADLESS_EXIT = {completed: 0, failed: 1, interrupted: 2, setup: 3} as const;

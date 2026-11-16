@@ -3,8 +3,13 @@ import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {ProviderError, isProviderInterruption} from '../providers/http.js';
 import type {Delta, ModelRequest, ModelTurn, Provider} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
+import {FINGERPRINT_VERSION, appendFingerprint} from '../providers/fingerprint.js';
 import type {ReadyRequest} from './request.js';
 import type {AgentRun} from './run.js';
+import {refineTurn} from './turn-refine.js';
+
+/** Card step note on a turn whose tool call was recovered from reply text. */
+const TEXT_CALL_RECOVERED_STEP_NOTE = 'Tool call written as text was run as a real call.';
 
 /** A drafting update reaches the store when the call grew by this many characters or this many milliseconds passed (or its tool or target changed). */
 const DRAFT_CHARS_STEP = 1024, DRAFT_MS_STEP = 250;
@@ -79,7 +84,7 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
       usedProvider = taskModel?.provider() ?? options.provider();
       options.keepAlive?.wake(run.context);
       requestedAt = Date.now();
-      const turn = await usedProvider.respond(request, delta => {
+      const answered = await usedProvider.respond(request, delta => {
         if (delta.kind === 'tool') return draft(delta);
         emitted = true;
         const kind = delta.kind;
@@ -109,6 +114,17 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
         options.store.appendMessage(id, delta.text);
       }, run.context.signal);
       endDraft('completed');
+      // Calls written as text become real calls and repeated runtime text leaves the reply, before anything is shown as the reply or delivered.
+      const turn = refineTurn(answered, request);
+      if (turn !== answered) {
+        if (textId) options.store.updateMessage(textId, {text: turn.message.text});
+        if (turn.recovered) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: TEXT_CALL_RECOVERED_STEP_NOTE}});
+        if (request.fingerprint) {
+          const {file, ownerId, activityId} = request.fingerprint;
+          appendFingerprint(file, () => JSON.stringify({v: FINGERPRINT_VERSION, kind: 'refined', time: Date.now(), ownerId, ...(activityId ? {activityId} : {}),
+            ...(turn.recovered ? {recovered: turn.recovered} : {}), ...(turn.echo ? {echo: 1} : {})}));
+        }
+      }
       options.store.flush();
       state.providerAnswered();
       return {kind: 'turn', turn, request, thinkingId, textId, usedProvider, requestedAt};

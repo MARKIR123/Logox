@@ -27,6 +27,13 @@ export function askOwedAtClose(asks: readonly {readonly from: string; readonly l
   return `Do not finish yet: you have not answered ${list}. Send SendMessage type "reply" to each with your answer, or with what stopped you from answering, then finish.`;
 }
 
+/** Request-only note after a reply whose text held a tool call that the runtime ran as a real call (`src/kernel/text-recovery.ts`). */
+export const TEXT_CALL_RECOVERED_NOTE = 'Your last reply wrote a tool call as text; it was run as a real call. Use the structured tool-call format.';
+/** Request-only note after a reply that only repeated text the runtime inserted (`src/kernel/echo-guard.ts`). */
+export const ECHO_REMINDER = 'Your last reply only repeated text the runtime inserted. Continue the task: call a tool, or give your actual reply.';
+/** The error that ends a step after the model repeated runtime text three times in a row. */
+export const ECHO_STOP_ERROR = 'The model kept repeating runtime text instead of replying.';
+
 /** Sent once per run when the model returns only thinking or an empty reply, before the runtime counts it as a failure. */
 export const EMPTY_REPLY_REMINDER = 'Your previous reply was empty. Continue the task: call a tool or give your answer.';
 

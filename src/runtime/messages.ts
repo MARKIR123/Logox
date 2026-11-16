@@ -77,6 +77,10 @@ export interface RequestFingerprintTarget {
 export interface ModelTurn {
   message: Extract<ModelMessage, {role: 'assistant'}>;
   stop: 'complete' | 'tools' | 'length' | 'other';
+  /** Set by `src/kernel/turn-refine.ts` on a turn whose tool calls were recovered from reply text: how many. Never persisted (the message carries the calls). */
+  recovered?: number;
+  /** Set by `src/kernel/turn-refine.ts` when the visible reply was only runtime text the model repeated (already stripped from `message.text`). Never persisted. */
+  echo?: true;
   /** `cacheWrite1h` is the part of `cacheWrite` stored with the 1-hour lifetime, when the provider reports it. */
   usage?: {input: number; output: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number | undefined};
 }
@@ -129,13 +133,14 @@ export function withoutAnsweredUnexecuted<T extends ModelMessage>(messages: read
   }
   return dropped.size ? messages.filter((_, index) => !dropped.has(index)) : [...messages];
 }
+/** The result a tool call with no recorded result gets in a request (an interrupted run); a fixed sentence the echo guard (`src/kernel/echo-guard.ts`) recognises. */
+export const UNEXECUTED_CALL_TEXT = 'The previous run was interrupted and this tool has no complete result. Re-check the current state before deciding the next step.';
 /** Repairs the request view only; the raw ledger and already-executed tools are unchanged. */
 export function normalizeMessages(messages: readonly ModelMessage[]): ModelMessage[] {
   const output: ModelMessage[] = [], pending = new Map<string, ToolCall>(), excludedCalls = new Set<string>();
   const unpaired: ModelMessage[] = [];
   const closeBatch = () => {
-    for (const call of pending.values()) output.push({role: 'tool', callId: call.id, name: call.name,
-      text: 'The previous run was interrupted and this tool has no complete result. Re-check the current state before deciding the next step.', isError: true});
+    for (const call of pending.values()) output.push({role: 'tool', callId: call.id, name: call.name, text: UNEXECUTED_CALL_TEXT, isError: true});
     pending.clear();
     output.push(...unpaired); unpaired.length = 0;
   };
@@ -170,6 +175,5 @@ export function repairToolResults(messages: readonly ModelMessage[]): Extract<Mo
     if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pending.set(call.id, call);
     if (message.role === 'tool') pending.delete(message.callId);
   }
-  return [...pending.values()].map(call => ({role: 'tool', callId: call.id, name: call.name,
-    text: 'The previous run was interrupted and this tool has no complete result. Re-check the current state before deciding the next step.', isError: true}));
+  return [...pending.values()].map(call => ({role: 'tool', callId: call.id, name: call.name, text: UNEXECUTED_CALL_TEXT, isError: true}));
 }
