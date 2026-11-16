@@ -11,7 +11,8 @@ import type {ActorServices} from '../actors/services.js';
 import type {Receipt} from '../app/state.js';
 import type {CommandContext} from '../commands.js';
 import {StateFile, preferenceSchema, effortSchema, effortInName, modelLabel, type ThinkingEffort} from '../config/model-preferences.js';
-import {likelyToolCapable, marksText} from '../providers/model-marks.js';
+import {marksText} from '../providers/model-marks.js';
+import {autoAutomaModel} from '../tools/orchestration/AutomaTool/preset.js';
 import {groupModelsForProvider, resolveActualModel, detectEffortLevels, type GroupedModel} from '../config/model-grouping.js';
 import type {ModelPool} from '../providers/model-pool.js';
 import type {ProviderRegistry} from '../providers/registry.js';
@@ -19,7 +20,7 @@ import type {Resources} from '../resources/manager.js';
 import type {CommandResult, PickerItem} from '../runtime/command-surface.js';
 import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {Tools} from '../tools/tools.js';
-import {AUTOMA_VISION_KEY} from '../tools/tool-models.js';
+import {AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
 import {INHERIT_CHOICE, MARKS_HINT, bindingChoices, markFields, type ChoiceModel} from './model-choices.js';
 import type {CommandSurfaces} from './surfaces.js';
 
@@ -196,33 +197,35 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     if (surfaces.getSnapshot()) surfaces.close();
     await surfaces.openPicker(...args);
   };
+  const shownBinding = (binding: {provider: string; model: string; effort?: ThinkingEffort | undefined}) =>
+    binding.provider + ' / ' + modelLabel(binding.model, binding.effort) + ' · ' + marksText(modelPool.marks.marks(binding.provider, binding.model));
+  /** The model an unbound Automa route resolves to right now (the same function the dispatch uses). */
+  const autoModel = (route: 'read' | 'code') => autoAutomaModel({route, session: registry.selection(), pool: modelPool.snapshot(),
+    tier: (provider, model) => modelPool.marks.marks(provider, model).tier, price: (provider, model) => modelPool.marks.price(provider, model)});
+  const autoText = (route: 'read' | 'code'): string => {
+    const chosen = autoModel(route);
+    return 'auto → ' + (chosen.model ? shownBinding(chosen) : 'no model selected');
+  };
   /**
    * The model list of one Automa row: the list every actor's model picker shows (`bindingChoices`) with the row's own first item and filter.
    * Choosing a model saves it under `key`, says so, and returns to the page on the row that changed; Esc returns without saving.
    */
-  const openAutomaChoice = async (row: 'worker' | 'vision') => {
-    const key = row === 'worker' ? 'automa' : AUTOMA_VISION_KEY, bound = tools.modelStorage.get(key), marks = modelPool.marks;
+  const openAutomaChoice = async (row: 'read' | 'worker' | 'vision') => {
+    const key = row === 'read' ? AUTOMA_READ_KEY : row === 'worker' ? AUTOMA_MODEL_KEY : AUTOMA_VISION_KEY, bound = tools.modelStorage.get(key), marks = modelPool.marks;
     modelPool.loadCacheSync();
     const poolModels = modelPool.snapshot();
     const choices = bindingChoices(bound, marks);
-    const session = registry.selection();
-    /** The cheapest T2 model of the session's provider that can run tools, moved to the top and labelled; nothing is bound by it. */
-    const recommend = (items: PickerItem[]): PickerItem[] => {
-      const price = (item: PickerItem) => item.markKey ? marks.price(session.provider, item.markKey.slice(session.provider.length + 1)) : undefined;
-      const best = items.filter(item => item.group === session.provider && item.marks?.tier === 2 && likelyToolCapable(item.label))
-        .sort((a, b) => (price(a) ?? Infinity) - (price(b) ?? Infinity) || a.label.localeCompare(b.label))[0];
-      if (!best) return items;
-      return [items[0]!, {...best, label: best.label + ' · recommended'}, ...items.slice(1).filter(item => item.id !== best.id)];
-    };
+    const tierName = row === 'read' ? 'T1' : 'T2';
     const list = (models: readonly ChoiceModel[]): PickerItem[] => {
-      const items = choices.items(models).map(item => item.id !== INHERIT_CHOICE ? item : row === 'worker'
-        ? {...item, label: 'Follow Logox (' + session.provider + ' / ' + session.model + ')'}
-        : {...item, label: 'None', description: 'Jobs marked vision fail when the worker model cannot see images'});
-      return row === 'vision' ? items.filter(item => item.id === INHERIT_CHOICE || item.marks?.vision) : bound ? items : recommend(items);
+      const items = choices.items(models).map(item => item.id !== INHERIT_CHOICE ? item : row === 'vision'
+        ? {...item, label: 'None', description: 'Jobs marked vision fail when their model cannot see images'}
+        : {...item, label: 'Auto (cheapest ' + tierName + ')', description: autoText(row === 'read' ? 'read' : 'code')});
+      return row === 'vision' ? items.filter(item => item.id === INHERIT_CHOICE || item.marks?.vision) : items;
     };
     await openLevel({
-      title: row === 'worker' ? 'Select Worker Model for Automa' : 'Select Vision Fallback for Automa',
-      description: (row === 'worker' ? 'Automa workers use this model; Esc to go back · ' : 'Used for jobs marked vision when the worker model cannot see images; Esc to go back · ') + MARKS_HINT,
+      title: row === 'read' ? 'Select Read Model for Automa' : row === 'worker' ? 'Select Code Model for Automa' : 'Select Vision Fallback for Automa',
+      description: (row === 'read' ? 'Automa jobs without writes use this model; Esc to go back · ' : row === 'worker' ? 'Automa jobs with writes use this model; Esc to go back · '
+        : 'Used for jobs marked vision when their model cannot see images; Esc to go back · ') + MARKS_HINT,
       current: choices.current,
       ...(poolModels.length > 0 ? {items: list(poolModels)} : {}),
     }, async pickerSignal => {
@@ -239,29 +242,28 @@ export function createModelSelection(deps: ModelSelectionDeps) {
       if (chosen === null) throw new Error('Invalid model selection');
       await tools.modelStorage.save(key, chosen, signal);
       const shown = chosen ? chosen.provider + '/' + chosen.model + (chosen.effort ? ' · ' + chosen.effort : '') : '';
-      receipt(row === 'worker' ? (chosen ? 'Automa model set to: ' + shown : 'Automa model set to inherit session model')
-        : (chosen ? 'Automa vision fallback set to: ' + shown : 'Automa has no vision fallback.'), 'status');
+      receipt(row === 'vision' ? (chosen ? 'Automa vision fallback set to: ' + shown : 'Automa has no vision fallback.')
+        : 'Automa ' + (row === 'read' ? 'read' : 'code') + ' model set to' + (chosen ? ': ' + shown : ' auto'), 'status');
       await openAutomaPage(row);
       return {};
     }, undefined, () => openAutomaPage(row), marks.pickerMarks());
   };
-  /** `/model automa`: the worker model and the vision fallback, each row with its value read now. */
+  /** `/model automa`: the read model, the code model and the vision fallback, each row with its value read now. */
   const openAutomaPage = async (focus?: string): Promise<void> => {
-    const marks = modelPool.marks, worker = tools.modelStorage.get('automa'), vision = tools.modelStorage.get(AUTOMA_VISION_KEY), session = registry.selection();
-    const shownBinding = (binding: {provider: string; model: string; effort?: ThinkingEffort | undefined}) =>
-      binding.provider + ' / ' + modelLabel(binding.model, binding.effort) + ' · ' + marksText(marks.marks(binding.provider, binding.model));
-    const effective = worker ?? (session.model ? {provider: session.provider, model: session.model} : undefined);
-    const workerSees = effective ? marks.vision(effective.provider, effective.model) : true;
-    const workerText = worker ? shownBinding(worker) : 'Follows Logox (' + (session.model ? session.provider + ' / ' + session.model + ' · ' + marksText(marks.marks(session.provider, session.model)) : 'no model selected') + ')';
-    const visionBlind = vision ? !marks.vision(vision.provider, vision.model) : !workerSees;
+    const marks = modelPool.marks, read = tools.modelStorage.get(AUTOMA_READ_KEY), code = tools.modelStorage.get(AUTOMA_MODEL_KEY), vision = tools.modelStorage.get(AUTOMA_VISION_KEY);
+    const effective = (bound: ReturnType<typeof tools.modelStorage.get>, route: 'read' | 'code') => bound ?? autoModel(route);
+    const sees = (model: {provider: string; model: string}) => !model.model || marks.vision(model.provider, model.model);
+    const readSees = sees(effective(read, 'read')), codeSees = sees(effective(code, 'code'));
+    const visionBlind = vision ? !marks.vision(vision.provider, vision.model) : !(readSees && codeSees);
     const visionText = vision ? shownBinding(vision) + (visionBlind ? ' · cannot see images' : '') : 'None' + (visionBlind ? ' · vision jobs will fail' : '');
     const items: PickerItem[] = [
-      {id: 'worker', label: 'Worker model', description: workerText},
+      {id: 'read', label: 'Read model', description: read ? shownBinding(read) : autoText('read')},
+      {id: 'worker', label: 'Code model', description: code ? shownBinding(code) : autoText('code')},
       {id: 'vision', label: 'Vision fallback', description: visionText, ...(visionBlind ? {valueTone: 'warning' as const} : {})},
     ];
     await openLevel({title: 'Automa', description: 'Enter changes a row · Esc closes', current: '', ...(focus ? {focus} : {}), items},
       async () => ({items}), async (id): Promise<CommandResult> => {
-        if (id !== 'worker' && id !== 'vision') throw new Error('Unknown row.');
+        if (id !== 'read' && id !== 'worker' && id !== 'vision') throw new Error('Unknown row.');
         await openAutomaChoice(id);
         return {};
       });
@@ -282,17 +284,21 @@ export function createModelSelection(deps: ModelSelectionDeps) {
     }
 
     if (firstToken === 'automa') {
-      const specificModel = rawArg.slice(firstToken.length).trim();
+      let specificModel = rawArg.slice(firstToken.length).trim();
+      // `/model automa read <model|auto>` sets the read model; every other form sets the code model (`inherit` clears it back to auto).
+      const readForm = /^read(?:\s+|$)/i.test(specificModel);
+      if (readForm) specificModel = specificModel.slice(4).trim();
+      const [key, name] = readForm ? [AUTOMA_READ_KEY, 'read'] as const : [AUTOMA_MODEL_KEY, 'code'] as const;
       if (specificModel) {
-        if (specificModel.toLowerCase() === 'inherit') {
-          await tools.modelStorage.save('automa', undefined, signal);
-          receipt('Automa model set to inherit session model', 'status', undefined, source);
+        if (['auto', 'inherit'].includes(specificModel.toLowerCase())) {
+          await tools.modelStorage.save(key, undefined, signal);
+          receipt('Automa ' + name + ' model set to auto', 'status', undefined, source);
           return;
         }
         const spec = withEffort(specificModel), resolved = modelPool.resolveShorthand(spec.text, settings.provider);
         const binding = bindingFor(resolved.provider, resolved.model, spec.effort);
-        await tools.modelStorage.save('automa', binding, signal);
-        receipt('Automa model set to: ' + resolved.provider + '/' + resolved.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
+        await tools.modelStorage.save(key, binding, signal);
+        receipt('Automa ' + name + ' model set to: ' + resolved.provider + '/' + resolved.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
         return;
       }
       await openAutomaPage();

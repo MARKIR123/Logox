@@ -10,6 +10,7 @@
 |---|---|---|
 | Trace dispatch, queueing or cancellation | `ensemble.ts:EnsembleRuntime.dispatch()` | `ensemble.ts:EnsembleRuntime.cancelActor()`, `TaskOrigin` |
 | Trace an actor-facing tool call | `services.ts:ActorServices.execute()` | `services.ts:serviceTools`, `services.ts:executeCancelActor` |
+| Change the brief check run before a larger Director dispatch | `services.ts:ActorServices.setBriefCheck()` | `../tools/orchestration/ActorTool/brief-check.ts:briefCheckNeeded()`, `../tools/AGENTS.md` (hard boundary), `tests/actor-brief-check.test.ts` |
 | Trace `SendMessage` routing and interruption | `collaboration.ts:Collaboration.execute()` | `ensemble.ts:EnsembleRuntime.injectTaskMessage()` |
 | Change Queue/Steer priority or durable receipts | `../runtime/delivery.ts:deliveryPriority` | `delivery-queue.ts:DeliveryQueue.drain()`, `services.ts:wakeDirector()` |
 | Change what the Director or peers are told about the ensemble | `../tools/orchestration/ActorTool/prompt.ts:dispatchedResult` (receipt) | `facts.ts:teammatesBlock()`, `facts.ts:heldProgress()`, `services.ts:ActorServices.restoreRecord()`, `services.ts:executeListActors`, `src/app/request.ts:requestBase` |

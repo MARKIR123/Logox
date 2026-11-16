@@ -7,8 +7,12 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {z} from 'zod';
 import {effortSchema} from '../config/model-preferences.js';
 
-/** Storage keys of the two Automa bindings: the worker model, and the model a job marked `vision` uses when the worker model cannot see images. */
+/**
+ * Storage keys of the Automa bindings: the code model (jobs with a `writes` grant; the original `automa` key, so an earlier choice became the code model),
+ * the read model (jobs without `writes`), and the model a job marked `vision` uses when its model cannot see images.
+ */
 export const AUTOMA_MODEL_KEY = 'automa';
+export const AUTOMA_READ_KEY = 'automa-read';
 export const AUTOMA_VISION_KEY = 'automa-vision';
 export const toolIdSchema =z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 

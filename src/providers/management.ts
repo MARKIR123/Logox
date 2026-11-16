@@ -11,7 +11,7 @@ import type {ActorServices} from '../actors/services.js';
 import {presets, type Config} from '../config/config.js';
 import {isDirector} from '../runtime/director-id.js';
 import type {Tools} from '../tools/tools.js';
-import {AUTOMA_VISION_KEY} from '../tools/tool-models.js';
+import {AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
 import type {LoginFlow} from './login.js';
 import {runLoginWizard, type WizardProviderRow} from './login-wizard.js';
 import type {ModelPool} from './model-pool.js';
@@ -33,7 +33,7 @@ export function createProviderManagement(deps: ProviderManagementDeps) {
   const providerUsers = (name: string): {session: boolean; actors: string[]; automa: boolean} => ({
     session: selection().provider === name && Boolean(selection().model),
     actors: actors.list().filter(actor => !isDirector(actor.id) && actor.defaultModel?.provider === name).map(actor => actor.id),
-    automa: tools.modelStorage.get('automa')?.provider === name || tools.modelStorage.get(AUTOMA_VISION_KEY)?.provider === name,
+    automa: [AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY].some(key => tools.modelStorage.get(key)?.provider === name),
   });
   const usersLabel = (users: ReturnType<typeof providerUsers>): string[] =>
     [...users.session ? ['session'] : [], ...users.actors, ...users.automa ? ['automa'] : []];
@@ -52,7 +52,7 @@ export function createProviderManagement(deps: ProviderManagementDeps) {
     }
     if (users.automa) {
       try {
-        for (const key of ['automa', AUTOMA_VISION_KEY]) if (tools.modelStorage.get(key)?.provider === name) await tools.modelStorage.save(key, undefined, signal);
+        for (const key of [AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY]) if (tools.modelStorage.get(key)?.provider === name) await tools.modelStorage.save(key, undefined, signal);
       }
       catch {unresolved.push('automa');}
     }

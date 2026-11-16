@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import type {ThinkingEffort} from '../../../config/model-preferences.js';
+import {likelyToolCapable} from '../../../providers/model-marks.js';
 
 const inline = z.string().trim().min(1).max(200).regex(/^[^\r\n\t]+$/);
 
@@ -65,16 +66,49 @@ export function chooseAutomaModel(input: {
   readonly pool: readonly {readonly provider: string; readonly id: string}[];
   /** Expands a shorthand name; may throw when the name is ambiguous. */
   readonly expand: (name: string) => AutomaModelChoice;
+  /** The route's automatic default (`autoAutomaModel()`), used instead of the session model when nothing else names a model. */
+  readonly auto?: (() => AutomaModelChoice) | undefined;
 }): AutomaModelChoice {
   const {dedicated, preferred, session, pool} = input;
   if (dedicated) return dedicated;
-  if (!preferred) return session;
+  const fallback = () => input.auto?.() ?? session;
+  if (!preferred) return fallback();
   try {
     const named = input.expand(preferred);
     if (pool.some(item => item.provider === named.provider && item.id === named.model)) return named;
   } catch {}
   const family = pool.filter(item => item.provider === session.provider && item.id.toLowerCase().includes(preferred.toLowerCase())).map(item => item.id).sort().at(-1);
-  return family ? {provider: session.provider, model: family} : session;
+  return family ? {provider: session.provider, model: family} : fallback();
+}
+
+/** Which model a job runs on: the read model (no `writes` grant), the code model (a `writes` grant), or the vision fallback. */
+export type AutomaRoute = 'read' | 'code' | 'vision';
+
+/**
+ * The automatic worker model of a route when its `/model automa` key is unbound, decided by tier marks and catalog prices, never by guessed difficulty:
+ * the read route wants the cheapest T1 model of the session's provider that is likely tool-capable, the code route the cheapest T2.
+ * A provider without that tier gets the nearest lower tier, then the nearest higher one, never above the session model's own tier;
+ * when nothing qualifies the session model is used. A model without a catalog price sorts after every priced one.
+ */
+export function autoAutomaModel(input: {
+  readonly route: 'read' | 'code';
+  readonly session: AutomaModelChoice;
+  readonly pool: readonly {readonly provider: string; readonly id: string}[];
+  readonly tier: (provider: string, model: string) => number;
+  readonly price: (provider: string, model: string) => number | undefined;
+}): AutomaModelChoice {
+  const {session} = input;
+  if (!session.model) return session;
+  const target = input.route === 'read' ? 1 : 2, ceiling = input.tier(session.provider, session.model);
+  const candidates = [...new Set(input.pool.filter(item => item.provider === session.provider && likelyToolCapable(item.id)).map(item => item.id))]
+    .map(id => ({id, tier: input.tier(session.provider, id), price: input.price(session.provider, id) ?? Infinity}));
+  const cheapest = (tier: number) => candidates.filter(item => item.tier === tier).sort((a, b) => a.price - b.price || a.id.localeCompare(b.id))[0];
+  const order = [target, ...Array.from({length: target - 1}, (_, index) => target - 1 - index), ...Array.from({length: Math.max(0, ceiling - target)}, (_, index) => target + 1 + index)];
+  for (const tier of order) {
+    const found = cheapest(tier);
+    if (found) return {provider: session.provider, model: found.id};
+  }
+  return session;
 }
 
 /** Used by actors whose profile has no `automa` block: one plain style. */

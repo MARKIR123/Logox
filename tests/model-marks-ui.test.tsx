@@ -41,6 +41,9 @@ async function fixture() {
   {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
   const send = async (value: string) => {await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();};
   const screen = () => output.lines.join('\n');
+  /** The terminal repaints a moment after the state changes (more slowly under load), so a screen assertion waits for the paint instead of reading it at once. */
+  const seeing = (pattern: RegExp) => waitFor(screen, text => pattern.test(text), {label: 'the screen shows ' + pattern});
+  const notSeeing = (pattern: RegExp) => waitFor(screen, text => !pattern.test(text), {label: 'the screen no longer shows ' + pattern});
   const find = (needle: string) => {const y = output.lines.findIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle)};};
   const click = async (needle: string, dx = 0) => {const {x, y} = find(needle); await send(`\x1b[<0;${x + dx + 1};${y + 1}M`); await send(`\x1b[<0;${x + dx + 1};${y + 1}m`);};
   /** The list row of a model (not the banner or the title, which also name it). */
@@ -52,7 +55,7 @@ async function fixture() {
     await act(async () => {await app.submit(command);}); await instance.waitUntilRenderFlush();
     await waitFor(() => app.surfaces.getSnapshot()?.kind === 'picker' && picker().status === 'ready' && picker().title, found => title.test(String(found)), {label: command});
   };
-  return {app, home, send, screen, find, click, row, clickAt, picker, stored, open, input, output,
+  return {app, home, send, screen, seeing, notSeeing, find, click, row, clickAt, picker, stored, open, input, output,
     async close() {await act(async () => {await app.close(); instance.unmount();}); await instance.waitUntilExit(); input.destroy(); output.destroy(); await rm(root, {recursive: true, force: true});}};
 }
 
@@ -63,31 +66,32 @@ test('/model lists every model with its tier and vision marks, a filter row, and
     const rowOf = (name: string) => f.picker().items.find(item => item.label === name)!;
     assert.deepEqual([rowOf('claude-haiku-4-5').marks?.tier, rowOf('claude-opus-4-6').marks?.tier, rowOf('zz-fast').marks?.tier], [1, 3, 2]);
     assert.equal(rowOf('zz-fast').marks?.vision, true, 'a model the table does not know is treated as vision-capable');
-    assert.match(f.screen(), /\[All\] +T1 +T2 +T3 +T4 +◉ Vision/, 'the filter row');
-    assert.match(f.screen(), /zz-fast.* T2 ◉/, 'marks at the end of the row');
-    assert.match(f.screen(), /1–4 tier · v vision · 0 reset · \[ \] filter/, 'the keys are described on the screen');
+    await f.seeing(/\[All\] +T1 +T2 +T3 +T4 +◉ Vision/);
+    await f.seeing(/zz-fast.* T2 ◉/);
+    await f.seeing(/1–4 tier · v vision · 0 reset · \[ \] filter/);
     assert.match(f.picker().description, /1–4 set tier · v vision · 0 reset · \[ \] filter/);
 
     // Filter with ] : T1 keeps only the haiku row.
     await f.send(']');
-    assert.match(f.screen(), /\[T1\]/);
-    assert.match(f.screen(), /^\s*(?:❯\s)?claude-haiku-4-5/m);
-    assert.doesNotMatch(f.screen(), /^\s*(?:❯\s)?zz-fast/m);
+    await f.seeing(/\[T1\]/);
+    await f.seeing(/^\s*(?:❯\s)?claude-haiku-4-5/m);
+    await f.notSeeing(/^\s*(?:❯\s)?zz-fast/m);
     // 3 sets the highlighted row's tier at once and persists it; the row leaves the T1 filter.
     await f.send('3');
     await waitFor(() => f.stored().catch(() => ({models: {}} as Stored)), file => file.models['openai/claude-haiku-4-5']?.tier === 3, {label: 'tier persisted'});
-    assert.equal(rowOf('claude-haiku-4-5').marks?.tier, 3);
+    // The file is written before the picker re-renders its items; wait for the row, not just the file.
+    await waitFor(() => rowOf('claude-haiku-4-5').marks?.tier, tier => tier === 3, {label: 'row shows the new tier'});
     assert.deepEqual(rowOf('claude-haiku-4-5').marks?.derived, {tier: false, vision: true});
-    assert.doesNotMatch(f.screen(), /^\s*(?:❯\s)?claude-haiku-4-5/m);
+    await f.notSeeing(/^\s*(?:❯\s)?claude-haiku-4-5/m);
     // The T3 filter now lists the haiku row beside the opus one; v toggles the highlighted row's vision mark and 0 resets the model.
     await f.send(']'); await f.send(']');
-    assert.match(f.screen(), /\[T3\]/);
-    assert.match(f.screen(), /^\s*❯ claude-haiku-4-5/m, 'the haiku row is the highlighted one');
+    await f.seeing(/\[T3\]/);
+    await f.seeing(/^\s*❯ claude-haiku-4-5/m);
     await f.send('v');
     await waitFor(() => f.stored(), file => file.models['openai/claude-haiku-4-5']?.vision === false, {label: 'vision toggled off'});
     await f.send('0');
     await waitFor(() => f.stored(), file => file.models['openai/claude-haiku-4-5'] === undefined, {label: 'override cleared'});
-    assert.deepEqual(rowOf('claude-haiku-4-5').marks, {tier: 1, vision: true, derived: {tier: true, vision: true}});
+    await waitFor(() => JSON.stringify(rowOf('claude-haiku-4-5').marks), marks => marks === JSON.stringify({tier: 1, vision: true, derived: {tier: true, vision: true}}), {label: 'row reset'});
   } finally {await f.close();}
 });
 
@@ -119,38 +123,52 @@ test('typing a search keeps the plain keys for the text; Alt+key still edits, an
   } finally {await f.close();}
 });
 
-test('/model automa is a page of two rows; the worker picker recommends the cheapest T2 model and binds nothing until chosen; the vision fallback lists vision models', async () => {
+test('/model automa is a page of three rows; unbound rows show the automatic model and bind nothing; the code and read pickers set and clear their own key; the vision fallback lists vision models', async () => {
   const f = await fixture();
   try {
     await f.open('/model automa', /^Automa$/);
     const page = f.picker();
-    assert.deepEqual(page.items.map(item => item.label), ['Worker model', 'Vision fallback']);
-    assert.match(page.items[0]!.description!, /^Follows Logox \(openai \/ zz-fast · T2 ◉\)$/);
-    assert.equal(page.items[1]!.description, 'None');
+    assert.deepEqual(page.items.map(item => item.label), ['Read model', 'Code model', 'Vision fallback']);
+    assert.match(page.items[0]!.description!, /^auto → openai \/ claude-haiku-4-5 · T1/, 'the cheapest T1 of the session provider');
+    assert.match(page.items[1]!.description!, /^auto → openai \/ zz-big · T2 ◉$/, 'the cheapest T2 (unpriced models sort by name)');
+    assert.equal(page.items[2]!.description, 'None');
     assert.equal(f.app.tools.modelStorage.get('automa'), undefined);
+    assert.equal(f.app.tools.modelStorage.get('automa-read'), undefined);
 
-    await f.app.surfaces.choose(page.id, 'worker');
+    await f.app.surfaces.choose(page.id, 'read');
+    const readers = f.picker();
+    assert.equal(readers.title, 'Select Read Model for Automa');
+    assert.equal(readers.items[0]!.id, 'inherit');
+    assert.equal(readers.items[0]!.label, 'Auto (cheapest T1)');
+    assert.ok(!readers.items.some(item => item.label.includes('recommended')), 'auto replaces the old recommendation');
+    await f.app.surfaces.choose(readers.id, readers.items.find(item => item.label === 'zz-big')!.id);
+    assert.deepEqual(f.app.tools.modelStorage.get('automa-read'), {provider: 'openai', model: 'zz-big'});
+    assert.equal(f.app.tools.modelStorage.get('automa'), undefined, 'the read row never touches the code key');
+    await waitFor(() => f.app.surfaces.getSnapshot()?.kind === 'picker' && f.picker().title, title => title === 'Automa', {label: 'back on the page'});
+    assert.match(f.picker().items[0]!.description!, /^openai \/ zz-big · T2 ◉$/);
+    await f.app.surfaces.choose(f.picker().id, 'read');
+    await f.app.surfaces.choose(f.picker().id, 'inherit');
+    assert.equal(f.app.tools.modelStorage.get('automa-read'), undefined, 'Auto clears the read model');
+    await waitFor(() => f.app.surfaces.getSnapshot()?.kind === 'picker' && f.picker().title, title => title === 'Automa', {label: 'back on the page'});
+
+    await f.app.surfaces.choose(f.picker().id, 'worker');
     const workers = f.picker();
-    assert.equal(workers.title, 'Select Worker Model for Automa');
+    assert.equal(workers.title, 'Select Code Model for Automa');
     assert.equal(workers.items[0]!.id, 'inherit');
-    assert.match(workers.items[0]!.label, /^Follow Logox \(openai \/ zz-fast\)$/);
-    const first = workers.items[1]!;
-    assert.match(first.label, / · recommended$/, 'the first model row is the recommendation');
-    assert.equal(first.marks?.tier, 2);
-    assert.equal(workers.items.filter(item => item.label.endsWith('recommended')).length, 1);
-    assert.equal(f.app.tools.modelStorage.get('automa'), undefined, 'showing a recommendation binds nothing');
+    assert.equal(workers.items[0]!.label, 'Auto (cheapest T2)');
+    assert.equal(f.app.tools.modelStorage.get('automa'), undefined, 'opening the picker binds nothing');
     await f.app.surfaces.choose(workers.id, workers.items.find(item => item.label === 'claude-opus-4-6')!.id);
     assert.deepEqual(f.app.tools.modelStorage.get('automa'), {provider: 'openai', model: 'claude-opus-4-6'});
     await waitFor(() => f.app.surfaces.getSnapshot()?.kind === 'picker' && f.picker().title, title => title === 'Automa', {label: 'back on the page'});
-    assert.match(f.picker().items[0]!.description!, /^openai \/ claude-opus-4-6 · T3 ◉$/);
+    assert.match(f.picker().items[1]!.description!, /^openai \/ claude-opus-4-6 · T3 ◉$/);
 
-    // The worker cannot see images (the user says so) and there is no fallback: the row warns.
+    // The code model cannot see images (the user says so) and there is no fallback: the row warns.
     await f.app.tools.marks.setVision('openai', 'claude-opus-4-6', false);
     await f.app.surfaces.choose(f.picker().id, 'worker');
     await f.app.surfaces.choose(f.picker().id, f.picker().items.find(item => item.label === 'claude-opus-4-6')!.id);
     await waitFor(() => f.app.surfaces.getSnapshot()?.kind === 'picker' && f.picker().title, title => title === 'Automa', {label: 'back on the page'});
-    assert.match(f.picker().items[0]!.description!, /^openai \/ claude-opus-4-6 · T3$/);
-    const blind = f.picker().items[1]!;
+    assert.match(f.picker().items[1]!.description!, /^openai \/ claude-opus-4-6 · T3$/);
+    const blind = f.picker().items[2]!;
     assert.equal(blind.description, 'None · vision jobs will fail');
     assert.equal(blind.valueTone, 'warning');
     await f.app.surfaces.choose(f.picker().id, 'vision');
@@ -162,31 +180,73 @@ test('/model automa is a page of two rows; the worker picker recommends the chea
     await f.app.surfaces.choose(choices.id, choices.items.find(item => item.label === 'zz-big')!.id);
     assert.deepEqual(f.app.tools.modelStorage.get('automa-vision'), {provider: 'openai', model: 'zz-big'});
     await waitFor(() => f.app.surfaces.getSnapshot()?.kind === 'picker' && f.picker().title, title => title === 'Automa', {label: 'back on the page'});
-    assert.match(f.picker().items[1]!.description!, /^openai \/ zz-big · T2 ◉$/);
-    assert.equal(f.picker().items[1]!.valueTone, undefined);
+    assert.match(f.picker().items[2]!.description!, /^openai \/ zz-big · T2 ◉$/);
+    assert.equal(f.picker().items[2]!.valueTone, undefined);
     await f.app.surfaces.choose(f.picker().id, 'vision');
     await f.app.surfaces.choose(f.picker().id, 'inherit');
     assert.equal(f.app.tools.modelStorage.get('automa-vision'), undefined, 'None clears the fallback');
   } finally {await f.close();}
 });
 
-test('the Automa resolver sends a vision job to the fallback only when the worker model cannot see images', async () => {
+type Resolver = (preferred: string | undefined, vision?: boolean, writes?: boolean) => {model: string; vision?: boolean; route?: string};
+const resolverOf = (f: Awaited<ReturnType<typeof fixture>>) => (f.app.tools as unknown as {automa: {resolveModel: Resolver}}).automa.resolveModel;
+
+test('the Automa resolver sends a vision job to the fallback only when the job\'s own model cannot see images', async () => {
   const f = await fixture();
   try {
     await f.app.tools.modelStorage.save('automa', {provider: 'openai', model: 'claude-opus-4-6'});
     await f.app.tools.marks.setVision('openai', 'claude-opus-4-6', false);
     await f.app.tools.modelStorage.save('automa-vision', {provider: 'openai', model: 'zz-big'});
-    const environment = (f.app.tools as unknown as {automa: {resolveModel(preferred: string | undefined, vision?: boolean): {model: string; vision?: boolean}}}).automa;
-    assert.equal(environment.resolveModel(undefined).model, 'openai/claude-opus-4-6');
-    assert.equal(environment.resolveModel(undefined).vision, false);
-    assert.equal(environment.resolveModel(undefined, true).model, 'openai/zz-big');
-    assert.equal(environment.resolveModel(undefined, true).vision, true);
+    const resolve = resolverOf(f);
+    assert.equal(resolve(undefined, undefined, true).model, 'openai/claude-opus-4-6');
+    assert.equal(resolve(undefined, undefined, true).vision, false);
+    assert.equal(resolve(undefined, undefined, true).route, 'code');
+    assert.equal(resolve(undefined, true, true).model, 'openai/zz-big');
+    assert.equal(resolve(undefined, true, true).vision, true);
+    assert.equal(resolve(undefined, true, true).route, 'vision');
     await f.app.tools.marks.setVision('openai', 'zz-big', false);
-    assert.equal(environment.resolveModel(undefined, true).vision, false, 'a fallback that cannot see either leaves the job to be refused');
+    assert.equal(resolve(undefined, true, true).vision, false, 'a fallback that cannot see either leaves the job to be refused');
     await f.app.tools.modelStorage.save('automa-vision', undefined);
-    assert.equal(environment.resolveModel(undefined, true).model, 'openai/claude-opus-4-6');
+    assert.equal(resolve(undefined, true, true).model, 'openai/claude-opus-4-6');
     await f.app.tools.marks.setVision('openai', 'claude-opus-4-6', true);
     await f.app.tools.modelStorage.save('automa-vision', {provider: 'openai', model: 'zz-big'});
-    assert.equal(environment.resolveModel(undefined, true).model, 'openai/claude-opus-4-6', 'a worker that can see images keeps its job');
+    assert.equal(resolve(undefined, true, true).model, 'openai/claude-opus-4-6', 'a code model that can see images keeps its job');
+    assert.equal(resolve(undefined, true, true).route, 'code');
+  } finally {await f.close();}
+});
+
+test('the Automa resolver routes a job without writes to the read model and a job with writes to the code model, each bound or automatic', async () => {
+  const f = await fixture();
+  try {
+    const resolve = resolverOf(f);
+    // Nothing bound: the session model is zz-fast (T2); read takes the cheapest T1, code the cheapest T2 (unpriced models sort by name).
+    assert.deepEqual([resolve(undefined).model, resolve(undefined).route], ['openai/claude-haiku-4-5', 'read']);
+    assert.deepEqual([resolve(undefined, false, true).model, resolve(undefined, false, true).route], ['openai/zz-big', 'code']);
+    // The old `automa` key is the code model and never routes a read job.
+    await f.app.tools.modelStorage.save('automa', {provider: 'openai', model: 'claude-opus-4-6'});
+    assert.equal(resolve(undefined, false, true).model, 'openai/claude-opus-4-6');
+    assert.equal(resolve(undefined).model, 'openai/claude-haiku-4-5');
+    await f.app.tools.modelStorage.save('automa-read', {provider: 'openai', model: 'zz-fast'});
+    assert.equal(resolve(undefined).model, 'openai/zz-fast');
+    assert.equal(resolve(undefined, false, true).model, 'openai/claude-opus-4-6');
+    await f.app.tools.modelStorage.save('automa', undefined); await f.app.tools.modelStorage.save('automa-read', undefined);
+    // Unbound again: automatic. The nearest-tier fallback is covered by the autoAutomaModel test (automa-tool.test.ts).
+    assert.equal(resolve(undefined, false, true).model, 'openai/zz-big');
+  } finally {await f.close();}
+});
+
+test('/model automa read <model|auto> and /model automa <model|inherit> set and clear their own binding', async () => {
+  const f = await fixture();
+  try {
+    await f.app.submit('/model automa read zz-big');
+    assert.deepEqual(f.app.tools.modelStorage.get('automa-read'), {provider: 'openai', model: 'zz-big'});
+    assert.equal(f.app.tools.modelStorage.get('automa'), undefined);
+    await f.app.submit('/model automa zz-fast');
+    assert.deepEqual(f.app.tools.modelStorage.get('automa'), {provider: 'openai', model: 'zz-fast'});
+    await f.app.submit('/model automa read auto');
+    assert.equal(f.app.tools.modelStorage.get('automa-read'), undefined);
+    assert.deepEqual(f.app.tools.modelStorage.get('automa'), {provider: 'openai', model: 'zz-fast'}, 'clearing read leaves the code model');
+    await f.app.submit('/model automa inherit');
+    assert.equal(f.app.tools.modelStorage.get('automa'), undefined);
   } finally {await f.close();}
 });

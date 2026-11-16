@@ -10,13 +10,29 @@ const WAITING_CONTRACT = 'They work in the background, and their reports wake yo
 /** One dispatched task of a receipt. */
 export interface DispatchedTask {activityId: string; ownerId: string; title: string; owns: readonly string[]; after: readonly string[]}
 
-/** The receipt of a dispatch: one line per task (activity id, owner, title, `owns`, `after`), then the waiting contract and advisory notes. */
-export function dispatchedResult(tasks: readonly DispatchedTask[], batchId: string, notes: readonly string[] = []): string {
+/** The receipt of a dispatch: one line per task (activity id, owner, title, `owns`, `after`), the brief-check line when a check ran or was skipped, then the waiting contract and advisory notes. */
+export function dispatchedResult(tasks: readonly DispatchedTask[], batchId: string, notes: readonly string[] = [], briefLine?: string): string {
   const targets = [...new Set(tasks.map(task => task.ownerId))].join(', ');
   const lines = tasks.map(task => `- ${task.activityId} ${task.ownerId}: ${task.title}` +
     (task.owns.length ? ` | owns: ${task.owns.join(', ')}` : '') + (task.after.length ? ` | after: ${task.after.join(', ')}` : ''));
-  return `Dispatched to ${targets} (Batch ${batchId}):\n${lines.join('\n')}\n${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
+  return `Dispatched to ${targets} (Batch ${batchId}):\n${lines.join('\n')}\n${briefLine ? briefLine + '\n' : ''}${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
 }
+
+/** System prompt of the brief check: a read-only worker on the code model that reads the briefs before any companion starts. */
+export const BRIEF_CHECK_SYSTEM_PROMPT = `You check dispatch briefs before work starts in LOGOX. Each companion who receives a brief has not seen the conversation that produced it: the brief, the files it names and the repository are all they will have. Your job is to find what would make a companion build the wrong thing or stop to ask.
+
+Read every brief. Open the files they name when that settles a question. Then report through Finish:
+- status "done" when every brief can be acted on as written; summary: one sentence per task saying what that companion will do.
+- status "blocked" when something would lead to wrong or wasted work; question: a numbered list, one item per problem, each naming the task and the exact gap: an undefined name or format, two briefs that contradict each other, a file or interface two tasks both expect the other to provide, acceptance that cannot be checked, or a goal stated only by reference to the conversation ("as discussed", "the bug above").
+
+Do not judge the plan's strategy or suggest improvements. Report only gaps that would cause wrong or wasted work.`;
+
+/** Receipt lines and the blocked result of the brief check. */
+export const BRIEF_CHECK_CLEAR = 'Brief check: clear.';
+export const BRIEF_CHECK_SKIPPED = 'Brief check: skipped.';
+export const briefCheckFailed = (reason: string): string => `Brief check: failed (${reason}); dispatched without it.`;
+export const briefCheckBlocked = (gaps: string): string =>
+  `Brief check found gaps; nothing was dispatched. Fix the briefs and call Actor again, or add "briefCheck": "skip" to dispatch them as they are.\n${gaps}`;
 
 /** Dispatch-time notes: advisory only, appended to the result of a dispatch that already succeeded. */
 export const overlapNote = (a: string, b: string, path: string): string =>

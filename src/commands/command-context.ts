@@ -104,7 +104,8 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
           row.field('Execution state', shown.state),
           row.field('Active tasks', store.getSnapshot().activities.filter(a => ['queued', 'running', 'waiting_input'].includes(a.status)).length),
           ...(shown.git ? [row.field('Git', shown.git.branch + (shown.git.dirty ? ' · ' + shown.git.dirty + ' changed' : '') + (shown.git.ahead ? ' · ahead ' + shown.git.ahead : '') + (shown.git.behind ? ' · behind ' + shown.git.behind : ''))] : []),
-          ...(automaModel ? [row.field('Automa worker', automaModel.provider + '/' + automaModel.model)] : []),
+          ...(automaModel ? [row.field('Automa code model', automaModel.provider + '/' + automaModel.model)] : []),
+          ...(tools.modelStorage.get('automa-read') ? [row.field('Automa read model', tools.modelStorage.get('automa-read')!.provider + '/' + tools.modelStorage.get('automa-read')!.model)] : []),
           row.blank(),
           row.rule('Context & Tokens'),
           ...contextRows(),
@@ -117,13 +118,14 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
         ];
       })(),
       configLines: (() => {
-        const shown = status.status(pageOwner), automaModel = tools.modelStorage.get('automa');
+        const shown = status.status(pageOwner), automaModel = tools.modelStorage.get('automa'), readModel = tools.modelStorage.get('automa-read');
         return [
           row.field('Provider', shown.model?.provider ?? settings.provider),
           row.field('Model', shown.model?.model || 'None selected'),
           row.field('Thinking effort', shown.effort + (shown.effortError ? ' (' + shown.effortError + ')' : '')),
           row.field('Base URL', settings.baseUrl),
-          row.field('Automa worker', automaModel ? automaModel.provider + '/' + automaModel.model + ' (dedicated)' : 'Inherits session model (' + settings.provider + '/' + (settings.model || 'none') + ')'),
+          row.field('Automa code model', automaModel ? automaModel.provider + '/' + automaModel.model + ' (dedicated)' : 'Auto (cheapest T2 of ' + settings.provider + ')'),
+          row.field('Automa read model', readModel ? readModel.provider + '/' + readModel.model + ' (dedicated)' : 'Auto (cheapest T1 of ' + settings.provider + ')'),
           row.blank(),
           row.rule('Execution Limits'),
           row.field('Temperature', config.provider.temperature),

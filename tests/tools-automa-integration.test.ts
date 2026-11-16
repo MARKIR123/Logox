@@ -35,7 +35,8 @@ test('A real application runs a dispatch end to end: gate, permissions, live swa
     }};
     const app = await createTestApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, config, env: {}, authPath: join(cwd, 'auth.json'), provider: director, fetcher, sessionId: 'automa-session'});
     try {
-      await app.submit('/model automa alpha/my-worker');
+      // The job has no `writes`, so it runs on the read model.
+      await app.submit('/model automa read alpha/my-worker');
       await app.submit('go');
       await waitForSnapshot(app.store, snapshot => snapshot.activities.length > 0 && snapshot.activities.every(activity => ['completed', 'failed'].includes(activity.status)));
       const settled = app.store.getSnapshot();

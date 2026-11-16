@@ -38,7 +38,8 @@ import {ASK_USER_QUESTION_DESCRIPTION} from './AskUserQuestionTool/prompt.js';
 import {webFetchSchema, executeWebFetch} from './WebFetchTool/WebFetchTool.js';
 import {WEB_FETCH_DESCRIPTION} from './WebFetchTool/prompt.js';
 import {actorSchema, type ActorArgs, type TaskSpec} from './orchestration/ActorTool/ActorTool.js';
-import {ACTOR_DESCRIPTION, ACTOR_TOOL_NAME} from './orchestration/ActorTool/prompt.js';
+import {ACTOR_DESCRIPTION, ACTOR_TOOL_NAME, BRIEF_CHECK_SYSTEM_PROMPT} from './orchestration/ActorTool/prompt.js';
+import {renderBriefCheckInput, type BriefCheckInput, type BriefCheckOutcome} from './orchestration/ActorTool/brief-check.js';
 import {craftActorSchema, type CraftActorArgs} from './orchestration/CraftActorTool/CraftActorTool.js';
 import {CRAFT_ACTOR_DESCRIPTION, CRAFT_ACTOR_TOOL_NAME} from './orchestration/CraftActorTool/prompt.js';
 import {readActorSchema, type ReadActorArgs} from './orchestration/ReadActorTool/ReadActorTool.js';
@@ -56,7 +57,7 @@ import {workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput,
 import {WorkerShelf} from './orchestration/AutomaTool/workers.js';
 import {Semaphore} from '../kernel/semaphore.js';
 import {isReadOnlyTool} from './catalog.js';
-import {grantTools, isExclusiveCommand, pathDenial, planDispatch} from './orchestration/AutomaTool/grant.js';
+import {grantTools, isExclusiveCommand, pathDenial, planDispatch, type JobGrant} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
@@ -238,6 +239,9 @@ async function resolvedPath(path: string): Promise<string> {
   }
 }
 
+/** The brief check reads and searches only; any other tool is refused by the grant. */
+const BRIEF_CHECK_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 200) || 'unknown error';
 const AUTOMA_DEFAULT_PARALLEL = 4;
 const AUTOMA_DEFAULT_PER_DISPATCH = 16;
 const AUTOMA_DEFAULT_RUNNING = 24;
@@ -245,11 +249,13 @@ const AUTOMA_DEFAULT_RUNNING = 24;
 /** What the application supplies so Automa can run; tests supply fakes. */
 export interface AutomaEnvironment {
   /**
-   * Picks the model: `/model automa` first, then `preferred` (style, then role) when it resolves, then the session model.
-   * With `vision` set (a job marked `vision: true`) a worker model that cannot see images is replaced by the vision fallback;
-   * the result's `vision` says whether the returned model can see images.
+   * Picks the model of a job by what it may do, never by guessed difficulty: with `writes` set (the job has a write grant) the code model
+   * (`/model automa`, else the cheapest T2), otherwise the read model (`/model automa read`, else the cheapest T1); a style or role `preferred`
+   * model applies when no binding does and it resolves; the session model is the last resort.
+   * With `vision` set (a job marked `vision: true`) a model that cannot see images is replaced by the vision fallback;
+   * the result's `vision` says whether the returned model can see images and `route` which route it came from.
    */
-  resolveModel(preferred: string | undefined, vision?: boolean): ResolvedAutomaModel;
+  resolveModel(preferred: string | undefined, vision?: boolean, writes?: boolean): ResolvedAutomaModel;
   profile?(ownerId: string): AutomaProfile | undefined;
   actorName?(ownerId: string): string | undefined;
   /** Jobs of one dispatch that run at once by default (`[automa] max_parallel`). */
@@ -440,6 +446,46 @@ export class Tools {
     } finally {
       this.dispatches.delete(key);
     }
+  }
+
+  /**
+   * The brief check before a larger `Actor` dispatch: one fresh read-only worker (Read, Glob, Grep; any other call is refused by the grant) on the code model
+   * that reads the briefs and reports through `Finish`. Its usage is charged to the dispatcher as Automa work. It never throws for a failed run: the outcome says so.
+   */
+  async runBriefCheck(input: BriefCheckInput, context: ActorContext): Promise<BriefCheckOutcome> {
+    const environment = this.automa;
+    if (!environment) return {status: 'failed', reason: 'no model provider is configured'};
+    const {sessionId, ownerId, activityId} = context;
+    const {startTool: _step, reportSwarm: _swarm, ...principal} = context;
+    const grant: JobGrant = {writes: [], exclusive: [], tools: BRIEF_CHECK_TOOLS};
+    const shelf = new WorkerShelf();
+    let verdict: {status: string; summary: string; question?: string | undefined} | undefined;
+    try {
+      await executeAutomaDispatch({
+        jobs: [{id: 'B1', job: {title: 'Check dispatch briefs', brief: renderBriefCheckInput(input), scope: 'exact'}, grant, system: BRIEF_CHECK_SYSTEM_PROMPT}],
+        parallel: 1, swarmName: 'Brief check', signal: context.signal, cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId,
+        resolveModel: (preferred, vision) => environment.resolveModel(preferred, vision, true),
+        ...(environment.retries ? {retries: environment.retries()} : {}),
+        workers: shelf,
+        ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
+        readOnly: call => isReadOnlyTool(call.name),
+        executeTool: ({workerId, grant: given}, call) => this.execute(call, {...principal, via: {label: 'the brief check', workerId, grant: given}}),
+        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
+        journalPath: environment.journalPath?.(sessionId),
+        onEnd: end => {verdict = end;},
+        ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
+        ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
+      });
+    } catch (error) {
+      context.signal.throwIfAborted();
+      return {status: 'failed', reason: oneLine(error instanceof Error ? error.message : String(error))};
+    } finally {
+      await shelf.closeActivity(sessionId, activityId).catch(() => {});
+    }
+    context.signal.throwIfAborted();
+    if (verdict?.status === 'done') return {status: 'clear'};
+    if (verdict?.status === 'blocked') return {status: 'blocked', gaps: (verdict.question?.trim() || verdict.summary).trim()};
+    return {status: 'failed', reason: oneLine(verdict?.summary ?? 'the check ended without a verdict')};
   }
 
   configurePermissions(sessionId: string, options: GuardOptions): () => void {

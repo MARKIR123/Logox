@@ -69,13 +69,14 @@ test('/model automa configures automa model via slash command, opens picker, and
     const page = app.surfaces.getSnapshot();
     assert.ok(page?.kind === 'picker');
     assert.equal(page.title, 'Automa');
-    assert.deepEqual(page.items.map(item => item.label), ['Worker model', 'Vision fallback']);
-    assert.match(page.items[0]!.description!, /^beta \/ fast-model · T\d/);
-    assert.match(page.items[1]!.description!, /^None/);
+    assert.deepEqual(page.items.map(item => item.label), ['Read model', 'Code model', 'Vision fallback']);
+    assert.match(page.items[0]!.description!, /^auto → /);
+    assert.match(page.items[1]!.description!, /^beta \/ fast-model · T\d/);
+    assert.match(page.items[2]!.description!, /^None/);
     await app.surfaces.choose(page.id, 'worker');
     const picker = app.surfaces.getSnapshot();
     assert.ok(picker?.kind === 'picker');
-    assert.equal(picker.title, 'Select Worker Model for Automa');
+    assert.equal(picker.title, 'Select Code Model for Automa');
     assert.equal(picker.current, JSON.stringify({provider: 'beta', model: 'fast-model'}));
     assert.ok(picker.items.every(item => item.id === 'inherit' || item.marks), 'every model row carries its marks');
 

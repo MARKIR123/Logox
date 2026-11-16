@@ -7,7 +7,7 @@ import {automaSchema, automaToolDefinitions, markInterruptedJobs, normalizeAutom
 import {finishSchema, parseFinish} from '../src/tools/orchestration/AutomaTool/finish.js';
 import {composeActorSystemPrompt, projectRulesSection} from '../src/prompts/boundary.js';
 import {ProviderError} from '../src/providers/http.js';
-import {automaProfileSchema, chooseAutomaModel, type AutomaProfile} from '../src/tools/orchestration/AutomaTool/preset.js';
+import {automaProfileSchema, autoAutomaModel, chooseAutomaModel, type AutomaProfile} from '../src/tools/orchestration/AutomaTool/preset.js';
 import {AUTOMA_ANIMATION_FRAMES, AUTOMA_COLOR_TOKEN, AUTOMA_DESCRIPTION} from '../src/tools/orchestration/AutomaTool/prompt.js';
 import {metadata} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
 import {patternsOverlap} from '../src/tools/ownership.js';
@@ -651,7 +651,7 @@ test('The tool contract states continue and release concisely', () => {
   assert.match(AUTOMA_DESCRIPTION, /`context` is written once for all jobs/);
   assert.match(AUTOMA_DESCRIPTION, /`exact` .*`bounded` .*`open` /);
   assert.doesNotMatch(AUTOMA_DESCRIPTION, /preset|`files`|receipt|Verdict/);
-  assert.ok(AUTOMA_DESCRIPTION.length <= 2200, String(AUTOMA_DESCRIPTION.length));
+  assert.ok(AUTOMA_DESCRIPTION.length <= 2300, String(AUTOMA_DESCRIPTION.length));
   const properties = (automaSchema.toJSONSchema() as unknown as {properties: {jobs: {items: {properties: object; required: string[]}}}}).properties.jobs.items;
   const keys = Object.keys(properties.properties);
   assert.ok(keys.includes('keep') && keys.includes('continue') && !keys.includes('persistence') && !keys.includes('instance'));
@@ -1144,4 +1144,55 @@ test("The user's /model automa choice outranks styles and roles; otherwise style
   assert.deepEqual(choose('sonnet'), session);
   assert.deepEqual(choose('ambiguous'), session);
   assert.deepEqual(choose(undefined), session);
+});
+
+test('The automatic worker model is the cheapest likely tool-capable model of the route tier on the session provider; missing tiers fall to the nearest lower, then higher up to the session tier, then the session model', () => {
+  const tiers: Record<string, number> = {t1a: 1, t1b: 1, 'text-embedding-t1': 1, t2a: 2, t2b: 2, t3a: 3, t4a: 4, session: 3, other: 1};
+  const prices: Record<string, number> = {t1a: 0.5, t1b: 0.2, 'text-embedding-t1': 0.01, t2a: 3, t2b: 1};
+  const auto = (route: 'read' | 'code', ids: string[], session = 'session') => autoAutomaModel({route, session: {provider: 'p', model: session},
+    pool: [...ids.map(id => ({provider: 'p', id})), {provider: 'q', id: 'other'}], tier: (_provider, model) => tiers[model] ?? 2, price: (_provider, model) => prices[model]});
+  assert.deepEqual(auto('read', ['t1a', 't1b', 't2a', 't2b', 'text-embedding-t1', 'session']), {provider: 'p', model: 't1b'}, 'cheapest T1, embeddings excluded, other providers ignored');
+  assert.deepEqual(auto('code', ['t1a', 't1b', 't2a', 't2b', 'session']), {provider: 'p', model: 't2b'}, 'cheapest T2');
+  assert.deepEqual(auto('code', ['t1a', 't1b', 't3a', 'session']), {provider: 'p', model: 't1b'}, 'no T2: the nearest lower tier wins over a higher one');
+  assert.deepEqual(auto('read', ['t2a', 't3a', 'session']), {provider: 'p', model: 't2a'}, 'no T1 and nothing lower: the nearest higher tier');
+  assert.deepEqual(auto('read', ['t4a']), {provider: 'p', model: 'session'}, 'a tier above the session model is never taken');
+  assert.deepEqual(auto('code', ['t3a', 't4a']), {provider: 'p', model: 't3a'}, 'higher tiers up to the session tier (T3) qualify');
+  assert.deepEqual(auto('code', []), {provider: 'p', model: 'session'}, 'nothing qualifies: the session model, never an error');
+  assert.deepEqual(autoAutomaModel({route: 'read', session: {provider: 'p', model: ''}, pool: [{provider: 'p', id: 't1a'}], tier: () => 1, price: () => 1}), {provider: 'p', model: ''}, 'no session model: nothing to route');
+});
+
+test('chooseAutomaModel uses the route default only when neither a binding nor a resolvable style model names one', () => {
+  const session = {provider: 'alpha', model: 'session-model'}, auto = {provider: 'alpha', model: 'auto-model'};
+  const pool = [{provider: 'alpha', id: 'exact'}];
+  const expand = (name: string) => ({provider: 'alpha', model: name});
+  const choose = (preferred: string | undefined, dedicated?: {provider: string; model: string}) => chooseAutomaModel({dedicated, preferred, session, pool, expand, auto: () => auto});
+  assert.deepEqual(choose(undefined), auto);
+  assert.deepEqual(choose('unknown-style-model'), auto);
+  assert.deepEqual(choose('exact'), {provider: 'alpha', model: 'exact'});
+  assert.deepEqual(choose('exact', {provider: 'beta', model: 'mine'}), {provider: 'beta', model: 'mine'});
+});
+
+test('A job without writes asks the resolver for the read route, a job with writes for the code route, and the journal end event records the route', async () => {
+  const {cwd, tools, done} = await project();
+  try {
+    const journalPath = join(cwd, 'sessions', 's', 'subagents', 'automa.jsonl'), asked: (boolean | undefined)[] = [];
+    const provider = workers({Scan: ['Verdict: read'], Edit: ['Verdict: wrote']});
+    tools.setAutomaEnvironment(environment(provider, {journalPath: () => journalPath, resolveModel: (_preferred, _vision, writes) => {
+      asked.push(writes);
+      return {provider, model: 'mock/' + (writes ? 'code' : 'read'), route: writes ? 'code' : 'read'};
+    }}));
+    const result = await tools.execute(dispatch({jobs: [job('Scan'), job('Edit', {writes: ['a.txt']})]}), principal());
+    assert.equal(result.isError, false, result.text);
+    assert.deepEqual([...asked].sort(), [false, true]);
+    assert.match(result.text, /title="Scan" status="done" took="[^"]+" model="mock\/read"/);
+    assert.match(result.text, /title="Edit" status="done" took="[^"]+" model="mock\/code"/);
+    const ends = (await readFile(journalPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>).filter(entry => entry.event === 'end');
+    assert.deepEqual(ends.map(entry => [entry.model, entry.route]).sort(), [['mock/code', 'code'], ['mock/read', 'read']]);
+  } finally {await done();}
+});
+
+test('The Automa description tells dispatchers how jobs route to models', () => {
+  assert.match(AUTOMA_DESCRIPTION, /^- Jobs without `writes` run on a fast read model; jobs with `writes` run on a stronger code model\. Give a read-only job `writes` only if it must edit\.$/m);
+  const lines = AUTOMA_DESCRIPTION.split('\n'), writes = lines.findIndex(line => line.startsWith('- `writes` lists'));
+  assert.match(lines[writes + 1]!, /^- Jobs without `writes`/, 'the bullet follows the writes bullet');
 });

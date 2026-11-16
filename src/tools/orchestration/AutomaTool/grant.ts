@@ -13,12 +13,14 @@ export interface JobGrant {
   readonly writes: readonly string[];
   /** Command prefixes that run one at a time across jobs (shared build artifacts). */
   readonly exclusive: readonly string[];
+  /** Narrows the tools offered to the worker; absent means all of them. Only runtime-built jobs (the brief check) set it, never a dispatcher. */
+  readonly tools?: readonly string[];
 }
 
 const TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch', 'Edit', 'Write', 'Shell'] as const;
 
-export function grantTools(_grant: JobGrant): readonly string[] {
-  return TOOLS;
+export function grantTools(grant: JobGrant): readonly string[] {
+  return grant.tools ?? TOOLS;
 }
 
 function matchesCommand(prefix: string, command: string): boolean {

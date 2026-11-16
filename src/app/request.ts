@@ -32,9 +32,9 @@ import {permissionModes} from '../runtime/permission-mode.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import {storedMessage, type Journal} from '../store/journal.js';
 import {markInterruptedJobs} from '../tools/orchestration/AutomaTool/AutomaTool.js';
-import {chooseAutomaModel} from '../tools/orchestration/AutomaTool/preset.js';
+import {autoAutomaModel, chooseAutomaModel} from '../tools/orchestration/AutomaTool/preset.js';
 import type {ToolRegistry} from '../tools/registry.js';
-import {AUTOMA_MODEL_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
+import {AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
 import type {Tools} from '../tools/tools.js';
 import type {SessionState} from './state.js';
 
@@ -62,15 +62,18 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
   // A gateway that mirrors another vendor's catalog (`[catalogs.<provider>]`) gets that catalog's tier and vision defaults.
   for (const store of new Set([tools.marks, modelPool.marks])) store.configure({catalogs: config.catalogs});
   tools.setAutomaEnvironment({
-    resolveModel: (preferred, vision) => {
-      const session = registry.selection();
-      const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get(AUTOMA_MODEL_KEY), preferred, session, pool: modelPool.snapshot(),
-        expand: name => modelPool.resolveShorthand(name, session.provider)});
-      // The one automatic switch: a job that must look at images leaves a worker model that cannot see them for the vision fallback (when it can).
+    resolveModel: (preferred, vision, writes) => {
+      const session = registry.selection(), pool = modelPool.snapshot(), route = writes ? 'code' as const : 'read' as const;
+      // Two routes, decided by the grant: a job with `writes` runs on the code model, any other on the read model; an unbound key resolves to its automatic default.
+      const chosen = chooseAutomaModel({dedicated: tools.modelStorage.get(writes ? AUTOMA_MODEL_KEY : AUTOMA_READ_KEY), preferred, session, pool,
+        expand: name => modelPool.resolveShorthand(name, session.provider),
+        auto: () => autoAutomaModel({route, session, pool, tier: (provider, model) => tools.marks.marks(provider, model).tier, price: (provider, model) => tools.marks.price(provider, model)})});
+      // The one switch besides the route: a job that must look at images leaves a model that cannot see them for the vision fallback (when it can).
       const fallback = vision && !tools.marks.vision(chosen.provider, chosen.model) ? tools.modelStorage.get(AUTOMA_VISION_KEY) : undefined;
-      const used = fallback && tools.marks.vision(fallback.provider, fallback.model) ? fallback : chosen;
+      const switched = Boolean(fallback && tools.marks.vision(fallback.provider, fallback.model));
+      const used = switched ? fallback! : chosen;
       return {provider: registry.candidate(used.provider, used.model, used.effort).provider(), model: used.provider + '/' + used.model,
-        vision: tools.marks.vision(used.provider, used.model)};
+        vision: tools.marks.vision(used.provider, used.model), route: switched ? 'vision' as const : route};
     },
     profile: ownerId => actors.find(ownerId)?.automa,
     actorName: ownerId => actors.find(ownerId)?.name,
@@ -85,6 +88,8 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
   });
+  // A larger Director dispatch is read by a read-only Automa-style check on the code model before any companion starts.
+  actorServices.setBriefCheck((input, context) => tools.runBriefCheck(input, context));
   // Finished workers end with their dispatcher's task: any store change may be that task settling, and the sweep is cheap while none waits.
   store.subscribe(() => {void tools.sweepWorkers();});
   // Replays an idle actor's last request just before its short cache expires, only while a wake-up is certain (never while the human is awaited).

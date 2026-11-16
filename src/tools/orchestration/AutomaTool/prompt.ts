@@ -11,6 +11,7 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - \`brief\` stands alone: what to do, where, and what to report. \`acceptance\` lists the checks that define done; the worker is told to meet them and the result shows them beside its claims.
 - \`scope\` says how open the problem is, not how much work it is: \`exact\` (the change or answer is fully specified), \`bounded\` (a known goal with room for judgment), \`open\` (the cause or approach is unknown). Never mention other jobs or coordination in it.
 - \`writes\` lists workspace paths or globs the job may edit, disjoint across jobs. Leave it out for read-only work: reading, searching, commands and scratch scripts in your scratchpad need no grant.
+- Jobs without \`writes\` run on a fast read model; jobs with \`writes\` run on a stronger code model. Give a read-only job \`writes\` only if it must edit.
 - \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 - Workers read whatever you can read and run commands; every call is judged by your permission rules and can never exceed them.
 - Every finished worker can be continued with \`continue: "<id from the result>"\` and a new \`brief\`; it keeps its context. \`release\` ends workers you no longer need; all of them end with your task.

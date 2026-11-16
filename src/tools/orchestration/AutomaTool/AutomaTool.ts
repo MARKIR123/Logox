@@ -28,6 +28,7 @@ import {grantTools, titleFrom, type JobGrant, type PlannedJob} from './grant.js'
 import {AUTOMA_RETAINED_INPUT_LIMIT, type IdleWorker, type WorkerShelf} from './workers.js';
 import type {Semaphore} from '../../../kernel/semaphore.js';
 import {finishSchema, parseFinish, type FinishArgs} from './finish.js';
+import type {AutomaRoute} from './preset.js';
 import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME} from './prompt.js';
 
 export const AUTOMA_SCOPES = ['exact', 'bounded', 'open'] as const;
@@ -197,7 +198,7 @@ const TRUST_LINE = "Trust: summary and evidence are the worker's own; Changed an
 
 export type AutomaProvider = WorkerProvider;
 /** `model` is `<provider>/<model>`; `vision` is whether it can see images (absent counts as yes). */
-export interface ResolvedAutomaModel {readonly provider: AutomaProvider; readonly model: string; readonly vision?: boolean}
+export interface ResolvedAutomaModel {readonly provider: AutomaProvider; readonly model: string; readonly vision?: boolean; readonly route?: AutomaRoute}
 
 export interface WrittenFile {readonly path: string; readonly before: Buffer | null; readonly after: Buffer}
 
@@ -215,7 +216,7 @@ export interface DispatchOptions {
   readonly released?: readonly string[];
   /** Provider retries per request (the kernel's `max_retries`). */
   readonly retries?: number;
-  resolveModel(preferred: string | undefined, vision?: boolean): ResolvedAutomaModel;
+  resolveModel(preferred: string | undefined, vision?: boolean, writes?: boolean): ResolvedAutomaModel;
   /** Where finished workers wait for a continue. */
   readonly workers: WorkerShelf;
   /** Session-wide running limit (`[automa] max_running`): a job holds one slot while it runs; the others show as queued. */
@@ -228,6 +229,8 @@ export interface DispatchOptions {
   trackWrites(workerId: string, listener: (file: WrittenFile) => void): () => void;
   journalPath?: string | undefined;
   onProgress?(swarm: AutomaSwarm): void;
+  /** Called as each job ends, with what the worker handed back (the brief check reads its verdict here instead of parsing the result text). */
+  onEnd?(end: {readonly index: number; readonly status: JobStatus; readonly summary: string; readonly question?: string | undefined}): void;
   charge?(usage: ModelTurn['usage'], model: string): void;
   /** Ledger form of a worker turn's usage (tokens, model, provider, priced cost); stored on the turn's `message` event. */
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
@@ -343,14 +346,15 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
   const receipts: string[] = new Array(jobs.length).fill('');
   const statuses: AutomaJobState['state'][] = jobs.map(() => 'queued');
 
-  const finish = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts) => {
+  const finish = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute) => {
     const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started;
     const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model}, {...parts, acceptance: planned.job.acceptance});
     receipts[index] = receipt; statuses[index] = status;
+    options.onEnd?.({index, status, summary: parts.summary, question: parts.question});
     const {startedAt: _startedAt, tool: _tool, ...settled} = states[index]!;
     states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000)};
     publish();
-    await journal(index, 'end', {id, state: status, status, elapsedMs: elapsed, receipt, model, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision)});
+    await journal(index, 'end', {id, state: status, status, elapsedMs: elapsed, receipt, model, route: route ?? (planned.grant.writes.length ? 'code' : 'read'), scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision)});
   };
 
   // A dispatch of many jobs with one shared system prompt starts job 0 alone: once its first response is back, the provider's prefix cache can
@@ -383,7 +387,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       written.set(file.path, {before: written.has(file.path) ? written.get(file.path)!.before : file.before, after: file.after});
     });
     const ran: string[] = [], refused: string[] = [];
-    let succeeded = 0, lastInput = 0, modelName = '';
+    let succeeded = 0, lastInput = 0, modelName = '', route: AutomaRoute | undefined;
     const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle));
     states[index] = {...states[index]!, state: 'running', startedAt: started};
     publish();
@@ -391,13 +395,14 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     const measured = () => ({changed: changeLine(written, options.root), ran: ranLine(ran), denied: refused.join(', ')});
     try {
       const messages: ModelMessage[] = idle ? [...await options.workers.messages(idle), {role: 'user', text}] : [{role: 'user', text}];
-      const resolved = idle?.resolved ?? options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision);
+      const resolved = idle?.resolved ?? options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision, grant.writes.length > 0);
       modelName = resolved.model;
+      route = resolved.route;
       // A vision job never runs on a model that cannot see images: this job is refused, the others of the dispatch still run.
       if (planned.job.vision && resolved.vision === false) {
         stopTracking();
         if (idle) options.workers.unhold(idle);
-        await finish(index, 'denied', started, modelName, {summary: `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`});
+        await finish(index, 'denied', started, modelName, {summary: `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`}, route);
         return;
       }
       const end = await runWorker<FinishArgs>({
@@ -445,18 +450,18 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
         preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false});
       const large = idle && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
       if (end.kind === 'stalled') {
-        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note: large});
+        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note: large}, route);
         return;
       }
       const result = end.value;
       const allDenied = result.status === 'done' && refused.length > 0 && succeeded === 0 && written.size === 0;
       await finish(index, allDenied ? 'denied' : result.status, started, modelName, {summary: result.summary, evidence: result.evidence, notVerified: [...(result.notVerified ?? []), ...notes],
-        question: result.question, ...measured(), note: large});
+        question: result.question, ...measured(), note: large}, route);
     } catch (error) {
       stopTracking();
       // A continued worker that did not get to the end of its job stays as it was before this brief; the shelf's history was never extended.
       if (idle) options.workers.unhold(idle);
-      await finish(index, signal.aborted ? 'cancelled' : 'failed', started, modelName, {summary: signal.aborted ? 'Cancelled.' : error instanceof Error ? error.message : String(error), ...measured()});
+      await finish(index, signal.aborted ? 'cancelled' : 'failed', started, modelName, {summary: signal.aborted ? 'Cancelled.' : error instanceof Error ? error.message : String(error), ...measured()}, route);
     } finally {
       releaseSlot?.();
     }

@@ -1,6 +1,7 @@
 /**
- * Tier and vision marks of a model. They only help the user filter and choose models: the runtime never routes a request by task difficulty,
- * and the only automatic use of a mark is the image fallback (a model that cannot see images gets a placeholder, and an Automa job marked `vision` runs on the vision fallback).
+ * Tier and vision marks of a model. They mostly help the user filter and choose models: the runtime never routes a request by task difficulty.
+ * Its only automatic uses of a mark are the image fallback (a model that cannot see images gets a placeholder, and an Automa job marked `vision` runs on the vision fallback)
+ * and the default worker model of an unbound Automa route (`AutomaTool/preset.ts:autoAutomaModel()`: cheapest T1 for jobs without `writes`, cheapest T2 for jobs with).
  *
  * A mark is derived (known family, then price rank within the provider; input modalities of the catalog row) and a user override in `model-tiers.json` wins.
  */

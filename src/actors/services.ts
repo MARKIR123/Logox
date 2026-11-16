@@ -47,7 +47,8 @@ import {activeEnsembleRoster, directorFacts, hasOpenWork, heldProgress, openWork
 import {ENSEMBLE_RECORD_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
-import {dispatchedResult, endedBatchResult, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
+import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
+import {briefCheckNeeded, type BriefChecker, type BriefCheckInput, type BriefCheckOutcome} from '../tools/orchestration/ActorTool/brief-check.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
@@ -123,6 +124,9 @@ export class ActorServices {
   private readonly restartInterrupted = new Set<string>();
   private readonly restartBlockers = new Map<string, Set<string>>();
   private readonly dispatchSignatures = new Map<string, number>();
+  private briefChecker: BriefChecker | undefined;
+  /** Installs the brief check run before a larger dispatch (`src/app/request.ts` wires `Tools.runBriefCheck()`); without one no check runs. */
+  setBriefCheck(checker: BriefChecker | undefined): void {this.briefChecker = checker;}
   private readonly groups = new Map<string, {remaining: Set<string>; depth: number; batchId: string; origin: TaskOrigin; paused: boolean}>();
   constructor(readonly options: ActorServicesOptions) {
     this.deliveries = options.deliveries ?? new DeliveryQueue(options.sessionId, options.journal);
@@ -252,7 +256,7 @@ export class ActorServices {
         } else {
           parsedInput = actorSchema.parse(input);
         }
-        const {tasks, resumeBatch} = parsedInput;
+        const {tasks, resumeBatch, briefCheck} = parsedInput;
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
         const resumed = new Set<string>(), roots = new Set<string>();
         for (const task of tasks) {
@@ -318,6 +322,23 @@ export class ActorServices {
           if (group) applyBatch = () => {this.resumableBatches.delete(resumeBatch); this.restartBlockers.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);};
           if (!tasks.length) {applyBatch?.(); return {text: applyBatch ? resumedBatchResult(resumeBatch) : endedBatchResult(resumeBatch), isError: false};}
         }
+        // A larger dispatch is read by a read-only check first: gaps return to the Director with nothing started; a failed check never blocks.
+        let briefLine: string | undefined = briefCheck === 'skip' ? BRIEF_CHECK_SKIPPED : undefined;
+        if (!briefLine && this.briefChecker && briefCheckNeeded(tasks)) {
+          const fresh = tasks.filter(task => !task.resumeTask);
+          const input: BriefCheckInput = {companions: [...new Set(fresh.map(task => this.options.catalog.find(task.ownerId)?.name ?? task.ownerId))],
+            tasks: fresh.map(task => ({ownerId: task.ownerId, title: task.title ?? task.prompt.split('\n', 1)[0]!.slice(0, 80), prompt: task.prompt,
+              owns: task.owns ?? [], acceptance: task.acceptance ?? [], after: task.after ?? []}))};
+          const resume = context.wait?.('Checking briefs');
+          let outcome: BriefCheckOutcome;
+          try {outcome = await this.briefChecker(input, context);}
+          catch (error) {
+            context.signal.throwIfAborted();
+            outcome = {status: 'failed', reason: (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim().slice(0, 200) || 'unknown error'};
+          } finally {resume?.();}
+          if (outcome.status === 'blocked') return {text: briefCheckBlocked(outcome.gaps), isError: false};
+          briefLine = outcome.status === 'clear' ? BRIEF_CHECK_CLEAR : briefCheckFailed(outcome.reason);
+        }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
           ...(recovery ? {recovery} : {})};
@@ -349,7 +370,7 @@ export class ActorServices {
           for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
         }
         return {
-          text: dispatchedResult(receipt, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd())),
+          text: dispatchedResult(receipt, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), briefLine),
           isError: false,
         };
       }
