@@ -8,7 +8,7 @@ import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import type {ToolResult} from '../tools/tools.js';
 import type {McpServerConfig} from './config.js';
 import {McpClient} from './mcp-client.js';
-import {scratchOutputArguments, withOutputDir} from './playwright.js';
+import {SVG_NAVIGATION_TEXT, navigatesToSvg, scratchOutputArguments, withOutputDir} from './playwright.js';
 import {ensureActorScratchpadDir, getActorScratchpadDir} from '../kernel/scratchpad.js';
 
 const argsSchema = z.discriminatedUnion('action', [
@@ -144,6 +144,7 @@ export class Mcp {
       }
       const validator = tool.validator;
       if (args.server === 'playwright') {
+        if (navigatesToSvg(args.tool, args.arguments)) return {text: SVG_NAVIGATION_TEXT, isError: true};
         const owner = context.ownerId ?? DIRECTOR_ID;
         const redirected = scratchOutputArguments(args.arguments, getActorScratchpadDir(this.cwd, context.sessionId, owner));
         if (redirected !== args.arguments) {args.arguments = redirected as typeof args.arguments; await ensureActorScratchpadDir(this.cwd, context.sessionId, owner);}

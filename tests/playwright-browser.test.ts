@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {loadConfig} from '../src/config/config.js';
 import {ProjectExtensions} from '../src/extensions/runtime.js';
-import {playwrightServer, scratchOutputArguments, withOutputDir} from '../src/extensions/playwright.js';
+import {navigatesToSvg, playwrightServer, scratchOutputArguments, withOutputDir} from '../src/extensions/playwright.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 
 const enabled = process.env.LOGOX_BROWSER_TEST === '1';
@@ -109,4 +109,12 @@ test('local Playwright opens file URLs from the workspace and scratchpad', {skip
     await extensions.close();
     await rm(cwd, {recursive: true, force: true});
   }
+});
+
+test('navigating straight to a standalone SVG is recognised (its MCP page snapshot hangs), an HTML page is not', () => {
+  assert.equal(navigatesToSvg('browser_navigate', {url: 'http://127.0.0.1:8766/pelican-scene.svg'}), true);
+  assert.equal(navigatesToSvg('browser_navigate', {url: 'file:///G:/a/B.SVG?v=2#top'}), true);
+  assert.equal(navigatesToSvg('browser_navigate', {url: 'http://127.0.0.1:8766/'}), false);
+  assert.equal(navigatesToSvg('browser_navigate', {url: 'http://127.0.0.1:8766/svg-viewer.html'}), false);
+  assert.equal(navigatesToSvg('browser_take_screenshot', {url: 'x.svg'}), false);
 });

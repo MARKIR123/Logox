@@ -39,3 +39,12 @@ export function withOutputDir(args: readonly string[], dir: string): string[] {
   const at = args.indexOf('--output-dir');
   return at < 0 || at + 1 >= args.length ? [...args] : [...args.slice(0, at + 1), dir, ...args.slice(at + 2)];
 }
+
+/** Sent instead of a navigation to a standalone SVG: the Playwright MCP's post-navigation page snapshot hangs on SVG documents until its 30 s timeout. */
+export const SVG_NAVIGATION_TEXT = 'The browser tool cannot open a standalone SVG document: its page snapshot never finishes on one and the call times out after 30 s. Open an HTML page that shows it instead, such as one containing <img src="<the svg>"> or the inline <svg>, then navigate to that page.';
+
+/** True when `browser_navigate` targets a URL whose path ends in `.svg` (query and fragment ignored). */
+export function navigatesToSvg(tool: string, args: Record<string, unknown>): boolean {
+  if (tool !== 'browser_navigate' || typeof args.url !== 'string') return false;
+  return /\.svgz?$/i.test(args.url.trim().split(/[?#]/)[0] ?? '');
+}
