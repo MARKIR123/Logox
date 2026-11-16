@@ -42,7 +42,7 @@ categories:
 | Missing ripgrep binary | `GrepTool/rg-path.ts:resolveRgPath()` | `@vscode/ripgrep` in `package.json` |
 | Hanging child process | `process.ts:runProcess()` | `process.ts:killActivityProcesses()` |
 | Shell `run_in_background`, reading or stopping a background job | `ShellTool/ShellTool.ts:executeShell()` | `process.ts:startBackgroundProcess()`, `ShellJobTool/ShellJobTool.ts:executeShellJob()`, `process.ts:killBackgroundJobs()` |
-| `/undo` rollback (snapshots live in the project data folder, `src/config/project-data.ts:projectDataDir()`, passed as `Tools` option `dataDir`) | `snapshots.ts:Snapshots` | the `/undo` branch in `src/app/submit.ts` |
+| `/undo` rollback (snapshots live in the project data folder, `src/config/project-data.ts:projectDataDir()`, passed as `Tools` option `dataDir`) | `snapshots.ts:Snapshots` | the `/undo` branch in `src/app/submit.ts`; `snapshots.ts:Snapshots.changedPaths()` feeds the headless `changedFiles` (`src/headless.ts`) |
 | MCP tools, Playwright browser | `src/extensions/mcp.ts:Mcp` | `src/extensions/playwright.ts:playwrightServer()`; `src/extensions/runtime.ts:mcpRegistrations` registers MCP tools under category `extensions` |
 
 ## 3. Common Changes

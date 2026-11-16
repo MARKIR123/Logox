@@ -8,6 +8,7 @@ import {App} from './tui/app.js';
 import {ApplicationStage} from './tui/application.js';
 import {ProviderRegistry} from './providers/registry.js';
 import {applyTheme} from './tui/appearance/theme.js';
+import {HEADLESS_HELP, isHeadlessArgv, runHeadless} from './headless.js';
 
 async function main(): Promise<void> {
   try {
@@ -16,6 +17,14 @@ async function main(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 
+  if (isHeadlessArgv(process.argv.slice(2))) {
+    const code = await runHeadless(process.argv.slice(2), {cwd: process.cwd(), env: process.env, signals: process,
+      stdout: text => {process.stdout.write(text);}, stderr: text => {process.stderr.write(text);},
+      stdin: async () => {const chunks: Buffer[] = []; for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk)); return Buffer.concat(chunks).toString('utf8');}});
+    // Leftover handles (extension processes, sockets) must not keep a finished unattended run alive; flush both streams, then leave.
+    process.stderr.write('', () => process.stdout.write('', () => process.exit(code)));
+    return;
+  }
   const {values} = parseArgs({options: {
     demo: {type: 'boolean'}, help: {type: 'boolean'}, session: {type: 'string'}, resume: {type: 'boolean'},
     model: {type: 'string'}, provider: {type: 'string'}, 'base-url': {type: 'string'}, 'check-config': {type: 'boolean'},
@@ -55,7 +64,10 @@ async function main(): Promise<void> {
       '  --list-models                  List available models from active provider\n' +
       '  --auth-file <path>             Specify custom read-only credentials file\n' +
       '  --install-profiles             Install default actor profiles into ~/.logox/actors/\n' +
-      '  --help                         Show this help message\n'
+      '  --help                         Show this help message\n\n' +
+      'Headless run (no TUI; exit 0 completed, 1 failed, 2 timeout or interrupted, 3 setup error):\n' +
+      '  logox -p "<task>" [--output json] [--permission-mode auto] [--timeout <minutes>] [--verbose]\n' +
+      HEADLESS_HELP
     );
     return;
   }

@@ -561,6 +561,53 @@ npm start -- <参数>
 
 `--check-config`、`--check-provider`、`--list-providers`、`--list-models` 执行后直接退出，不进入界面。
 
+### 无界面运行（headless）
+
+评测脚本、CI 和批处理可以用 `-p` 把一个任务从头跑到尾，不渲染界面、不启用鼠标、不改终端标题、不响铃、不弹引导向导，Anamnesis 的自动回顾和做梦也关闭。
+
+```bash
+logox -p "给 src/add.ts 补上单元测试并跑通"                 # 只在 stdout 输出 Director 的最终回复
+logox -p - < task.md                                       # 任务从标准输入读取
+logox --task-file task.md --output json --permission-mode auto > result.json
+logox -p "整理 README" --verbose --timeout 30 2> progress.log
+```
+
+| 参数 | 作用 |
+|---|---|
+| `-p`、`--print <任务>` | 运行一个任务；`-p -` 从标准输入读取 |
+| `--task-file <路径>` | 从文件读取任务（与 `-p` 二选一） |
+| `--output text\|json` | `text`（默认）：stdout 只有 Director 本次运行最后一轮的最终回复；`json`：stdout 只有一个 JSON 对象 |
+| `--permission-mode default\|auto\|creative` | 只对本次运行生效，不会写入保存的权限模式 |
+| `--timeout <分钟>` | 可选，无默认值。到点后像 Esc / Ctrl+C 一样取消所有工作，等它们收尾，输出状态 `timeout` 并以 2 退出。它是外部的墙钟保险，不是智能体循环里的轮数或时间上限 |
+| `--verbose` | 进度写到 stderr，每个事件一行：`[mm:ss] <角色> · <标题> · <状态或工具名>`，绝不混入 stdout |
+| `--session <id>`、`--resume`、`--provider`、`--model`、`--base-url`、`--auth-file` | 与界面模式相同 |
+
+- **新会话**：不带 `--session` 和 `--resume` 时 headless 总是新建会话（界面模式会重开项目里最近的会话），所以同一项目里连续的两次运行互不污染。会话 ID 在启动时写到 stderr（`Session <id>`），`--output json` 时也是；会话照常保存在 `~/.logox/projects/<键>/`，`scripts/score-session.mjs`、`scripts/cache-report.mjs`、`scripts/automa-outcomes.mjs` 可以直接分析。
+- **何时结束**：Director 的这一轮已收尾，并且会话里没有任何角色的活动或 Automa 任务处于排队、运行或等待状态（连续约 150 ms 没有变化）。派给同伴或 Automa 的工作会等到汇报回来、Director 处理完才算完。
+- **没人能回答的交互**：需要询问用户的权限请求由权限引擎照常裁决，凡是会弹审批的一律拒绝，理由是 `Headless run: nobody can approve this. Use --permission-mode auto or creative to let it proceed.`；`AskUserQuestion` 等提问一律回答 `No user is available in this headless run. Decide yourself from the task and the code, and state your assumption.`；需要登录时立即失败（退出码 3，`No usable model: run logox interactively and /login first.`）。
+- **Ctrl+C**（SIGINT）：取消、等待收尾、输出状态 `cancelled` 并以 2 退出；第二次 Ctrl+C 不再等待。
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 完成 |
+| 1 | 失败（Director 任务失败或不可恢复的错误） |
+| 2 | 超时或被中断 |
+| 3 | 启动错误（没有可用模型、参数错误、任务文件读不了、任务为空） |
+
+`--output json` 的 stdout 是一行 JSON：
+
+```json
+{"version": 1, "sessionId": "…", "status": "completed", "durationMs": 48213, "final": "…Director 的最终回复…",
+ "actors": {"logox": {"tasks": 2, "toolCalls": 5}, "techne": {"tasks": 1, "toolCalls": 14}},
+ "automa": {"jobs": 3, "done": 3, "blocked": 0, "failed": 0},
+ "usage": {"inputTokens": 91000, "outputTokens": 4200, "cacheReadTokens": 70000, "cacheWriteTokens": 12000, "costUsd": 0.41,
+   "byActor": {"logox": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0}},
+   "byCategory": {"task": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0}}},
+ "changedFiles": ["src/add.ts", "tests/add.test.ts"], "errors": []}
+```
+
+`status` 为 `completed`、`failed`、`cancelled`（SIGINT）或 `timeout`。`actors` 里每个角色的 `tasks` 是本次运行里它启动的任务数，`toolCalls` 是它的工具调用数（不含内部的 `_FinishRound`）。`usage` 只统计本次运行新增的记录（`inputTokens` 含缓存读写，与 `/usage` 一致，Automa 与摘要、审批调用计入派发者或所属角色）；价格未知或不是 USD 时 `costUsd` 为 `null`。`changedFiles` 是 Write、Edit（含 Automa 工人）改动的文件，相对当前目录；Shell 命令造成的改动不在其中。
+
 ## 数据位置与构建
 
 | 位置 | 内容 |

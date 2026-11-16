@@ -96,6 +96,11 @@ export class Snapshots {
     snapshots.sort((a, b) => b.entry.time - a.entry.time);
     return snapshots;
   }
+  /** Absolute paths that Write or Edit changed under the given activities (Automa workers write under their dispatcher's activity); deleted-on-undo snapshots are gone. */
+  async changedPaths(activities: readonly string[]): Promise<string[]> {
+    const wanted = new Set(activities);
+    return [...new Set((await this.records()).filter(item => wanted.has(item.entry.activityId)).map(item => item.entry.path))].sort();
+  }
   async undo(activities?: readonly string[]): Promise<string[]> {
     const snapshots = (await this.records()).filter(item => !activities || activities.includes(item.entry.activityId));
     const latest = snapshots[0]?.entry.activityId;

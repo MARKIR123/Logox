@@ -30,6 +30,8 @@ export interface AnamnesisAppOptions {
   wall?: () => number;
   /** Interval of the idle check; without it `activate()` uses `ANAMNESIS_TICK_MS` outside tests and starts nothing inside them. */
   tickMs?: number;
+  /** A headless run: no automatic recap or dream and no idle interval (a manual `runNow` still works). */
+  disabled?: boolean;
   recapIdleMs?: number;
   dreamIdleMs?: number;
   /** `YYYY-MM-DD` shown to the dream as today. */
@@ -86,7 +88,7 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     ...(options.clock ? {clock: options.clock} : {}), ...(options.wall ? {wall: options.wall} : {}),
     recapIdleMs: options.recapIdleMs ?? config.anamnesis.recap_idle_minutes * 60_000,
     dreamIdleMs: options.dreamIdleMs ?? config.anamnesis.dream_idle_minutes * 60_000,
-    auto: () => {const current = settings(); return {recap: current.recap, dream: current.dream};},
+    auto: () => {const current = settings(); return options.disabled ? {recap: false, dream: false} : {recap: current.recap, dream: current.dream};},
   });
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -123,7 +125,7 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     /** Starts the idle interval (unref'd); `fallbackMs` applies when the options give none. Does nothing without an interval. */
     start(fallbackMs?: number) {
       const every = options.tickMs ?? fallbackMs;
-      if (timer || every === undefined) return;
+      if (timer || every === undefined || options.disabled) return;
       timer = setInterval(() => {void service.tick().catch(() => {});}, every);
       timer.unref();
     },

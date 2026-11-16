@@ -49,6 +49,7 @@ Paths under `src/`. "Inherits" means no local signpost; use the named one.
 | `demo/`, `demo.ts` | Inherits `tui/` | Scripted demo scenes behind `--demo` |
 | `doctor.ts` | Inherits `tests/` | Environment, dependency and config diagnostics behind `--doctor` |
 | `application*.ts`, `cli.tsx` | Root | Application container, bootstrap, sessions, status, command wiring, CLI entry |
+| `headless.ts` | [`src/runtime/AGENTS.md`](src/runtime/AGENTS.md) | `logox -p` run mode: drives the application through its public API with no TUI (see the headless run boundary there) |
 | `tests/` | [`tests/AGENTS.md`](tests/AGENTS.md) | Domain test matrices, home-directory isolation, mock fixture rules |
 
 ## 4. Verification
