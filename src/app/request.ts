@@ -33,6 +33,7 @@ import type {RuntimeStore} from '../runtime/store.js';
 import {storedMessage, type Journal} from '../store/journal.js';
 import {markInterruptedJobs} from '../tools/orchestration/AutomaTool/AutomaTool.js';
 import {autoAutomaModel, chooseAutomaModel} from '../tools/orchestration/AutomaTool/preset.js';
+import type {PlanBoard} from '../store/plans.js';
 import type {ToolRegistry} from '../tools/registry.js';
 import {AUTOMA_MODEL_KEY, AUTOMA_READ_KEY, AUTOMA_VISION_KEY} from '../tools/tool-models.js';
 import type {Tools} from '../tools/tools.js';
@@ -43,6 +44,8 @@ export interface RequestAssemblyDeps {
   store: RuntimeStore; journal: Journal; deliveries: DeliveryQueue; tools: Tools; toolRegistry: ToolRegistry;
   registry: ProviderRegistry; modelPool: ModelPool; actors: ActorCatalog; actorServices: ActorServices;
   taskModels: TaskModels; contexts: ContextManager; permissions: PermissionEngine; extensions: ProjectExtensions;
+  /** The session's plan board: Automa jobs link to its nodes and the Director is told what others changed. */
+  plans: PlanBoard;
   /** Resolves once the preferred name has loaded. */
   profileReady: Promise<void>;
   /** The Director's open task reports by activity id, written by the ensemble hooks and drained here. */
@@ -56,7 +59,7 @@ export interface RequestAssemblyDeps {
 
 export function createRequestAssembly(deps: RequestAssemblyDeps) {
   const {session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry, modelPool, actors, actorServices,
-    taskModels, contexts, permissions, extensions, profileReady, directorReports, configureMeter, memoryPrompt, deliverToTask} = deps;
+    taskModels, contexts, permissions, extensions, plans, profileReady, directorReports, configureMeter, memoryPrompt, deliverToTask} = deps;
   const resources = extensions.resources;
   const environment = new EnvironmentState();
   const automaJournal = (sessionId: string) => join(stateDir, 'sessions', sessionId, 'subagents', 'automa.jsonl');
@@ -91,6 +94,7 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
     // Results of background jobs reach the dispatcher as peer messages do.
     deliver: (target, text, summary) => deliverToTask(target.ownerId, target.activityId, text, summary),
+    plans,
   }, session);
   // A larger Director dispatch is read by a read-only Automa-style check on the code model before any companion starts.
   actorServices.setBriefCheck((input, context) => tools.runBriefCheck(input, context));
@@ -141,6 +145,9 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
       if (history.findLast(message => message.role === 'context' && message.kind === 'task-state' && message.data?.slot === 'ensemble')?.text === record) actorServices.recordStored(context.ownerId);
       else contextUpdates.push(createRuntimeContextMessage('task-state', record, {slot: 'ensemble'}));
     }
+    // What others changed in the plan since the Director last looked: one update, changed nodes only, and nothing at all when nothing changed.
+    const planChange = isDirector(context.ownerId) ? plans.peekChanges(context.ownerId) : undefined;
+    if (planChange) contextUpdates.push(createRuntimeContextMessage('task-state', planChange.text, {slot: 'plan', token: planChange.token}));
     for (const [slot, text] of [['restriction', restriction], ['handoff', pending ? PENDING_HANDOFF_HEADER + '\n' + pending : '']] as const) {
       const previous = history.findLast(message => message.role === 'context' && message.kind === 'task-state' &&
         message.data?.slot === slot && message.data?.activityId === context.activityId);

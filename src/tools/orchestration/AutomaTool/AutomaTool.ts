@@ -46,6 +46,7 @@ const automaJobSchema = z.strictObject({
   continue: z.string().min(1).optional().describe('Rare: id a result returned for a finished worker of this task, to give it a next step. Omit for a new job'),
   vision: z.boolean().optional().describe('Rare: true when the job must look at images (screenshots, mockups, image files). Omit otherwise'),
   after: z.array(z.string().min(1).max(80)).min(1).max(8).optional().describe('Jobs this one follows, by id (T1), "#n" position or exact title, or a finished worker by its id. It starts when they are all done and receives their results'),
+  node: z.string().min(1).max(40).optional().describe('Rare: the plan node (see Plan) this job carries out; the node\'s status then follows the job'),
 });
 
 export const AUTOMA_MODES = ['wait', 'background'] as const;
@@ -64,7 +65,7 @@ export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after']);
+const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node']);
 const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
@@ -133,6 +134,8 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
       if (Array.isArray(job.after)) job.after = job.after.map(item => typeof item === 'number' ? '#' + item : item);
       const after = cleanList(job.after, /^#\d+$/);
       job.after = Array.isArray(after) ? [...new Set(after.map(item => (item as string).trim()))] : undefined;
+      if (typeof job.node === 'number') job.node = String(job.node);
+      if (typeof job.node === 'string' && PLACEHOLDER.test(job.node.trim())) delete job.node;
       for (const key of Object.keys(job)) {
         if (!JOB_KEYS.has(key)) {drop(key, job[key]); delete job[key];}
         else if (job[key] === undefined) delete job[key];
@@ -401,6 +404,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const followed = jobs.map((_, index) => [...needs[index]!.map(prerequisite => jobs[prerequisite]!.id), ...workerNeeds[index]!]);
   const ordered = followed.some(list => list.length > 0);
   const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
+    ...(planned.job.node ? {node: planned.job.node} : {}),
     ...(followed[index]!.length ? {after: followed[index]!} : {}), ...(options.background ? {delivered: false} : {})}));
   const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {})});
   const finished: boolean[] = jobs.map(() => false);

@@ -19,7 +19,7 @@ export class ExecutionRecoveryError extends Error {
 export {executionRecoveryInstruction} from '../prompts/runtime/recovery.js';
 
 /** Canonical names: talking to people or actors is not progress on the work itself. */
-const coordinationTools = new Set<string>(['Actor', 'CraftActor', 'ReadActor', 'ListActors', 'CancelActor', 'SendMessage', 'AskUserQuestion', 'LoadTools']);
+const coordinationTools = new Set<string>(['Actor', 'CraftActor', 'ReadActor', 'ListActors', 'CancelActor', 'SendMessage', 'AskUserQuestion', 'LoadTools', 'Plan']);
 
 /** Differences in argument JSON key order or formatting do not count as new progress, and re-reading the same result does not refresh the budget. */
 export function toolProgressFingerprint(call: ToolCall, result: ToolResult): string | undefined {

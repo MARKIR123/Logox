@@ -61,6 +61,7 @@ import {createCommandContext} from './commands/command-context.js';
 import {createPages, loadUiPreferences} from './commands/pages.js';
 import {createSessionStatus} from './app/status.js';
 import {createRequestAssembly} from './app/request.js';
+import {createPlans} from './app/plans.js';
 import {createInput} from './app/input.js';
 import {createSubmit} from './app/submit.js';
 import {ANAMNESIS_TICK_MS, createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
@@ -187,7 +188,10 @@ export async function createSessionApplication(options: SessionApplicationOption
   // Tasks, compaction, reload, a model save or a permission save each make the session busy; a switch of model or provider waits for idle.
   const busy = () => ensemble.isBusy() || !!state.compactTask || modelSelection.isSelecting() || !!state.reloadTask || !!state.permissionTask;
   const requireIdle = () => {if (busy()) throw new Error('Tasks are running. Please wait for completion or cancel before switching models or providers.');};
-  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry,
+  // The plans of this session (`<project>/.logox/plans/`): read before anything asks for them, so a resumed session finds its plan.
+  const plans = createPlans({session, cwd, store, journal, actors, notice: text => notice(text, 'task_notice', DIRECTOR_ID)});
+  await plans.load();
+  const actorServices = new ActorServices({sessionId: session, catalog: actors, registry, resources, journal, config, deliveries, toolRegistry, plans,
     notice: text => notice(text, 'task_notice', DIRECTOR_ID),
     ...(options.outageDelaysMs ? {outageDelaysMs: options.outageDelaysMs} : {}),
     outageNotice: (text, first) => notice(text, 'task_notice', DIRECTOR_ID, undefined, {presentation: first ? 'timeline' : 'status'}),
@@ -293,7 +297,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const anamnesis = await createAnamnesis({session, cwd, homeDir, stateDir, config, store, journal, actors, registry, provider: options.provider, busy,
     configureMeter: sessionStatus.configureMeter, contexts, options: options.anamnesis});
   const {requestBase, keepAlive} = createRequestAssembly({session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry,
-    modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, profileReady, directorReports,
+    modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, plans, profileReady, directorReports,
     configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt,
     deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'automa', summary, 'queue', {activityId})});
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
@@ -317,6 +321,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     recoverExecution: (context, kind) => actorServices.recovery.execution(context.rootActivityId ?? context.activityId, kind, context.ownerId),
     executionProgress: (context, fingerprint) => actorServices.recovery.progress(context.rootActivityId ?? context.activityId, fingerprint),
     contextUpdated: (context, update) => {if (update.kind === 'task-state' && update.data?.slot === 'ensemble') actorServices.recordStored(context.ownerId);
+      // The plan update reached the model: what it said is not news again.
+      if (update.kind === 'task-state' && update.data?.slot === 'plan' && typeof update.data.token === 'string') plans.commit(context.ownerId, update.data.token);
       if (update.kind === 'environment-change') notice('Execution environment updated:\n' + update.text, 'environment_change', context.ownerId, context.activityId, {presentation: 'silent'});},
     executionNotice: (context, text) => {if (isDirector(context.ownerId)) notice(text, 'task_notice', context.ownerId, context.activityId);},
     resources, extraTools, extraApprovalHandled: extraTools.map(tool => tool.name),
@@ -403,12 +409,12 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const input = createInput({session, state, store, ensemble, actorServices, systems, notice, beforeTask: options.beforeTask});
   const submitCommand = createSubmit({session, cwd, homeDir, state, env: options.env ?? process.env, resourceOptions: options.resourceOptions, store, journal,
-    surfaces, authentication, ensemble, permissions, tools, toolRegistry, actors, actorServices, resources, contexts, registry, modelPool, owners,
+    surfaces, authentication, ensemble, permissions, tools, toolRegistry, actors, actorServices, plans, resources, contexts, registry, modelPool, owners,
     memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, anamnesis: anamnesis.api, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
     sessionCommand: options.sessionCommand, requireIdle});
   return {
     sendPendingNow: input.sendPendingNow, discardPending: input.discardPending,
-    sessionId: session, store, ensemble, journal, tools, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar,
+    sessionId: session, store, ensemble, journal, tools, plans, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar,
     /** Anamnesis: `runNow`, `memories`, `forget`, `anamnesisModel`, `setAnamnesisModel`, `settings`, `setAuto` (see `app/anamnesis.ts`). */
     anamnesis: anamnesis.api,
     status: sessionStatus.status, isBusy: busy,
@@ -467,7 +473,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       state.closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), anamnesis.lifecycle.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
-        await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail();
+        await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await plans.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail();
       } finally {replayed.stopHeld(); await sessionStatus.closeGit(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); input.stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = DIRECTOR_ID, inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {

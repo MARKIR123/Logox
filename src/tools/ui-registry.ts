@@ -22,11 +22,12 @@ import {UI as FinishRound} from './protocol/_FinishRoundTool/UI.js';
 import {UI as LoadTools} from './protocol/LoadToolsTool/UI.js';
 import {UI as GitStatus} from './protocol/_GitStatusTool/UI.js';
 import {UI as Automa} from './orchestration/AutomaTool/UI.js';
+import {UI as Plan} from './coordination/PlanTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
   Read, Write, Edit, Glob, Grep, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
-  ListActors, CancelActor, SendMessage, Automa,
+  ListActors, CancelActor, SendMessage, Plan, Automa,
   _FinishRound: FinishRound, _GitStatus: GitStatus, LoadTools, mcp: Mcp,
 };
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));

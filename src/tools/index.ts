@@ -48,11 +48,14 @@ import {listActorsSchema, executeListActors, type ListActorsArgs} from './coordi
 import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './coordination/ListActorsTool/prompt.js';
 import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './orchestration/CancelActorTool/CancelActorTool.js';
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './orchestration/CancelActorTool/prompt.js';
+import {planSchema, executePlan, type PlanArgs} from './coordination/PlanTool/PlanTool.js';
+import {PLAN_DESCRIPTION, PLAN_TOOL_NAME} from './coordination/PlanTool/prompt.js';
 import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {projectRulesSection} from '../prompts/boundary.js';
+import {planUnknownLinkNode} from '../prompts/runtime/plan.js';
 import {workerPromptHash, workerSystem, automaSchema, executeAutomaDispatch, startAutomaDispatch, normalizeAutomaInput, TRUST_LINE, type AutomaArgs, type DispatchOptions, type DispatchRun, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
 import {WorkerShelf} from './orchestration/AutomaTool/workers.js';
 import {BackgroundBoard, type BackgroundDispatch} from '../runtime/background-jobs.js';
@@ -106,6 +109,11 @@ export {
   type CancelActorArgs,
   CANCEL_ACTOR_DESCRIPTION,
   CANCEL_ACTOR_TOOL_NAME,
+  planSchema,
+  executePlan,
+  type PlanArgs,
+  PLAN_DESCRIPTION,
+  PLAN_TOOL_NAME,
   ToolModelStorage,
   type ToolModel,
   type ToolModelMap,
@@ -127,6 +135,7 @@ export const schemas = {
   ReadActor: readActorSchema,
   ListActors: listActorsSchema,
   CancelActor: cancelActorSchema,
+  Plan: planSchema,
   Automa: automaSchema,
   _FinishRound: finishRoundSchema,
   _GitStatus: gitStatusSchema,
@@ -150,6 +159,7 @@ export const descriptions: Record<ToolName, string> = {
   ReadActor: READ_ACTOR_DESCRIPTION,
   ListActors: LIST_ACTORS_DESCRIPTION,
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
+  Plan: PLAN_DESCRIPTION,
   Automa: AUTOMA_DESCRIPTION,
   _FinishRound: FINISH_ROUND_DESCRIPTION,
   _GitStatus: GIT_STATUS_DESCRIPTION,
@@ -286,6 +296,8 @@ export interface AutomaEnvironment {
   deliver?(target: {readonly sessionId: string; readonly ownerId: string; readonly activityId: string}, text: string, summary: string): Promise<boolean> | boolean;
   /** Results that end within this long of each other are delivered together; tests shorten it (default 3000). */
   coalesceMs?(): number;
+  /** The session's plan (`PlanBoard`): a job naming a `node` is checked against it and linked to it when the dispatch starts. Without it `node` is refused. */
+  plans?: {check(node: string): string | undefined; link(node: string, link: {readonly automaJob: string}): void};
 }
 
 async function fileVersion(path: string): Promise<string> {
@@ -447,6 +459,11 @@ export class Tools {
       return refuse(text);
     };
     if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of finished workers.');
+    // A job that names a plan node needs that node in the active plan; the refusal says which ids exist (not remembered: the plan may gain the node next).
+    for (const job of args.jobs ?? []) if (job.node) {
+      const refusal = environment.plans ? environment.plans.check(job.node) : planUnknownLinkNode(job.node, []);
+      if (refusal) return refuse(refusal);
+    }
     // The workers this call names are looked up first (a parked one is read back from disk), awaited before the one-dispatch check.
     // A job may follow a finished worker (`after`), so those are looked up too.
     const followed = [...new Set((args.jobs ?? []).flatMap(job => job.after ?? []).filter(entry => !/^#\d+$/.test(entry)))];
@@ -487,6 +504,7 @@ export class Tools {
       // The ids were previewed above; taking them is synchronous, so they are the ones the model was told.
       const fresh = this.shelf.reserve(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length, true);
       const jobs = plan.jobs.map(job => ({...job, id: job.job.continue ?? fresh.shift()!}));
+      for (const job of jobs) if (job.job.node) environment.plans?.link(job.job.node, {automaJob: activityId + '/' + job.id});
       const slots = this.slots.get(sessionId) ?? this.slots.set(sessionId, new Semaphore(() => environment.maxRunning?.() ?? AUTOMA_DEFAULT_RUNNING)).get(sessionId)!;
       // A background dispatch has its own signal: it follows the dispatcher's task and is cancelled with it (`BackgroundBoard.cancelActivity()`), whichever way the task ends.
       const controller = new AbortController();

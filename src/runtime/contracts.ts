@@ -7,6 +7,8 @@ import {stopReasonSchema, storedStopSchema} from './stop-reason.js';
 
 const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
+  /** The plan node this task carries out (`src/runtime/plan.ts`); the plan holds the link, the activity keeps the origin. */
+  planNode: z.string().trim().min(1).max(40).optional(),
   resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), ownedFiles: z.array(z.string().trim().min(1)).max(32).optional(), acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional(), after: z.array(id).max(8).optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
   /** How the work ended (`stop-reason.ts`); while a task is stopping it briefly holds the cause word (`user`, `director_cancel`), and older sessions keep those words. */
@@ -167,6 +169,8 @@ const automaJobStateSchema = z.strictObject({
   /** The worker's readable id (`T1`), which a later `continue` names. */
   id: z.string().optional(),
   title: z.string(),
+  /** The plan node the job carries out (`Automa` job field `node`). */
+  node: z.string().optional(),
   /** `waiting`: ordered after jobs that have not ended yet (`after`); `skipped`: never started because a job it follows did not end `done`. */
   state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted', 'waiting', 'skipped']),
   /** Ids of the jobs this one follows. */

@@ -260,7 +260,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   let closeTask: Promise<void> | undefined;
   return {
     get sessionId() {return current.sessionId;}, get store() {return current.store;}, get ensemble() {return current.ensemble;},
-    get journal() {return current.journal;}, get tools() {return tools;}, get authentication() {return current.authentication;},
+    get journal() {return current.journal;}, get tools() {return tools;}, get plans() {return current.plans;}, get authentication() {return current.authentication;},
     get permissions() {return permissions;}, get extensions() {return extensions;}, get resources() {return extensions.resources;},
     get surfaces() {return current.surfaces;}, get contexts() {return current.contexts;}, sessions: manager,
     get actors() {return actors;}, get taskModels() {return current.taskModels;},

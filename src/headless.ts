@@ -292,6 +292,8 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
       ...(node.route ? {route: node.route} : {}), ...(node.model ? {model: node.model} : {}),
       ...(node.background ? {background: true, delivered: node.delivered === true} : {}),
       blockedBy: [...node.blockedBy], result: node.result ? {summary: node.result.summary, notVerified: [...node.result.notVerified ?? []]} : null}));
+  // The plans this run touched (changed during it, or holding work it started): derived, as the hub and `/plan` read them.
+  const plans = app.plans.plans().filter(plan => plan.updatedAt >= started || plan.nodes.some(node => node.links.some(link => ids.has((link.activityId ?? link.automaJob ?? '').split('/')[0]!))));
   const cwd = await realpath(io.cwd).catch(() => io.cwd);
   const changedFiles = (await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {
     const inside = relative(cwd, path);
@@ -302,6 +304,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     setupError, final,
     report: {version: 1 as const, sessionId: session, status, durationMs: Date.now() - started, final, actors: actorStats,
       delegations,
+      plans,
       automa: {jobs: jobs.length, done: jobs.filter(job => job.state === 'done').length, blocked: jobs.filter(job => job.state === 'blocked').length, failed: jobs.filter(job => job.state === 'failed').length,
         ...(jobs.some(job => job.state === 'skipped') ? {skipped: jobs.filter(job => job.state === 'skipped').length} : {})},
       usage: {...totalsOf(used.map(item => item.record), config), byActor: group(item => item.owner), byCategory: group(item => item.record.category)},

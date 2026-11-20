@@ -156,6 +156,18 @@ export function createTasksCommand(deps: TasksPageDeps) {
       await openList();
     },
     openList,
+    /** Opens the detail page of one delegation (an activity id, or `<activityId>/<jobId>`), Esc returning through `backTo`; false when the session does not know it. */
+    async openDelegation(id: string, backTo: () => Promise<void>): Promise<boolean> {
+      const node = project().find(item => item.id === id);
+      if (!node) return false;
+      await openDetail(node, (await costs().catch(() => new Map<string, number>())).get(id), backTo);
+      return true;
+    },
+    /** The title of one delegation, for links from other pages. */
+    titleOf(id: string): string | undefined {
+      const node = project().find(item => item.id === id);
+      return node ? (node.kind === 'automa' ? (node.jobId ?? 'job') + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title : undefined;
+    },
   };
 }
 export type TasksCommand = ReturnType<typeof createTasksCommand>;

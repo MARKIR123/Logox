@@ -7,6 +7,7 @@ export const taskSpecSchema = z.strictObject({
   owns: z.array(z.string().trim().min(1)).max(32).optional().describe('Paths or globs (relative to the project) this task may change; other actors editing them get a coordination note'),
   acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional().describe('Checks that define done'),
   after: z.array(z.string().trim().min(1)).max(8).optional().describe('Actor ids or activity ids to wait for'),
+  node: z.string().trim().min(1).max(40).optional().describe('Plan node id this task carries out (see Plan): the node\'s status then follows this work'),
   resumeTask: z.string().optional(),
 });
 export type TaskSpec = z.infer<typeof taskSpecSchema>;

@@ -12,6 +12,8 @@ export interface BriefCheckTask {
   readonly owns: readonly string[];
   readonly acceptance: readonly string[];
   readonly after: readonly string[];
+  /** The plan node the task carries out, when it names one: what the plan says about it, to compare with the brief. */
+  readonly node?: {readonly id: string; readonly title: string; readonly owner: string; readonly acceptance: readonly string[]} | undefined;
 }
 export interface BriefCheckInput {
   readonly tasks: readonly BriefCheckTask[];
@@ -38,6 +40,7 @@ export function briefCheckNeeded(tasks: readonly Pick<TaskSpec, 'prompt' | 'resu
 export function renderBriefCheckInput(input: BriefCheckInput): string {
   const list = (items: readonly string[]) => items.length ? '\n' + items.map(item => '- ' + item.replace(/\s+/g, ' ')).join('\n') : ' none';
   const tasks = input.tasks.map((task, index) => [`## Task ${index + 1}: ${task.title}`, `Companion: ${task.ownerId}`, 'Prompt:', task.prompt,
-    'Owns:' + list(task.owns), 'Acceptance:' + list(task.acceptance), 'After:' + list(task.after)].join('\n'));
+    'Owns:' + list(task.owns), 'Acceptance:' + list(task.acceptance), 'After:' + list(task.after),
+    ...task.node ? [`Plan node ${task.node.id}: ${task.node.title} (owner ${task.node.owner})`, 'Plan acceptance:' + list(task.node.acceptance)] : []].join('\n'));
   return [`Companions receiving these briefs: ${input.companions.join(', ')}.`, '', ...tasks.flatMap(task => [task, ''])].join('\n').trimEnd();
 }

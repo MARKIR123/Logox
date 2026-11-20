@@ -73,6 +73,8 @@ export interface AutomaJobArgs {
   readonly vision?: boolean | undefined;
   /** The jobs this one follows: ids of this call (`T1`), `#n` positions, exact titles, or finished workers of this dispatcher. It starts when they are all done. */
   readonly after?: readonly string[] | undefined;
+  /** The plan node this job carries out (`Plan`); the runtime links the job to it when the dispatch starts. */
+  readonly node?: string | undefined;
 }
 
 export interface RetainedGrant {

@@ -378,6 +378,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(origin.ownedFiles?.length ? {ownedFiles: [...origin.ownedFiles]} : {}),
       ...(origin.acceptance?.length ? {acceptance: [...origin.acceptance]} : {}),
       ...(origin.after?.length ? {after: [...origin.after]} : {}),
+      ...(origin.planNode ? {planNode: origin.planNode} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.fingerprint ? {fingerprint: origin.fingerprint} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),

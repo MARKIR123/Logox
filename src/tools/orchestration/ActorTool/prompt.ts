@@ -18,6 +18,9 @@ export function dispatchedResult(tasks: readonly DispatchedTask[], batchId: stri
   return `Dispatched to ${targets} (Batch ${batchId}):\n${lines.join('\n')}\n${briefLine ? briefLine + '\n' : ''}${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
 }
 
+/** Advisory line of a Director dispatch of two or more tasks while no plan is active; it never blocks. */
+export const NO_PLAN_NOTE = 'No plan yet: for work in several parts, create one with Plan and link each task with node.';
+
 /** One line of the receipt for a task whose companion is still working on an earlier task: it starts when that one ends. */
 export const queuedBehindNote = (task: DispatchedTask, ownerName: string, runningTitle: string, runningId: string): string =>
   `Queued: ${task.title} (${task.activityId}) waits behind ${ownerName}'s running task "${runningTitle.replace(/\s+/g, ' ').trim().slice(0, 80)}" (${runningId}); it starts when that ends.`;
@@ -27,7 +30,7 @@ export const BRIEF_CHECK_SYSTEM_PROMPT = `You check dispatch briefs before work 
 
 Read every brief. Open the files they name when that settles a question. Then report through Finish:
 - status "done" when every brief can be acted on as written; summary: one sentence per task saying what that companion will do.
-- status "blocked" when something would lead to wrong or wasted work; question: a numbered list, one item per problem, each naming the task and the exact gap: an undefined name or format, two briefs that contradict each other, a file or interface two tasks both expect the other to provide, acceptance that cannot be checked, or a goal stated only by reference to the conversation ("as discussed", "the bug above").
+- status "blocked" when something would lead to wrong or wasted work; question: a numbered list, one item per problem, each naming the task and the exact gap: an undefined name or format, two briefs that contradict each other, a file or interface two tasks both expect the other to provide, acceptance that cannot be checked, or a goal stated only by reference to the conversation ("as discussed", "the bug above"). When a task names a plan node, the node's title, owner and acceptance are listed under it: a brief that contradicts them (another goal, another owner, acceptance the brief does not cover) is a gap too.
 
 Do not judge the plan's strategy or suggest improvements. Report only gaps that would cause wrong or wasted work.`;
 

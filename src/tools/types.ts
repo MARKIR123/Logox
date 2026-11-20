@@ -65,6 +65,8 @@ export const toolAliases = {
   task_stop: 'CancelActor',
   taskstop: 'CancelActor',
   TaskStop: 'CancelActor',
+  plan: 'Plan',
+  Plan: 'Plan',
   automa: 'Automa',
   Automa: 'Automa',
   _FinishRound: '_FinishRound',

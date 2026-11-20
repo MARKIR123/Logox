@@ -37,8 +37,12 @@ import {
   cancelActorSchema,
   CANCEL_ACTOR_DESCRIPTION,
   executeCancelActor,
+  planSchema,
+  executePlan,
   canonicalToolName,
 } from '../tools/index.js';
+import type {PlanBoard} from '../store/plans.js';
+import {planUnknownLinkNode} from '../prompts/runtime/plan.js';
 import {renderBrief} from '../tools/orchestration/ActorTool/brief.js';
 import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
@@ -47,7 +51,7 @@ import {activeEnsembleRoster, directorFacts, hasOpenWork, heldProgress, openWork
 import {ENSEMBLE_RECORD_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
-import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, queuedBehindNote, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
+import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, NO_PLAN_NOTE, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, queuedBehindNote, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
 import {briefCheckNeeded, type BriefChecker, type BriefCheckInput, type BriefCheckOutcome} from '../tools/orchestration/ActorTool/brief-check.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
@@ -69,10 +73,12 @@ function orderByDependency<T extends {after: ReadonlySet<string>}>(grouped: Read
   for (const owner of grouped.keys()) visit(owner);
   return ordered;
 }
-const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'SendMessage']);
+const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'SendMessage', 'Plan']);
 
 export interface ActorServicesOptions {
   toolRegistry?: ToolRegistry;
+  /** The session's plan board (the `Plan` tool, `node` links of dispatches); without one plans are unavailable. */
+  plans?: PlanBoard;
   sessionId: string; catalog: ActorCatalog; registry: ProviderRegistry; resources: Resources; journal: Journal; config: Config;
   deliveries?: DeliveryQueue;
   enqueue(owner: string, prompt: string, source: string, origin?: TaskOrigin): TaskHandle;
@@ -273,6 +279,10 @@ export class ActorServices {
           const explicitTitle = task.title?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
           if (isDirector(task.ownerId) || !this.options.catalog.find(task.ownerId)) throw new Error('Invalid actor: ' + task.ownerId);
+          if (task.node) {
+            const refusal = this.options.plans ? this.options.plans.check(task.node) : planUnknownLinkNode(task.node, []);
+            if (refusal) throw new Error(refusal);
+          }
           if (task.resumeTask) {
             const previous = saved.find(previous => previous.activityId === task.resumeTask);
             if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
@@ -311,14 +321,19 @@ export class ActorServices {
         if (tasks.some(task => !task.resumeTask) && baseDepth >= 3) {
           throw new Error('Actor dispatch has made no new progress three times; wrap up the task using the existing results');
         }
-        const grouped = new Map<string, {prompts: string[]; files: Set<string>; acceptance: string[]; after: Set<string>; resumeTaskId?: string; taskTitle?: string}>();
+        // Two or more new tasks with no plan to hang them on: the receipt says so once (advice, never a refusal).
+        const planAdvice = isDirector(context.ownerId) && !!this.options.plans && tasks.filter(task => !task.resumeTask).length >= 2 && !this.options.plans.active();
+        const grouped = new Map<string, {prompts: string[]; files: Set<string>; acceptance: string[]; after: Set<string>; nodes: string[]; resumeTaskId?: string; taskTitle?: string}>();
         for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), acceptance: [], after: new Set<string>(), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
+          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), acceptance: [], after: new Set<string>(), nodes: [], ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
           if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
           if (task.resumeTask) group.resumeTaskId = task.resumeTask;
           if (!group.taskTitle && task.title) group.taskTitle = task.title;
           const brief = renderBrief(task);
-          group.prompts.push(brief ? task.prompt + '\n\n' + brief : task.prompt);
+          // A task on a plan node is told where its node sits: the path from the root and its own subtree, after the brief.
+          const planBlock = task.node ? this.options.plans?.contextFor(task.node) : undefined;
+          group.prompts.push((brief ? task.prompt + '\n\n' + brief : task.prompt) + (planBlock ? '\n\n' + planBlock : ''));
+          if (task.node && !group.nodes.includes(task.node)) group.nodes.push(task.node);
           for (const file of task.owns ?? []) group.files.add(file);
           for (const item of task.acceptance ?? []) if (!group.acceptance.includes(item)) group.acceptance.push(item);
           for (const ref of task.after ?? []) group.after.add(ref);
@@ -342,7 +357,8 @@ export class ActorServices {
           const fresh = tasks.filter(task => !task.resumeTask);
           const input: BriefCheckInput = {companions: [...new Set(fresh.map(task => this.options.catalog.find(task.ownerId)?.name ?? task.ownerId))],
             tasks: fresh.map(task => ({ownerId: task.ownerId, title: task.title ?? task.prompt.split('\n', 1)[0]!.slice(0, 80), prompt: task.prompt,
-              owns: task.owns ?? [], acceptance: task.acceptance ?? [], after: task.after ?? []}))};
+              owns: task.owns ?? [], acceptance: task.acceptance ?? [], after: task.after ?? [],
+              ...(task.node ? this.briefNode(task.node) : {})}))};
           const resume = context.wait?.('Checking briefs');
           let outcome: BriefCheckOutcome;
           try {outcome = await this.briefChecker(input, context);}
@@ -367,13 +383,15 @@ export class ActorServices {
           const after = this.resolveAfter(owner, task.after, dispatched);
           const fingerprint = this.fingerprintOf(owner);
           const childOrigin = {...origin, batchId: group.batchId, ...(fingerprint ? {fingerprint} : {}), ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
-            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {})};
+            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {}),
+            ...(task.nodes.length ? {planNode: task.nodes[0]!} : {})};
           const ownerOf = (id: string) => [...dispatched].find(([, activity]) => activity === id)?.[0] ?? snapshot?.activities.find(activity => activity.activityId === id)?.ownerId;
           const finished = new Set(after.map(ownerOf).filter((who): who is string => !!who));
           const teammates = teammatesBlock(owner, batch, snapshot, rootActivityId, finished);
           const prompt = task.prompts.join('\n\n') + (teammates ? '\n\n' + teammates : '');
           const handle = this.options.enqueue(owner, prompt, DIRECTOR_ID, childOrigin);
           this.origins.set(handle.activityId, childOrigin);
+          for (const node of task.nodes) this.options.plans?.link(node, {activityId: handle.activityId});
           this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
           dispatched.set(owner, handle.activityId);
@@ -385,7 +403,7 @@ export class ActorServices {
           for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
         }
         return {
-          text: dispatchedResult(receipt, group.batchId, [...dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), ...resumeNotes, ...this.queuedNotes(receipt, snapshot)], briefLine),
+          text: dispatchedResult(receipt, group.batchId, [...dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), ...resumeNotes, ...this.queuedNotes(receipt, snapshot), ...(planAdvice ? [NO_PLAN_NOTE] : [])], briefLine),
           isError: false,
         };
       }
@@ -426,6 +444,7 @@ export class ActorServices {
           memo: this.listActorsMemo,
         });
       }
+      if (canonical === 'Plan') return executePlan(planSchema.parse(input), {caller: context.ownerId, board: this.options.plans});
       if (canonical === 'CancelActor') {
         const cancelArgs = cancelActorSchema.parse(input);
         return executeCancelActor(cancelArgs, {
@@ -445,6 +464,11 @@ export class ActorServices {
       const collab = await this.collaboration.execute(call, context);
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
     } catch (error) {return {text: error instanceof Error ? error.message : 'Actor operation failed', isError: true};}
+  }
+  /** What the brief check reads of a plan node a task names: its title, owner and acceptance. */
+  private briefNode(id: string): {node?: {id: string; title: string; owner: string; acceptance: readonly string[]}} {
+    const node = this.options.plans?.node(id);
+    return node ? {node: {id: node.id, title: node.title, owner: node.owner, acceptance: node.acceptance}} : {};
   }
   /** One line per dispatched task whose companion is still on an earlier task (read from the snapshot taken before the dispatch): it queues behind that running task. */
   private queuedNotes(receipt: readonly DispatchedTask[], before: RuntimeSnapshot | undefined): string[] {

@@ -15,6 +15,8 @@ import {ProjectHost, type SessionApplication} from './project-host.js';
 import type {ApplicationOptions} from './application.js';
 import {createSessionApplication} from './application.js';
 import type {SessionLease} from './store/sessions.js';
+import {PLAN_USER, type DerivedPlan, type PlanOp} from './runtime/plan.js';
+import type {PlanApply} from './store/plans.js';
 
 export type SessionHubErrorCode = 'SESSION_NOT_FOUND' | 'SESSION_CLOSING' | 'SESSION_IN_USE' | 'SESSION_FAILED' | 'HUB_CLOSED';
 export class SessionHubError extends Error {
@@ -48,6 +50,11 @@ export interface SessionHubSnapshot {
   readonly revision: number;
   readonly sessions: readonly SessionSummary[];
   readonly issues: readonly string[];
+  /**
+   * Changes whenever any open session's plans change: their content (a person's edit, an op) or their derived progress (a node turning running, done or failed).
+   * An adapter that shows plans re-reads `plans(id)` when this moves; it never moves for anything else.
+   */
+  readonly plansRevision: number;
 }
 
 /** The only mutable-state-free view of a session given to the GUI. */
@@ -76,6 +83,10 @@ export interface SessionHub {
   cancelTool(id: string, callId: string): boolean;
   sendPendingNow(id: string, pendingId: string): Promise<boolean>;
   discardPending(id: string, pendingId: string): string | undefined;
+  /** The plans of an open session with statuses derived from the work linked to their nodes (JSON-serializable). */
+  plans(id: string): readonly DerivedPlan[];
+  /** One plan edit made by the person (actor `user`, who may do anything the Director may); refused ops answer with the fix, nothing throws for them. */
+  planOp(id: string, op: PlanOp): Promise<PlanApply>;
   noteDraft(id: string): void;
   close(id: string): Promise<void>;
   shutdown(): Promise<void>;
@@ -97,6 +108,7 @@ interface Live {
   closing: Promise<void> | undefined;
   stopData: (() => void) | undefined;
   stopStatus: (() => void) | undefined;
+  stopPlans: (() => void) | undefined;
 }
 
 const EMPTY_SNAPSHOT: RuntimeSnapshot = Object.freeze({revision: 0, pending: [], activities: [], interactions: [], messages: []});
@@ -116,7 +128,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
   const catalog = new Map<string, CatalogEntry>();
   const listeners = new Set<() => void>();
   let issues: readonly string[] = [];
-  let closed = false, signature = '', revision = 0;
+  let closed = false, signature = '', revision = 0, plansSignature = '', plansRevision = 0;
   let snapshot: SessionHubSnapshot | undefined;
   let closeAll: Promise<void> | undefined;
 
@@ -159,11 +171,17 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
         waiting: queued + approvals + questions > 0 || retrying || (busy && active === 0), ...(running?.error ? {error: running.error} : {})}));
     }
     sessions.sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id));
-    const next = JSON.stringify([issues, sessions]);
+    // Plans are part of the picture only for open sessions that have any: the signature is empty otherwise, so a session without a plan costs nothing here.
+    const plansNow = JSON.stringify([...live.values()].flatMap(entry => {
+      if (!entry.app) return [];
+      try {const plans = entry.app.plans.signature(); return plans === '[]' ? [] : [[entry.id, plans]];} catch {return [];}
+    }));
+    if (plansNow !== plansSignature) {plansSignature = plansNow; plansRevision += 1;}
+    const next = JSON.stringify([issues, sessions, plansRevision]);
     if (next === signature) return;
     signature = next;
     revision += 1;
-    snapshot = Object.freeze({revision, sessions: Object.freeze(sessions), issues});
+    snapshot = Object.freeze({revision, sessions: Object.freeze(sessions), issues, plansRevision});
     for (const listener of listeners) listener();
   };
 
@@ -223,6 +241,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
       entry.app = app;
       entry.stopData = app.store.subscribe(() => publish());
       entry.stopStatus = app.subscribeStatus(() => publish());
+      entry.stopPlans = app.plans.subscribe(() => publish());
       if (entry.persistence.saved) {await manager.touch(entry.id); await manager.remember(entry.id); await rememberInfo(entry);}
       app.activate();
       entry.state = 'open';
@@ -250,7 +269,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
     if (existing) return existing;
     const now = Date.now();
     const entry: Live = {id, state: 'opening', persistence: {saved: false, async save() {}}, created: now, updated: now,
-      app: undefined, lease: undefined, title: undefined, error: undefined, opening: undefined, closing: undefined, stopData: undefined, stopStatus: undefined};
+      app: undefined, lease: undefined, title: undefined, error: undefined, opening: undefined, closing: undefined, stopData: undefined, stopStatus: undefined, stopPlans: undefined};
     live.set(id, entry);
     return entry;
   };
@@ -301,8 +320,8 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
         try {await extensions.mcp.releaseSession(entry.id);} catch (error) {failures.push(error);}
         permissions.clearSession(entry.id);
         if (entry.lease) try {await entry.lease.release(); entry.lease = undefined;} catch (error) {failures.push(error);}
-        entry.stopData?.(); entry.stopStatus?.();
-        entry.stopData = undefined; entry.stopStatus = undefined;
+        entry.stopData?.(); entry.stopStatus?.(); entry.stopPlans?.();
+        entry.stopData = undefined; entry.stopStatus = undefined; entry.stopPlans = undefined;
         live.delete(entry.id);
         handles.delete(entry.id);
         if (entry.persistence.saved) {
@@ -362,7 +381,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
     },
     getSnapshot() {
       if (!snapshot) publish();
-      return snapshot ?? Object.freeze({revision, sessions: Object.freeze([]), issues});
+      return snapshot ?? Object.freeze({revision, sessions: Object.freeze([]), issues, plansRevision});
     },
     async refresh() {
       if (closed) throw new SessionHubError('HUB_CLOSED', 'The session hub is closed');
@@ -445,6 +464,17 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
       if (!entry?.app || entry.state !== 'open') throw new SessionHubError('SESSION_NOT_FOUND', 'Unknown open session: ' + id);
       if (!entry.app.store.getSnapshot().pending.some(item => item.id === pendingId && item.sessionId === id)) return undefined;
       return entry.app.discardPending(pendingId);
+    },
+    plans(id) {
+      const entry = live.get(id);
+      if (!entry?.app || entry.state !== 'open') throw new SessionHubError('SESSION_NOT_FOUND', 'Unknown open session: ' + id);
+      return entry.app.plans.plans();
+    },
+    async planOp(id, op) {
+      const entry = await ready(id);
+      const result = await entry.app!.plans.apply([op], PLAN_USER);
+      publish();
+      return result;
     },
     noteDraft(id) {
       const entry = live.get(id);
