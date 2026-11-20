@@ -5,7 +5,7 @@ import {useInsertionEffect, useState, type MutableRefObject} from 'react';
 import type {Message} from '../../runtime/contracts.js';
 import type {CommandSurface} from '../../runtime/command-surface.js';
 import type {StatusbarSnapshot} from '../../config/statusbar-preferences.js';
-import type {TerminalPlane} from '../terminal/terminal-plane.js';
+import type {PlaneSide, TerminalPlane} from '../terminal/terminal-plane.js';
 import {decorateRow} from './row-presentation.js';
 import {selectionRange, selectionInViewport, type ContentSelection} from './selection.js';
 import {extractSelection, normalizeSelection, viewport, type Anchor, type Row} from './viewport.js';
@@ -26,14 +26,19 @@ export interface ReadingInput {
   view: ReturnType<typeof viewport>;
   selection: ReturnType<typeof selectionInViewport>;
   setAnchor(next: Anchor | null): void;
+  /** The plan sidebar docked beside the timeline, painted by the plane in the same frame. */
+  side?: PlaneSide | undefined;
+  /** The narrow-terminal plan overlay covers the screen like the other takeover pages. */
+  planOverlay?: boolean;
 }
 
 export function useReading({plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface, welcome, width, layout, contentSelection,
-  hoveredFoldIdRef, view, selection, setAnchor}: ReadingInput) {
+  hoveredFoldIdRef, view, selection, setAnchor, side, planOverlay = false}: ReadingInput) {
   const [, refreshReading] = useState(0);
+  const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome;
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
-    if (plane && (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome)) {plane.hide(); return;}
+    if (plane && covered()) {plane.hide(); return;}
     if (plane) plane.present({
       ...current,
       width,
@@ -41,13 +46,14 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
       selection: selectionInViewport(selectionRange(messageRows, contentSelection.current), current.start),
       motion: layout?.motion ?? true,
       hoveredFoldId: hoveredFoldIdRef.current,
+      side,
     });
     else refreshReading(value => value + 1);
   };
   // Transfer the rectangle before Ink's resetAfterCommit paints the surrounding UI.
   useInsertionEffect(() => {
     if (!plane) return;
-    if (composerExpanded || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome) plane.hide();
+    if (covered()) plane.hide();
     else plane.present({
       ...view,
       width,
@@ -55,6 +61,7 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
       selection,
       motion: layout?.motion ?? true,
       hoveredFoldId: hoveredFoldIdRef.current,
+      side,
     });
   });
   const copySelection = () => {

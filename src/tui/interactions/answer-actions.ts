@@ -23,7 +23,7 @@ export interface AnswerDeps {
   response: ResponseDraft | undefined;
   setResponses: Setter<Record<string, ResponseDraft>>;
   setScene: Setter<DemoSceneUi>;
-  setFocus: Setter<'input' | 'question' | 'stop'>;
+  setFocus: Setter<'input' | 'question' | 'stop' | 'plan'>;
   setEditingCustom: Setter<boolean>;
   setDetailOffset: Setter<number>;
   setNotice(text: string, tone?: NoticeTone): void;

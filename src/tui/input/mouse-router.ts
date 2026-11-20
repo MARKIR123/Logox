@@ -15,6 +15,29 @@ import type {SgrMouseEvent} from '../terminal/mouse.js';
 import {cursorAt} from './editor.js';
 import type {ShellContext} from './shell-context.js';
 
+/**
+ * Scrolls the timeline to the latest card of an actor and highlights it: what a single click on an actor pill does, and what a click on an owner's name in the
+ * plan sidebar does. From an actor's own window it first returns to the Director window. False when the actor has no card yet.
+ */
+export function locateActor(ctx: ShellContext, ownerId: string): boolean {
+  const {currentView, hoveredFoldIdRef, messageRows, presentReading, setAnchor, setHoveredFoldId, switchView} = ctx;
+  if (!isDirector(currentView)) switchView(DIRECTOR_ID);
+  const targetIndex = findLatestActorRowIndex(messageRows, ownerId);
+  if (targetIndex < 0) return false;
+  const targetRow = messageRows[targetIndex]!;
+  setAnchor({
+    messageId: targetRow.messageId,
+    line: targetRow.line,
+    screenOffset: 0,
+    ...(targetRow.sourceStart !== undefined ? {sourceOffset: targetRow.sourceStart} : {}),
+  });
+  const highlightId = (targetRow as SceneRow).action?.foldId ?? targetRow.messageId;
+  setHoveredFoldId(highlightId);
+  hoveredFoldIdRef.current = highlightId;
+  presentReading();
+  return true;
+}
+
 export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) => void {
   const {sessionId, close, focus, scroll, expanded, activePills, activity, activityHeight, anchors, atExpandButton, clearSelection, composerExpanded, contentSelection, copySelection,
       currentView, demoScene, edgePointer, edgeTimer, edit, editableComposer, exitDeadline, flash, footerHeight, footerLayout,
@@ -23,7 +46,7 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       messageRows, mouseListeners, noticeInline, onSubmit, pendingAt, presentReading, promptWidth, questionHeight, readingRows, roles,
       screenRows, sendPending, setAnchor, setComposerMode, setEditingCustom, setExpandHovered, setExpanded, setFocus, setHoveredFoldId,
       setHoveredPill, setHoveredStop, setHoveredWidget, setNotice, setPendingHover, stage, statusSelectionRef, stdout, stopEdgeScroll,
-      surface, switchView, takePendingBack, timelineHeight, width} = ctx;
+      surface, switchView, takePendingBack, timelineHeight, width, planSidebar} = ctx;
   const updateDrag = (x: number, y: number) => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
     const selected = contentSelection.current;
@@ -52,6 +75,11 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
   return (event: SgrMouseEvent) => {
     for (const listener of mouseListeners.current) listener(event);
     if (composerExpanded || loginState && !loginFolded || surface) {inputDrag.current = null; return;}
+    // The plan sidebar (docked, or the overlay of a narrow terminal) takes every event inside it; a timeline or composer gesture in progress keeps its drags.
+    if (planSidebar.handleMouse(event, Boolean(gesture.current || inputDrag.current || statusSelectionRef.current?.active))) {
+      if (event.action === 'move' && hoveredFoldIdRef.current !== null) {hoveredFoldIdRef.current = null; presentReading(); setHoveredFoldId(null);}
+      return;
+    }
     if (inputDrag.current && (event.action === 'drag' || event.action === 'release')) {
       const drag = inputDrag.current;
       if (drag.key === inputKey && editableComposer) {
@@ -75,6 +103,8 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       const nextHoveredPill = hoveredPillItem ? hoveredPillItem.ownerId : null;
       const hoveredRegion = overStatus && !hoveredPillItem && !noticeInline ? footerLayout.regions.find(region => event.x >= region.startX && event.x < region.endX) : undefined;
       const nextHoveredWidget = hoveredRegion ? hoveredRegion.id : null;
+      const overChip = Boolean(overStatus && planSidebar.chip && event.x >= width - planSidebar.chip.width && event.x < width);
+      if (overChip !== planSidebar.chipHover) planSidebar.setChipHover(overChip);
       if (hoveredPillRef.current !== nextHoveredPill) {
         hoveredPillRef.current = nextHoveredPill;
         setHoveredPill(nextHoveredPill);
@@ -114,6 +144,9 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       // Footer click: row 2 (notifications) is passive.
       if (footerHeight > 1 && event.y > footerStatusY) return;
       if (event.y >= screenRows - footerHeight) {
+        if (planSidebar.chip && event.y === footerStatusY && event.x >= width - planSidebar.chip.width && event.x < width) {
+          clearSelection(); planSidebar.request('show'); return;
+        }
         const clickedPill = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
         const clickedRegion = clickedPill || noticeInline ? undefined : footerLayout.regions.find(region => event.x >= region.startX && event.x < region.endX);
         const command = clickedRegion ? widgetCommand(clickedRegion.id) : undefined;
@@ -128,23 +161,7 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
             switchView(clickedPill.ownerId);
             lastClickRef.current = {time: 0, key: ''};
           } else {
-            if (!isDirector(currentView)) {
-              switchView(DIRECTOR_ID);
-            }
-            const targetIndex = findLatestActorRowIndex(messageRows, clickedPill.ownerId);
-            if (targetIndex >= 0) {
-              const targetRow = messageRows[targetIndex]!;
-              setAnchor({
-                messageId: targetRow.messageId,
-                line: targetRow.line,
-                screenOffset: 0,
-                ...(targetRow.sourceStart !== undefined ? {sourceOffset: targetRow.sourceStart} : {}),
-              });
-              const highlightId = (targetRow as SceneRow).action?.foldId ?? targetRow.messageId;
-              setHoveredFoldId(highlightId);
-              hoveredFoldIdRef.current = highlightId;
-              presentReading();
-            }
+            locateActor(ctx, clickedPill.ownerId);
             lastClickRef.current = {time: now, key: 'pill:' + clickedPill.ownerId};
           }
           return;
@@ -170,6 +187,7 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       // Composer input click focuses input
       if (event.y >= inputY && event.y < inputY + inputHeight) {
         if (editableComposer) {
+          if (focus === 'plan') setFocus('input');
           const cursor = cursorAt(inputLayout, inputView.start + event.y - inputY, Math.max(0, event.x - promptWidth));
           inputDrag.current = {key: inputKey, anchor: cursor};
           edit(current => ({text: current.text, cursor, anchor: cursor}));
@@ -179,6 +197,7 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       }
       if (event.y < timelineHeight) {
         stopEdgeScroll();
+        if (focus === 'plan') setFocus('input');
         const clickedRow = readingRows()[event.y] as SceneRow | undefined;
         const act = actionAt(clickedRow, event.x);
         const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);

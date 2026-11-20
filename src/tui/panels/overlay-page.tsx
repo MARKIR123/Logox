@@ -8,6 +8,7 @@ import {MouseHost} from '../terminal/mouse.js';
 import {osc52Clipboard} from '../terminal/clipboard.js';
 import {CommandResultPanel} from './command-result.js';
 import {EnsemblePage} from './ensemble-page.js';
+import {PlanOverlay} from './plan-sidebar-view.js';
 import {SettingsPage} from './settings-page.js';
 import {TabbedPage} from './tabbed-page.js';
 import {ThemePage} from './theme-page.js';
@@ -15,7 +16,7 @@ import {ThemePage} from './theme-page.js';
 export function overlayPage(ctx: ShellContext): ReactElement | null {
   const {close, closing, composerExpanded, composerMode, currentView, draft, exitDeadline, flash, interrupt, notice, onDraft, roles, screenRows,
       sendSceneInput, setComposerMode, setCursorPosition, setDraft, setNotice, stdout, steerInput, subscribeMouse, surface, surfaces,
-      width, windowColor} = ctx;
+      width, windowColor, planSidebar} = ctx;
   if (composerExpanded) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
       onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
@@ -49,5 +50,10 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
     saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} onSave={(tabId, items, appearance) => surfaces.saveToggles(surface.id, tabId, items, appearance)}
     {...(surface.confirm ? {confirm: surface.confirm} : {})}
     onAction={(tabId, action) => {void surfaces.triggerTabAction(surface.id, tabId, action);}}/></MouseHost>;
+  // A terminal too narrow to dock the plan sidebar opens it as a panel on the right edge, over everything else.
+  if (!surface && planSidebar.overlay && planSidebar.panelVisible) {
+    const panel = planSidebar.render(screenRows);
+    if (panel) return <MouseHost subscribe={subscribeMouse} color={windowColor}><PlanOverlay lines={panel.lines} x={planSidebar.overlayX} width={planSidebar.overlayWidth} height={screenRows}/></MouseHost>;
+  }
   return null;
 }

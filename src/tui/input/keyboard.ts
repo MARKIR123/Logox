@@ -29,7 +29,7 @@ export function useKeyboard(ctx: ShellContext): void {
       notice, onCancel, pending, plane, questionPanel, request, response, roles, scene, selection, sendSceneInput, sessionId, setAnchor,
       setCardCursor, setCompletion, setDetailOffset, setDraft, setEditingCustom, setExpanded, setFocus, setFocusedStop, setNotice,
       setScene, setSelectedActivityId, setSelectedRequestId, snapshot, stage, stdout, steerInput, stopActor, store, suggestionIndex,
-      suggestions, surface, switchView, timelineHeight} = ctx;
+      suggestions, surface, switchView, timelineHeight, planSidebar} = ctx;
     plane?.noteInput();
     if (closing || key.eventType === 'release') return;
     if (!key.escape) escArmedUntil.current = 0; // Any other key ends the second-Esc window.
@@ -46,6 +46,9 @@ export function useKeyboard(ctx: ShellContext): void {
     if (key.ctrl && input === 'd') { close(); return; }
     if (loginState && (!loginFolded || key.ctrl && input === 'k' || key.escape)) return;
     if (surface) return;
+    // Ctrl+B: the plan sidebar (show and focus; again to hide). While it has the keyboard it takes arrows, Enter, Esc and paging first.
+    if (key.ctrl && input === 'b') {planSidebar.shortcut(); return;}
+    if (planSidebar.keyboardOwner && planSidebar.handleKey(input, key)) return;
     if (key.ctrl && input === 't') {steerInput(); return;}
     if (editableComposer && key.ctrl && input === 'a') {edit(current => ({text: current.text, cursor: graphemes(current.text).length, anchor: 0})); return;}
     if (editableComposer && key.ctrl && input === 'x') {
@@ -76,10 +79,11 @@ export function useKeyboard(ctx: ShellContext): void {
     if (key.tab) {
       if (stage) {
         const stops = [...new Set(messageRows.flatMap(row => (row as SceneRow).controls?.filter(item => !item.disabled).flatMap(item => item.action.foldId ? [item.action.foldId] : []) ?? []))];
-        const targets = ['input', ...pending.map(item => 'question:' + item.requestId), ...stops.map(id => 'stop:' + id)];
-        const current = focus === 'stop' ? 'stop:' + focusedStop : focus === 'question' ? 'question:' + request?.requestId : 'input';
+        const targets = ['input', ...pending.map(item => 'question:' + item.requestId), ...stops.map(id => 'stop:' + id), ...(planSidebar.docked ? ['plan'] : [])];
+        const current = focus === 'stop' ? 'stop:' + focusedStop : focus === 'question' ? 'question:' + request?.requestId : focus === 'plan' ? 'plan' : 'input';
         const selected = targets[(Math.max(0, targets.indexOf(current)) + targets.length + (key.shift ? -1 : 1)) % targets.length]!;
         if (selected === 'input') {setFocus('input'); return;}
+        if (selected === 'plan') {setFocus('plan'); return;}
         const kind = selected.startsWith('stop:') ? 'stop' : 'question', id = selected.slice(kind.length + 1);
         setFocus(kind);
         if (kind === 'stop') {

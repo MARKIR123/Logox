@@ -24,10 +24,11 @@ import type {useCursor, useStdout} from 'ink';
 import type {CommandSurface} from '../../runtime/command-surface.js';
 import type {CommandSurfaces} from '../../commands/surfaces.js';
 import type {MouseSubscriber} from '../terminal/mouse.js';
+import type {PlanSidebar} from '../panels/use-plan-sidebar.js';
 
 export type Setter<T> = Dispatch<SetStateAction<T>>;
 type Ref<T> = MutableRefObject<T>;
-export type FocusTarget = 'input' | 'question' | 'stop';
+export type FocusTarget = 'input' | 'question' | 'stop' | 'plan';
 export interface Gesture {x: number; y: number; dragged: boolean; action?: SceneAction; row?: SceneRow; lastDragX?: number; lastDragY?: number}
 
 export interface ShellContext {
@@ -175,4 +176,9 @@ export interface ShellContext {
   footerStatusText: string;
   noticeInline: boolean;
   activePills: readonly ActivePillItem[];
+  // The plan sidebar (docked or overlay), its footer chip and the timeline width it leaves.
+  planSidebar: PlanSidebar;
+  timelineWidth: number;
+  /** Scrolls the timeline to an actor's latest card (an actor pill click, a sidebar owner name). */
+  locateActor(ownerId: string): void;
 }

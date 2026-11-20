@@ -45,6 +45,8 @@ export interface ThemeActions {
   /** Persists the choice through the preference store and applies it. */
   save(name: string): Promise<void>;
 }
+/** What `/plan sidebar` asks of the terminal. */
+export type PlanSidebarMode = 'show' | 'hide' | 'toggle';
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
 /** Owns the command surface lifecycle; callbacks and query cancellation signals stay in the business layer. */
@@ -70,6 +72,14 @@ export class CommandSurfaces {
   subscribeWindow = (listener: (ownerId: string) => void): (() => void) => {this.windowListeners.add(listener); return () => this.windowListeners.delete(listener);};
   /** Asks the terminal to show the conversation window of `ownerId`; a surface without a terminal listening ignores it. */
   requestWindow(ownerId: string): void {for (const listener of this.windowListeners) listener(ownerId);}
+  private planListeners = new Set<(mode: PlanSidebarMode) => void>();
+  /** The terminal subscribes here to show, hide or toggle the plan sidebar (`/plan sidebar`). */
+  subscribePlanSidebar = (listener: (mode: PlanSidebarMode) => void): (() => void) => {this.planListeners.add(listener); return () => this.planListeners.delete(listener);};
+  /** Asks the terminal to show, hide or toggle the plan sidebar; true when a terminal is listening (a headless run has none). */
+  requestPlanSidebar(mode: PlanSidebarMode): boolean {for (const listener of this.planListeners) listener(mode); return this.planListeners.size > 0;}
+  /** Opens the detail page of a plan node (set by the `/plan` command; the sidebar's double-click and Enter call `openPlanNode`). */
+  planNodeOpener: ((nodeId: string) => Promise<void>) | undefined;
+  openPlanNode(nodeId: string): void {void this.planNodeOpener?.(nodeId).catch(() => {});}
   constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
     private readonly origin?: () => CommandOrigin) {}
   private completion(state: CommandSurface, active: boolean): CommandCompletion {

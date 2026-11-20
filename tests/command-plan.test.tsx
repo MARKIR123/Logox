@@ -70,6 +70,27 @@ test('the catalog, /help and completion know /plan; arguments are a usage error;
   } finally {await f.close();}
 });
 
+test('/plan sidebar [show|hide|toggle] asks the terminal; the board can be peeked without reading files; a node opens by id', async () => {
+  const f = await fixture();
+  try {
+    const app = await f.open();
+    const modes: string[] = [];
+    const stop = app.surfaces.subscribePlanSidebar(mode => modes.push(mode));
+    await app.submit('/plan sidebar'); await app.submit('/plan sidebar show'); await app.submit('/plan sidebar HIDE');
+    assert.deepEqual(modes, ['toggle', 'show', 'hide']);
+    await assert.rejects(app.submit('/plan sidebar sideways'), /^Error: Usage: \/plan$/);
+    stop();
+    assert.equal(app.surfaces.requestPlanSidebar('show'), false, 'no terminal listening');
+    assert.equal(app.plans.peek(), undefined);
+    await seed(app);
+    assert.equal(app.plans.peek()?.title, 'Theme preview');
+    app.surfaces.openPlanNode('1.1');
+    await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Palette', {label: 'the node detail'});
+    app.surfaces.cancel();
+    await waitFor(() => surface(app), current => current === null, {label: 'Esc closes it (the sidebar is the parent)'});
+  } finally {await f.close();}
+});
+
 test('rows show glyph, id, title, owner, status and progress; Enter opens the detail; a link opens the /tasks detail and Esc comes back', async () => {
   const f = await fixture();
   try {

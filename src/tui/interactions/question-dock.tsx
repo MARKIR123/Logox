@@ -18,7 +18,7 @@ export interface QuestionDockProps {
   focused: boolean;
   windowColor: string;
   subscribeMouse: MouseSubscriber;
-  setFocus: Dispatch<SetStateAction<'input' | 'question' | 'stop'>>;
+  setFocus: Dispatch<SetStateAction<'input' | 'question' | 'stop' | 'plan'>>;
   changeResponse(update: (current: ResponseDraft) => ResponseDraft): void;
 }
 

@@ -2,7 +2,8 @@
  * `/plan`: the plan of the current request as an indented tree, one row per node (status glyph, id, title, owner, progress of a parent), a node's detail
  * on Enter (acceptance, evidence, prerequisites and links; a link opens the `/tasks` detail of that work), and a switcher row when the project holds
  * more than one plan. A stack of the existing surfaces like `/tasks`, so keyboard, click, hover and wheel behave as on every list. Nothing here owns
- * state: rows come from the board (`src/store/plans.ts`) each time a level opens. This list is the stopgap until the flowchart sidebar.
+ * state: rows come from the board (`src/store/plans.ts`) each time a level opens. The flowchart sidebar (`src/tui/panels/plan-sidebar.ts`) is the live view
+ * of the same plan; it opens a node's detail through `CommandSurfaces.openPlanNode()` and `/plan sidebar` shows or hides it.
  */
 import type {PickerItem, TabAction, TabRow} from '../runtime/command-surface.js';
 import {formatDuration} from './tasks-page.js';
@@ -10,7 +11,7 @@ import type {TasksCommand} from './tasks-page.js';
 import type {DerivedNode, DerivedPlan, NodeStatus} from '../runtime/plan.js';
 import type {PlanBoard} from '../store/plans.js';
 import {row, tabContent} from './tab-rows.js';
-import type {CommandSurfaces, PageActions} from './surfaces.js';
+import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
 
 export const PLAN_EMPTY_TEXT = 'There is no plan yet. The Director creates one with Plan when a request has more than one piece of work.';
 export const PLAN_USAGE = 'Usage: /plan';
@@ -122,14 +123,27 @@ export function createPlanCommand(deps: PlanPageDeps) {
       });
   };
 
+  /** The detail page of one node of the session's plan (the sidebar's double-click and Enter); Esc closes it. */
+  const openNode = async (id: string): Promise<void> => {
+    viewing = undefined;
+    const {plan} = await current();
+    const node = plan?.nodes.find(item => item.id === id);
+    if (!plan || !node) throw new Error('That node no longer exists.');
+    await openDetail(plan, node, async () => {});
+  };
+  surfaces.planNodeOpener = openNode;
+
   return {
-    /** `/plan` opens the page; arguments are not accepted. */
+    /** `/plan` opens the page; `/plan sidebar [show|hide]` shows, hides or toggles the sidebar; other arguments are not accepted. */
     async command(argument: string): Promise<void> {
+      const sidebar = /^sidebar(?:\s+(show|hide|toggle))?$/i.exec(argument.trim());
+      if (sidebar) {surfaces.requestPlanSidebar((sidebar[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode); return;}
       if (argument.trim()) throw new Error(PLAN_USAGE);
       viewing = undefined;
       await openList();
     },
     openList,
+    openNode,
   };
 }
 export type PlanCommand = ReturnType<typeof createPlanCommand>;

@@ -173,6 +173,15 @@ export class PlanBoard {
     const entry = this.activeEntry();
     return entry ? this.derive(entry.plan) : undefined;
   }
+  /**
+   * The plan the sidebar draws: the active plan, else the session's latest one that was not abandoned (a finished plan stays readable). Unlike `active()` it never
+   * reads the plan files, so a view may call it on every store change; derived statuses are memoised on the store revision. Edits made on disk reach it with the
+   * next `refresh()` (any `Plan` call, `/plan`, or the sidebar being opened).
+   */
+  peek(): DerivedPlan | undefined {
+    const entry = this.activeEntry() ?? this.latestEntry();
+    return entry ? this.derive(entry.plan) : undefined;
+  }
   /** What `Plan` with no arguments answers: the active plan (or else the latest of the session) as an outline. */
   describe(): string {
     const all = this.plans();

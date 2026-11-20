@@ -5,8 +5,13 @@ import {palette} from '../appearance/theme.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {decorateRow, presentedSegments, railCell} from '../timeline/row-presentation.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from '../timeline/viewport.js';
+import {formatClock} from './text.js';
 
-export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null}
+/** A segment of a side line; `clock` marks a fixed-width placeholder the plane fills with the time elapsed since that epoch time (ms) each second. */
+export interface SideSegment extends SceneSegment {readonly clock?: number}
+/** A column drawn beside the history: `lines` (one per row, each exactly `width` cells) at column `x`. The plane repaints only the lines that changed. */
+export interface PlaneSide {readonly x: number; readonly width: number; readonly lines: readonly (readonly SideSegment[])[]}
+export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null; readonly side?: PlaneSide | undefined}
 export interface PlaneMetrics {readonly renderTime: number; readonly scrolled: number; readonly paintedRows: number}
 const reset = '\x1b[0m';
 function rgb(color: string | undefined, background = false): string {
@@ -41,6 +46,11 @@ function clipEncoded(text: string, width: number): string {
   }
   return result;
 }
+/** One side line as terminal text; clock placeholders show the time elapsed at `now`. */
+export function encodeSide(segments: readonly SideSegment[] | undefined, now: number): string {
+  if (!segments) return '';
+  return segments.map(segment => styled(segment.clock === undefined ? segment : {...segment, text: formatClock(now - segment.clock).padEnd(segment.text.length)}, palette.fg)).join('') + reset;
+}
 const encoded = new WeakMap<Row, {revision: number; width: number; text: string}>();
 export function encodeRow(raw: Row, index: number, selection: SelectionRange | null, width = Infinity, isHovered = false): string {
   const bounds = rowSelectionBounds(raw, index, selection);
@@ -58,6 +68,7 @@ export class TerminalPlane {
   private frame: PlaneFrame | undefined;
   private previous: PlaneFrame | undefined;
   private previousLines: readonly string[] = [];
+  private previousSide: readonly string[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private queued = false;
   private animationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -75,7 +86,7 @@ export class TerminalPlane {
   get height(): number {return this.frame?.height ?? 0;}
   noteInput(): void {this.lastInputAt = performance.now();}
   present(frame: PlaneFrame): void {
-    if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height)) this.erase();
+    if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height || this.frame.side?.x !== frame.side?.x || this.frame.side?.width !== frame.side?.width)) this.erase();
     const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId;
     // The first content after an empty history (a new approval, the first message) must not wait for frame pacing.
     const firstContent = this.displayedRows.length === 0 && frame.rows.length > 0;
@@ -99,7 +110,7 @@ export class TerminalPlane {
     if (text.includes('\x1b[2J') || text.includes('\x1b[1;1H\x1b[J') || text.includes('\x1b[H\x1b[J')) this.invalidate();
     this.flush();
   }
-  invalidate(): void {this.previous = undefined; this.previousLines = [];}
+  invalidate(): void {this.previous = undefined; this.previousLines = []; this.previousSide = [];}
   beginOutput(): void {this.outputHeld = true; this.cancel();}
   endOutput(): void {this.outputHeld = false; this.flush();}
   private erase(): void {
@@ -118,7 +129,14 @@ export class TerminalPlane {
       const a = (raw as SceneRow).animation;
       return a?.step?.state === 'running' || a?.active;
     });
-    if (!hasRunning) return;
+    if (!hasRunning) {
+      // A side column with an elapsed clock only needs the next whole second.
+      if (this.frame?.side?.lines.some(line => line.some(segment => segment.clock !== undefined))) {
+        this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, 1010 - (Date.now() % 1000));
+        this.animationTimer.unref?.();
+      }
+      return;
+    }
     const sinceInput = performance.now() - this.lastInputAt;
     const baseWait = this.frame?.motion === false ? 100 : 80;
     const wait = sinceInput < 120 ? Math.max(baseWait, 150 - Math.round(sinceInput)) : baseWait;
@@ -141,10 +159,13 @@ export class TerminalPlane {
       const isHovered = Boolean(hoveredFoldId && (row as SceneRow).hover?.foldId === hoveredFoldId);
       return encodeRow(row, index, frame.selection, frame.width, isHovered);
     });
+    const side = frame.side;
+    const sideLines = side ? Array.from({length: frame.height}, (_, index) => encodeSide(side.lines[index], this.clock)) : [];
     const previous = this.previous;
+    const same = Boolean(previous && previous.width === frame.width && previous.height === frame.height && previous.side?.x === side?.x && previous.side?.width === side?.width);
     let shifted = [...this.previousLines], scrolled = 0;
     const delta = previous ? frame.start - previous.start : 0;
-    if (previous && previous.width === frame.width && previous.height === frame.height && delta && Math.abs(delta) < frame.height) {
+    if (same && delta && Math.abs(delta) < frame.height) {
       const count = frame.height - Math.abs(delta);
       let matches = 0;
       for (let i = 0; i < count; i++) if (lines[i + Math.max(0, -delta)] === shifted[i + Math.max(0, delta)]) matches++;
@@ -158,10 +179,16 @@ export class TerminalPlane {
     let paintedRows = 0;
     for (let i = 0; i < lines.length; i++) {
       // A newly exposed blank row has already been cleared by SU/SD.
-      if (previous && previous.width === frame.width && previous.height === frame.height && lines[i] === shifted[i]) continue;
-      chunks.push(`\x1b[${i + 1};1H${reset}\x1b[2K${lines[i]}`); paintedRows++;
+      const historyDirty = !(same && lines[i] === shifted[i]);
+      // The scroll moves the side column with the rows, so every side line is painted again after one; otherwise only a changed side line is.
+      const sideDirty = side !== undefined && (scrolled !== 0 || !same || sideLines[i] !== this.previousSide[i]);
+      // Beside a side column a row is padded to its width instead of erased to the end of the line, which would wipe the side line.
+      if (historyDirty) chunks.push(side ? `\x1b[${i + 1};1H${reset}${lines[i]}${' '.repeat(Math.max(0, frame.width - stringWidth(lines[i]!.replace(/\x1b\[[\d;]*m/g, ''))))}`
+        : `\x1b[${i + 1};1H${reset}\x1b[2K${lines[i]}`);
+      if (sideDirty && side) chunks.push(`\x1b[${i + 1};${side.x + 1}H${reset}${sideLines[i]}`);
+      if (historyDirty || sideDirty) paintedRows++;
     }
-    this.previous = frame; this.previousLines = lines;
+    this.previous = frame; this.previousLines = lines; this.previousSide = sideLines;
     if (chunks.length) {
       // DEC save/restore preserves Ink's composer cursor (including pending wrap); margins are always reset.
       this.write('\x1b[?2026h\x1b7' + chunks.join('') + reset + '\x1b8\x1b[?2026l');

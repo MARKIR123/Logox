@@ -307,7 +307,7 @@ export function applyPlanOps(plan: Plan | undefined, ops: readonly PlanOp[], act
 
 // ---------------------------------------------------------------------------------------------------------------------------------- linked work
 /** One unit of work a node can be linked to: a delegation record (`delegations.ts:Delegation` has this shape). */
-export interface PlanWork {readonly id: string; readonly status: string}
+export interface PlanWork {readonly id: string; readonly status: string; /** When the work started, if known (a delegation record's `startedAt`). */ readonly startedAt?: number | undefined}
 export type WorkPhase = 'running' | 'waiting' | 'completed' | 'failed';
 /** What a record's status says: a running task or job runs; one waiting for approval, an answer, a place in the queue or its prerequisites waits; the rest ended. */
 export function workPhase(status: string): WorkPhase {
@@ -329,6 +329,8 @@ export interface DerivedNode extends PlanNode {
   readonly blockedBy: readonly string[];
   /** The linked work the runtime knows, with its phase. */
   readonly work: readonly {readonly id: string; readonly phase: WorkPhase}[];
+  /** When the earliest work still running for this node (or, for a parent, below it) started; absent when nothing runs or no start is known. The sidebar's elapsed clock. */
+  readonly runningSince?: number;
 }
 export interface DerivedPlan extends Omit<Plan, 'nodes'> {
   readonly nodes: readonly DerivedNode[];
@@ -397,6 +399,17 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
     return status;
   }
   for (const node of nodes) statusOf(node.id);
+  // The start of the earliest running work of each node's own links; a parent takes the earliest of its subtree.
+  const startedAt = new Map(work.flatMap(item => item.startedAt === undefined ? [] : [[item.id, item.startedAt] as const]));
+  const since = new Map<string, number>();
+  for (const node of nodes) {
+    if (node.abandoned) continue;
+    for (const item of linkedWork(node, work)) {
+      const started = startedAt.get(item.id);
+      if (item.phase !== 'running' || started === undefined) continue;
+      for (let at: string | undefined = node.id; at !== undefined; at = parentOf(at)) since.set(at, Math.min(since.get(at) ?? Infinity, started));
+    }
+  }
   const derived: DerivedNode[] = nodes.map(node => {
     const parent = parentOf(node.id);
     const children = kids.get(node.id) ?? [];
@@ -405,7 +418,7 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
       done: list.filter(child => statuses.get(child.id) === 'accepted' || statuses.get(child.id) === 'done').length, total: list.length});
     return {...node, status: statusOf(node.id)!, depth: depthOf(node.id), ...(parent !== undefined ? {parent} : {}), children: children.map(child => child.id),
       ...(live.length ? {progress: counts(live)} : {}),
-      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work)};
+      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {})};
   });
   const top = nodes.filter(node => depthOf(node.id) === 1 && !node.abandoned);
   const topCounts = {accepted: top.filter(node => statuses.get(node.id) === 'accepted').length,
