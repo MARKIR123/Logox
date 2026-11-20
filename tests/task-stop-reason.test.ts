@@ -29,7 +29,7 @@ test('every vocabulary maps to the one outcome in one place', () => {
     ['a content filter', {status: 'failed', error: new ProviderError('blocked', false, 'protocol', {code: 'content_filter'})}, 'refusal'],
   ];
   for (const [label, input, expected] of table) assert.equal(stopReasonFor(input), expected, label);
-  assert.deepEqual([...STOP_REASONS], ['completed', 'cancelled_by_user', 'cancelled_by_director', 'interrupted', 'shutdown', 'error', 'max_tokens', 'refusal', 'stalled']);
+  assert.deepEqual([...STOP_REASONS], ['completed', 'cancelled_by_user', 'cancelled_by_director', 'interrupted', 'shutdown', 'error', 'max_tokens', 'refusal', 'stalled', 'dependency_unmet']);
 });
 
 test('stored values are read in both vocabularies', () => {

@@ -294,7 +294,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     configureMeter: sessionStatus.configureMeter, contexts, options: options.anamnesis});
   const {requestBase, keepAlive} = createRequestAssembly({session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry,
     modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, profileReady, directorReports,
-    configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt});
+    configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt,
+    deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'automa', summary, 'queue', {activityId})});
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,

@@ -6,7 +6,7 @@
  */
 import {z} from 'zod';
 
-export const STOP_REASONS = ['completed', 'cancelled_by_user', 'cancelled_by_director', 'interrupted', 'shutdown', 'error', 'max_tokens', 'refusal', 'stalled'] as const;
+export const STOP_REASONS = ['completed', 'cancelled_by_user', 'cancelled_by_director', 'interrupted', 'shutdown', 'error', 'max_tokens', 'refusal', 'stalled', 'dependency_unmet'] as const;
 export const stopReasonSchema = z.enum(STOP_REASONS);
 export type StopReasonCode = z.infer<typeof stopReasonSchema>;
 /** The cause words older sessions stored in `stopReason` and the runtime still tracks while a task runs. */
@@ -38,8 +38,8 @@ function refused(error: unknown): boolean {
 }
 
 export interface StopInput {
-  /** The activity's final status: `completed`, `failed` or `cancelled`. */
-  readonly status: 'completed' | 'failed' | 'cancelled';
+  /** The activity's final status: `completed`, `failed` or `cancelled`; `skipped` is an Automa job that never started because a job it follows did not end done. */
+  readonly status: 'completed' | 'failed' | 'cancelled' | 'skipped';
   /** The stop cause the runtime tracked while the task ran (`user`, `director_cancel`, `shutdown`, `interrupted`); a new outcome value is accepted too. */
   readonly cause?: string | undefined;
   /** What ended a failed task. */
@@ -52,6 +52,7 @@ export interface StopInput {
 /** Maps how work ended, in every vocabulary the runtime has, to the one outcome. This is the only place that does it. */
 export function stopReasonFor(input: StopInput): StopReasonCode {
   if (input.status === 'completed') return 'completed';
+  if (input.status === 'skipped') return 'dependency_unmet';
   if (input.status === 'cancelled') return normalizeStopReason(input.cause) ?? 'interrupted';
   if (input.stalled) return 'stalled';
   if (input.length) return 'max_tokens';

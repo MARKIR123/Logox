@@ -98,7 +98,8 @@ export class Steps {
   }
   swarm(id: string, swarm: NonNullable<Step['swarm']>): void {
     const step = this.get(id);
-    if (['completed', 'failed', 'cancelled'].includes(step.state)) return;
+    // A background dispatch keeps publishing after its tool step has ended (the step returned a receipt at once).
+    if (['completed', 'failed', 'cancelled'].includes(step.state) && !swarm.background) return;
     const updated = {...step, swarm};
     this.stepsCache.set(id, updated);
     this.store.updateMessage(id, {step: updated});

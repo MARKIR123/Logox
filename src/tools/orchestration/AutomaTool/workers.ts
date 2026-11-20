@@ -13,6 +13,8 @@ export const AUTOMA_RETAINED_INPUT_LIMIT = 64_000;
 /** An idle worker that nobody continued for this long is parked. */
 export const AUTOMA_IDLE_PARK_MS = 10 * 60_000;
 
+export interface WorkerResult {readonly status: string; readonly block: string}
+
 /** A worker that finished and waits for a next brief, in memory or parked on disk. */
 export interface IdleWorker {
   readonly id: string;
@@ -27,6 +29,8 @@ export interface IdleWorker {
   readonly vision: boolean;
   /** What the worker's definition was when its last job ran (`runtime/definition-fingerprint.ts`); a continue compares it with the current one. Absent for workers parked by older versions. */
   readonly fingerprint?: string | undefined;
+  /** How its last job ended and the result block the dispatcher got, so a job that follows this worker (`after`) can start from it. Absent for workers parked by older versions. */
+  readonly last?: WorkerResult | undefined;
   /** Undefined after a restart, until the next continue resolves it again. */
   resolved: ResolvedAutomaModel | undefined;
   /** Undefined while parked. */
@@ -48,6 +52,7 @@ export interface ShelfSettings {
 interface ParkedFile {
   readonly id: string; readonly sessionId: string; readonly ownerId: string; readonly activityId: string; readonly workerId: string;
   readonly grant: JobGrant; readonly system: string; readonly preferred?: string; readonly vision: boolean; readonly fingerprint?: string; readonly lastInput: number;
+  readonly last?: WorkerResult;
   readonly messages: ModelMessage[];
 }
 
@@ -90,16 +95,35 @@ export class WorkerShelf {
 
   /** `count` fresh ids for a dispatcher: its letter and a counter that never repeats within the session, nor an id still on the shelf or on disk. */
   async allocate(sessionId: string, ownerId: string, count: number): Promise<string[]> {
+    await this.prepare(sessionId, ownerId);
+    return this.reserve(sessionId, ownerId, count, true);
+  }
+
+  /** Reads the counter of this dispatcher's letter from disk when this process has not yet; after it, `reserve()` needs no await. */
+  async prepare(sessionId: string, ownerId: string): Promise<void> {
     const letter = workerLetter(ownerId), counterKey = sessionId + '\0' + letter;
     if (!this.counters.has(counterKey)) this.counters.set(counterKey, await this.highestOnDisk(sessionId, letter));
+  }
+
+  /**
+   * The next `count` ids, in order. With `commit: false` the counter stays: a refused call burns no ids, so the ids a model wrote into `after` still hold when it
+   * sends the call again. Synchronous, so the preview and the commit of one call cannot be interleaved with another dispatcher's. Call `prepare()` first.
+   */
+  reserve(sessionId: string, ownerId: string, count: number, commit: boolean): string[] {
+    const letter = workerLetter(ownerId), counterKey = sessionId + '\0' + letter;
     const ids: string[] = [];
+    let at = this.counters.get(counterKey) ?? 0;
     while (ids.length < count) {
-      const next = this.counters.get(counterKey)! + 1;
-      this.counters.set(counterKey, next);
-      const id = letter + next;
+      const id = letter + ++at;
       if (!this.entries.has(this.key(sessionId, id))) ids.push(id);
     }
+    if (commit) this.counters.set(counterKey, at);
     return ids;
+  }
+
+  /** The dispatcher that owns a worker held in this process (any task), for a refusal that names whose it is; undefined when none holds it. */
+  ownerOf(sessionId: string, id: string): string | undefined {
+    return this.entries.get(this.key(sessionId, id))?.ownerId;
   }
 
   /** After a restart the counter starts above every id a parked file of an open task still carries. */
@@ -126,7 +150,7 @@ export class WorkerShelf {
       const data = JSON.parse(await readFile(path, 'utf8')) as ParkedFile;
       if (data.id !== id || data.ownerId !== ownerId || data.sessionId !== sessionId) return undefined;
       const entry: IdleWorker = {id, sessionId, ownerId, activityId, workerId: data.workerId, grant: data.grant, system: data.system, preferred: data.preferred,
-        vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
+        vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), ...(data.last ? {last: data.last} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
       this.entries.set(this.key(sessionId, id), entry);
       this.arm();
       return entry;
@@ -161,7 +185,7 @@ export class WorkerShelf {
     const path = this.file(entry.sessionId, entry.activityId, entry.id);
     const data: ParkedFile = {id: entry.id, sessionId: entry.sessionId, ownerId: entry.ownerId, activityId: entry.activityId, workerId: entry.workerId,
       grant: entry.grant, system: entry.system, ...(entry.preferred !== undefined ? {preferred: entry.preferred} : {}), vision: entry.vision, ...(entry.fingerprint ? {fingerprint: entry.fingerprint} : {}),
-      lastInput: entry.lastInput, messages: entry.messages};
+      ...(entry.last ? {last: entry.last} : {}), lastInput: entry.lastInput, messages: entry.messages};
     await mkdir(join(path, '..'), {recursive: true});
     const temporary = path + '.' + randomUUID().slice(0, 8) + '.tmp';
     await writeFile(temporary, JSON.stringify(data));

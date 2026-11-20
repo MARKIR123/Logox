@@ -167,7 +167,12 @@ const automaJobStateSchema = z.strictObject({
   /** The worker's readable id (`T1`), which a later `continue` names. */
   id: z.string().optional(),
   title: z.string(),
-  state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted']),
+  /** `waiting`: ordered after jobs that have not ended yet (`after`); `skipped`: never started because a job it follows did not end `done`. */
+  state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted', 'waiting', 'skipped']),
+  /** Ids of the jobs this one follows. */
+  after: z.array(z.string()).optional(),
+  /** Background jobs: the result reached the dispatcher as a message (absent while it is outstanding, and for jobs of a waited dispatch). */
+  delivered: z.boolean().optional(),
   elapsedMs: z.number().nonnegative(),
   /** Set while running; the renderer samples its own clock from it. */
   startedAt: z.number().optional(),
@@ -180,7 +185,9 @@ const automaJobStateSchema = z.strictObject({
   /** What the worker handed back through Finish, for the delegation record. */
   summary: z.string().optional(), evidence: z.array(z.string()).optional(), notVerified: z.array(z.string()).optional(), question: z.string().optional(),
 });
-export const automaSwarmSchema = z.strictObject({name: z.string(), jobs: z.array(automaJobStateSchema)});
+export const automaSwarmSchema = z.strictObject({name: z.string(), jobs: z.array(automaJobStateSchema),
+  /** The dispatch runs in the background: its tool step ended at once and the card keeps updating. */
+  background: z.boolean().optional()});
 export type AutomaJobState = z.infer<typeof automaJobStateSchema>;
 export type AutomaSwarm = z.infer<typeof automaSwarmSchema>;
 export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),

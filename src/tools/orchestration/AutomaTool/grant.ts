@@ -3,6 +3,7 @@ import {shellWords} from '../../../permissions/shell.js';
 import {ownsPath, patternsOverlap} from '../../ownership.js';
 import {canonicalPath, within} from './paths.js';
 import {chooseStyle, type AutomaProfile} from './preset.js';
+import {resolveAfter} from './graph.js';
 
 /**
  * What one job may do beyond the baseline (read whatever the dispatcher can read, run commands the permission engine allows,
@@ -70,6 +71,8 @@ export interface AutomaJobArgs {
   readonly continue?: string | undefined;
   /** The job must look at images: it runs on a model that can see them (the worker model, else the vision fallback) or is refused. */
   readonly vision?: boolean | undefined;
+  /** The jobs this one follows: ids of this call (`T1`), `#n` positions, exact titles, or finished workers of this dispatcher. It starts when they are all done. */
+  readonly after?: readonly string[] | undefined;
 }
 
 export interface RetainedGrant {
@@ -87,6 +90,9 @@ export interface PlannedJob {
   /** The worker's full system prompt (base contract plus style flavour). */
   readonly system: string;
   readonly denial?: string | undefined;
+  /** Resolved `after`: positions of the jobs of this call it follows, and ids of finished workers it follows (`graph.ts`). */
+  readonly needs?: readonly number[] | undefined;
+  readonly needsWorkers?: readonly string[] | undefined;
 }
 
 const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+|\/)$/;
@@ -123,8 +129,12 @@ export function planDispatch(input: {
   readonly cwd: string;
   /** The dispatcher's own scratchpad subdirectory. */
   readonly scratch?: string | undefined;
-  /** The finished workers of this dispatcher's current task the call names (to continue or release). */
+  /** The finished workers of this dispatcher's current task the call names (to continue, release or follow). */
   readonly retained: readonly RetainedGrant[];
+  /** The ids each job will carry (`T4`, a continued worker's own id), in call order; `after` entries may name them. Absent: only `#n` and titles resolve. */
+  readonly ids?: readonly string[] | undefined;
+  /** Workers named by `after` that belong to another dispatcher, with their owner. */
+  readonly foreign?: ReadonlyMap<string, string> | undefined;
   /** Most jobs one call may carry (`[automa] max_per_dispatch`). */
   readonly maxJobs: number;
   /** Who currently holds a write pattern, when it is not the principal. */
@@ -185,12 +195,19 @@ export function planDispatch(input: {
     const grant: JobGrant = {writes, exclusive: profile.exclusive ?? []};
     planned.push({job: {...rest, ...(writes.length ? {writes} : {})}, grant, system, model: style.model ?? profile.model, ...coordinate(heldBy(writes))});
   }
+  const sequence = resolveAfter(planned.map((item, index) => ({id: input.ids?.[index] ?? '#' + (index + 1), title: item.job.title, after: item.job.after})),
+    {live, ...(input.foreign ? {foreign: input.foreign} : {})});
+  if (!sequence.ok) return refuse(sequence.error);
+  const graph = sequence.graph;
+  const ordered = planned.map((item, index) => graph.needs[index]!.length || graph.workers[index]!.length ? {...item, needs: graph.needs[index]!, needsWorkers: graph.workers[index]!} : item);
+  // Only jobs that can run at the same time must write disjoint paths: jobs ordered by `after` take turns.
   for (let left = 0; left < planned.length; left++) {
     for (let right = left + 1; right < planned.length; right++) {
+      if (graph.ordered(left, right)) continue;
       for (const a of planned[left]!.grant.writes) for (const b of planned[right]!.grant.writes) {
         if (patternsOverlap(a, b, cwd)) return refuse(`Jobs "${planned[left]!.job.title}" and "${planned[right]!.job.title}" have overlapping writes: ${a} and ${b}. Give each job a disjoint set, or merge them into one job.`);
       }
     }
   }
-  return {ok: true, jobs: planned, style: choice.name, ...(style.parallel ? {parallel: style.parallel} : {}), release, ...(notes.length ? {note: notes.join('\n')} : {})};
+  return {ok: true, jobs: ordered, style: choice.name, ...(style.parallel ? {parallel: style.parallel} : {}), release, ...(notes.length ? {note: notes.join('\n')} : {})};
 }

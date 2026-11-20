@@ -53,15 +53,16 @@ import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {projectRulesSection} from '../prompts/boundary.js';
-import {workerPromptHash, workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
+import {workerPromptHash, workerSystem, automaSchema, executeAutomaDispatch, startAutomaDispatch, normalizeAutomaInput, TRUST_LINE, type AutomaArgs, type DispatchOptions, type DispatchRun, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
 import {WorkerShelf} from './orchestration/AutomaTool/workers.js';
+import {BackgroundBoard, type BackgroundDispatch} from '../runtime/background-jobs.js';
 import {Semaphore} from '../kernel/semaphore.js';
 import {isReadOnlyTool} from './catalog.js';
 import {grantTools, isExclusiveCommand, pathDenial, planDispatch, type JobGrant} from './orchestration/AutomaTool/grant.js';
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
-import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME} from './orchestration/AutomaTool/prompt.js';
+import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME, BACKGROUND_RECEIPT_SENTENCE, BACKGROUND_UNAVAILABLE, WAIT_ALONE, backgroundDeliverySummary, backgroundReceiptLine, waitUnknown} from './orchestration/AutomaTool/prompt.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
 import {TOOL_CANCELLED_TEXT} from '../prompts/runtime/interruption.js';
@@ -278,6 +279,13 @@ export interface AutomaEnvironment {
   journalPath?(sessionId: string): string;
   charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
+  /**
+   * Hands the results of background jobs to the dispatcher's running task as one message (the path peer messages take: queued at the next step boundary, never
+   * interrupting a tool). False when the task cannot receive it now; the runtime tries again. Without it `mode: "background"` is refused.
+   */
+  deliver?(target: {readonly sessionId: string; readonly ownerId: string; readonly activityId: string}, text: string, summary: string): Promise<boolean> | boolean;
+  /** Results that end within this long of each other are delivered together; tests shorten it (default 3000). */
+  coalesceMs?(): number;
 }
 
 async function fileVersion(path: string): Promise<string> {
@@ -344,7 +352,13 @@ export class Tools {
   private readonly shelf = new WorkerShelf();
   /** One running-limit semaphore per session (`[automa] max_running`), shared by every dispatcher of it. */
   private readonly slots = new Map<string, Semaphore>();
+  /** Write patterns held by running dispatches (wait or background), by `[sessionId, ownerId, n]`. */
   private readonly dispatches = new Map<string, {readonly sessionId: string; readonly ownerId: string; readonly files: readonly string[]}>();
+  private dispatchCount = 0;
+  /** `[sessionId, ownerId]` of a call that is planning, or running in wait mode: one at a time per actor. */
+  private readonly starting = new Set<string>();
+  /** The background jobs of every dispatcher: what is still open, what has not been delivered (`runtime/background-jobs.ts`). The kernel reads it to keep a dispatcher's task open. */
+  readonly background = new BackgroundBoard();
   /** Per principal: dispatches refused whole, by their normalised arguments, so an identical retry is answered without planning again. */
   private readonly refusals = new Map<string, Map<string, string>>();
 
@@ -364,7 +378,9 @@ export class Tools {
   async releaseSession(sessionId: string): Promise<void> {
     this.guards.delete(sessionId); this.registries.delete(sessionId); this.activitiesBySession.delete(sessionId);
     this.automas.delete(sessionId); this.slots.delete(sessionId);
+    this.background.cancelSession(sessionId);
     for (const key of [...this.dispatches.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.dispatches.delete(key);
+    for (const key of [...this.starting]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.starting.delete(key);
     for (const key of [...this.refusals.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.refusals.delete(key);
     await this.shelf.closeSession(sessionId);
   }
@@ -415,7 +431,8 @@ export class Tools {
     const environment = this.automaFor(context.sessionId);
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
-    // Awaited before the one-dispatch check: from that check to `dispatches.set()` nothing may yield, or two calls of one actor would both pass.
+    if (args.wait) return args.jobs?.length || args.release?.length ? refuse(WAIT_ALONE) : this.waitForBackground(args.wait, context);
+    // Awaited before the one-dispatch check: from that check to `starting.add()` nothing may yield, or two calls of one actor would both pass.
     const rules = projectRulesSection(await environment.guidelines?.(context) ?? []);
     const {sessionId, ownerId, activityId} = context;
     const key = JSON.stringify([sessionId, ownerId]);
@@ -431,17 +448,33 @@ export class Tools {
     };
     if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of finished workers.');
     // The workers this call names are looked up first (a parked one is read back from disk), awaited before the one-dispatch check.
-    const named = new Set([...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? [])]);
+    // A job may follow a finished worker (`after`), so those are looked up too.
+    const followed = [...new Set((args.jobs ?? []).flatMap(job => job.after ?? []).filter(entry => !/^#\d+$/.test(entry)))];
+    const named = new Set([...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? []), ...followed]);
     const retained = (await Promise.all([...named].map(id => this.shelf.find(sessionId, ownerId, activityId, id))))
       .flatMap(worker => worker ? [{id: worker.id, grant: worker.grant, system: worker.system}] : []);
-    if (this.dispatches.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
+    await this.shelf.prepare(sessionId, ownerId);
+    if (this.starting.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
+    const background = args.mode === 'background';
+    if (background && !environment.deliver) return refuse(BACKGROUND_UNAVAILABLE);
     const profile = environment.profile?.(ownerId) ?? DEFAULT_AUTOMA_PROFILE;
-    const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained,
+    // The ids the new jobs will get, previewed without taking them: a call refused for its `after` burns none, so the ids the model wrote still hold when it sends the call again.
+    const preview = this.shelf.reserve(sessionId, ownerId, (args.jobs ?? []).filter(job => !job.continue).length, false);
+    const ids = (args.jobs ?? []).map(job => job.continue ?? preview.shift()!);
+    const foreign = new Map<string, string>();
+    for (const name of followed) {
+      const owner = retained.some(item => item.id === name) ? undefined : this.shelf.ownerOf(sessionId, name);
+      if (owner && owner !== ownerId) foreign.set(name, owner);
+    }
+    const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained, ids, foreign,
       maxJobs: environment.maxPerDispatch?.() ?? AUTOMA_DEFAULT_PER_DISPATCH,
       scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: workerSystem(rules, args.context),
       holder: pattern => this.patternHolder(ownerId, pattern, sessionId)});
     if (!plan.ok) return refuseAndRemember(plan.error);
-    this.dispatches.set(key, {sessionId, ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
+    this.starting.add(key);
+    const dispatchKey = JSON.stringify([sessionId, ownerId, ++this.dispatchCount]);
+    this.dispatches.set(dispatchKey, {sessionId, ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
+    let detached = false;
     try {
       await this.shelf.closeStale(sessionId, ownerId, activityId);
       const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
@@ -451,11 +484,18 @@ export class Tools {
       const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
       const {startTool: _principalStep, reportSwarm, ...principal} = context;
       const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
-      const fresh = await this.shelf.allocate(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length);
+      // The ids were previewed above; taking them is synchronous, so they are the ones the model was told.
+      const fresh = this.shelf.reserve(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length, true);
       const jobs = plan.jobs.map(job => ({...job, id: job.job.continue ?? fresh.shift()!}));
       const slots = this.slots.get(sessionId) ?? this.slots.set(sessionId, new Semaphore(() => environment.maxRunning?.() ?? AUTOMA_DEFAULT_RUNNING)).get(sessionId)!;
-      const result = await executeAutomaDispatch({
-        jobs, parallel, swarmName: profile.name, signal: context.signal,
+      // A background dispatch has its own signal: it follows the dispatcher's task and is cancelled with it (`BackgroundBoard.cancelActivity()`), whichever way the task ends.
+      const controller = new AbortController();
+      // The dispatcher's task was cancelled: its background jobs are cancelled with it and nothing they return is delivered.
+      const link = () => {controller.abort(context.signal.reason); this.background.cancelActivity(activityId);};
+      if (background) {if (context.signal.aborted) link(); else context.signal.addEventListener('abort', link, {once: true});}
+      const signal = background ? controller.signal : context.signal;
+      const common: DispatchOptions = {
+        jobs, parallel, swarmName: profile.name, signal,
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
         ...(environment.retries ? {retries: environment.retries()} : {}),
@@ -463,17 +503,49 @@ export class Tools {
         ...(context.stopReason ? {stopCause: context.stopReason} : {}),
         ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
         readOnly: call => isReadOnlyTool(call.name),
-        executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
+        executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, signal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
         trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener, sessionId),
         journalPath: environment.journalPath?.(sessionId),
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
         ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
+      };
+      if (!background) {
+        const result = await executeAutomaDispatch(common);
+        return note ? {...result, text: result.text + '\n\n' + note} : result;
+      }
+      const scope = {sessionId, ownerId, activityId};
+      let run!: DispatchRun, board!: BackgroundDispatch;
+      run = startAutomaDispatch({...common, background: true,
+        onResults: results => this.background.ended(board, results.map(result => ({id: result.id, status: result.status, block: result.block})))});
+      board = this.background.start(scope, controller, run.initial.map(item => ({id: item.id, title: item.title, state: item.state})), {
+        deliver: (text, delivered) => environment.deliver!(scope, text + '\n\n' + TRUST_LINE, backgroundDeliverySummary(delivered)),
+        delivered: delivered => run.markDelivered(delivered),
+        ...(environment.coalesceMs ? {coalesceMs: environment.coalesceMs()} : {}),
       });
-      return note ? {...result, text: result.text + '\n\n' + note} : result;
+      // The call is over; the dispatch carries on until its jobs have ended, holding its write patterns until then.
+      detached = true;
+      void run.done.catch(() => {}).finally(() => {
+        context.signal.removeEventListener('abort', link);
+        this.dispatches.delete(dispatchKey);
+      });
+      return {text: [...run.initial.map(item => backgroundReceiptLine(item.id, item.title, item.state, item.after)), BACKGROUND_RECEIPT_SENTENCE, ...(released.length ? [`Released ${released.join(', ')}.`] : []), ...(note ? [note] : [])].join('\n'), isError: false};
     } finally {
-      this.dispatches.delete(key);
+      this.starting.delete(key);
+      if (!detached) this.dispatches.delete(dispatchKey);
     }
+  }
+
+  /** `Automa({"wait": [...]})`: returns when the named background jobs have ended, with their result blocks; with no model requests while it waits. */
+  private async waitForBackground(ids: readonly string[], context: ActorContext): Promise<ToolResult> {
+    const {found, unknown, known} = this.background.find({sessionId: context.sessionId, ownerId: context.ownerId, activityId: context.activityId}, ids);
+    if (unknown.length) return {text: waitUnknown(unknown, known), isError: true, disposition: 'denied'};
+    // Claimed first: their results come back here and are not sent as messages, even by the job that ends last.
+    this.background.claim(found.map(item => item.job));
+    try {await this.background.untilEnded(found.map(item => item.job), context.signal);}
+    catch (error) {this.background.unclaim(found); throw error;}
+    this.background.take(found);
+    return {text: [`Automa wait · ${found.map(item => item.job.id).join(', ')} ended`, ...found.map(item => item.job.block ?? ''), TRUST_LINE].join('\n\n'), isError: false};
   }
 
   /**

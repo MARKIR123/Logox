@@ -38,7 +38,13 @@ const money = (usd: number) => '$' + (usd >= 1 ? usd.toFixed(2) : usd.toFixed(4)
 /** The status words of a row: the status with its stop reason once settled (an ordinary completion needs none), what it waits on, how long it ran, what it cost. */
 export function statusText(node: Delegation, cost: number | undefined): string {
   const stopped = node.stopReason && node.stopReason !== 'completed' ? ' (stop: ' + node.stopReason + ')' : '';
-  return [node.status + stopped, node.waiting?.text, node.durationMs !== undefined ? formatDuration(node.durationMs) : undefined, cost !== undefined ? money(cost) : undefined].filter(Boolean).join(' · ');
+  return [node.status + stopped, node.waiting?.text, node.durationMs !== undefined ? formatDuration(node.durationMs) : undefined, cost !== undefined ? money(cost) : undefined, deliveryText(node)].filter(Boolean).join(' · ');
+}
+
+/** A background Automa job: in the background while it works, then whether its result has reached the dispatcher. */
+function deliveryText(node: Delegation): string | undefined {
+  if (!node.background) return undefined;
+  return node.delivered ? 'delivered' : node.result ? 'not delivered yet' : 'background';
 }
 
 /**
@@ -96,6 +102,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
       ...(node.diagnostic ? [row.field('Diagnostic', node.diagnostic)] : []),
       ...(node.waiting ? [row.field('Waiting on', node.waiting.text)] : []),
       ...(node.blockedBy.length ? [row.field('Blocked by', node.blockedBy.map(id => {const other = project().find(item => item.id === id); return other ? name(other.ownerId) + ' · ' + other.title : id;}).join('; '))] : []),
+      ...(deliveryText(node) ? [row.field('Mode', 'background · ' + (node.delivered ? 'result delivered' : node.result ? 'result not delivered yet' : 'result pending'))] : []),
       ...(node.durationMs !== undefined ? [row.field('Duration', formatDuration(node.durationMs))] : []),
       ...(cost !== undefined ? [row.field('Cost', money(cost))] : []),
       ...(node.jobId ? [row.field('Worker', node.jobId + (node.route ? ' · ' + node.route + ' route' : '') + (node.model ? ' · ' + node.model : ''))] : []),

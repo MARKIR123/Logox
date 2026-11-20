@@ -28,7 +28,7 @@ import {shellSchema} from '../../ShellTool/ShellTool.js';
 import {SHELL_DESCRIPTION} from '../../ShellTool/prompt.js';
 import {grantTools, titleFrom, type JobGrant, type PlannedJob} from './grant.js';
 import {AUTOMA_RETAINED_INPUT_LIMIT, type IdleWorker, type WorkerShelf} from './workers.js';
-import type {Semaphore} from '../../../kernel/semaphore.js';
+import {Semaphore} from '../../../kernel/semaphore.js';
 import {finishSchema, parseFinish, type FinishArgs} from './finish.js';
 import type {AutomaRoute} from './preset.js';
 import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, queuedJobsLine} from './prompt.js';
@@ -45,22 +45,27 @@ const automaJobSchema = z.strictObject({
   keep: z.boolean().optional().describe('No longer needed and ignored: every finished worker can be continued'),
   continue: z.string().min(1).optional().describe('Rare: id a result returned for a finished worker of this task, to give it a next step. Omit for a new job'),
   vision: z.boolean().optional().describe('Rare: true when the job must look at images (screenshots, mockups, image files). Omit otherwise'),
+  after: z.array(z.string().min(1).max(80)).min(1).max(8).optional().describe('Jobs this one follows, by id (T1), "#n" position or exact title, or a finished worker by its id. It starts when they are all done and receives their results'),
 });
+
+export const AUTOMA_MODES = ['wait', 'background'] as const;
 
 export const automaArgs = z.strictObject({
   context: z.string().min(1).max(8000).optional().describe('Shared background for every job: goal, conventions, interfaces, what is out of scope'),
-  jobs: z.array(automaJobSchema).min(1).max(32).optional().describe('Independent jobs to run in parallel; one per question or file set'),
+  jobs: z.array(automaJobSchema).min(1).max(32).optional().describe('Jobs of this call: independent ones run in parallel; one per question or file set. Order some with `after`'),
   style: z.string().min(1).optional().describe('Rare: a worker style from your profile. Omit: the runtime picks yours'),
   parallel: z.number().int().min(1).max(32).optional().describe('Omit unless you need fewer at once'),
   release: z.array(z.string().min(1)).min(1).max(32).optional().describe('Rare: ids of finished workers to end now; they also end with your task'),
+  mode: z.enum(AUTOMA_MODES).optional().describe('`wait` (default) returns when every job has ended; `background` returns at once and delivers each result as a message'),
+  wait: z.array(z.string().min(1)).min(1).max(64).optional().describe('Alone: ids of your background jobs to wait for; their results come back as this call\'s result'),
 });
 
 export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision']);
-const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release']);
+const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after']);
+const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
   if (typeof value === 'string') value = [value];
@@ -119,6 +124,15 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
       if (job.keep === false && !job.continue) delete job.keep;
       if (job.vision === 'true' || job.vision === 'false') job.vision = job.vision === 'true';
       if (job.vision !== true) delete job.vision;
+      // `after` may arrive as one string, or as `depends_on` / `needs`; numbers are positions ("#2").
+      for (const alias of ['depends_on', 'dependsOn', 'needs']) {
+        if (job.after === undefined && job[alias] !== undefined) job.after = job[alias];
+        delete job[alias];
+      }
+      if (typeof job.after === 'number') job.after = '#' + job.after;
+      if (Array.isArray(job.after)) job.after = job.after.map(item => typeof item === 'number' ? '#' + item : item);
+      const after = cleanList(job.after, /^#\d+$/);
+      job.after = Array.isArray(after) ? [...new Set(after.map(item => (item as string).trim()))] : undefined;
       for (const key of Object.keys(job)) {
         if (!JOB_KEYS.has(key)) {drop(key, job[key]); delete job[key];}
         else if (job[key] === undefined) delete job[key];
@@ -135,6 +149,12 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
   else if (raw.release !== undefined) {
     delete raw.release;
   }
+  if (typeof raw.mode === 'string' && (AUTOMA_MODES as readonly string[]).includes(raw.mode.trim().toLowerCase())) raw.mode = raw.mode.trim().toLowerCase(); else delete raw.mode;
+  if (typeof raw.wait === 'string') raw.wait = [raw.wait];
+  if (Array.isArray(raw.wait)) {
+    const ids = raw.wait.filter(id => typeof id === 'string' && !PLACEHOLDER.test(id.trim())).map(id => (id as string).trim());
+    if (ids.length) raw.wait = [...new Set(ids)]; else delete raw.wait;
+  } else delete raw.wait;
   if (typeof raw.style !== 'string' || PLACEHOLDER.test(raw.style.trim())) delete raw.style; else raw.style = raw.style.trim();
   if (typeof raw.parallel !== 'number' || !Number.isInteger(raw.parallel) || raw.parallel < 1 || raw.parallel > 32) delete raw.parallel;
   for (const key of Object.keys(raw)) {
@@ -201,7 +221,9 @@ export {AUTOMA_RETAINED_INPUT_LIMIT};
 const LARGE_CONTEXT_NOTE = "this worker's context is large; a fresh job with a short brief is cheaper.";
 const CALLS_SHOWN_PER_JOB = 20;
 const DIFF_COUNT_LIMIT = 512 * 1024;
-const TRUST_LINE = "Trust: summary and evidence are the worker's own; Changed and Ran are measured by the runtime.";
+export const TRUST_LINE = "Trust: summary and evidence are the worker's own; Changed and Ran are measured by the runtime.";
+/** The heading of the section that carries the results of the jobs a job follows. */
+const PRIOR_RESULTS_HEADING = 'Results of the jobs this one follows:';
 
 export type AutomaProvider = WorkerProvider;
 /** `model` is `<provider>/<model>`; `vision` is whether it can see images (absent counts as yes). */
@@ -242,12 +264,29 @@ export interface DispatchOptions {
   onProgress?(swarm: AutomaSwarm): void;
   /** Called as each job ends, with what the worker handed back (the brief check reads its verdict here instead of parsing the result text). */
   onEnd?(end: {readonly index: number; readonly status: JobStatus; readonly summary: string; readonly question?: string | undefined}): void;
+  /** The dispatch runs in the background: its swarm is published as such and each job starts without `delivered`. */
+  readonly background?: boolean | undefined;
+  /** Called when jobs end, with their result blocks: one job, or a job that did not end `done` together with the jobs it kept from starting. */
+  onResults?(results: readonly JobOutcome[]): void;
   charge?(usage: ModelTurn['usage'], model: string): void;
   /** Ledger form of a worker turn's usage (tokens, model, provider, priced cost); stored on the turn's `message` event. */
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
 }
 
-type JobStatus = Extract<AutomaJobState['state'], 'done' | 'blocked' | 'failed' | 'cancelled' | 'denied'>;
+type JobStatus = Extract<AutomaJobState['state'], 'done' | 'blocked' | 'failed' | 'cancelled' | 'denied' | 'skipped'>;
+
+/** How one job ended, with the runtime's result block. */
+export interface JobOutcome {readonly id: string; readonly title: string; readonly status: JobStatus; readonly block: string}
+
+/** What a call that started a dispatch has right away. */
+export interface DispatchRun {
+  /** Where each job stands as the call returns: `running`, `queued` (a free place or running slot is awaited) or `waiting` (it follows unfinished jobs); `after` lists what it follows. */
+  readonly initial: readonly {readonly id: string; readonly title: string; readonly state: 'running' | 'queued' | 'waiting'; readonly after: readonly string[]}[];
+  /** Settles when every job has ended. */
+  readonly done: Promise<ToolResult>;
+  /** The results of these jobs reached the dispatcher: the card shows them as delivered. */
+  markDelivered(ids: readonly string[]): void;
+}
 
 function seconds(ms: number): string {
   return (ms / 1000).toFixed(1) + 's';
@@ -275,9 +314,11 @@ function changeLine(files: ReadonlyMap<string, {before: Buffer | null; after: Bu
 }
 
 /** The job's user message: the brief, its scope, the acceptance checks and (for a fresh worker) the grant. The system prompt stays the same for every job of a dispatch. */
-function jobMessage(planned: PlannedJob, scratch: string, resumed: boolean): string {
+function jobMessage(planned: PlannedJob, scratch: string, resumed: boolean, prior: readonly string[] = []): string {
   const {job, grant} = planned;
-  return [job.brief, '', 'Scope: ' + SCOPE_GLOSS[job.scope ?? 'bounded'],
+  // The results of the jobs this one follows (summary, evidence, not verified, changed, ran): their reports, never their transcripts.
+  const followed = prior.length ? ['', PRIOR_RESULTS_HEADING, ...prior.map(block => block.split('\n').filter(line => !line.startsWith('Trust:')).join('\n'))] : [];
+  return [job.brief, ...followed, '', 'Scope: ' + SCOPE_GLOSS[job.scope ?? 'bounded'],
     ...(job.acceptance?.length ? ['', 'Acceptance:', ...job.acceptance.map(check => '- ' + check)] : []),
     ...(resumed ? [] : ['', 'Grant:',
       '- read: anything your dispatcher can read',
@@ -343,10 +384,31 @@ export function resultBlock(head: {id: string; title: string; status: JobStatus;
 }
 
 /** Runs one dispatch: jobs fail independently, and the call returns once every job has ended. */
-export async function executeAutomaDispatch(options: DispatchOptions): Promise<ToolResult> {
+export function executeAutomaDispatch(options: DispatchOptions): Promise<ToolResult> {
+  return startAutomaDispatch(options).done;
+}
+
+/**
+ * Starts one dispatch and returns at once with where each job stands and a promise for the whole. A job starts when every job it follows (`after`) has
+ * ended `done`; one that did not end `done` keeps its dependents from starting (they end `skipped`, stop reason `dependency_unmet`). Jobs that wait hold neither
+ * a per-dispatch place nor a session running slot.
+ */
+export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const {jobs, signal} = options;
-  const states: AutomaJobState[] = jobs.map(planned => ({id: planned.id, title: planned.job.title, state: 'queued', elapsedMs: 0, calls: []}));
-  const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]}))});
+  const needs = jobs.map(planned => planned.needs ?? []), workerNeeds = jobs.map(planned => planned.needsWorkers ?? []);
+  const dependents: number[][] = jobs.map(() => []);
+  needs.forEach((list, index) => list.forEach(prerequisite => dependents[prerequisite]!.push(index)));
+  const followed = jobs.map((_, index) => [...needs[index]!.map(prerequisite => jobs[prerequisite]!.id), ...workerNeeds[index]!]);
+  const ordered = followed.some(list => list.length > 0);
+  const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
+    ...(followed[index]!.length ? {after: followed[index]!} : {}), ...(options.background ? {delivered: false} : {})}));
+  const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {})});
+  const finished: boolean[] = jobs.map(() => false);
+  /** Results of finished workers this job follows, read before anything starts. */
+  const external: {id: string; status: string; block: string | undefined}[][] = jobs.map(() => []);
+  let ended = 0;
+  let openAll!: () => void;
+  const allEnded = new Promise<void>(resolve => {openAll = resolve;});
   let journalReady: Promise<unknown> | undefined;
   const journal = (jobIndex: number, event: string, data: Record<string, unknown> = {}) => {
     if (!options.journalPath) return Promise.resolve();
@@ -363,23 +425,66 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
   const stopOf = (status: JobStatus, how: {error?: unknown; stalled?: boolean}): StopReasonCode =>
     status === 'cancelled' ? stopReasonFor({status: 'cancelled', cause: options.stopCause?.()})
     : status === 'failed' ? stopReasonFor({status: 'failed', ...(how.stalled ? {stalled: true} : {}), error: how.error ?? new Error('failed')})
+    : status === 'skipped' ? stopReasonFor({status: 'skipped'})
     : 'completed';
-  const finish = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute, how: {error?: unknown; stalled?: boolean} = {}) => {
+  /** Records how a job ended (block, state, journal); `shelve` is the finished worker kept for a continue, stored with this result so a job that follows it can start from it. */
+  const finishCore = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute, how: {error?: unknown; stalled?: boolean} = {}, shelve?: Omit<IdleWorker, 'last'>) => {
     const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started, stop = stopOf(status, how);
+    finished[index] = true;
     const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model, stop}, {...parts, acceptance: planned.job.acceptance});
     receipts[index] = receipt; statuses[index] = status;
+    // Shelved before anything hears of the result, so a dispatcher that answers it at once can continue the worker.
+    // (A worker that could not be parked simply cannot be continued.)
+    if (shelve) await options.workers.retain({...shelve, last: {status, block: receipt}}).catch(() => {});
     options.onEnd?.({index, status, summary: parts.summary, question: parts.question});
     const {startedAt: _startedAt, tool: _tool, ...settled} = states[index]!;
     const shown = route ?? (planned.grant.writes.length ? 'code' as const : 'read' as const);
     states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000), route: shown, ...(model ? {model} : {}), stopReason: stop, summary: parts.summary.slice(0, 600),
       ...(parts.evidence?.length ? {evidence: parts.evidence.slice(0, 8)} : {}), ...(parts.notVerified?.length ? {notVerified: parts.notVerified.slice(0, 8)} : {}), ...(parts.question ? {question: parts.question} : {})};
     publish();
-    await journal(index, 'end', {id, state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision)});
+    await journal(index, 'end', {id, state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision),
+      ...(options.background ? {background: true} : {})});
+  };
+  const outcomeOf = (index: number): JobOutcome => ({id: jobs[index]!.id, title: jobs[index]!.job.title, status: statuses[index] as JobStatus, block: receipts[index]!});
+
+  /** The jobs that follow this one, directly or not, that have not ended, nearest first. */
+  const downstream = (index: number): number[] => {
+    const order: number[] = [], seen = new Set<number>([index]);
+    for (let at = 0, queue = [index]; at < queue.length; at++) {
+      for (const next of dependents[queue[at]!]!) if (!seen.has(next)) {seen.add(next); queue.push(next); if (!finished[next]) order.push(next);}
+    }
+    return order;
+  };
+  let launch!: (index: number) => void;
+  /** A job has ended: a failure ends the jobs that follow it without starting them, one that is done may release the jobs that wait for it. */
+  const settle = async (index: number): Promise<void> => {
+    const outcomes: JobOutcome[] = [outcomeOf(index)];
+    const status = statuses[index];
+    if (status !== 'done') {
+      for (const next of downstream(index)) {
+        if (finished[next]) continue;
+        const cause = needs[next]!.find(prerequisite => finished[prerequisite] && statuses[prerequisite] !== 'done')!;
+        await finishCore(next, 'skipped', Date.now(), '', {summary: `Not started: ${jobs[cause]!.id} ended ${statuses[cause]}.`});
+        outcomes.push(outcomeOf(next));
+      }
+    }
+    try {options.onResults?.(outcomes);} catch {}
+    ended += outcomes.length;
+    if (status === 'done') for (const next of dependents[index]!) {
+      if (finished[next] || !needs[next]!.every(prerequisite => finished[prerequisite] && statuses[prerequisite] === 'done')) continue;
+      launch(next);
+    }
+    if (ended >= jobs.length) openAll();
+  };
+  const finish = async (...args: Parameters<typeof finishCore>) => {
+    await finishCore(...args);
+    await settle(args[0]);
   };
 
   // A dispatch of many jobs with one shared system prompt starts job 0 alone: once its first response is back, the provider's prefix cache can
   // serve the shared prefix to the others. They start when it has answered, failed or ended.
-  const staggered = jobs.length > 3 && new Set(jobs.map(planned => planned.system)).size === 1;
+  // Never with an order between the jobs: job 0 may be the one that waits.
+  const staggered = !ordered && jobs.length > 3 && new Set(jobs.map(planned => planned.system)).size === 1;
   let openStart!: () => void;
   const firstAnswered = new Promise<void>(resolve => {openStart = resolve;});
 
@@ -421,7 +526,8 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       // A worker continued after its definition changed still continues; it and its dispatcher are told once (the fingerprint is renewed below).
       fingerprint = definitionFingerprint({...(options.promptHash !== undefined ? {prompt: [options.promptHash]} : {}), grant: [JSON.stringify([grant.writes, grant.exclusive, grant.tools ?? null])], model: resolved.model});
       change = idle && fingerprint ? definitionChangeNote(id, definitionChanges(idle.fingerprint, fingerprint)) : undefined;
-      const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle));
+      const prior = [...needs[index]!.map(prerequisite => receipts[prerequisite]!), ...external[index]!.flatMap(item => item.block ? [item.block] : [])];
+      const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle), prior);
       const messages: ModelMessage[] = idle ? [...await options.workers.messages(idle), {role: 'user', text: change ? change + '\n\n' + text : text}] : [{role: 'user', text}];
       modelName = resolved.model;
       route = resolved.route;
@@ -473,20 +579,20 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       stopTracking();
       const notes: string[] = end.imagesOmitted ? [imagesOmittedNote(modelName)] : [];
       // Whatever the outcome, a worker that ended through the loop (Finish, or the stall rule) stays on the shelf with its history.
-      await options.workers.retain({id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, grant, system: planned.system,
+      const shelve: Omit<IdleWorker, 'last'> = {id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, grant, system: planned.system,
         preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false,
-        ...(fingerprint ? {fingerprint} : {})});
+        ...(fingerprint ? {fingerprint} : {})};
       const large = idle && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
       // The block prefixes `Note: ` itself.
       const note = [change?.replace(/^Note: /, ''), large].filter(Boolean).join('\n') || undefined;
       if (end.kind === 'stalled') {
-        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note}, route, {stalled: true});
+        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note}, route, {stalled: true}, shelve);
         return;
       }
       const result = end.value;
       const allDenied = result.status === 'done' && refused.length > 0 && succeeded === 0 && written.size === 0;
       await finish(index, allDenied ? 'denied' : result.status, started, modelName, {summary: result.summary, evidence: result.evidence, notVerified: [...(result.notVerified ?? []), ...notes],
-        question: result.question, ...measured(), note}, route);
+        question: result.question, ...measured(), note}, route, {}, shelve);
     } catch (error) {
       stopTracking();
       // A continued worker that did not get to the end of its job stays as it was before this brief; the shelf's history was never extended.
@@ -496,24 +602,60 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       releaseSlot?.();
     }
   };
+  // The jobs of one dispatch that run at once (`parallel`); a job that waits for the jobs it follows has not asked for a place yet.
+  const places = new Semaphore(() => options.parallel);
   const runJobs = async (index: number): Promise<void> => {
-    try {await runJob(index);}
-    finally {if (index === 0) openStart();}
+    let release: (() => void) | undefined;
+    try {
+      try {release = await places.acquire(signal);}
+      catch {await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
+      await runJob(index);
+    } finally {
+      release?.();
+      if (index === 0) openStart();
+    }
+  };
+  launch = index => {
+    if (finished[index]) return;
+    if (states[index]!.state === 'waiting') {states[index] = {...states[index]!, state: 'queued'}; publish();}
+    void runJobs(index).catch(async error => {
+      if (!finished[index]) await finish(index, 'failed', Date.now(), '', {summary: error instanceof Error ? error.message : String(error)}, undefined, {error}).catch(() => {});
+    });
   };
 
-  await ensureActorScratchpadDir(options.cwd, options.sessionId, options.principal).catch(() => {});
-  publish();
-  let next = 0;
-  await Promise.all(Array.from({length: Math.min(options.parallel, jobs.length)}, async () => {
-    while (next < jobs.length) await runJobs(next++);
-  }));
+  // Where each job stands as the call returns: the first `parallel` jobs that follow nothing run (unless the session's running slots are all taken), the rest queue.
+  let startable = 0;
+  const initial = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, after: followed[index]!,
+    state: needs[index]!.length ? 'waiting' as const : startable++ < options.parallel && !options.slots?.saturated ? 'running' as const : 'queued' as const}));
 
-  const count = (state: AutomaJobState['state']) => statuses.filter(item => item === state).length;
-  const done = count('done');
-  const header = `Automa dispatch · ${options.swarmName} · ${done}/${jobs.length} done` + (options.released?.length ? ` · released ${options.released.join(', ')}` : '');
-  // Said once per dispatch, never per job: how many of its jobs had to wait for a running slot, and the limit behind it.
-  const limits = queuedForSlot > 0 && options.slots?.capacity ? [queuedJobsLine(queuedForSlot, jobs.length, options.slots.capacity)] : [];
-  return {text: [header, ...limits, ...receipts, TRUST_LINE].join('\n\n'), isError: done === 0 && count('blocked') === 0, ...(count('denied') === jobs.length ? {disposition: 'denied' as const} : {})};
+  const run = async (): Promise<ToolResult> => {
+    await ensureActorScratchpadDir(options.cwd, options.sessionId, options.principal).catch(() => {});
+    publish();
+    // A worker a job follows has already ended: it starts from that result, or, when the worker did not end `done`, does not start.
+    for (let index = 0; index < jobs.length; index++) {
+      for (const id of workerNeeds[index]!) {
+        const worker = await options.workers.find(options.sessionId, options.principal, options.activityId, id);
+        external[index]!.push({id, status: worker?.last?.status ?? (worker ? 'done' : 'closed'), block: worker?.last?.block});
+      }
+      const unmet = external[index]!.find(item => item.status !== 'done');
+      if (unmet && !finished[index]) await finish(index, 'skipped', Date.now(), '', {summary: `Not started: ${unmet.id} ended ${unmet.status}.`});
+    }
+    for (let index = 0; index < jobs.length; index++) if (!needs[index]!.length) launch(index);
+    if (!jobs.length) openAll();
+    await allEnded;
+
+    const count = (state: AutomaJobState['state']) => statuses.filter(item => item === state).length;
+    const done = count('done'), skipped = count('skipped');
+    const header = `Automa dispatch · ${options.swarmName} · ${done}/${jobs.length} done` + (skipped ? ` · ${skipped} skipped` : '') + (options.released?.length ? ` · released ${options.released.join(', ')}` : '');
+    // Said once per dispatch, never per job: how many of its jobs had to wait for a running slot, and the limit behind it.
+    const limits = queuedForSlot > 0 && options.slots?.capacity ? [queuedJobsLine(queuedForSlot, jobs.length, options.slots.capacity)] : [];
+    return {text: [header, ...limits, ...receipts, TRUST_LINE].join('\n\n'), isError: done === 0 && count('blocked') === 0, ...(count('denied') === jobs.length ? {disposition: 'denied' as const} : {})};
+  };
+  return {initial, done: run(), markDelivered: ids => {
+    let changed = false;
+    for (const [index, state] of states.entries()) if (ids.includes(jobs[index]!.id) && state.delivered === false) {states[index] = {...state, delivered: true}; changed = true;}
+    if (changed) publish();
+  }};
 }
 
 /** Marks jobs a previous process left unfinished; they are never replayed, so the dispatcher decides what to send again. */

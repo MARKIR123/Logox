@@ -230,7 +230,8 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
   const guard = args.timeoutMs === undefined ? undefined : setTimeout(() => {timedOut = true; cancelling = true;}, args.timeoutMs);
 
   const errors: string[] = [];
-  const settledNow = () => !runActivities().some(activity => LIVE.has(activity.status)) && !app.ensemble.isBusy() &&
+  // Background Automa jobs are part of the dispatcher's open work: the run does not settle before they ended and reached it.
+  const settledNow = () => !runActivities().some(activity => LIVE.has(activity.status)) && !app.ensemble.isBusy() && !app.tools.background.open(session) &&
     !app.getInputQueue().queued.length && !app.getInputQueue().steering.length;
   try {
     try {await app.submit(task);}
@@ -289,6 +290,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
       status: node.status, stopReason: node.stopReason ?? null, durationMs: node.durationMs ?? null,
       costUsd: costs.has(node.id) ? Number(costs.get(node.id)!.toFixed(6)) : null,
       ...(node.route ? {route: node.route} : {}), ...(node.model ? {model: node.model} : {}),
+      ...(node.background ? {background: true, delivered: node.delivered === true} : {}),
       blockedBy: [...node.blockedBy], result: node.result ? {summary: node.result.summary, notVerified: [...node.result.notVerified ?? []]} : null}));
   const cwd = await realpath(io.cwd).catch(() => io.cwd);
   const changedFiles = (await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {
@@ -300,7 +302,8 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     setupError, final,
     report: {version: 1 as const, sessionId: session, status, durationMs: Date.now() - started, final, actors: actorStats,
       delegations,
-      automa: {jobs: jobs.length, done: jobs.filter(job => job.state === 'done').length, blocked: jobs.filter(job => job.state === 'blocked').length, failed: jobs.filter(job => job.state === 'failed').length},
+      automa: {jobs: jobs.length, done: jobs.filter(job => job.state === 'done').length, blocked: jobs.filter(job => job.state === 'blocked').length, failed: jobs.filter(job => job.state === 'failed').length,
+        ...(jobs.some(job => job.state === 'skipped') ? {skipped: jobs.filter(job => job.state === 'skipped').length} : {})},
       usage: {...totalsOf(used.map(item => item.record), config), byActor: group(item => item.owner), byCategory: group(item => item.record.category)},
       changedFiles, errors},
   };

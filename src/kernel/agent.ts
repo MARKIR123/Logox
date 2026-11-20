@@ -149,7 +149,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const directorWaiting = () => isDirector(run.context.ownerId) && options.store.getSnapshot().activities.some(activity =>
         activity.sessionId === run.context.sessionId && activity.kind === 'actor' && ['queued', 'running', 'waiting_input'].includes(activity.status));
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
-        signal: context.signal, hasPendingInbox: () => run.context.hasPendingInbox?.() ?? false});
+        signal: context.signal, hasPendingInbox: () => run.context.hasPendingInbox?.() ?? false, background: options.tools.background});
       const run: AgentRun = {
         options, messages, steps, state, narration, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(), repeat: new RepeatGuard(options.cwd),
         context: {...context, reviewMessages: () => [...userRequests, ...messages.filter(message => message.role === 'assistant')]},
@@ -239,6 +239,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       // Natural end or not, the actors waiting on this one are told to stop waiting, and its own questions lapse.
       asks.endRecipient(context.sessionId, context.ownerId, lastDrain);
       if (!isDirector(context.ownerId)) asks.dropAsker(context.activityId);
+      // Background Automa jobs end with the task that dispatched them, however it ended (a normal end leaves none open: the task is held until they are delivered).
+      options.tools.background?.cancelActivity(context.activityId);
       steps.close(context.signal.aborted ? 'cancelled' : outcome); await taskModel?.finish(context.signal.aborted ? 'cancelled' : outcome);}
   };
 }

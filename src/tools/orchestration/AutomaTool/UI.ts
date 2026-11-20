@@ -32,11 +32,13 @@ function parseArgs(arguments_: string): Record<string, unknown> {
 function automaTitle(call: ToolCall): string {
   const args = parseArgs(call.arguments);
   const jobs = Array.isArray(args.jobs) ? args.jobs : [];
+  const background = args.mode === 'background' ? SEP + 'background' : '';
   if (jobs.length === 1) {
     const title = jobs[0] && typeof jobs[0] === 'object' ? (jobs[0] as Record<string, unknown>).title : undefined;
-    if (typeof title === 'string' && clip(title)) return 'Automa · ' + clip(title);
+    if (typeof title === 'string' && clip(title)) return 'Automa · ' + clip(title) + background;
   }
-  if (jobs.length > 1) return `Automa · ${jobs.length} jobs`;
+  if (jobs.length > 1) return `Automa · ${jobs.length} jobs` + background;
+  if (Array.isArray(args.wait) && args.wait.length) return 'Automa · wait for ' + args.wait.filter(id => typeof id === 'string').join(', ');
   if (Array.isArray(args.release) && args.release.length) return 'Automa · release';
   if (typeof args.description === 'string' && clip(args.description)) return 'Automa · ' + clip(args.description);
   return 'Automa';
@@ -53,10 +55,15 @@ function fit(text: string, width: number): string {
 }
 
 /** A job still queued or running inside a step that has ended was cut off, whatever the last publication said. */
-function effectiveJobs(jobs: readonly AutomaJobState[], step: Step | undefined): readonly AutomaJobState[] {
-  if (!step || LIVE.has(step.state)) return jobs;
-  return jobs.map(job => job.state === 'queued' || job.state === 'running' ? {...job, state: 'interrupted' as const} : job);
+function effectiveJobs(jobs: readonly AutomaJobState[], step: Step | undefined, background = false): readonly AutomaJobState[] {
+  // A background dispatch outlives its tool step (the call returned a receipt at once): its jobs are not cut off by the step having ended.
+  if (!step || background || LIVE.has(step.state)) return jobs;
+  return jobs.map(job => job.state === 'queued' || job.state === 'running' || job.state === 'waiting' ? {...job, state: 'interrupted' as const} : job);
 }
+const OPEN_JOB = new Set(['queued', 'running', 'waiting']);
+/** The state word of a job row; a background job adds whether its result reached the dispatcher. */
+const stateLabel = (job: AutomaJobState, background: boolean): string =>
+  job.state + (background ? job.delivered ? SEP + 'delivered' : !OPEN_JOB.has(job.state) && job.state !== 'interrupted' ? SEP + 'not delivered' : '' : '');
 const jobStep = (job: AutomaJobState): Step | undefined => job.state === 'running' && job.startedAt !== undefined
   ? {state: 'running', title: job.title, elapsedMs: 0, runningSince: job.startedAt} : undefined;
 
@@ -64,16 +71,21 @@ function renderSwarm(context: ToolRenderContext): void {
   const {builder, message, frame, open, accent} = context;
   const swarm = message.step!.swarm!;
   const step = message.step!;
-  const live = LIVE.has(step.state);
-  const jobs = effectiveJobs(swarm.jobs, step);
-  const returned = jobs.filter(job => job.state !== 'queued' && job.state !== 'running').length;
+  const background = swarm.background === true;
+  const jobs = effectiveJobs(swarm.jobs, step, background);
+  const live = LIVE.has(step.state) || (background && jobs.some(job => OPEN_JOB.has(job.state)));
+  const returned = jobs.filter(job => !OPEN_JOB.has(job.state)).length;
   const failed = jobs.filter(job => job.state === 'failed').length;
   const denied = jobs.filter(job => job.state === 'denied').length;
   const blocked = jobs.filter(job => job.state === 'blocked').length;
+  const skipped = jobs.filter(job => job.state === 'skipped').length;
+  const waiting = jobs.filter(job => job.state === 'waiting').length;
+  const undelivered = background ? jobs.filter(job => !OPEN_JOB.has(job.state) && job.state !== 'interrupted' && !job.delivered).length : 0;
   const parentWidth = frame?.innerWidth ?? builder.contentWidth;
   const lead = open ? '▾ ' : '▸ ';
-  const summary = [capitalize(swarm.name), `${jobs.length} ${noun(swarm.name, jobs.length)}`, `${returned} returned`,
-    ...(blocked ? [`${blocked} blocked`] : []), ...(failed ? [`${failed} failed`] : []), ...(denied ? [`${denied} denied`] : [])].join(SEP);
+  const summary = [capitalize(swarm.name), `${jobs.length} ${noun(swarm.name, jobs.length)}`, ...(background ? ['background'] : []), `${returned} returned`,
+    ...(waiting ? [`${waiting} waiting`] : []), ...(undelivered ? [`${undelivered} not delivered`] : []),
+    ...(blocked ? [`${blocked} blocked`] : []), ...(failed ? [`${failed} failed`] : []), ...(denied ? [`${denied} denied`] : []), ...(skipped ? [`${skipped} skipped`] : [])].join(SEP);
   const reserve = SEP.length + 7;
   const text = lead + fit(summary, Math.max(1, parentWidth - 4 - reserve - lead.length));
   const titleSegments: SceneSegment[] = [{text, color: live ? palette.fg : palette.muted, italic: true, selectionKey: message.id + ':title', selectionOffset: 0}];
@@ -84,10 +96,11 @@ function renderSwarm(context: ToolRenderContext): void {
   builder.pushOrdinaryCard({
     id: message.id, ownerId: message.ownerId, kind: 'Tool', title: text, titleSegments,
     status: live ? '' : elapsed > 0 ? seconds(elapsed) : '', bodyLines: [], open, railColor: accent, expandable: true,
-    ...(live ? {step: {state: 'running', title: text, elapsedMs: step.elapsedMs, ...(step.runningSince !== undefined ? {runningSince: step.runningSince} : {})} as Step} : {}),
+    ...(live ? {step: {state: 'running', title: text, elapsedMs: step.elapsedMs, ...(step.runningSince !== undefined ? {runningSince: step.runningSince}
+      : background && jobs.some(job => job.startedAt !== undefined) ? {runningSince: Math.min(...jobs.flatMap(job => job.startedAt !== undefined ? [job.startedAt] : []))} : {})} as Step} : {}),
     ...(frame ? {parentFrame: frame} : {}),
     renderBody(inner) {
-      jobs.forEach((job, index) => renderJob(context, job, jobId(index), jobOpen(index), inner));
+      jobs.forEach((job, index) => renderJob(context, job, jobId(index), jobOpen(index), inner, background));
     },
     renderAfterHeader(headerFrame) {
       // Collapsed only: each running job shows as a `└` row with a live frame and its own clock.
@@ -116,12 +129,13 @@ function renderSwarm(context: ToolRenderContext): void {
   });
 }
 
-function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, open: boolean, parent: NonNullable<ToolRenderContext['frame']>): void {
+function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, open: boolean, parent: NonNullable<ToolRenderContext['frame']>, background = false): void {
   const {builder, message, accent} = context;
   const bad = job.state === 'failed' || job.state === 'denied';
   const running = jobStep(job);
   const tag = job.id ? job.id + SEP : '';
-  const text = (open ? '▾ ' : '▸ ') + tag + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - job.state.length - 8 - tag.length)) + SEP + job.state;
+  const label = stateLabel(job, background);
+  const text = (open ? '▾ ' : '▸ ') + tag + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - label.length - 8 - tag.length)) + SEP + label;
   const color = bad ? palette.error : job.state === 'running' ? palette.fg : palette.muted;
   builder.pushOrdinaryCard({
     id, ownerId: message.ownerId, kind: 'Tool', title: text,
@@ -135,7 +149,7 @@ function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, 
         {text: (call.state === 'completed' ? '✓' : call.state === 'failed' ? '✗' : '·') + ' ', color: call.state === 'failed' ? palette.error : palette.muted},
         {text: call.name + (call.title ? ' ' + call.title : ''), color: palette.muted}]}));
       const receipt: ToolLine[] = job.receipt?.trim() ? job.receipt.trimEnd().split(/\r?\n/).map(prose => ({prose, color: palette.muted})) : [];
-      pushToolBody(builder, id, accent, inner, {lines: [...calls, ...receipt], empty: job.state === 'queued' ? 'Waiting for a free slot' : 'No details'}, context.isOpen?.(expanderId(id)) ?? false);
+      pushToolBody(builder, id, accent, inner, {lines: [...calls, ...receipt], empty: job.state === 'queued' ? 'Waiting for a free slot' : job.state === 'waiting' ? 'Waiting for ' + (job.after ?? []).join(', ') : 'No details'}, context.isOpen?.(expanderId(id)) ?? false);
     },
   });
 }

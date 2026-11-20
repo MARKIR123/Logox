@@ -2,6 +2,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {ASK_DEADLOCK_RELEASED, askRecipientEnded} from '../prompts/runtime/recovery.js';
 import {asksFor, type AskBoard} from '../runtime/asks.js';
 import type {RuntimeStore} from '../runtime/store.js';
+import type {BackgroundBoard} from '../runtime/background-jobs.js';
 import {isDirector} from './director.js';
 
 const POLL_MS = 1000;
@@ -15,6 +16,8 @@ export interface PeerWaitEnvironment {
   readonly signal: AbortSignal;
   readonly hasPendingInbox?: (() => boolean) | undefined;
   readonly pollMs?: number;
+  /** The Automa background jobs of this task: while any result is outstanding the task stays open and parks with no model requests. */
+  readonly background?: Pick<BackgroundBoard, 'outstanding' | 'flush' | 'nextChange'> | undefined;
 }
 
 export interface PeerWaitNotice {readonly id: string; readonly text: string}
@@ -33,11 +36,15 @@ export class PeerWait {
 
   private get asks() { return isDirector(this.env.ownerId) ? [] : this.board.awaited(this.env.activityId); }
 
-  get pending(): boolean { return this.asks.length > 0; }
+  /** Background Automa jobs of this task whose results have not reached it. A Director waits for them like any actor: it has no companion to hold its task open. */
+  private get jobs() { return this.env.background?.outstanding(this.env.activityId) ?? []; }
+
+  get pending(): boolean { return this.asks.length > 0 || this.jobs.length > 0; }
 
   describe(): string {
     const names = [...new Set(this.asks.map(ask => ask.to))];
-    return 'Waiting for a reply from ' + names.join(', ');
+    const jobs = this.jobs.map(job => job.id);
+    return [names.length ? 'Waiting for a reply from ' + names.join(', ') : '', jobs.length ? 'Waiting for Automa results: ' + jobs.join(', ') : ''].filter(Boolean).join(' · ');
   }
 
   /** Reports and clears what is over. Never waits. */
@@ -60,6 +67,8 @@ export class PeerWait {
     try {
       for (;;) {
         env.signal.throwIfAborted();
+        // A result that found nobody to receive it (the inbox was closing) is offered again.
+        env.background?.flush(env.activityId);
         if (env.hasPendingInbox?.()) return;
         const notices = this.take();
         if (notices.length) { this.released.push(...notices); return; }
@@ -73,7 +82,9 @@ export class PeerWait {
           }
           return;
         }
-        await delay(env.pollMs ?? POLL_MS, undefined, {signal: env.signal});
+        // Background jobs wake the wait the moment one changes; questions are polled.
+        if (env.background && !this.asks.length) await env.background.nextChange(env.pollMs ?? POLL_MS, env.signal);
+        else await delay(env.pollMs ?? POLL_MS, undefined, {signal: env.signal});
       }
     } finally {
       board.unpark(env.sessionId, env.ownerId);

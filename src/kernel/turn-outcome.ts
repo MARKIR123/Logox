@@ -15,7 +15,7 @@ export interface TurnFacts {
   readonly closing: boolean;
   /** Ending this activity closes a round (`roundEffect`), or this is the closing follow-up. */
   readonly closes: boolean;
-  /** A peer reply is awaited or this actor still owes a reply. */
+  /** A peer reply is awaited, this actor still owes a reply, or results of its background Automa jobs are outstanding (`PeerWait.pending`). */
   readonly peerPending: boolean;
   /** A Director with dispatched work still open. */
   readonly directorWaiting: boolean;

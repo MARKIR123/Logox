@@ -12,6 +12,8 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - \`scope\` says how open the problem is, not how much work it is: \`exact\` (the change or answer is fully specified), \`bounded\` (a known goal with room for judgment), \`open\` (the cause or approach is unknown). Never mention other jobs or coordination in it.
 - \`writes\` lists workspace paths or globs the job may edit, disjoint across jobs. Leave it out for read-only work: reading, searching, commands and scratch scripts in your scratchpad need no grant.
 - Jobs without \`writes\` run on a fast read model; jobs with \`writes\` run on a stronger code model. Give a read-only job \`writes\` only if it must edit.
+- \`after\` orders jobs: a job starts when the jobs it names (by id \`T1\`…, \`#n\` or title) are done, and receives their results. Jobs without \`after\` run in parallel; a job whose prerequisite does not finish is skipped. Ordered jobs may write the same files.
+- \`mode: "background"\` returns at once and delivers each result as a message when it is ready, so you can act on the first findings while the rest run. Use it when early results let you move on; use the default when you need all results together. \`{"wait": ["T3"]}\` waits for specific background jobs.
 - \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 - Workers read whatever you can read and run commands; every call is judged by your permission rules and can never exceed them.
 - Every finished worker can be continued with \`continue: "<id from the result>"\` and a new \`brief\`; it keeps its context. \`release\` ends workers you no longer need; all of them end with your task.
@@ -37,6 +39,22 @@ export const AUTOMA_FINISH_ACCEPTED = 'Result delivered to your dispatcher.';
 /** One line per dispatch: some of its jobs waited for a running slot because the session runs a limited number of workers at once (`[automa] max_running`). */
 export const queuedJobsLine = (queued: number, total: number, maxRunning: number): string =>
   `Queued ${queued} of ${total} jobs: the session runs at most ${maxRunning} workers at once.`;
+
+/** The last line of a background dispatch's receipt. */
+export const BACKGROUND_RECEIPT_SENTENCE = 'Results arrive as messages while you keep working; you do not need to wait for them.';
+/** One receipt line per job of a background dispatch. */
+export const backgroundReceiptLine = (id: string, title: string, state: 'running' | 'queued' | 'waiting', after: readonly string[]): string =>
+  `${id} ${title.replace(/\s+/g, ' ').trim()} · ${state === 'waiting' ? 'waiting on ' + after.join(', ') : state}`;
+/** `Automa` called with `wait` together with other fields. */
+export const WAIT_ALONE = 'Send `wait` alone. Fix: {"wait":["T3"]}, ids of your own background jobs; dispatch more jobs in a separate call.';
+/** `wait` named ids that are not background jobs of this task. */
+export const waitUnknown = (unknown: readonly string[], known: readonly string[]): string =>
+  `Unknown background job${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}. ` + (known.length ? `Your background jobs are ${known.join(', ')}.` : 'You have no background jobs right now.') +
+  ' Fix: wait only for ids a background receipt listed.';
+/** Background mode needs somewhere to deliver results. */
+export const BACKGROUND_UNAVAILABLE = 'Background mode is not available here. Fix: omit `mode`, or use `"mode":"wait"`.';
+/** The summary line of a delivery of results (shown beside the message header). */
+export const backgroundDeliverySummary = (ids: readonly string[]): string => 'Automa results ' + ids.join(', ');
 
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;
 

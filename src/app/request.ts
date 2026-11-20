@@ -50,11 +50,13 @@ export interface RequestAssemblyDeps {
   configureMeter(ownerId: string): Promise<void>;
   /** The static memory section (read at session start and on /reload); the same string for every request of every actor between those moments. */
   memoryPrompt(): string;
+  /** Puts a message into a running task's inbox the way a peer message arrives (`EnsembleRuntime.injectTaskMessage()`, queued); false when the task cannot receive it now. */
+  deliverToTask(ownerId: string, activityId: string, text: string, summary: string): Promise<boolean>;
 }
 
 export function createRequestAssembly(deps: RequestAssemblyDeps) {
   const {session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry, modelPool, actors, actorServices,
-    taskModels, contexts, permissions, extensions, profileReady, directorReports, configureMeter, memoryPrompt} = deps;
+    taskModels, contexts, permissions, extensions, profileReady, directorReports, configureMeter, memoryPrompt, deliverToTask} = deps;
   const resources = extensions.resources;
   const environment = new EnvironmentState();
   const automaJournal = (sessionId: string) => join(stateDir, 'sessions', sessionId, 'subagents', 'automa.jsonl');
@@ -87,6 +89,8 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     journalPath: automaJournal,
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
+    // Results of background jobs reach the dispatcher as peer messages do.
+    deliver: (target, text, summary) => deliverToTask(target.ownerId, target.activityId, text, summary),
   }, session);
   // A larger Director dispatch is read by a read-only Automa-style check on the code model before any companion starts.
   actorServices.setBriefCheck((input, context) => tools.runBriefCheck(input, context));

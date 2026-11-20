@@ -47,10 +47,13 @@ export interface Delegation {
   readonly jobId?: string;
   readonly route?: 'read' | 'code' | 'vision';
   readonly model?: string;
+  /** Automa jobs of a background dispatch: `background`, and whether the result reached the dispatcher (`delivered`; absent while it is outstanding). */
+  readonly background?: boolean;
+  readonly delivered?: boolean;
 }
 
 const LIVE: ReadonlySet<string> = new Set(['queued', 'running', 'waiting_input', 'paused']);
-const SETTLED_JOB: ReadonlySet<string> = new Set(['done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted']);
+const SETTLED_JOB: ReadonlySet<string> = new Set(['done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted', 'skipped']);
 const SUMMARY_LIMIT = 400;
 const oneLine = (text: string, limit = SUMMARY_LIMIT) => {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -62,6 +65,7 @@ function jobStop(job: AutomaJobState): StopReasonCode | undefined {
   if (job.stopReason) return job.stopReason;
   if (job.state === 'done' || job.state === 'blocked' || job.state === 'denied') return 'completed';
   if (job.state === 'failed') return 'error';
+  if (job.state === 'skipped') return 'dependency_unmet';
   if (job.state === 'cancelled' || job.state === 'interrupted') return 'interrupted';
   return undefined;
 }
@@ -127,9 +131,14 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
       const jobId = job.id ?? '#' + (index + 1), id = dispatcher.activityId + '/' + jobId;
       const settled = SETTLED_JOB.has(job.state), stop = jobStop(job);
       const durationMs = job.state === 'running' && job.startedAt !== undefined ? Math.max(0, now - job.startedAt) : job.elapsedMs;
+      // A job that follows others waits on those that have not ended; their delegation ids are `<activityId>/<jobId>`.
+      const unfinished = job.state === 'waiting' ? (job.after ?? []).filter(afterId => { const other = swarm.jobs.find(item => item.id === afterId); return other ? !SETTLED_JOB.has(other.state) : false; }) : [];
       jobs.set(id, {
-        id, kind: 'automa', ownerId: dispatcher.ownerId, title: job.title, status: job.state, parentId: dispatcher.activityId, rootId, children: [], blockedBy: [],
+        id, kind: 'automa', ownerId: dispatcher.ownerId, title: job.title, status: job.state, parentId: dispatcher.activityId, rootId, children: [],
+        blockedBy: unfinished.map(afterId => dispatcher.activityId + '/' + afterId),
         ...(job.state === 'queued' ? {waiting: {kind: 'queued' as const, text: 'queued for a worker slot'}} : {}),
+        ...(job.state === 'waiting' ? {waiting: {kind: 'blocked' as const, text: 'waiting on ' + (unfinished.length ? unfinished : job.after ?? []).join(', ')}} : {}),
+        ...(swarm.background ? {background: true, ...(job.delivered !== undefined ? {delivered: job.delivered} : {})} : {}),
         durationMs, ...(stop ? {stopReason: stop} : {}), jobId, ...(job.route ? {route: job.route} : {}), ...(job.model ? {model: job.model} : {}),
         assignment: {title: job.title, owns: [], acceptance: []},
         ...(settled && stop ? {result: {summary: oneLine(job.summary ?? job.title), ...(job.evidence?.length ? {evidence: job.evidence} : {}), ...(job.notVerified?.length ? {notVerified: job.notVerified} : {}),
