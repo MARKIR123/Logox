@@ -205,6 +205,11 @@ export function App({store, authentication, surfaces, getCommandContext, getActo
     setHoveredStop(''); setFocus('input');
   };
 
+  // A page can ask for an actor's window (`/tasks` "Open conversation"); only known actors are switched to.
+  const switchViewRef = useRef(switchView), knownRoles = useRef(roles);
+  switchViewRef.current = switchView; knownRoles.current = roles;
+  useEffect(() => surfaces?.subscribeWindow(ownerId => {if (Object.hasOwn(knownRoles.current, ownerId)) switchViewRef.current(ownerId);}), [surfaces]);
+
   const pending = snapshot.interactions.filter(request =>
     request.sessionId === sessionId &&
     request.status === 'pending' &&

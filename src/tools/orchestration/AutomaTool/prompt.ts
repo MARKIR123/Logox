@@ -34,6 +34,10 @@ export const AUTOMA_FINISH_ALONE = 'Finish was not accepted: it came in the same
 /** The answer to an accepted Finish; the worker sees it again when it is continued. */
 export const AUTOMA_FINISH_ACCEPTED = 'Result delivered to your dispatcher.';
 
+/** One line per dispatch: some of its jobs waited for a running slot because the session runs a limited number of workers at once (`[automa] max_running`). */
+export const queuedJobsLine = (queued: number, total: number, maxRunning: number): string =>
+  `Queued ${queued} of ${total} jobs: the session runs at most ${maxRunning} workers at once.`;
+
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;
 
 export const AUTOMA_COLOR_TOKEN = 'automa' as const;

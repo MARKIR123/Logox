@@ -47,12 +47,14 @@ import {activeEnsembleRoster, directorFacts, hasOpenWork, heldProgress, openWork
 import {ENSEMBLE_RECORD_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
-import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
+import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, queuedBehindNote, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
 import {briefCheckNeeded, type BriefChecker, type BriefCheckInput, type BriefCheckOutcome} from '../tools/orchestration/ActorTool/brief-check.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {inputKind} from '../runtime/provenance.js';
+import {normalizeStopReason} from '../runtime/stop-reason.js';
+import {definitionChangeNote, definitionChanges, definitionFingerprint} from '../runtime/definition-fingerprint.js';
 
 /** Orders per-owner groups so an owner dispatched `after` another owner of the same call comes later; rejects cycles. */
 function orderByDependency<T extends {after: ReadonlySet<string>}>(grouped: ReadonlyMap<string, T>): [string, T][] {
@@ -186,6 +188,14 @@ export class ActorServices {
       if (this.wakeTask) void this.wakeTask.done.then(wake, wake); else wake();
     }, (text, first) => options.outageNotice?.(text, first), options.outageDelaysMs);
   }
+  /** What the actor's definition is now: its profile text and bound model. Stored on the work it starts, compared when that work is resumed. */
+  private fingerprintOf(ownerId: string): string | undefined {
+    const definition = this.options.catalog.find(ownerId);
+    if (!definition) return undefined;
+    const model = this.options.modelResolver?.(ownerId);
+    return definitionFingerprint({prompt: [definition.prompt, definition.execution, definition.collaboration, definition.compression, definition.skills.join(',')],
+      model: model ? model.provider + '/' + model.model + (model.effort ? ' ' + model.effort : '') : undefined});
+  }
   definition(context: ActorContext): ActorDefinition {
     this.origins.set(context.activityId, context);
     if (context.dispatchDepth !== undefined) this.depths.set(context.activityId, context.dispatchDepth);
@@ -258,7 +268,7 @@ export class ActorServices {
         }
         const {tasks, resumeBatch, briefCheck} = parsedInput;
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
-        const resumed = new Set<string>(), roots = new Set<string>();
+        const resumed = new Set<string>(), roots = new Set<string>(), resumeNotes: string[] = [];
         for (const task of tasks) {
           const explicitTitle = task.title?.replace(/\s+/g, ' ').trim().slice(0, 120);
           if (explicitTitle) task.title = explicitTitle;
@@ -267,7 +277,7 @@ export class ActorServices {
             const previous = saved.find(previous => previous.activityId === task.resumeTask);
             if (!previous) throw new Error('Resume activity does not exist or is not in the current session effective history: ' + task.resumeTask);
             if (previous.ownerId !== task.ownerId) throw new Error('Resume actor mismatch: the original activity belongs to ' + previous.ownerId);
-            if (previous.stopReason === 'user') throw new Error('This activity was stopped by the user and cannot be resumed automatically');
+            if (normalizeStopReason(previous.stopReason) === 'cancelled_by_user') throw new Error('This activity was stopped by the user and cannot be resumed automatically');
             if (previous.status !== 'failed' && !restartStopped(previous)) throw new Error('Only failed or restart-interrupted activities can be resumed; current status: ' + previous.status);
             const root = previous.rootActivityId ?? previous.activityId;
             if (root !== (context.rootActivityId ?? context.activityId) && !this.recovery.canResume(context.activityId, root) && !this.restartInterrupted.has(task.resumeTask) &&
@@ -278,7 +288,11 @@ export class ActorServices {
             if (resumed.has(task.resumeTask) || this.continuedTasks.has(task.resumeTask)) throw new Error('This failed activity is already scheduled to resume and cannot be dispatched again: ' + task.resumeTask);
             roots.add(root);
             resumed.add(task.resumeTask);
-            task.prompt = '[Resuming interrupted Actor task]\nOriginal activity: ' + previous.activityId + '\nOriginal goal: ' + previous.prompt +
+            // A definition that changed since the work started does not stop the resume; the resumed task and the receipt both say so once.
+            const current = this.fingerprintOf(task.ownerId);
+            const changed = current ? definitionChangeNote(this.options.catalog.find(task.ownerId)?.name ?? task.ownerId, definitionChanges(previous.fingerprint, current)) : undefined;
+            if (changed) resumeNotes.push(changed);
+            task.prompt = '[Resuming interrupted Actor task]\n' + (changed ? changed + '\n' : '') + 'Original activity: ' + previous.activityId + '\nOriginal goal: ' + previous.prompt +
               '\nContinuation request: ' + task.prompt + '\nFirst check your own history summary and completed tool results, and do only the unfinished part. Keep existing output and do not re-run writes or commands that already succeeded; tool calls that were not fully generated were not executed, and approval denials still stand.';
           }
         }
@@ -351,7 +365,8 @@ export class ActorServices {
         const receipt: DispatchedTask[] = [];
         orderByDependency(grouped).forEach(([owner, task]) => {
           const after = this.resolveAfter(owner, task.after, dispatched);
-          const childOrigin = {...origin, batchId: group.batchId, ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
+          const fingerprint = this.fingerprintOf(owner);
+          const childOrigin = {...origin, batchId: group.batchId, ...(fingerprint ? {fingerprint} : {}), ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
             ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {})};
           const ownerOf = (id: string) => [...dispatched].find(([, activity]) => activity === id)?.[0] ?? snapshot?.activities.find(activity => activity.activityId === id)?.ownerId;
           const finished = new Set(after.map(ownerOf).filter((who): who is string => !!who));
@@ -370,7 +385,7 @@ export class ActorServices {
           for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
         }
         return {
-          text: dispatchedResult(receipt, group.batchId, dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), briefLine),
+          text: dispatchedResult(receipt, group.batchId, [...dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), ...resumeNotes, ...this.queuedNotes(receipt, snapshot)], briefLine),
           isError: false,
         };
       }
@@ -430,6 +445,16 @@ export class ActorServices {
       const collab = await this.collaboration.execute(call, context);
       return {text: collab.text, isError: collab.isError, ...(collab.images ? {images: collab.images} : {})};
     } catch (error) {return {text: error instanceof Error ? error.message : 'Actor operation failed', isError: true};}
+  }
+  /** One line per dispatched task whose companion is still on an earlier task (read from the snapshot taken before the dispatch): it queues behind that running task. */
+  private queuedNotes(receipt: readonly DispatchedTask[], before: RuntimeSnapshot | undefined): string[] {
+    if (!before) return [];
+    const name = (ownerId: string) => this.options.catalog.find(ownerId)?.name ?? ownerId;
+    return receipt.flatMap(task => {
+      const running = before.activities.findLast(activity => activity.sessionId === this.options.sessionId && activity.ownerId === task.ownerId && activity.kind === 'actor' &&
+        (activity.status === 'running' || activity.status === 'waiting_input'));
+      return running ? [queuedBehindNote(task, name(task.ownerId), running.taskTitle ?? running.title, running.activityId)] : [];
+    });
   }
   /** Resolves `after` references (activity ids or actor ids) to unfinished activity ids; finished or unknown activity ids are dropped, unknown actors are rejected. */
   private resolveAfter(owner: string, refs: ReadonlySet<string>, dispatched: ReadonlyMap<string, string>): string[] {
@@ -591,11 +616,12 @@ export class ActorServices {
     const rootActivityId = origin.rootActivityId ?? result.rootActivityId ?? result.activityId;
     const [cause, ...diagnostics] = (executionError?.message ?? (result.error instanceof ProviderError ? formatFailureDetail(result.error) : undefined))?.split('\n') ?? [];
     const failure = cause ? '\nRuntime termination cause: ' + cause + '. Earlier tool failures are separate observations.' + (diagnostics.length ? '\n' + diagnostics.join('\n') : '') : '';
-    const body = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
+    const stopLine = result.stop ? `\nStop reason: ${result.stop}` + (result.diagnostic && !failure ? `\nDiagnostic: ${result.diagnostic}` : '') : '';
+    const body = `Actor ${result.ownerId} activity ${result.activityId} (${result.status})${stopLine}${failure}\nTitle: ${result.delivery?.title ?? result.summary.title}\nReport:\n${result.delivery?.text ?? result.summary.report}`;
     const record = isDirector(result.ownerId) ? '' : await this.runtimeRecord(result.ownerId, result.activityId, origin);
     const report = record ? body + '\n\n' + record : body;
     if (result.stopReason === 'shutdown') {this.closeHandoff(result.activityId); return;}
-    const userStopped = result.stopReason === 'user' || this.stoppedActors.delete(result.activityId);
+    const userStopped = result.stopReason === 'user' || result.stop === 'cancelled_by_user' || this.stoppedActors.delete(result.activityId);
     const failed = result.status !== 'completed';
     // A Director wake that failed on a provider outage is not a new failure: its deliveries return to pending and the backoff schedules the next try, without spending recovery budget.
     if (isDirector(result.ownerId) && failed && !userStopped && isProviderOutage(result.error) &&
@@ -611,7 +637,7 @@ export class ActorServices {
       !!(origin.recovery?.exhausted && !origin.recovery.key.startsWith('execution:'));
     const inheritedRecovery = origin.recovery ? {...origin.recovery} : undefined;
     const recovery = deferred ? inheritedRecovery : failed ? executionError ? await this.recovery.directorClaim(rootActivityId, executionError.kind)
-      : await this.recovery.next(rootActivityId, result.error, origin.recovery) : inheritedRecovery;
+      : await this.recovery.next(rootActivityId, result.error, origin.recovery, result.stop) : inheritedRecovery;
     const noClaim = !!executionError && !recovery;
     if (recovery) {
       const actorTask = !failed ? undefined : isDirector(result.ownerId) ? origin.recovery?.actorTask

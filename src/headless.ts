@@ -24,6 +24,7 @@ import type {ResourceOptions} from './resources/manager.js';
 import {stripNarration} from './runtime/narration.js';
 import {answerEnvelope} from './runtime/interactions.js';
 import {DIRECTOR_ID} from './runtime/director-id.js';
+import {activityCosts, projectDelegations} from './runtime/delegations.js';
 import type {Provider} from './runtime/messages.js';
 import type {Activity, Message} from './runtime/contracts.js';
 
@@ -278,6 +279,17 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     for (const item of used) groups.set(key(item), [...groups.get(key(item)) ?? [], item.record]);
     return Object.fromEntries([...groups].map(([name, list]) => [name, totalsOf(list, config)]));
   };
+  // The delegation record of this run (the same projection `/tasks` reads): every companion activity and Automa job, with how it ended.
+  const owners = [...new Set(activities.map(activity => activity.ownerId))];
+  const ledgers = (await Promise.all(owners.map(owner => app.journal.load(session, owner).catch(() => [])))).flat().filter(entry => entry.activityId && ids.has(entry.activityId));
+  const costs = activityCosts(ledgers);
+  const delegations = projectDelegations({snapshot, sessionId: session, deliveries: app.ensemble.deliveries.snapshot()})
+    .filter(node => node.kind === 'automa' ? node.parentId !== undefined && ids.has(node.parentId) : node.kind === 'actor' && ids.has(node.id))
+    .map(node => ({id: node.kind === 'automa' ? node.jobId! : node.id, owner: node.ownerId, kind: node.kind as 'actor' | 'automa', parentId: node.parentId ?? null, title: node.title,
+      status: node.status, stopReason: node.stopReason ?? null, durationMs: node.durationMs ?? null,
+      costUsd: costs.has(node.id) ? Number(costs.get(node.id)!.toFixed(6)) : null,
+      ...(node.route ? {route: node.route} : {}), ...(node.model ? {model: node.model} : {}),
+      blockedBy: [...node.blockedBy], result: node.result ? {summary: node.result.summary, notVerified: [...node.result.notVerified ?? []]} : null}));
   const cwd = await realpath(io.cwd).catch(() => io.cwd);
   const changedFiles = (await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {
     const inside = relative(cwd, path);
@@ -287,6 +299,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     exit: setupError ? HEADLESS_EXIT.setup : status === 'completed' ? HEADLESS_EXIT.completed : status === 'failed' ? HEADLESS_EXIT.failed : HEADLESS_EXIT.interrupted,
     setupError, final,
     report: {version: 1 as const, sessionId: session, status, durationMs: Date.now() - started, final, actors: actorStats,
+      delegations,
       automa: {jobs: jobs.length, done: jobs.filter(job => job.state === 'done').length, blocked: jobs.filter(job => job.state === 'blocked').length, failed: jobs.filter(job => job.state === 'failed').length},
       usage: {...totalsOf(used.map(item => item.record), config), byActor: group(item => item.owner), byCategory: group(item => item.record.category)},
       changedFiles, errors},

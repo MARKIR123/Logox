@@ -62,7 +62,8 @@ export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatu
     if (!pill) return undefined;
     const activity = snapshot.activities.find(item => item.activityId === pill.id);
     const own = snapshot.messages.filter(message => message.activityId === pill.id);
-    const stage = pill.state === 'question' ? 'Awaiting your answer' : pill.state === 'approval' ? 'Awaiting approval' : pill.state === 'paused' ? 'Paused'
+    const asked = pill.state === 'approval' ? snapshot.interactions.find(item => item.status === 'pending' && item.kind === 'permission' && item.ownerId === pill.ownerId) : undefined;
+    const stage = pill.state === 'question' ? 'Awaiting your answer' : pill.state === 'approval' ? 'Awaiting approval' + (asked?.kind === 'permission' ? ' · ' + asked.tool : '') : pill.state === 'paused' ? 'Paused'
       : pill.state === 'queued' ? (activity?.stage.startsWith('Waiting on ') ? activity.stage : 'Queued')
       : pill.state === 'failed' ? (activity?.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() || 'Failed')
       : liveStatusLine(liveStatus(own)) ?? activity?.stage ?? 'Working';

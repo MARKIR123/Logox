@@ -332,7 +332,7 @@ test('wizard notification severity is explicit: recoverable discovery failure is
   assert.equal(f.requests.length, 0);
 }));
 
-test('unknown commands throw with explicit timeline errors, old events survive, and replay never reopens results or enters model history', async () => withFixture(async f => {
+test('unknown commands throw as rejected input with silent system records, old events survive, and replay never reopens results or enters model history', async () => withFixture(async f => {
   const legacy: SystemEvent = {version: 1, id: randomUUID(), sessionId: f.app.sessionId, ownerId: 'logox', time: 1,
     kind: 'command_result', text: 'Legacy model-switch receipt without presentation'};
   await f.app.persistSession();
@@ -351,9 +351,9 @@ test('unknown commands throw with explicit timeline errors, old events survive, 
   await assert.rejects(f.app.submit('/unknown-receipt-command'), /Unknown command/);
   const error = lastReceipt(f);
   assert.equal(error.systemEventKind, 'command_error');
-  assert.equal(error.systemPresentation, 'timeline');
+  assert.equal(error.systemPresentation, 'silent');
   assert.equal(error.systemReplay, false);
-  assert.equal(isTimelineMessage(error), true);
+  assert.equal(isTimelineMessage(error), false);
   await f.app.submit('/help');
   assert.equal(lastReceipt(f).systemPresentation, 'panel');
   f.app.surfaces.cancel();
@@ -377,4 +377,15 @@ test('unknown commands throw with explicit timeline errors, old events survive, 
   assert.ok(replayed.every(message => message.systemReplay === true));
   assert.equal(replayed.filter(message => message.id === error.id).length, 1);
   assert.equal(f.requests.length, 1, 'Restore never re-executes tasks.');
+}));
+
+test('rejected input leaves no timeline row, however often it is submitted', async () => withFixture(async f => {
+  const visible = () => f.app.store.getSnapshot().messages.filter(isTimelineMessage).length;
+  const before = visible();
+  for (let i = 0; i < 3; i++) await assert.rejects(f.app.submit('@nosuchactor do something'), /Unknown actor name/);
+  await assert.rejects(f.app.submit('/nosuchcommand'), /Unknown command/);
+  assert.equal(visible(), before, 'No timeline-visible system message');
+  const errors = systemMessages(f).filter(message => message.systemEventKind === 'command_error');
+  assert.equal(errors.length, 4, 'The refusals stay in system history');
+  assert.ok(errors.every(message => message.systemPresentation === 'silent'));
 }));

@@ -44,7 +44,7 @@ export class PermissionGuard {
   private output = 0;
   private missingUsage = 0;
   constructor(readonly engine: PermissionEngine, private readonly options: GuardOptions = {}) {}
-  policy(): string {return digest(this.engine.policyKey());}
+  policy(sessionId?: string): string {return digest(this.engine.policyKey(sessionId));}
   /** Approval statistics of this run: calls that needed adjudication, prompts shown to the user, model reviews and their tokens. */
   stats() {return {approvals: this.approvals, asked: this.asked, reviewed: this.calls, tokens: this.input + this.output};}
   snapshot(): readonly PermissionRecord[] {return this.records.map(record => ({...record}));}
@@ -105,8 +105,8 @@ export class PermissionGuard {
     const deny = (note?: string) => ({allowed: false, ...note ? {note} : {}});
     for (;;) {
       context.signal.throwIfAborted();
-      let policy = this.policy();
-      const evaluation = this.engine.evaluate(target);
+      let policy = this.policy(context.sessionId);
+      const evaluation = this.engine.evaluate(target, context.sessionId);
       if (evaluation.decision === 'deny') {this.record(context, target, 'deny', 'rule', evaluation.reason); return deny();}
       if (this.denied.has(key)) {this.record(context, target, 'deny', 'user', 'The user already denied this operation and authorization is unchanged; find another approach.'); return deny(this.denied.get(key));}
       if (evaluation.decision === 'allow') {this.record(context, target, 'allow', 'rule', evaluation.reason); return {allowed: true};}
@@ -116,9 +116,9 @@ export class PermissionGuard {
         let verdict: z.infer<typeof verdictSchema> | undefined;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {verdict = await this.review(context, target, args); break;}
-          catch {context.signal.throwIfAborted(); if (policy !== this.policy()) break;}
+          catch {context.signal.throwIfAborted(); if (policy !== this.policy(context.sessionId)) break;}
         }
-        if (policy !== this.policy()) continue;
+        if (policy !== this.policy(context.sessionId)) continue;
         if (!verdict) {
           this.record(context, target, 'paused', 'failure', 'The approval model could not reach a verdict; the operation is paused.');
           const outcome = await context.ask({kind: 'question', title: 'Approval failed; action paused', questions: [{id: 'retry', header: 'Approval',
@@ -128,7 +128,7 @@ export class PermissionGuard {
               {id: 'creative', label: 'Switch to creative', description: 'Save the mode and re-adjudicate under the danger-filter rules.'},
             ]}]});
           context.signal.throwIfAborted();
-          if (policy !== this.policy()) continue;
+          if (policy !== this.policy(context.sessionId)) continue;
           if (outcome.status !== 'answered' || outcome.response.kind !== 'question') return deny();
           const answer = outcome.response.answers.retry;
           if (answer?.type !== 'option') return deny();
@@ -150,12 +150,12 @@ export class PermissionGuard {
       if (suggestion && (answer.decision === 'allow_session' || answer.decision === 'allow_project')) {
         // The grant is created from the suggestion computed here, never from anything the answer carries.
         try {
-          await this.engine.add({scope: answer.decision === 'allow_session' ? 'session' : 'project', decision: 'allow', tool: suggestion.tool, pattern: suggestion.pattern});
+          await this.engine.add({scope: answer.decision === 'allow_session' ? 'session' : 'project', decision: 'allow', tool: suggestion.tool, pattern: suggestion.pattern}, context.sessionId);
           granted = answer.decision === 'allow_session' ? ' (rule added for this session)' : ' (rule added for this project)';
-          policy = this.policy();
+          policy = this.policy(context.sessionId);
         } catch {granted = ' (the rule could not be saved; allowed once)';}
       }
-      if (policy !== this.policy()) continue;
+      if (policy !== this.policy(context.sessionId)) continue;
       if (answer.decision === 'deny') {
         const note = answer.note?.replace(/\s+/g, ' ').trim() || undefined;
         this.denied.set(key, note); if (this.denied.size > 1000) this.denied.delete(this.denied.keys().next().value!);

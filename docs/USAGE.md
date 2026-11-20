@@ -274,6 +274,32 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 
 投递与恢复的实现见[角色模块](modules/actors.md#消息与投递)。
 
+### 委派记录：/tasks 与结束原因
+
+`/tasks` 打开一页只读的委派记录：本会话里每一次委派一行（Director 的一轮、角色的任务、Automa 工人各占一行），当前这一轮的树在最上面，较早的轮次依次排在下面，工人缩进在派遣它的任务下面。每行是“角色 · 标题”，右侧是状态和附注：结束的任务带结束原因（正常完成不加），没结束的写明在等什么（`blocked by <角色>`、`awaiting approval (<工具>)`、`awaiting your answer`、`queued behind …`、`paused`），再加耗时，有价格时加费用（来自账本里已定价的 USD 轮次）。键盘、点击、悬停和滚轮与其他列表一致：点一下选中，再点一下（或 Enter）打开该行的详情页；Esc 回到列表同一行，再按 Esc 关闭。
+
+详情页分三段：**Assignment**（所有者、标题、`owns`、验收标准）、**Status**（状态、`Stop reason`、一行诊断、等待对象、耗时、费用、批次、父任务；工人另有 id、路由和模型）和 **Result**（摘要、证据、`Not verified`、问题、完成时间，以及完整报告所在的引用：已有交付时是交付 id，否则是活动 id，可用 `ReadActor` 读取）。角色任务的页脚有 `o Open conversation`，直接切到该角色的窗口（与点击页脚的角色胶囊相同）；Automa 工人的页脚有 `t Worker transcript`，显示该工人在 `automa.jsonl` 里的简报、消息、调用和结果。页面是打开时的快照，不会自行刷新，需要最新状态时再输入 `/tasks`。悬停页脚里一个正在等审批的角色胶囊，提示行会写出 `Awaiting approval · <工具>`；等待依赖的角色写 `Waiting on <角色>`。
+
+**结束原因 `stopReason`**：一个值说明工作怎么结束，由运行时在一处写入，不依赖错误文字：
+
+| 值 | 含义 |
+|---|---|
+| `completed` | 正常完成（Automa 工人交回 `done`、`blocked` 或 `denied` 也算它已完成，状态另行显示） |
+| `cancelled_by_user` | 你按了 Esc / Ctrl+C |
+| `cancelled_by_director` | Logox 用 `CancelActor` 停止 |
+| `interrupted` | 进程崩溃或被强杀，重启后标记；也用于原因未知的取消 |
+| `shutdown` | 正常退出时被停止 |
+| `error` | 其他失败（含工人在 `Finish` 里报 `failed`） |
+| `max_tokens` | 输出反复被长度上限截断 |
+| `refusal` | 提供商拒绝了请求 |
+| `stalled` | 模型什么也没交付，或 Automa 工人连续三轮不调用工具 |
+
+出错时还有一行 `diagnostic`（最多 300 个字符，已去掉密钥样式的内容）。结束原因写在活动、任务检查点、交给 Logox 的报告和失败通知里（报告里是 `Stop reason: <值>` 一行），Automa 结果块在不是 `completed` 时多一个 `stop="…"` 属性（`status` 仍是工人自己报的）。失败的恢复预算按结束原因归类（同样是 `max_tokens`，措辞不同也算同一类）。旧会话里的 `user`、`director_cancel` 等旧值照常读取；没有这个字段的记录显示为“完成/失败/中断”之一，不报错。
+
+**限额与排队的说明**：Automa 一次派遣里有作业因为会话的 `max_running` 已满而排队时，结果开头多一行 `Queued <n> of <m> jobs: the session runs at most <max_running> workers at once.`（每次派遣只一行）。Logox 派工时某个角色还在做上一个任务，派工回执里每个排队的任务一行 `Queued: <标题> (<活动 id>) waits behind <角色>'s running task "<标题>" (<活动 id>); it starts when that ends.`。
+
+**恢复时的定义检查**：任务开始时会记下角色定义的指纹（档案文本的哈希和绑定的模型）；Automa 工人则记下系统提示（合约加项目规则）、授权和模型。用 `resumeTask` 恢复角色任务，或用 `continue` 续跑工人时，运行时拿它与当前定义比较；不同就照常恢复，但在被恢复任务的第一条消息和回执里各加一行 `Note: <名字>'s definition changed since this work started (prompt, model, grant); it continues under the current definition.`，括号里只列出变了的部分。没有存下指纹的旧记录不做比较。
+
 ### Automa：角色的并行工人
 
 角色（包括 Logox）可以用 `Automa` 工具一次派出最多 8 个无状态工人，处理可以并行的独立调查或修改（例如"各模块里是否都成立"、"把同一处改动应用到这几个文件"、只需要结论的长测试）。一两次调用就能完成的小事不用它。工人的原始输出不进入角色的上下文，角色只收到回执。
@@ -525,6 +551,7 @@ dream_idle_minutes = 30
 | | `/providers logout <name>`（同 `unregister`） | 删除已保存的提供商 |
 | 角色 | `/anamnesis [recap\|dream]` | 回顾与记忆：立即运行回顾或入梦，浏览和删除记忆记录，选择 Anamnesis 的模型（见“Anamnesis：回顾与长期记忆”） |
 | | `/ensemble` | 每个角色一个标签页：模型、上下文、工具、技能、本会话用量和提示词 |
+| | `/tasks` | 只读的委派记录：谁在做什么、在等什么、怎么结束、结果摘要，可打开某个角色的窗口（见“委派记录：/tasks 与结束原因”） |
 | | `/cast <task>` | 把同一任务交给三个内置角色 |
 | | `@actor <task>` | 交给指定角色 |
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |
@@ -602,11 +629,17 @@ logox -p "整理 README" --verbose --timeout 30 2> progress.log
 {"version": 1, "sessionId": "…", "status": "completed", "durationMs": 48213, "final": "…Director 的最终回复…",
  "actors": {"logox": {"tasks": 2, "toolCalls": 5}, "techne": {"tasks": 1, "toolCalls": 14}},
  "automa": {"jobs": 3, "done": 3, "blocked": 0, "failed": 0},
+ "delegations": [{"id": "a3f…", "owner": "techne", "kind": "actor", "parentId": "9c1…", "title": "Build the parser", "status": "completed", "stopReason": "completed",
+   "durationMs": 31200, "costUsd": 0.12, "blockedBy": [], "result": {"summary": "Built the parser; tests pass.", "notVerified": []}},
+  {"id": "T1", "owner": "techne", "kind": "automa", "parentId": "a3f…", "title": "Find the callers", "status": "done", "stopReason": "completed",
+   "durationMs": 4200, "costUsd": null, "route": "read", "model": "provider/reader", "blockedBy": [], "result": {"summary": "three callers", "notVerified": []}}],
  "usage": {"inputTokens": 91000, "outputTokens": 4200, "cacheReadTokens": 70000, "cacheWriteTokens": 12000, "costUsd": 0.41,
    "byActor": {"logox": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0}},
    "byCategory": {"task": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0}}},
  "changedFiles": ["src/add.ts", "tests/add.test.ts"], "errors": []}
 ```
+
+`delegations` 列出本次运行里的每一次委派（与 `/tasks` 读同一份投影）：角色任务（`kind` 为 `actor`，`id` 是活动 id）和 Automa 工人（`kind` 为 `automa`，`id` 是 `T1` 这样的工人 id，`parentId` 是派遣它的活动）。`status` 是活动状态或工人状态，`stopReason` 取上文“结束原因”表里的值（没结束时为 `null`），`durationMs` 未知时为 `null`，`costUsd` 来自账本里已定价的 USD 轮次（工人和没有价格的记录为 `null`），`blockedBy` 是还没结束的 `after` 依赖，`result` 在结束后有 `summary` 与 `notVerified`，否则为 `null`；工人另有 `route` 和 `model`。没有委派时是 `[]`。
 
 `status` 为 `completed`、`failed`、`cancelled`（SIGINT）或 `timeout`。`actors` 里每个角色的 `tasks` 是本次运行里它启动的任务数，`toolCalls` 是它的工具调用数（不含内部的 `_FinishRound`）。`usage` 只统计本次运行新增的记录（`inputTokens` 含缓存读写，与 `/usage` 一致，Automa 与摘要、审批调用计入派发者或所属角色）；价格未知或不是 USD 时 `costUsd` 为 `null`。`changedFiles` 是 Write、Edit（含 Automa 工人）改动的文件，相对当前目录；Shell 命令造成的改动不在其中。
 

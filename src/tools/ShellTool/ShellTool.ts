@@ -27,7 +27,7 @@ export async function executeShell(
   args: ShellArgs,
   cwd: string,
   signal: AbortSignal = new AbortController().signal,
-  metadata?: {activityId?: string; toolId?: string},
+  metadata?: {activityId?: string; toolId?: string; sessionId?: string},
 ): Promise<ToolResult> {
   const command = args.command;
 

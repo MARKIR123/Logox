@@ -25,6 +25,8 @@ export type PermissionScope = z.infer<typeof permissionScopeSchema>;
 export type PermissionDecision = z.infer<typeof permissionDecisionSchema>;
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export type NewPermissionRule = Omit<PermissionRule, 'id' | 'hits' | 'lastHit'>;
+/** What changed in the authorization state; session-scoped changes name their session so other sessions can ignore them. */
+export type PermissionChange = {readonly scope: PermissionScope | 'mode'; readonly sessionId?: string};
 const modeFileSchema = z.strictObject({version: z.literal(1), mode: permissionModeSchema});
 const userFileSchema = z.strictObject({version: z.literal(1), rules: z.array(permissionRuleSchema)});
 export interface PermissionTarget {tool: string; paths: readonly string[]; risky: boolean; command?: string; effect?: 'read' | 'write' | 'unknown'; danger?: string;
@@ -45,17 +47,40 @@ function globMatch(pattern: string, value: string): boolean {
 const SCOPE_ORDER: readonly PermissionScope[] = ['session', 'project', 'user'];
 const STATS_FLUSH_MS = 1500;
 export class PermissionEngine {
+  /** Project and user rules only; session rules live in per-session buckets. */
   private rules: PermissionRule[] = [];
-  private scratchpadDir?: string;
+  private readonly sessionRules = new Map<string, PermissionRule[]>();
+  private readonly scratchpadDirs = new Map<string, string>();
+  private boundSessionId: string | undefined;
+  private separateSessionScopes = false;
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = new Set<(change: PermissionChange) => void>();
   private readonly pendingHits = new Map<string, {hits: number; lastHit: number}>();
   private statsTimer: NodeJS.Timeout | undefined;
   private readonly userStore?: StateFile<z.infer<typeof userFileSchema>>;
   private readonly modeStore?: StateFile<z.infer<typeof modeFileSchema>>;
-  subscribe(listener: () => void): () => void {this.listeners.add(listener); return () => {this.listeners.delete(listener);};}
-  private changed(): void {for (const listener of this.listeners) listener();}
-  setScratchpadDir(dir: string): void {this.scratchpadDir = dir;}
+  subscribe(listener: (change: PermissionChange) => void): () => void {this.listeners.add(listener); return () => {this.listeners.delete(listener);};}
+  private changed(change: PermissionChange): void {for (const listener of this.listeners) listener(change);}
+  /**
+   * Binds the single session an older adapter drives: calls without a session id act on that session's bucket.
+   * A hub serving concurrent sessions never binds and resolves every call with an explicit id.
+   */
+  bindSession(sessionId: string | undefined): void {this.boundSessionId = sessionId;}
+  /** Isolates session buckets strictly: a real session never reads the legacy/default bucket. */
+  isolateSessions(): void {this.separateSessionScopes = true;}
+  private sessionKey(sessionId?: string): string {
+    // Direct engine/Tools users before session isolation share one bucket; strict scoping starts only with isolateSessions().
+    if (!this.separateSessionScopes) return this.boundSessionId ?? '';
+    return sessionId ?? this.boundSessionId ?? '';
+  }
+  private rulesForSession(sessionId?: string): PermissionRule[] {
+    const key = this.sessionKey(sessionId), own = this.sessionRules.get(key) ?? [];
+    if (this.separateSessionScopes || key === '') return own;
+    // Compatibility for direct engine/Tools users from before sessions were isolated: un-scoped rules stay visible.
+    return [...own, ...(this.sessionRules.get('') ?? [])];
+  }
+  setScratchpadDir(dir: string, sessionId?: string): void {this.scratchpadDirs.set(this.sessionKey(sessionId), dir);}
+  private scratchpadDir(sessionId?: string): string | undefined {return this.scratchpadDirs.get(this.sessionKey(sessionId));}
   /**
    * `userFile` is the user-global rule file (`~/.logox/user-permissions.json`); without it the user scope is unavailable, so tests never touch the real home.
    * `modeFile` (`~/.logox/permission-mode.json`) remembers the mode the user chose, shared by every project; without it a chosen mode lasts for this engine only.
@@ -85,22 +110,33 @@ export class PermissionEngine {
     if (new Set(saved.rules.map(rule => rule.id)).size !== saved.rules.length) throw new Error('Duplicate permission rule ID; original file preserved');
     return saved.rules;
   }
-  private of(scope: PermissionScope): PermissionRule[] {return this.rules.filter(rule => rule.scope === scope);}
-  private put(scope: PermissionScope, next: PermissionRule[]): void {
+  private of(scope: PermissionScope, sessionId?: string): PermissionRule[] {
+    return scope === 'session' ? this.rulesForSession(sessionId) : this.rules.filter(rule => rule.scope === scope);
+  }
+  private put(scope: PermissionScope, next: PermissionRule[], sessionId?: string): void {
+    if (scope === 'session') {
+      const key = this.sessionKey(sessionId);
+      if (next.length) this.sessionRules.set(key, [...next]); else this.sessionRules.delete(key);
+      return;
+    }
     const merged = [...this.rules.filter(rule => rule.scope !== scope), ...next];
-    this.rules = SCOPE_ORDER.flatMap(item => merged.filter(rule => rule.scope === item));
+    this.rules = SCOPE_ORDER.filter(item => item !== 'session').flatMap(item => merged.filter(rule => rule.scope === item));
   }
   async load(): Promise<void> {
     const saved = await this.readProject(), user = await this.readUser();
-    this.rules = [...this.of('session'), ...saved?.rules ?? [], ...user];
+    this.rules = [...saved?.rules ?? [], ...user];
     // Remembered mode, highest first: the user-level file, then a mode an older version saved in this project's rule file (read only; never written again), then the configured mode.
     const remembered = await this.modeStore?.read().catch(() => undefined);
     if (remembered) this.mode = remembered.mode;
     else if (saved?.mode) this.mode = saved.mode;
   }
-  snapshot(): readonly PermissionRule[] {return this.rules.map(rule => ({...rule}));}
+  snapshot(sessionId?: string): readonly PermissionRule[] {
+    return [...this.of('session', sessionId), ...this.of('project'), ...this.of('user')].map(rule => ({...rule}));
+  }
   /** Identity of the authorization state; hit statistics are deliberately excluded so counting never invalidates a pending approval. */
-  policyKey(): string {return JSON.stringify([this.mode, this.rules.map(({id, scope, decision, tool, pattern}) => [id, scope, decision, tool, pattern])]);}
+  policyKey(sessionId?: string): string {
+    return JSON.stringify([this.mode, this.snapshot(sessionId).map(({id, scope, decision, tool, pattern}) => [id, scope, decision, tool, pattern])]);
+  }
   /** Adds un-persisted hits to a copy of the stored rules; `applied` records how many were taken so concurrent hits are never lost. */
   private drain(stored: readonly PermissionRule[], applied: Map<string, number>): PermissionRule[] {
     return stored.map(rule => {
@@ -124,9 +160,10 @@ export class PermissionEngine {
     });
   }
   /** Changes the rules of one scope. Persistent scopes re-read their file under its lock; `quiet` skips listeners (statistics are not an authorization change). */
-  private mutate(scope: PermissionScope, change: (rules: PermissionRule[]) => PermissionRule[], options: {quiet?: boolean} = {}): Promise<void> {
+  private mutate(scope: PermissionScope, change: (rules: PermissionRule[]) => PermissionRule[], options: {quiet?: boolean; sessionId?: string} = {}): Promise<void> {
+    const sessionId = options.sessionId;
     const operation = this.queue.then(async () => {
-      if (scope === 'session') {this.put('session', change(this.of('session')));}
+      if (scope === 'session') {this.put('session', change(this.of('session', sessionId)), sessionId);}
       else if (scope === 'user') {
         const store = this.userStore;
         if (!store) throw new Error('The user rule scope is not available');
@@ -156,12 +193,15 @@ export class PermissionEngine {
           this.put('project', this.settle(applied, next));
         });
       }
-      if (!options.quiet) this.changed();
+      if (!options.quiet) {
+        const key = this.sessionKey(sessionId);
+        this.changed({scope, ...(scope === 'session' && key ? {sessionId: key} : {})});
+      }
     });
     this.queue = operation.catch(() => {});
     return operation;
   }
-  async add(input: NewPermissionRule): Promise<PermissionRule> {
+  async add(input: NewPermissionRule, sessionId?: string): Promise<PermissionRule> {
     const rule = permissionRuleSchema.parse({id: randomUUID(), scope: input.scope, decision: input.decision, tool: input.tool, pattern: input.pattern});
     if (rule.tool.toLowerCase() === 'shell' && rule.pattern !== '*') {
       const parsed = shellWords(rule.pattern);
@@ -172,7 +212,7 @@ export class PermissionEngine {
       const same = rules.find(item => item.decision === rule.decision && item.tool.toLowerCase() === rule.tool.toLowerCase() && item.pattern === rule.pattern);
       if (same) {result = same; return rules;}
       return [...rules, rule];
-    });
+    }, sessionId === undefined ? {} : {sessionId});
     return result;
   }
   /** Switches the mode and remembers it in the user-level mode file, so every project starts with it from now on. */
@@ -181,19 +221,26 @@ export class PermissionEngine {
     const operation = this.queue.then(async () => {
       await this.modeStore?.save({version: 1, mode: next});
       this.mode = next;
-      this.changed();
+      this.changed({scope: 'mode'});
     });
     this.queue = operation.catch(() => {});
     await operation;
   }
-  clearSession(): void {this.put('session', []);}
-  async revoke(id: string): Promise<void> {
-    const rule = this.rules.find(item => item.id === id);
+  /** Clears only the named session's grants (the default bucket when no session is named). */
+  clearSession(sessionId?: string): void {
+    const key = this.sessionKey(sessionId);
+    this.sessionRules.delete(key);
+    this.changed({scope: 'session', ...(key ? {sessionId: key} : {})});
+  }
+  async revoke(id: string, sessionId?: string): Promise<void> {
+    const own = this.of('session', sessionId).find(item => item.id === id);
+    const rule = own ?? this.rules.find(item => item.id === id);
     if (!rule) throw new Error('Permission rule not found');
+    const targetSession = own ? this.sessionKey(sessionId) : undefined;
     await this.mutate(rule.scope, rules => {
       if (!rules.some(item => item.id === id)) throw new Error('Permission rule not found');
       return rules.filter(item => item.id !== id);
-    });
+    }, {...targetSession ? {sessionId: targetSession} : {}});
   }
   /** Records that a rule decided a call; project and user statistics are written lazily (and by `flushStats()`). */
   private hit(rule: PermissionRule): void {
@@ -220,19 +267,21 @@ export class PermissionEngine {
     return impact?.kind === 'danger' ? impact.reason : undefined;
   }
   /** A target is risky when it leaves the workspace; reaching only into the scratchpad (a script run from it, say) does not count. */
-  private risky(target: PermissionTarget): boolean {
+  private risky(target: PermissionTarget, sessionId?: string): boolean {
     if (!target.risky) return false;
-    if (!this.scratchpadDir) return true;
+    const scratchpadDir = this.scratchpadDir(sessionId);
+    if (!scratchpadDir) return true;
     const outsideRoot = (path: string) => {const rest = relative(this.root, path); return rest === '..' || rest.startsWith('..' + sep) || isAbsolute(rest);};
     const outside = target.paths.filter(path => isAbsolute(path) && outsideRoot(path));
-    if (!outside.length || !outside.every(path => isScratchpadPath(path, this.scratchpadDir!))) return true;
+    if (!outside.length || !outside.every(path => isScratchpadPath(path, scratchpadDir))) return true;
     return target.paths.some(path => riskyPath(path, target.effect, this.root));
   }
-  evaluate(target: PermissionTarget): {decision: 'allow' | 'deny' | 'ask' | 'review'; reason: string} {
+  evaluate(target: PermissionTarget, sessionId?: string): {decision: 'allow' | 'deny' | 'ask' | 'review'; reason: string} {
     const shell = target.command === undefined ? undefined : shellWords(target.command);
     const impact = target.command === undefined ? undefined : shellImpact(target.command, 0, this.root);
     if (impact?.kind === 'forbidden') return {decision: 'deny', reason: impact.reason};
     const toolLower = target.tool.toLowerCase();
+    const scoped = this.rulesForSession(sessionId);
     const matches = (rule: PermissionRule) => (rule.tool.toLowerCase() === toolLower || toolLower.startsWith(rule.tool.toLowerCase() + ':')) && (rule.pattern === '*' || (shell
       ? (() => {
         if (rule.decision === 'allow' && (shell.compound || shell.dynamic)) return false;
@@ -243,14 +292,15 @@ export class PermissionEngine {
       : target.paths.some(path => globMatch(rule.pattern, path))));
     // Precedence is by decision, never by scope: deny, then ask, then allow. Credit goes to the narrowest scope that matches.
     const decided = (decision: PermissionDecision) => {
-      const rule = SCOPE_ORDER.flatMap(scope => this.rules.filter(item => item.scope === scope)).find(item => item.decision === decision && matches(item));
+      const rule = [...scoped, ...this.rules.filter(item => item.scope !== 'session')].find(item => item.decision === decision && matches(item));
       if (rule) this.hit(rule);
       return rule;
     };
     if (decided('deny')) return {decision: 'deny', reason: 'Matched an explicit deny rule'};
     // Paths are listed both absolute and workspace-relative; a `../` form of an outside path is only the twin of an absolute entry that is checked too.
     const scratchPaths = target.paths.filter(p => !/^\.\.(?:[\/]|$)/.test(p));
-    const inScratchpad = Boolean(this.scratchpadDir) && scratchPaths.length > 0 && scratchPaths.every(p => isScratchpadPath(p, this.scratchpadDir!));
+    const scratchpadDir = this.scratchpadDir(sessionId);
+    const inScratchpad = Boolean(scratchpadDir) && scratchPaths.length > 0 && scratchPaths.every(p => isScratchpadPath(p, scratchpadDir!));
     const danger = target.danger ?? (impact?.kind === 'danger' ? impact.reason : undefined);
     // Creative mode refuses credential and repository dangers outright; an ask rule must not turn that refusal into a prompt.
     const refused = this.mode === 'creative' && danger !== undefined && danger !== RUNTIME_WRITE_DANGER && !inScratchpad;
@@ -270,7 +320,7 @@ export class PermissionEngine {
     if (this.mode === 'auto') {
       // Only genuinely risky work reaches the review model; ordinary development proceeds.
       if (read) return {decision: 'allow', reason: 'auto: read-only access (credentials and repositories are protected separately)'};
-      if (this.risky(target)) return {decision: 'review', reason: 'auto: the target is outside the workspace or sensitive; an independent model must assess the actual impact'};
+      if (this.risky(target, sessionId)) return {decision: 'review', reason: 'auto: the target is outside the workspace or sensitive; an independent model must assess the actual impact'};
       if (target.effect === 'write') return {decision: 'allow', reason: 'auto: routine file edit inside the project'};
       if (target.command !== undefined && routineShell(target.command)) return {decision: 'allow', reason: 'auto: routine development command inside the project'};
       if (toolLower.startsWith('mcp:playwright:')) return {decision: 'allow', reason: 'auto: local browser automation'};

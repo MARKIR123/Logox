@@ -45,6 +45,7 @@ export async function executeWrite(
   ownerId?: string,
   /** The caller's scratchpad directory: a refused large-file write saves the attempted content here. */
   scratchDir?: string,
+  sessionId?: string,
 ): Promise<ToolResult> {
   return snapshots.withLock(canonicalPath, async () => {
     const size = await stat(canonicalPath).then(info => info.size).catch(error => {
@@ -55,7 +56,7 @@ export async function executeWrite(
 
     const before = await bytesOrMissing(canonicalPath);
     if (before && before.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB');
-    const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId);
+    const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId, sessionId);
     if (peer) {
       throw new Error(`File was modified by ${peer} since your last read. Please Read the latest file content (or use Edit for targeted changes) before overwriting.`);
     }
@@ -67,7 +68,7 @@ export async function executeWrite(
     const after = Buffer.from(args.content);
     if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
 
-    await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId);
+    await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId, sessionId);
     recordWrite(canonicalPath, args.content, before);
     return {
       text: 'Updated ' + canonicalPath + '; use /undo to revert file changes from this round.',

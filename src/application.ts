@@ -6,6 +6,7 @@
  * command context) and `src/providers/management.ts`. Statement order below is the startup order; keep it.
  */
 import {DIRECTOR_ID, isDirector} from './runtime/director-id.js';
+import {InputRejected} from './runtime/input-rejected.js';
 import {isOutageWake} from './runtime/outage.js';
 import type {ResourceOptions} from './resources/manager.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
@@ -83,12 +84,14 @@ export interface ApplicationOptions {
   statusbarPath?: string;
   /** Test hook: clocks, idle thresholds and the idle-check interval of Anamnesis (no interval runs in tests unless `tickMs` is given). */
   anamnesis?: AnamnesisAppOptions;
+  /** False for embedded adapters: no terminal onboarding, notifications or other TTY-only side effects. */
+  interactive?: boolean;
 }
 export interface SessionApplicationOptions extends ApplicationOptions {
   sessionId: string;
-  config: Config;
   /** The project data folder holding `state/` (see `src/config/project-data.ts:projectDataDir()`). */
   dataDir: string;
+  config: Config;
   registry: ProviderRegistry;
   preferences: StateFile<z.infer<typeof preferenceSchema>>;
   permissions: PermissionEngine;
@@ -99,9 +102,15 @@ export interface SessionApplicationOptions extends ApplicationOptions {
   sessionCommand(text: string): Promise<boolean>;
   beforeTask(): Promise<void>;
   isPersistent(): boolean;
+  /** Preferences loaded once by the project host and shared by every session. */
+  statusbar?: StatusbarPreferences;
+  uiPreferences?: ReturnType<typeof loadUiPreferences>;
+  /** The preferred name loaded once by the host; each session copies it into its own state. */
+  profile?: Promise<string | undefined>;
 }
 export async function createSessionApplication(options: SessionApplicationOptions) {
   const {cwd, config, registry, preferences, permissions, tools, usage, extensions, actors} = options;
+  const interactive = options.interactive !== false;
   if (config?.theme) applyTheme(config.theme);
   const stateDir = join(options.dataDir, 'state'), session = options.sessionId;
   const initialSelection = registry.selection();
@@ -110,7 +119,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const deliveries = new DeliveryQueue(session, journal);
   const resources = extensions.resources;
   const systems = new SystemHistory(session, store, journal, options.isPersistent);
-  const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
+  const statusbar = options.statusbar ?? new StatusbarPreferences(options.statusbarPath ?? join(options.resourceOptions?.home ?? homedir(), '.logox', 'statusbar.json'));
   const state: SessionState = {closed: false, commandOwner: DIRECTOR_ID, loginOwner: DIRECTOR_ID, pageOwner: DIRECTOR_ID, activeCommandPage: '',
     userName: undefined, compactTask: undefined, reloadTask: undefined, permissionTask: undefined};
   const notice = (text: string, kind: Parameters<SystemHistory['emit']>[1] = 'command_result', owner = state.commandOwner, activityId?: string,
@@ -138,19 +147,19 @@ export async function createSessionApplication(options: SessionApplicationOption
     }
   };
   await systems.restore();
-  try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : 'Could not read statusbar preferences; using default layout.', 'command_error');}
+  if (!options.statusbar) try {await statusbar.load();} catch (error) {notice(error instanceof Error ? error.message : 'Could not read statusbar preferences; using default layout.', 'command_error');}
   const scratchpad = getScratchpadDir(cwd, session);
   void ensureScratchpadDir(cwd, session);
-  permissions.setScratchpadDir(scratchpad);
+  permissions.setScratchpadDir(scratchpad, session);
   const directorReports = new Map<string, string>();
   const homeDir = options.resourceOptions?.home ?? homedir();
   // The preferred name is application-owned; the timeline label is synced from it (renderers read the live label).
   setUserLabel(undefined);
-  const profileReady = loadUserName(homeDir).then(name => {state.userName = name; setUserLabel(name);});
+  const profileReady = (options.profile ?? loadUserName(homeDir)).then(name => {state.userName = name; setUserLabel(name);});
   const toolRegistry = new ToolRegistry(cwd, homeDir);
   await toolRegistry.reloadUserConfigs();
-  tools.setRegistry(toolRegistry);
-  tools.setActivityProbe(() => store.getSnapshot().activities);
+  tools.setRegistry(toolRegistry, session);
+  tools.setActivityProbe(() => store.getSnapshot().activities, session);
   const modelPool = new ModelPool(registry, join(homeDir, '.logox', 'models-store.json'));
   void modelPool.loadCache().catch(() => {});
   const taskModelLedger = new TaskModelLedger(join(stateDir, 'task-models'));
@@ -342,25 +351,27 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const recovered = await recoverCheckpoints({session, journal, actors, actorServices, taskModels, taskModelLedger, configureMeter: sessionStatus.configureMeter});
   const {checkpoints, owners} = recovered;
-  const ui = loadUiPreferences(homeDir, config);
+  const ui = options.uiPreferences ?? loadUiPreferences(homeDir, config);
   const providersPage = createProvidersPage({registry, modelPool, management: providers, signal: commands.signal, selection: modelSelection.current,
     isEnsembleBusy: () => ensemble.isBusy(), commandOwner: () => state.commandOwner, refreshPage: () => pages.refreshCurrentPage()});
   const buildContext = createCommandContext({session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels,
     status: sessionStatus, actors, providersPage, selection: modelSelection.current});
-  const pages = createPages({cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry,
+  const pages = createPages({session, cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry,
     extensions, registry, modelPool, modelSelection, providersPage, status: sessionStatus, buildContext, profileReady});
   // Store changes and status bumps (usage recorded, subscriptions found) both refresh an open page, so `/usage` grows with the session.
   const stopPageUpdates = sessionStatus.subscribe(() => {if (pages.pageIsOpen()) pages.refreshCurrentPage();});
   // `Notify when done`: a bell or OSC 9 notification when a stretch of work longer than 30 s ends (see `tui/terminal/notify.ts`).
   const roundNotifier = new RoundNotifier({sessionId: session, mode: () => uiSettings().notify, focused: terminalFocus,
-    write: data => {if (process.stdout.isTTY) process.stdout.write(data);}});
+    write: data => {if (interactive && process.stdout.isTTY) process.stdout.write(data);}});
   const stopNotifier = store.subscribe(() => {roundNotifier.observe(store.getSnapshot());});
   const stopPermissions = tools.configurePermissions(session, {
     reviewer: () => {const selected = registry.selection(); return {provider: options.provider ?? registry.provider(), model: JSON.stringify([selected.provider, selected.model])};},
     charge: async (context, amount, model) => {await sessionStatus.configureMeter(context.ownerId); contexts.meter(context).chargeUsage(amount, model, 'approval');},
     changed: () => {if (pages.pageIsOpen()) pages.refreshCurrentPage();},
   });
-  const stopPermissionPolicy = permissions.subscribe(() => {
+  const stopPermissionPolicy = permissions.subscribe(change => {
+    // A grant of one session never re-evaluates another session's waits; project/user rules and the mode affect every session.
+    if (change.scope === 'session' && change.sessionId !== session) return;
     sessionStatus.bumpStatus();
     for (const request of store.interactions.list()) if (request.status === 'pending' &&
       (request.kind === 'permission' || request.kind === 'question' && request.title === 'Approval failed; action paused')) {
@@ -405,8 +416,10 @@ export async function createSessionApplication(options: SessionApplicationOption
       item.kind === 'human_steer' && item.status === 'pending' && (!ownerId || item.ownerId === ownerId))}),
     getStatusSnapshot: sessionStatus.revision,
     subscribeStatus: sessionStatus.subscribe,
+    isPersistent: () => options.isPersistent(),
     async recordError(error: unknown, owner = DIRECTOR_ID) {
-      notice(error instanceof Error ? error.message : String(error), 'command_error', owner);
+      // A rejected input leaves its draft in the composer and flashes in the footer; it must not leave a permanent timeline row.
+      notice(error instanceof Error ? error.message : String(error), 'command_error', owner, undefined, error instanceof InputRejected ? {presentation: 'silent'} : {});
       await systems.flush();
     },
     activate() {
@@ -416,7 +429,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       // The idle check is a real timer: tests start it only by giving `tickMs`.
       anamnesis.lifecycle.start(isTest ? undefined : ANAMNESIS_TICK_MS);
       const onboardingPrefs = readOnboardingPrefs(homeDir);
-      if (shouldOfferOnboarding(onboardingPrefs) && !modelSelection.current().model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
+      if (interactive && shouldOfferOnboarding(onboardingPrefs) && !modelSelection.current().model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
         void (async () => {
           if (!ensemble.isBusy() && !authentication.getSnapshot()) {
             state.loginOwner = DIRECTOR_ID;
@@ -439,7 +452,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     /** A keystroke in the composer: the session is not idle. */
     noteDraft() {anamnesis.lifecycle.noteDraft();},
     /** Stops one running tool call (its child process) without ending the owner's step; false when the call is not cancellable or already done. */
-    cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user');},
+    cancelTool(callId: string): boolean {return killActiveProcess(callId, USER_STOP_REASON, 'user', session);},
     cancel(activityId: string) {if (state.compactTask?.activityId === activityId) state.compactTask.controller.abort(); else {
       const director = store.activities.get(session, activityId)?.ownerId === DIRECTOR_ID;
       if (director) actorServices.stopDirector(activityId); else actorServices.stopActor(activityId);
@@ -447,7 +460,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const working = director ? workingNames(roundScope(store.getSnapshot().activities, session).actors, id => actors.list().find(item => item.id === id)?.name ?? id) : [];
       ensemble.cancel(activityId, 'user', working.length ? working.join(', ') : undefined);
       // Foreground commands die with the user reason; background Shell jobs of the stopped activity go with it.
-      killActivityProcesses(activityId, USER_STOP_REASON, 'user'); killBackgroundJobs(activityId);
+      killActivityProcesses(activityId, USER_STOP_REASON, 'user', session); killBackgroundJobs(activityId, session);
     }},
     async close() {
       state.closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();

@@ -108,7 +108,7 @@ test('Esc on a round: user-specific tool texts and exactly one [Interrupted by u
     assert.equal(marker.length, 1);
     assert.ok(marker[0]!.text.startsWith('[Interrupted by user]'));
     assert.equal(marker[0]!.text, USER_INTERRUPT_MARKER);
-    assert.equal(f.app.store.activities.get('test', first.activityId)?.stopReason, 'user');
+    assert.equal(f.app.store.activities.get('test', first.activityId)?.stopReason, 'cancelled_by_user');
     await f.app.ensemble.dispatch('logox', 'continue').done;
     const next = seen.at(-1)!;
     assert.equal(markers(next).length, 1);

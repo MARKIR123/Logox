@@ -3,12 +3,18 @@ import {effortSchema} from '../config/model-preferences.js';
 import {toolCallSchema} from './messages.js';
 import {inputKindSchema, type InputKind} from './provenance.js';
 import type {SystemEvent, SystemPresentation} from './system-events.js';
+import {stopReasonSchema, storedStopSchema} from './stop-reason.js';
 
 const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
   resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), ownedFiles: z.array(z.string().trim().min(1)).max(32).optional(), acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional(), after: z.array(id).max(8).optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
-  stopReason: z.enum(['user', 'shutdown', 'interrupted', 'director_cancel']).optional(),
+  /** How the work ended (`stop-reason.ts`); while a task is stopping it briefly holds the cause word (`user`, `director_cancel`), and older sessions keep those words. */
+  stopReason: storedStopSchema.optional(),
+  /** What went wrong, when an error ended the work: one short line, no secrets (`stop-reason.ts:diagnosticOf`). */
+  diagnostic: z.string().max(300).optional(),
+  /** What the actor's definition was when this work started (`src/actors/fingerprint.ts`); a resume compares it with the current one. Absent in older sessions. */
+  fingerprint: z.string().max(400).optional(),
   recovery: z.strictObject({key: id, attempt: z.number().int().nonnegative(), exhausted: z.boolean().optional(),
     actorTask: z.strictObject({ownerId: id, activityId: id}).optional()}).optional()});
 export type TaskOriginData = z.infer<typeof taskOriginSchema>;
@@ -72,6 +78,8 @@ export const activitySchema = z.strictObject({
   taskModel: taskModelSchema.optional(),
   /** Wall-clock creation time (ms). Set only by Anamnesis, whose card is placed among the messages by it; other activities are placed by their messages. */
   createdAt: z.number().optional(),
+  /** Wall-clock times (ms) the activity first ran and ended, stamped by the store; absent in older sessions. */
+  startedAt: z.number().optional(), finishedAt: z.number().optional(),
   ...taskOriginSchema.shape,
 });
 export type Activity = z.infer<typeof activitySchema>;
@@ -167,6 +175,10 @@ const automaJobStateSchema = z.strictObject({
   tool: z.string().optional(),
   calls: z.array(z.strictObject({name: z.string(), title: z.string(), state: z.enum(['running', 'completed', 'failed'])})),
   receipt: z.string().optional(),
+  /** The route (`read` or `code`) and model the job ran on, and how it ended (`stop-reason.ts`); set when it settles. */
+  route: z.enum(['read', 'code', 'vision']).optional(), model: z.string().optional(), stopReason: stopReasonSchema.optional(),
+  /** What the worker handed back through Finish, for the delegation record. */
+  summary: z.string().optional(), evidence: z.array(z.string()).optional(), notVerified: z.array(z.string()).optional(), question: z.string().optional(),
 });
 export const automaSwarmSchema = z.strictObject({name: z.string(), jobs: z.array(automaJobStateSchema)});
 export type AutomaJobState = z.infer<typeof automaJobStateSchema>;

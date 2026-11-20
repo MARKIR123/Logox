@@ -21,34 +21,42 @@ export interface ActiveToolExecution {
   pid: number;
   activityId?: string | undefined;
   toolId?: string | undefined;
+  sessionId?: string | undefined;
   kill(reason?: string, by?: StopSource): void;
 }
 
+/** Execution registry key: the session is part of the identity, so equal call ids in two sessions never collide. */
+function scopeKey(sessionId: string | undefined, id: string): string {return (sessionId ?? '') + '\0' + id;}
 const activeExecutions = new Map<string, ActiveToolExecution>();
 
 export function registerActiveProcess(id: string, execution: ActiveToolExecution): () => void {
-  activeExecutions.set(id, execution);
+  const key = scopeKey(execution.sessionId, id);
+  activeExecutions.set(key, execution);
   return () => {
-    if (activeExecutions.get(id) === execution) {
-      activeExecutions.delete(id);
+    if (activeExecutions.get(key) === execution) {
+      activeExecutions.delete(key);
     }
   };
 }
 
-export function killActiveProcess(id: string, reason = 'Terminated by director', by: StopSource = 'system'): boolean {
-  const execution = activeExecutions.get(id);
-  if (!execution) return [...backgroundJobs.values()].some(job => (job.callId === id || job.id === id) && stopBackgroundJob(job.id) !== undefined);
-  execution.kill(reason, by);
-  activeExecutions.delete(id);
-  return true;
+/** Stops one tool call; with a session id it only ever stops that session's call (never a same-named one elsewhere). */
+export function killActiveProcess(id: string, reason = 'Terminated by director', by: StopSource = 'system', sessionId?: string): boolean {
+  const execution = activeExecutions.get(scopeKey(sessionId, id));
+  if (execution) {
+    execution.kill(reason, by);
+    activeExecutions.delete(scopeKey(sessionId, id));
+    return true;
+  }
+  if (sessionId !== undefined) return [...backgroundJobs.values()].some(job => job.sessionId === sessionId && (job.callId === id || job.id === id) && stopBackgroundJob(job.id, sessionId) !== undefined);
+  return [...backgroundJobs.values()].some(job => (job.callId === id || job.id === id) && stopBackgroundJob(job.id, job.sessionId) !== undefined);
 }
 
-export function killActivityProcesses(activityId: string, reason = 'Terminated by director', by: StopSource = 'system'): number {
+export function killActivityProcesses(activityId: string, reason = 'Terminated by director', by: StopSource = 'system', sessionId?: string): number {
   let count = 0;
-  for (const [id, exec] of [...activeExecutions.entries()]) {
-    if (exec.activityId === activityId) {
+  for (const [key, exec] of [...activeExecutions.entries()]) {
+    if (exec.activityId === activityId && (sessionId === undefined || exec.sessionId === sessionId)) {
       exec.kill(reason, by);
-      activeExecutions.delete(id);
+      activeExecutions.delete(key);
       count++;
     }
   }
@@ -64,7 +72,7 @@ export function runProcess(
   maxOutput = 64_000,
   onLine?: (line: string) => boolean,
   extraEnv?: Record<string, string>,
-  metadata?: {activityId?: string; toolId?: string},
+  metadata?: {activityId?: string; toolId?: string; sessionId?: string},
 ): Promise<ProcessResult> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
@@ -131,6 +139,7 @@ export function runProcess(
         pid: child.pid,
         activityId: metadata.activityId,
         toolId: metadata.toolId,
+        sessionId: metadata.sessionId,
         kill: (msg, by) => stop(new ProcessStoppedError(msg || 'Process killed', by)),
       });
       child.once('close', () => unregister());
@@ -215,6 +224,7 @@ export interface BackgroundJob {
   readonly id: string;
   readonly pid: number;
   readonly command: string;
+  readonly sessionId: string | undefined;
   readonly activityId: string | undefined;
   readonly callId: string | undefined;
   readonly startedAt: number;
@@ -233,11 +243,17 @@ const BACKGROUND_SETTLE_MS = 1_000;
 const backgroundJobs = new Map<string, BackgroundJob>();
 let backgroundCounter = 0;
 
+function findBackgroundJob(id: string, sessionId?: string): BackgroundJob | undefined {
+  if (sessionId !== undefined) return backgroundJobs.get(scopeKey(sessionId, id));
+  // Legacy callers without a session still address the job key they were given; a job id is unique case by case.
+  return backgroundJobs.get(scopeKey(undefined, id)) ?? [...backgroundJobs.values()].find(job => job.id === id);
+}
+
 export function startBackgroundProcess(
   command: string,
   args: readonly string[],
   cwd: string,
-  metadata?: {activityId?: string; toolId?: string},
+  metadata?: {activityId?: string; toolId?: string; sessionId?: string},
   settleMs = BACKGROUND_SETTLE_MS,
 ): Promise<BackgroundJob> {
   return new Promise((resolve, reject) => {
@@ -247,8 +263,8 @@ export function startBackgroundProcess(
     if (!child.pid) return;
     started = true;
     const job: BackgroundJob = {id: 'job-' + ++backgroundCounter, pid: child.pid, command: args[args.length - 1] ?? command,
-      activityId: metadata?.activityId, callId: metadata?.toolId, startedAt: Date.now(), exitCode: undefined, stopped: false, unread: '', dropped: false, child};
-    backgroundJobs.set(job.id, job);
+      sessionId: metadata?.sessionId, activityId: metadata?.activityId, callId: metadata?.toolId, startedAt: Date.now(), exitCode: undefined, stopped: false, unread: '', dropped: false, child};
+    backgroundJobs.set(scopeKey(job.sessionId, job.id), job);
     const collect = (data: string) => {
       job.unread += data;
       if (job.unread.length > BACKGROUND_OUTPUT_LIMIT) {job.unread = job.unread.slice(-BACKGROUND_OUTPUT_LIMIT); job.dropped = true;}
@@ -264,29 +280,30 @@ export function startBackgroundProcess(
 }
 
 /** Returns the output produced since the last read and clears it. */
-export function takeBackgroundOutput(id: string): {job: BackgroundJob; output: string; dropped: boolean} | undefined {
-  const job = backgroundJobs.get(id);
+export function takeBackgroundOutput(id: string, sessionId?: string): {job: BackgroundJob; output: string; dropped: boolean} | undefined {
+  const job = findBackgroundJob(id, sessionId);
   if (!job) return undefined;
   const output = job.unread, dropped = job.dropped;
   job.unread = ''; job.dropped = false;
   return {job, output, dropped};
 }
 
-/** Kills one background job, keeping it listed so its remaining output can still be read. */
-export function stopBackgroundJob(id: string): BackgroundJob | undefined {
-  const job = backgroundJobs.get(id);
+/** Kills one background job of this session, keeping it listed so its remaining output can still be read. */
+export function stopBackgroundJob(id: string, sessionId?: string): BackgroundJob | undefined {
+  const job = findBackgroundJob(id, sessionId);
   if (!job) return undefined;
   if (job.exitCode === undefined && !job.stopped) {job.stopped = true; killTree(job.child);}
   return job;
 }
 
-/** Kills the background jobs a finished activity started and forgets every job it owned. */
-export function killBackgroundJobs(activityId?: string): number {
+/** Kills the background jobs a finished activity started and forgets every job it owned; with a session, only that session's jobs. */
+export function killBackgroundJobs(activityId?: string, sessionId?: string): number {
   let count = 0;
-  for (const job of [...backgroundJobs.values()]) {
+  for (const [key, job] of [...backgroundJobs.entries()]) {
     if (activityId !== undefined && job.activityId !== activityId) continue;
+    if (sessionId !== undefined && job.sessionId !== sessionId) continue;
     if (job.exitCode === undefined && !job.stopped) {job.stopped = true; killTree(job.child); count++;}
-    if (job.exitCode !== undefined || job.stopped) setTimeout(() => backgroundJobs.delete(job.id), 60_000).unref?.();
+    if (job.exitCode !== undefined || job.stopped) setTimeout(() => backgroundJobs.delete(key), 60_000).unref?.();
   }
   return count;
 }

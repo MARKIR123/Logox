@@ -87,7 +87,7 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     journalPath: automaJournal,
     charge: (context, amount, model) => {void configureMeter(context.ownerId).then(() => contexts.meter(context).chargeUsage(amount, model, 'automa'));},
     priceUsage: (amount, model) => turnUsageOf(amount, model, config),
-  });
+  }, session);
   // A larger Director dispatch is read by a read-only Automa-style check on the code model before any companion starts.
   actorServices.setBriefCheck((input, context) => tools.runBriefCheck(input, context));
   // Finished workers end with their dispatcher's task: any store change may be that task settling, and the sweep is cheap while none waits.
@@ -113,7 +113,7 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     const policy = actorServices.skills(context);
     const actorScratchpad = getActorScratchpadDir(cwd, context.sessionId, context.ownerId);
     void ensureActorScratchpadDir(cwd, context.sessionId, context.ownerId);
-    const permissionRules = permissions.snapshot().map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
+    const permissionRules = permissions.snapshot(session).map(rule => rule.decision + ' ' + rule.tool + ' ' + rule.pattern).join(', ') || 'none';
     const history = (await journal.load(context.sessionId, context.ownerId)).map(storedMessage);
     const language = sessionLanguage(store.getSnapshot().messages
       .filter(message => message.role === 'user' && message.inputKind === 'human').map(message => message.text));

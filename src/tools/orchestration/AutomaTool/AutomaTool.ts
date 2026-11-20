@@ -1,9 +1,11 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {appendFile, mkdir, readFile} from 'node:fs/promises';
 import {dirname, relative} from 'node:path';
 import {diffLines} from 'diff';
 import {z} from 'zod';
 import type {AutomaSwarm, AutomaJobState} from '../../../runtime/contracts.js';
+import {definitionChangeNote, definitionChanges, definitionFingerprint} from '../../../runtime/definition-fingerprint.js';
+import {stopReasonFor, type StopReasonCode} from '../../../runtime/stop-reason.js';
 import type {ModelMessage, ModelTurn, ToolCall, ToolDefinition, TurnUsage} from '../../../runtime/messages.js';
 import {ensureActorScratchpadDir, getActorScratchpadDir} from '../../../kernel/scratchpad.js';
 import {promptCacheKey} from '../../../kernel/request.js';
@@ -29,7 +31,7 @@ import {AUTOMA_RETAINED_INPUT_LIMIT, type IdleWorker, type WorkerShelf} from './
 import type {Semaphore} from '../../../kernel/semaphore.js';
 import {finishSchema, parseFinish, type FinishArgs} from './finish.js';
 import type {AutomaRoute} from './preset.js';
-import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME} from './prompt.js';
+import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, queuedJobsLine} from './prompt.js';
 
 export const AUTOMA_SCOPES = ['exact', 'bounded', 'open'] as const;
 export type AutomaScope = typeof AUTOMA_SCOPES[number];
@@ -161,6 +163,11 @@ How to work:
 
 End by calling Finish exactly once. Every turn must call a tool until then.`;
 
+/** The part of a worker's definition that comes from the project: the contract and the rules, as they are now. Stored with a worker, compared when it is continued. */
+export function workerPromptHash(rules: string): string {
+  return createHash('sha256').update(AUTOMA_SYSTEM_PROMPT + '\n' + rules.trim()).digest('hex').slice(0, 16);
+}
+
 /** One line per scope, shown under the brief. */
 const SCOPE_GLOSS: Readonly<Record<AutomaScope, string>> = {
   exact: 'exact: follow the brief literally.',
@@ -220,7 +227,11 @@ export interface DispatchOptions {
   /** Where finished workers wait for a continue. */
   readonly workers: WorkerShelf;
   /** Session-wide running limit (`[automa] max_running`): a job holds one slot while it runs; the others show as queued. */
-  readonly slots?: Pick<Semaphore, 'acquire'>;
+  readonly slots?: Pick<Semaphore, 'acquire'> & Partial<Pick<Semaphore, 'saturated' | 'capacity'>>;
+  /** Hash of the worker contract and project rules as they are now (the style flavour and the shared context are not part of it); stored on new workers and compared when a worker is continued. */
+  readonly promptHash?: string | undefined;
+  /** Why the dispatcher is being stopped, once it is (the runtime's cause word); a job that ends cancelled reports it as its stop reason. */
+  stopCause?(): string | undefined;
   /** Read-only calls of one worker turn that run side by side (`permissions.readonly_concurrency`). */
   readonly readonlyConcurrency?: number;
   /** True for a call that only observes (`catalog.ts:isReadOnlyTool`); supplied by `Tools`, which may import the catalog. */
@@ -315,9 +326,11 @@ interface ResultParts {
 }
 
 /** The runtime's result block for one job; everything the worker wrote is escaped, everything measured is added by the runtime. */
-export function resultBlock(head: {id: string; title: string; status: JobStatus; elapsedMs: number; model: string}, parts: ResultParts): string {
+export function resultBlock(head: {id: string; title: string; status: JobStatus; elapsedMs: number; model: string; stop?: StopReasonCode | undefined}, parts: ResultParts): string {
   const list = (label: string, items: readonly string[] | undefined) => items?.length ? [label + ':', ...items.map(item => '- ' + escapeBlock(item))] : [];
-  return [`<automa-result id="${attribute(head.id)}" title="${attribute(head.title)}" status="${head.status}" took="${took(head.elapsedMs)}" model="${attribute(head.model)}">`,
+  // `status` is what the worker reported; `stop` says how the run ended and is shown only when it was not an ordinary completion.
+  const stop = head.stop && head.stop !== 'completed' ? ` stop="${head.stop}"` : '';
+  return [`<automa-result id="${attribute(head.id)}" title="${attribute(head.title)}" status="${head.status}"${stop} took="${took(head.elapsedMs)}" model="${attribute(head.model)}">`,
     'Summary: ' + escapeBlock(parts.summary),
     ...list('Evidence', parts.evidence), ...list('Not verified', parts.notVerified),
     ...(parts.question ? ['Question: ' + escapeBlock(parts.question)] : []),
@@ -346,15 +359,22 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
   const receipts: string[] = new Array(jobs.length).fill('');
   const statuses: AutomaJobState['state'][] = jobs.map(() => 'queued');
 
-  const finish = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute) => {
-    const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started;
-    const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model}, {...parts, acceptance: planned.job.acceptance});
+  /** How a job ended, in the one outcome vocabulary: a worker that finished (whatever it reported) completed; the rest are mapped by `stopReasonFor`. */
+  const stopOf = (status: JobStatus, how: {error?: unknown; stalled?: boolean}): StopReasonCode =>
+    status === 'cancelled' ? stopReasonFor({status: 'cancelled', cause: options.stopCause?.()})
+    : status === 'failed' ? stopReasonFor({status: 'failed', ...(how.stalled ? {stalled: true} : {}), error: how.error ?? new Error('failed')})
+    : 'completed';
+  const finish = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute, how: {error?: unknown; stalled?: boolean} = {}) => {
+    const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started, stop = stopOf(status, how);
+    const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model, stop}, {...parts, acceptance: planned.job.acceptance});
     receipts[index] = receipt; statuses[index] = status;
     options.onEnd?.({index, status, summary: parts.summary, question: parts.question});
     const {startedAt: _startedAt, tool: _tool, ...settled} = states[index]!;
-    states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000)};
+    const shown = route ?? (planned.grant.writes.length ? 'code' as const : 'read' as const);
+    states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000), route: shown, ...(model ? {model} : {}), stopReason: stop, summary: parts.summary.slice(0, 600),
+      ...(parts.evidence?.length ? {evidence: parts.evidence.slice(0, 8)} : {}), ...(parts.notVerified?.length ? {notVerified: parts.notVerified.slice(0, 8)} : {}), ...(parts.question ? {question: parts.question} : {})};
     publish();
-    await journal(index, 'end', {id, state: status, status, elapsedMs: elapsed, receipt, model, route: route ?? (planned.grant.writes.length ? 'code' : 'read'), scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision)});
+    await journal(index, 'end', {id, state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision)});
   };
 
   // A dispatch of many jobs with one shared system prompt starts job 0 alone: once its first response is back, the provider's prefix cache can
@@ -363,6 +383,7 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
   let openStart!: () => void;
   const firstAnswered = new Promise<void>(resolve => {openStart = resolve;});
 
+  let queuedForSlot = 0;
   const runJob = async (index: number): Promise<void> => {
     const planned = jobs[index]!, id = planned.id;
     if (planned.denial) {await finish(index, 'denied', Date.now(), '', {summary: planned.denial}); return;}
@@ -370,6 +391,8 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     if (staggered && index !== 0) await firstAnswered;
     // Queued until a running slot is free (`[automa] max_running`, across every dispatcher of the session).
     let releaseSlot: (() => void) | undefined;
+    // A job that has to wait for a free slot is counted once; the dispatch's result says so in one line.
+    if (options.slots?.saturated) queuedForSlot++;
     try {releaseSlot = await options.slots?.acquire(signal);}
     catch {await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
     const started = Date.now();
@@ -388,14 +411,18 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
     });
     const ran: string[] = [], refused: string[] = [];
     let succeeded = 0, lastInput = 0, modelName = '', route: AutomaRoute | undefined;
-    const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle));
     states[index] = {...states[index]!, state: 'running', startedAt: started};
     publish();
     await journal(index, 'start', {id, title: planned.job.title, brief: planned.job.brief, grant, workerId, ...(idle ? {continued: id} : {})});
     const measured = () => ({changed: changeLine(written, options.root), ran: ranLine(ran), denied: refused.join(', ')});
+    let change: string | undefined, fingerprint: string | undefined;
     try {
-      const messages: ModelMessage[] = idle ? [...await options.workers.messages(idle), {role: 'user', text}] : [{role: 'user', text}];
-      const resolved = idle?.resolved ?? options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision, grant.writes.length > 0);
+      const resolved = options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision, grant.writes.length > 0);
+      // A worker continued after its definition changed still continues; it and its dispatcher are told once (the fingerprint is renewed below).
+      fingerprint = definitionFingerprint({...(options.promptHash !== undefined ? {prompt: [options.promptHash]} : {}), grant: [JSON.stringify([grant.writes, grant.exclusive, grant.tools ?? null])], model: resolved.model});
+      change = idle && fingerprint ? definitionChangeNote(id, definitionChanges(idle.fingerprint, fingerprint)) : undefined;
+      const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle));
+      const messages: ModelMessage[] = idle ? [...await options.workers.messages(idle), {role: 'user', text: change ? change + '\n\n' + text : text}] : [{role: 'user', text}];
       modelName = resolved.model;
       route = resolved.route;
       // A vision job never runs on a model that cannot see images: this job is refused, the others of the dispatch still run.
@@ -447,21 +474,24 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
       const notes: string[] = end.imagesOmitted ? [imagesOmittedNote(modelName)] : [];
       // Whatever the outcome, a worker that ended through the loop (Finish, or the stall rule) stays on the shelf with its history.
       await options.workers.retain({id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, grant, system: planned.system,
-        preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false});
+        preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false,
+        ...(fingerprint ? {fingerprint} : {})});
       const large = idle && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
+      // The block prefixes `Note: ` itself.
+      const note = [change?.replace(/^Note: /, ''), large].filter(Boolean).join('\n') || undefined;
       if (end.kind === 'stalled') {
-        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note: large}, route);
+        await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note}, route, {stalled: true});
         return;
       }
       const result = end.value;
       const allDenied = result.status === 'done' && refused.length > 0 && succeeded === 0 && written.size === 0;
       await finish(index, allDenied ? 'denied' : result.status, started, modelName, {summary: result.summary, evidence: result.evidence, notVerified: [...(result.notVerified ?? []), ...notes],
-        question: result.question, ...measured(), note: large}, route);
+        question: result.question, ...measured(), note}, route);
     } catch (error) {
       stopTracking();
       // A continued worker that did not get to the end of its job stays as it was before this brief; the shelf's history was never extended.
       if (idle) options.workers.unhold(idle);
-      await finish(index, signal.aborted ? 'cancelled' : 'failed', started, modelName, {summary: signal.aborted ? 'Cancelled.' : error instanceof Error ? error.message : String(error), ...measured()}, route);
+      await finish(index, signal.aborted ? 'cancelled' : 'failed', started, modelName, {summary: signal.aborted ? 'Cancelled.' : error instanceof Error ? error.message : String(error), ...measured(), ...(change ? {note: change.replace(/^Note: /, '')} : {})}, route, {error});
     } finally {
       releaseSlot?.();
     }
@@ -481,7 +511,9 @@ export async function executeAutomaDispatch(options: DispatchOptions): Promise<T
   const count = (state: AutomaJobState['state']) => statuses.filter(item => item === state).length;
   const done = count('done');
   const header = `Automa dispatch · ${options.swarmName} · ${done}/${jobs.length} done` + (options.released?.length ? ` · released ${options.released.join(', ')}` : '');
-  return {text: [header, ...receipts, TRUST_LINE].join('\n\n'), isError: done === 0 && count('blocked') === 0, ...(count('denied') === jobs.length ? {disposition: 'denied' as const} : {})};
+  // Said once per dispatch, never per job: how many of its jobs had to wait for a running slot, and the limit behind it.
+  const limits = queuedForSlot > 0 && options.slots?.capacity ? [queuedJobsLine(queuedForSlot, jobs.length, options.slots.capacity)] : [];
+  return {text: [header, ...limits, ...receipts, TRUST_LINE].join('\n\n'), isError: done === 0 && count('blocked') === 0, ...(count('denied') === jobs.length ? {disposition: 'denied' as const} : {})};
 }
 
 /** Marks jobs a previous process left unfinished; they are never replayed, so the dispatcher decides what to send again. */

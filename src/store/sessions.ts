@@ -142,6 +142,14 @@ export class SessionManager {
     await atomicWrite(this.metadataPath(id), Buffer.from(JSON.stringify({version: 1, id, project: this.project,
       created: previous?.created ?? now, updated: now, title: previous?.title && (previous.title !== 'New session' || !summary) ? previous.title : summary || 'New session'})));
   }
+  /** Sets the catalog title explicitly, unlike `touch` which preserves a title created by the first task. */
+  async rename(id: string, title: string): Promise<void> {
+    const previous = await this.info(id);
+    if (!previous) throw new Error('No session for this project: ' + id);
+    const summary = title.replace(/\s+/g, ' ').trim().slice(0, 100);
+    if (!summary) throw new Error('Session title must not be empty');
+    await atomicWrite(this.metadataPath(id), Buffer.from(JSON.stringify({...previous, updated: Date.now(), title: summary})));
+  }
   /** A lease guards all backup/commit/cleanup steps; active sessions cannot be deleted. */
   async remove(id: string, ownerHints: readonly string[] = []): Promise<SessionRemoval> {
     const lease = await this.acquire(id);

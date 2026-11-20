@@ -76,7 +76,7 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
         color: palette[permissionModes[permissions.mode].colorToken],
         page: {
           mode: {current: permissions.mode, options: Object.entries(permissionModes).map(([id, mode]) => ({id, description: mode.description}))},
-          rules: permissions.snapshot().map(rule => ({id: rule.id, scope: rule.scope, decision: rule.decision, tool: rule.tool, pattern: rule.pattern, hits: rule.hits ?? 0,
+          rules: permissions.snapshot(session).map(rule => ({id: rule.id, scope: rule.scope, decision: rule.decision, tool: rule.tool, pattern: rule.pattern, hits: rule.hits ?? 0,
             ...rule.lastHit ? {lastHit: rule.lastHit} : {}})),
           stats: tools.permissionGuard({sessionId: session}).stats(),
           userScope: permissions.userScopeAvailable,

@@ -10,10 +10,10 @@ export const shellJobSchema = z.strictObject({
 
 export type ShellJobArgs = z.infer<typeof shellJobSchema>;
 
-export async function executeShellJob(args: ShellJobArgs): Promise<ToolResult> {
-  if (args.stop && !stopBackgroundJob(args.id)) return {text: shellJobUnknownText(args.id), isError: true};
+export async function executeShellJob(args: ShellJobArgs, sessionId?: string): Promise<ToolResult> {
+  if (args.stop && !stopBackgroundJob(args.id, sessionId)) return {text: shellJobUnknownText(args.id), isError: true};
   if (args.stop) await new Promise(settle => setTimeout(settle, 150));
-  const taken = takeBackgroundOutput(args.id);
+  const taken = takeBackgroundOutput(args.id, sessionId);
   if (!taken) return {text: shellJobUnknownText(args.id), isError: true};
   const {job, output, dropped} = taken;
   const state = job.exitCode === undefined

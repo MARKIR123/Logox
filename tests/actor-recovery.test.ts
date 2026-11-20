@@ -114,7 +114,7 @@ test('Actor stop cancels its work and pauses dependencies without cancelling ind
     f.services.stopActor(actor.activityId); f.ensemble.cancel(actor.activityId, 'user');
     await idle(f.ensemble);
     assert.equal(sideEffects, 0);
-    assert.equal(f.store.activities.get('s', actor.activityId)?.stopReason, 'user');
+    assert.equal(f.store.activities.get('s', actor.activityId)?.stopReason, 'cancelled_by_user');
     assert.equal(f.store.getSnapshot().activities.find(task => task.ownerId === 'aletheia')?.status, 'paused');
     assert.equal(f.store.getSnapshot().activities.find(task => task.ownerId === 'kalon')?.status, 'completed');
     assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').length, 1);

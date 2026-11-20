@@ -1,12 +1,13 @@
 import {isDirector} from '../runtime/director-id.js';
 import {inputKind} from '../runtime/provenance.js';
+import {normalizeStopReason} from '../runtime/stop-reason.js';
 import type {TaskCheckpoint} from '../store/journal.js';
 import type {RoundStatus} from '../context/contracts.js';
 import type {TaskOrigin} from './ensemble.js';
 
 /** A checkpoint a restart cut short (a hard exit leaves `interrupted`, a graceful quit `shutdown`); never a user stop. */
 export const restartStopped = (task: Pick<TaskCheckpoint, 'status' | 'stopReason'>): boolean =>
-  task.status === 'cancelled' && (task.stopReason === 'interrupted' || task.stopReason === 'shutdown');
+  task.status === 'cancelled' && (normalizeStopReason(task.stopReason) === 'interrupted' || normalizeStopReason(task.stopReason) === 'shutdown');
 export interface RestartPlan {
   /** Director dispatches that never started: restored as a paused batch. */
   restore: TaskCheckpoint[];
@@ -50,6 +51,6 @@ export function restartDependencies(restore: readonly TaskCheckpoint[], all: rea
 }
 /** The dispatch origin a checkpoint was written with (everything except its identity, prompt and outcome). */
 export function checkpointOrigin(task: TaskCheckpoint): TaskOrigin {
-  const {activityId: _id, ownerId: _owner, prompt: _prompt, source: _source, status: _status, time: _time, progress: _progress, handoff: _handoff, error: _error, stopReason: _stop, ...origin} = task;
+  const {activityId: _id, ownerId: _owner, prompt: _prompt, source: _source, status: _status, time: _time, progress: _progress, handoff: _handoff, error: _error, stopReason: _stop, diagnostic: _diagnostic, ...origin} = task;
   return origin;
 }

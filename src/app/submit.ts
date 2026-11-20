@@ -34,6 +34,7 @@ import type {ProviderRegistry} from '../providers/registry.js';
 import {permissionDecisionSchema, permissionModeSchema, permissionScopeSchema, type PermissionEngine} from '../permissions/engine.js';
 import type {ResultLine} from '../runtime/command-surface.js';
 import {isDirector} from '../runtime/director-id.js';
+import {InputRejected} from '../runtime/input-rejected.js';
 import {permissionModes} from '../runtime/permission-mode.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import type {Journal} from '../store/journal.js';
@@ -41,6 +42,8 @@ import type {ToolRegistry} from '../tools/registry.js';
 import type {Tools} from '../tools/tools.js';
 import {palette} from '../tui/appearance/theme.js';
 import {createAnamnesisCommand} from '../commands/anamnesis-page.js';
+import {createTasksCommand} from '../commands/tasks-page.js';
+import {activityCosts} from '../runtime/delegations.js';
 import type {AnamnesisApi} from './anamnesis.js';
 import type {InputDelivery} from './input.js';
 import type {Notice, Receipt, SessionState} from './state.js';
@@ -75,9 +78,11 @@ export function createSubmit(deps: SubmitDeps) {
     providers, pages, buildContext, sessionCommand, requireIdle} = deps;
   const {beginTask, dispatchInput, ownerIsBusy} = input;
   const anamnesisCommand = createAnamnesisCommand({surfaces, anamnesis, registry, modelPool, receipt});
+  const tasksCommand = createTasksCommand({surfaces, store, session, actors, deliveries: () => actorServices.deliveries.snapshot(), journalPath: () => tools.automa?.journalPath?.(session),
+    costs: async () => activityCosts((await Promise.all(owners.map(owner => journal.load(session, owner).catch(() => [])))).flat())});
   /** `/providers check` and `/check-provider`: one request against the session provider, reported in a result panel. */
   const checkProvider = async (source: string) => {
-    if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before checking provider.');
+    if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before checking provider.');
     const selection = registry.selection();
     await queryResult(source, 'Provider check', async () => {
       const result = await registry.check(signal);
@@ -87,26 +92,26 @@ export function createSubmit(deps: SubmitDeps) {
   return async function submit(raw: string, source: string, inputDelivery: SubmitDelivery): Promise<void> {
     const text = raw.trim();
     if (!text || state.closed) return;
-    if (state.permissionTask) throw new Error('Permissions are saving, please wait...');
-    if (modelSelection.isSelecting()) throw new Error('Model settings are saving, please try again shortly...');
-    if (state.reloadTask) throw new Error('Resources are reloading, please wait...');
-    if (state.compactTask) throw new Error('Context is compacting, please wait or cancel...');
+    if (state.permissionTask) throw new InputRejected('Permissions are saving, please wait...');
+    if (modelSelection.isSelecting()) throw new InputRejected('Model settings are saving, please try again shortly...');
+    if (state.reloadTask) throw new InputRejected('Resources are reloading, please wait...');
+    if (state.compactTask) throw new InputRejected('Context is compacting, please wait or cancel...');
     const previousSurface = surfaces.getSnapshot();
     if (previousSurface) {
       if (text.startsWith('/') || previousSurface.kind === 'result' && previousSurface.ownerId && previousSurface.ownerId !== source) {
         surfaces.close();
       } else {
-        throw new Error('Please close the current command pane first');
+        throw new InputRejected('Please close the current command pane first');
       }
     }
-    if (authentication.getSnapshot()) throw new Error('Authentication is in progress, please complete or cancel first');
+    if (authentication.getSnapshot()) throw new InputRejected('Authentication is in progress, please complete or cancel first');
     state.commandOwner = source;
     const delivery = submitDeliverySchema.parse(inputDelivery);
     if (delivery.mode === 'steer') {
-      if (/^[@/]/.test(text)) throw new Error('Steering cannot execute commands or actor-routing syntax. Use Queue instead.');
+      if (/^[@/]/.test(text)) throw new InputRejected('Steering cannot execute commands or actor-routing syntax. Use Queue instead.');
       const target = store.activities.get(session, delivery.activityId);
-      if (!target || !['running', 'waiting_input'].includes(target.status)) throw new Error('The steering target is no longer active. The draft was not queued.');
-      if (target.ownerId !== source) throw new Error('The steering target does not match the selected Actor window.');
+      if (!target || !['running', 'waiting_input'].includes(target.status)) throw new InputRejected('The steering target is no longer active. The draft was not queued.');
+      if (target.ownerId !== source) throw new InputRejected('The steering target does not match the selected Actor window.');
       await beginTask();
       if (!await ensemble.injectTaskMessage(target.ownerId, text, 'steered', undefined, 'queue',
         {activityId: delivery.activityId, inputKind: 'human', kind: 'human_steer'})) {
@@ -116,7 +121,7 @@ export function createSubmit(deps: SubmitDeps) {
     }
     if (/^\/(new|resume|clear|rewind)(?:\s|$)/.test(text) && await sessionCommand(text)) return;
     if (text === '/setup' || text === '/login' || text.startsWith('/login ')) {
-      if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before logging in.');
+      if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before logging in.');
       state.loginOwner = source;
       const target = text.startsWith('/login ') ? text.slice(7).trim() : '';
       // A known provider jumps to its key flow, account flow or edit menu in the wizard; any other name is an error.
@@ -140,16 +145,15 @@ export function createSubmit(deps: SubmitDeps) {
     if (text.startsWith('/permissions ')) {
       state.permissionTask = (async () => {
         const parts = text.slice(13).trim().split(/\s+/);
-        if (parts[0] === 'mode') {if (parts.length !== 2) throw new Error('Usage: /permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
-        else if (parts[0] === 'revoke' && parts.length === 2) await permissions.revoke(parts[1]!);
-        else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: permissionScopeSchema.parse(parts[1]), decision: permissionDecisionSchema.parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')});
+        if (parts[0] === 'mode') {if (parts.length !== 2) throw new InputRejected('Usage: /permissions mode default|auto|creative'); await permissions.setMode(permissionModeSchema.parse(parts[1]));}
+        else if (parts[0] === 'revoke' && parts.length === 2) await permissions.revoke(parts[1]!, session);
+        else if (parts[0] === 'add' && parts.length >= 5) await permissions.add({scope: permissionScopeSchema.parse(parts[1]), decision: permissionDecisionSchema.parse(parts[2]), tool: z.string().min(1).parse(parts[3]), pattern: parts.slice(4).join(' ')}, session);
         else throw new Error('Run /permissions to view usage');
         receipt('Permissions updated.', 'status', undefined, source);
       })();
       try {await state.permissionTask;} finally {state.permissionTask = undefined;}
       return;
     }
-    if (text.startsWith('/model ') || text === '/model') {
     // `/model anamnesis [model [effort] | inherit]`: Anamnesis is no actor, so its binding goes through the Anamnesis page's API.
     const anamnesisModel = /^\/model\s+anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
     if (anamnesisModel) {
@@ -161,6 +165,7 @@ export function createSubmit(deps: SubmitDeps) {
       receipt('Anamnesis model set to: ' + binding.provider + '/' + binding.model + (binding.effort ? ' · ' + binding.effort : ''), 'status', undefined, source);
       return;
     }
+    if (text.startsWith('/model ') || text === '/model') {
       await modelSelection.modelCommand(text, source);
       return;
     }
@@ -172,7 +177,7 @@ export function createSubmit(deps: SubmitDeps) {
       }
       const reset = arg === '--reset';
       const next = reset ? undefined : sanitizeUserName(arg);
-      if (!reset && !next) throw new Error('Usage: /name <new name> | /name --reset');
+      if (!reset && !next) throw new InputRejected('Usage: /name <new name> | /name --reset');
       await profileReady;
       try {state.userName = await saveUserName(homeDir, next);}
       catch {throw new Error('Could not save the preferred name; it is unchanged.');}
@@ -187,6 +192,8 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
     if (text === '/theme') {pages.openTheme(); return;}
+    const tasksArgs = /^\/tasks(?:\s+([\s\S]*))?$/i.exec(text);
+    if (tasksArgs) {await tasksCommand.command(tasksArgs[1] ?? ''); return;}
     const anamnesisArgs = /^\/anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
     if (anamnesisArgs) {await anamnesisCommand.command(anamnesisArgs[1] ?? '', source); return;}
     const pageSpec = createCommandTabsFor(text, buildContext());
@@ -216,7 +223,7 @@ export function createSubmit(deps: SubmitDeps) {
     if (effortCommand) {
       if (!effortCommand[1]) {modelSelection.openThinking(); return;}
       const effort = effortSchema.safeParse(effortCommand[1]);
-      if (!effort.success) throw new Error('Thinking effort: auto/off/low/medium/high/max; see /effort');
+      if (!effort.success) throw new InputRejected('Thinking effort: auto/off/low/medium/high/max; see /effort');
       await modelSelection.saveEffort(effort.data); receipt('Thinking effort: ' + effort.data + ' (saved)', 'status', undefined, source); return;
     }
     if (text === '/models') {
@@ -231,14 +238,14 @@ export function createSubmit(deps: SubmitDeps) {
       const parts = text.replace(/^\/providers\s+/, '').trim().split(/\s+/);
       if (parts[0] === 'check') {await checkProvider(source); return;}
       if (parts[0] === 'unregister' || parts[0] === 'logout') {
-        if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before unregistering provider.');
+        if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before unregistering provider.');
         const target = parts[1];
-        if (!target) throw new Error('Usage: /providers unregister <name>');
+        if (!target) throw new InputRejected('Usage: /providers unregister <name>');
         await providers.removeProvider(target, source);
         receipt("Provider '" + target + "' unregistered successfully.", 'status', undefined, source); return;
       }
-      if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before switching provider.');
-      if (!parts[0] || parts.length > 2) throw new Error('Usage: /providers <name> [model]');
+      if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before switching provider.');
+      if (!parts[0] || parts.length > 2) throw new InputRejected('Usage: /providers <name> [model]');
       await modelSelection.saveSelection(registry.candidate(parts[0], parts[1]));
       receipt('Current provider: ' + modelSelection.current().provider + '\nModel: ' + (modelSelection.current().model || 'Select with /model'), 'status', undefined, source); return;
     }
@@ -269,11 +276,11 @@ export function createSubmit(deps: SubmitDeps) {
       return;
     }
     if (text === '/undo') {
-      if (ensemble.isBusy()) throw new Error('Tasks are running. Wait or cancel before undoing.');
+      if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before undoing.');
       await queryResult(source, 'File undo', async () => {
         const activities = new Set((await journal.activeTasks(session)).map(task => task.activityId));
         for (const owner of owners) for (const entry of await journal.load(session, owner)) if (entry.activityId) activities.add(entry.activityId);
-        const paths = await tools.snapshots.undo([...activities]);
+        const paths = await tools.snapshots.undo([...activities], session);
         if (!paths.length) {receipt('No file changes to undo', 'status', undefined, source); return undefined;}
         return 'Undone:\n' + paths.join('\n');
       }); return;
@@ -288,19 +295,19 @@ export function createSubmit(deps: SubmitDeps) {
     }
     if (text.startsWith('/cast ')) {
       const prompt = text.slice(6).trim();
-      if (!prompt) throw new Error('Please specify a task prompt for actors');
+      if (!prompt) throw new InputRejected('Please specify a task prompt for actors');
       await beginTask();
       ensemble.dispatchBatch((['aletheia', 'techne', 'kalon'] as const).map(ownerId => ({ownerId, prompt}))); return;
     }
     if (text.startsWith('/')) {
       const match = /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i.exec(text);
       const expanded = match ? resources.expand(match[1]!, match[2] ?? '') : undefined;
-      if (!expanded) throw new Error('Unknown command. Run /help to view available commands.');
+      if (!expanded) throw new InputRejected('Unknown command. Run /help to view available commands.');
       await beginTask();
       await dispatchInput(source, expanded, isDirector(source) ? source : 'direct'); return;
     }
     const mention = /^@([a-z][a-z0-9_-]*)\s+([\s\S]+)$/.exec(text);
-    if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new Error('Unknown actor name. Use /ensemble to view available members, then dispatch tasks with @<actor> <task>.');
+    if (text.startsWith('@') && (!mention || !actors.find(mention[1]!))) throw new InputRejected('Unknown actor name. Use /ensemble to view available members, then dispatch tasks with @<actor> <task>.');
     const owner = mention ? mention[1]! : source;
     await beginTask();
     if (ownerIsBusy(owner)) {

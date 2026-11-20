@@ -36,6 +36,7 @@ export async function executeEdit(
   activityId = 'task',
   signal: AbortSignal = new AbortController().signal,
   ownerId?: string,
+  sessionId?: string,
 ): Promise<ToolResult> {
   return snapshots.withLock(canonicalPath, async () => {
     const size = await stat(canonicalPath).then(info => info.size).catch(error => {
@@ -55,7 +56,7 @@ export async function executeEdit(
     let index = normalized.indexOf(old);
 
     if (index < 0) {
-      const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId);
+      const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId, sessionId);
       if (peer) {
         throw new Error(`No match found for old_string; file was updated by ${peer} since your last read — please Read the file again before editing`);
       }
@@ -95,7 +96,7 @@ export async function executeEdit(
 
     if (after.length > 32 * 1024 * 1024) throw new Error('Content exceeds 32 MiB');
 
-    await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId);
+    await snapshots.apply(canonicalPath, before, after, activityId, signal, ownerId, sessionId);
     return {
       text: 'Updated ' + canonicalPath + '; use /undo to revert file changes from this round.',
       isError: false,

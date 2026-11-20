@@ -26,7 +26,7 @@ export class Activities {
     return this.records.get(activityKey(sessionId, activityId));
   }
   create(input: Omit<Activity, 'version'>): Activity {
-    const record = immutable(activitySchema.parse({...input, version: 0}));
+    const record = immutable(activitySchema.parse({...input, version: 0, ...(input.status === 'running' && input.startedAt === undefined ? {startedAt: Date.now()} : {})}));
     const key = activityKey(record.sessionId, record.activityId);
     if (this.records.has(key)) throw new Error('Activity identity already exists');
     this.records.set(key, record);
@@ -42,11 +42,15 @@ export class Activities {
     this.onChange();
     return true;
   }
-  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'phase' | 'progress' | 'createdAt'>>): Activity {
+  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'diagnostic' | 'fingerprint' | 'phase' | 'progress' | 'createdAt' | 'startedAt' | 'finishedAt'>>): Activity {
     const key = activityKey(sessionId, activityId);
     const current = this.records.get(key);
     if (!current) throw new Error('Activity not found');
-    const next = activitySchema.parse({...current, ...patch, version: current.version + 1});
+    const now = Date.now(), finished = (status: ActivityStatus) => status === 'completed' || status === 'failed' || status === 'cancelled';
+    const parsed = activitySchema.parse({...current, ...patch, version: current.version + 1});
+    // The store stamps when the work first ran and when it ended, so durations never depend on message times.
+    const next = {...parsed, ...(parsed.status === 'running' && parsed.startedAt === undefined ? {startedAt: now} : {}),
+      ...(finished(parsed.status) && parsed.finishedAt === undefined ? {finishedAt: now} : {})};
     if (next.status !== current.status && !transitions[current.status].includes(next.status)) {
       throw new Error('Invalid activity status transition: ' + current.status + ' → ' + next.status);
     }

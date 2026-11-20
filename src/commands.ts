@@ -28,6 +28,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'reload', usage: '/reload', description: 'Reload personas, guidelines, skills, and template commands', argument: 'none'},
   {name: 'skills', usage: '/skills', description: 'View available skill names, descriptions, and file paths', argument: 'none'},
   {name: 'ensemble', usage: '/ensemble', description: 'One tab per actor: model, context, tools, skills, session figures and prompts', argument: 'none'},
+  {name: 'tasks', usage: '/tasks', description: 'Delegated work: who holds what, what it waits on, how it ended, with results (read-only)', argument: 'none'},
   {name: 'anamnesis', usage: '/anamnesis [recap|dream]', description: 'Recap and memory: run one now, browse or delete memory records, choose the model', argument: 'none'},
   {name: 'name', usage: '/name [new name | --reset]', description: 'Show, set or clear the name Logox calls you', argument: 'text'},
   {name: 'doctor', usage: '/doctor', description: 'Check the environment: fonts, browser, ripgrep, credentials and actor profiles', argument: 'none'},

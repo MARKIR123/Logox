@@ -1,64 +1,27 @@
 import {DIRECTOR_ID} from './runtime/director-id.js';
+import {InputRejected} from './runtime/input-rejected.js';
 import {randomUUID} from 'node:crypto';
-import {homedir} from 'node:os';
-import {join, resolve} from 'node:path';
-import {realpath} from 'node:fs/promises';
 import {z} from 'zod';
-import {migrateProjectData} from './store/project-migration.js';
-import {ActorCatalog} from './actors/catalog.js';
-import {assertActorProfiles, seedActorProfiles} from './actors/profiles.js';
-import {loadConfig} from './config/config.js';
-import {ProviderRegistry} from './providers/registry.js';
-import {AuthStorage} from './providers/auth.js';
-import {CustomProviderStorage} from './providers/custom-storage.js';
-import {migrateOpenAiAccount} from './providers/account-migration.js';
-import {Journal} from './store/journal.js';
-import {SessionManager, type SessionLease} from './store/sessions.js';
-import {Tools} from './tools/tools.js';
-import {PermissionEngine} from './permissions/engine.js';
-import {StateFile, preferenceSchema} from './config/model-preferences.js';
-import {UsageLedger} from './context/usage.js';
-import {ProjectExtensions, observeTools} from './extensions/runtime.js';
-import type {ExtensionApproval} from './extensions/mcp.js';
+import type {SessionLease} from './store/sessions.js';
+import {ProjectHost, type SessionApplication} from './project-host.js';
 import type {createSessionApplication, ApplicationOptions, SubmitDelivery} from './application.js';
 
 /** Project services stay stable; the session runtime is replaced as a whole once the candidate loads successfully. */
 export async function createManagedApplication(options: ApplicationOptions, createSession: typeof createSessionApplication) {
-  const home = options.resourceOptions?.home ?? homedir();
-  // Before anything reads state: runtime state written under `<project>/.logox/` by older versions moves to the project data folder.
-  const dataMigration = await migrateProjectData({project: await realpath(options.cwd), home});
-  const manager = await SessionManager.open(options.cwd, {dataDir: dataMigration.dataDir}), cwd = manager.project;
-  if (options.sessionId !== undefined && !options.sessionId.trim()) throw new Error('Session ID must not be empty');
+  // Every project service is constructed once, exactly as the multi-session hub does; this adapter only swaps the session runtime.
+  const host = await ProjectHost.open(options, createSession);
+  const {manager, registry, journal, actors, permissions, usage, extensions, tools} = host;
   const recent = options.sessionId === undefined ? await manager.recent() : undefined;
   let sessionId = options.sessionId?.trim() ?? recent ?? (options.resume ? undefined : randomUUID());
   if (!sessionId) throw new Error('No session to resume');
-  const auth = new AuthStorage(options.authPath ?? join(home, '.logox', 'auth.json')), customStorage = new CustomProviderStorage(join(home, '.logox', 'custom-providers.json'));
-  // Before the config reads the saved selection: the account sign-in used to live under the provider `openai`.
-  const migration = await migrateOpenAiAccount({auth, customStorage, home, project: cwd, dataDir: dataMigration.dataDir}).catch(() => undefined);
-  const config = options.config ?? await loadConfig(cwd, {}, options.env ?? process.env, options.resourceOptions?.home, options.resourceOptions?.boundary);
-  const registry = new ProviderRegistry(config, options.env ?? process.env, options.fetcher, auth, customStorage);
-  await registry.syncCustom();
-  if (migration?.status === 'migrated' && registry.selection().provider === 'openai') registry.select('openai-auth', config.provider.model);
-  const journal = new Journal(join(manager.directory, 'sessions'));
-  if (options.resourceOptions?.home && resolve(home) !== resolve(homedir())) await seedActorProfiles(home);
-  else await assertActorProfiles(home);
-  const actors = new ActorCatalog(cwd, options.resourceOptions?.home ? {home} : {});
-  await actors.load();
-  const owners = async (id: string) => [...new Set([...actors.list().map(actor => actor.id), ...(await journal.tasks(id)).map(task => task.ownerId)])];
-  let current: Awaited<ReturnType<typeof createSession>>;
-  const preferences = new StateFile(join(manager.directory, 'model-preferences.json'), preferenceSchema);
-  const permissions = new PermissionEngine(cwd, config.permissions.mode, join(dataMigration.dataDir, 'permissions.json'), join(home, '.logox', 'user-permissions.json'), join(home, '.logox', 'permission-mode.json'));
-  await permissions.load();
-  const earlyNotices: string[] = [];
+  // The engine may be driven without ids by legacy callers: resolve them against the session this adapter currently shows.
+  permissions.bindSession(sessionId);
+  extensions.mcp.bindSession(sessionId);
+  const owners = (id: string) => host.owners(id);
+  let current: SessionApplication;
+  const earlyNotices: string[] = [...host.notices];
   const diagnose = (text: string) => {if (current) current.systemNotice(text); else earlyNotices.push(text);};
-  if (migration?.notice) earlyNotices.push(migration.notice);
-  earlyNotices.push(...dataMigration.notices);
-  const usage = new UsageLedger(join(manager.directory, 'usage'), diagnose);
-  const approveExtension: ExtensionApproval = options.approveExtension ?? ((request, context) => tools.authorizeExtension({
-    id: request.callId, name: 'mcp:' + request.server + ':' + request.tool, arguments: JSON.stringify(request.arguments),
-  }, context, request.action === 'list' ? 'read' : 'unknown'));
-  const extensions = options.extensions ?? new ProjectExtensions(cwd, config, options.resourceOptions, approveExtension, diagnose);
-  const tools = observeTools(new Tools(cwd, undefined, permissions, {home, dataDir: dataMigration.dataDir}), extensions.hooks);
+  host.noticeSink = diagnose;
   let lease: SessionLease;
   let closed = false, transition: Promise<void> | undefined;
   let entry: Promise<void> = Promise.resolve();
@@ -68,10 +31,10 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const notice = (text: string) => current.systemNotice(text);
   const requireIdle = () => {
     if (closed) throw new Error('Application is closed');
-    if (transition || current.isBusy()) throw new Error('Tasks are running. Cancel or wait for completion before switching sessions or rewinding.');
-    if (current.authentication.getSnapshot()) throw new Error('Complete or cancel the login first');
+    if (transition || current.isBusy()) throw new InputRejected('Tasks are running. Cancel or wait for completion before switching sessions or rewinding.');
+    if (current.authentication.getSnapshot()) throw new InputRejected('Complete or cancel the login first');
   };
-  const persistence = new WeakMap<Awaited<ReturnType<typeof createSession>>, {saved: boolean; save(): Promise<void>}>();
+  const persistence = new WeakMap<SessionApplication, {saved: boolean; save(): Promise<void>}>();
   const create = async (id: string) => {
     let saving: Promise<void> | undefined;
     const state = {saved: await manager.hasContent(id), async save() {
@@ -83,8 +46,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       })();
       try {await saving;} finally {saving = undefined;}
     }};
-    const application = await createSession({...options, cwd, config, sessionId: id, dataDir: dataMigration.dataDir, registry, tools, preferences, permissions,
-      usage, extensions, actors, sessionCommand, beforeTask: () => state.save(), isPersistent: () => state.saved});
+    const application = await host.createSession({sessionId: id, sessionCommand, beforeTask: () => state.save(), isPersistent: () => state.saved});
     persistence.set(application, state);
     return application;
   };
@@ -107,9 +69,11 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         if (nextLease && !same) await nextLease.release();
         throw error;
       }
+      const previousId = current.sessionId;
       await current.close();
       if (!same) await lease.release();
-      permissions.clearSession();
+      permissions.clearSession(previousId);
+      permissions.bindSession(id); extensions.mcp.bindSession(id);
       current = next; lease = nextLease;
       current.activate(); publish();
       if (await journal.pending(id)) notice('This session has an unfinished rewind. Use /rewind to retry the same target; no new model tasks start until it completes.');
@@ -143,13 +107,14 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       if (!pending && index < 0) throw new Error('The rewind round is no longer valid. Select again.');
       const activities = pending?.activities ?? rounds.slice(index).map(round => round.id);
       await journal.savePending(id, {target, activities});
-      const result = await tools.snapshots.restore(activities);
+      const result = await tools.snapshots.restore(activities, id);
       if (!result.success) throw new Error('Rewind incomplete; the conversation branch did not advance. Restored: ' + (result.restored.join(', ') || 'none') + '\nFailed: ' + result.failed.join(', ') + '\n' + result.error + '\nFix the cause and use /rewind to retry the same target. Shell/MCP side effects are not restored.');
       await journal.fork(id, await owners(id), activities);
       await usage.flush();
       const next = await create(id);
       try {await journal.savePending(id, null);} catch (error) {await next.close(); throw error;}
-      await current.close(); permissions.clearSession(); current = next; current.activate(); publish();
+      const previousId = current.sessionId;
+      await current.close(); permissions.clearSession(previousId); current = next; permissions.bindSession(id); extensions.mcp.bindSession(id); current.activate(); publish();
       notice('Rewound the selected round and everything after it, including file changes.\n' + (result.restored.join('\n') || 'No file tool changes in this range') + '\nShell/MCP side effects are not restored by a file rewind.');
     })();
     transition = operation;
@@ -184,8 +149,10 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         await manager.remember(id);
       } catch (error) {await next?.close(); await nextLease?.release(); throw error;}
       finally {await sourceLease?.release();}
+      const previousId = current.sessionId;
       await current.close(); await lease.release();
-      permissions.clearSession(); current = next; lease = nextLease; current.activate(); publish();
+      permissions.clearSession(previousId);
+      current = next; lease = nextLease; permissions.bindSession(id); extensions.mcp.bindSession(id); current.activate(); publish();
       notice('Recovered the intact valid prefix as a new session. The source ledger is preserved; damaged lines and everything after them are not in the new branch, and tasks will not resume automatically.');
     })();
     transition = operation;
@@ -270,7 +237,6 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   let initial: typeof current | undefined;
   let startupIssue: string | undefined;
   try {
-    if (!options.extensions) await extensions.initialize();
     try {
       lease = await manager.acquire(sessionId);
       await manager.info(sessionId);
@@ -283,13 +249,14 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       sessionId = randomUUID(); lease = await manager.acquire(sessionId); initial = await create(sessionId);
     }
     current = initial;
+    permissions.bindSession(sessionId);
     snapshot = Object.freeze({revision: 0, sessionId});
     if (persistence.get(current)!.saved) {await manager.touch(sessionId); await manager.remember(sessionId);}
     current.activate();
     for (const message of earlyNotices.splice(0)) diagnose(message);
     if (await journal.pending(sessionId)) notice('The last rewind did not finish. Use /rewind to retry; new model tasks are blocked until it completes.');
     if (startupIssue) {notice(startupIssue); await sessionCommand('/resume');}
-  } catch (error) {try {await initial?.close();} finally {try {await lease!?.release(); if (!options.extensions) await extensions.close();} finally {await registry.close();}} throw error;}
+  } catch (error) {try {await initial?.close();} finally {try {await lease!?.release();} finally {await host.close();}} throw error;}
   let closeTask: Promise<void> | undefined;
   return {
     get sessionId() {return current.sessionId;}, get store() {return current.store;}, get ensemble() {return current.ensemble;},
@@ -328,10 +295,10 @@ export async function createManagedApplication(options: ApplicationOptions, crea
       let operation: Promise<void>;
       try {
         if (closed) return;
-        if (transition) throw new Error('The session is switching or rewinding. Wait for it to finish.');
-        if (text.startsWith('/permissions ') && await journal.pending(active.sessionId)) throw new Error('Session rewind is unfinished. Use /rewind to retry first.');
-        if (text && !/^\/(new|resume|rewind|status|config|help|usage|permissions|commands|skills)(?:\s|$)/.test(text) && await journal.pending(active.sessionId)) throw new Error('Session rewind is unfinished. Use /rewind to retry first.');
-        if (transition || active !== current || closed) throw new Error('The session is switching or closing. Wait for it to finish.');
+        if (transition) throw new InputRejected('The session is switching or rewinding. Wait for it to finish.');
+        if (text.startsWith('/permissions ') && await journal.pending(active.sessionId)) throw new InputRejected('Session rewind is unfinished. Use /rewind to retry first.');
+        if (text && !/^\/(new|resume|rewind|status|config|help|usage|permissions|commands|skills)(?:\s|$)/.test(text) && await journal.pending(active.sessionId)) throw new InputRejected('Session rewind is unfinished. Use /rewind to retry first.');
+        if (transition || active !== current || closed) throw new InputRejected('The session is switching or closing. Wait for it to finish.');
         operation = active.submit(raw, source, delivery);
       } catch (error) {await active.recordError(error, source); throw error;}
       finally {release();}
@@ -350,8 +317,9 @@ export async function createManagedApplication(options: ApplicationOptions, crea
         await transition?.catch(() => {});
         try {await current.close();}
         finally {
-          try {await usage.flush(); if (!options.extensions) await extensions.close(); permissions.clearSession();}
-          finally {try {await lease.release();} finally {await registry.close();}}
+          const id = current.sessionId;
+          try {await usage.flush(); permissions.clearSession(id);}
+          finally {try {await lease.release();} finally {await host.close();}}
         }
       })();
       return closeTask;

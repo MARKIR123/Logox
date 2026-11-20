@@ -11,6 +11,10 @@ export class Semaphore {
   get running(): number {return this.held;}
   /** Callers waiting for a slot. */
   get waiting(): number {return this.queue.length;}
+  /** The limit in force now. */
+  get capacity(): number {return Math.max(1, this.limit());}
+  /** True when a caller acquiring now would have to wait. */
+  get saturated(): boolean {return this.queue.length > 0 || this.held >= this.capacity;}
 
   /** Resolves with the function that gives the slot back (idempotent). Rejects with the signal's reason when it aborts while waiting. */
   acquire(signal?: AbortSignal): Promise<() => void> {

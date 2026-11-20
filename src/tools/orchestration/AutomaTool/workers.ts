@@ -25,6 +25,8 @@ export interface IdleWorker {
   /** The model name the dispatch asked for (style or role), so a worker revived after a restart resolves its model the same way. */
   readonly preferred: string | undefined;
   readonly vision: boolean;
+  /** What the worker's definition was when its last job ran (`runtime/definition-fingerprint.ts`); a continue compares it with the current one. Absent for workers parked by older versions. */
+  readonly fingerprint?: string | undefined;
   /** Undefined after a restart, until the next continue resolves it again. */
   resolved: ResolvedAutomaModel | undefined;
   /** Undefined while parked. */
@@ -45,7 +47,7 @@ export interface ShelfSettings {
 
 interface ParkedFile {
   readonly id: string; readonly sessionId: string; readonly ownerId: string; readonly activityId: string; readonly workerId: string;
-  readonly grant: JobGrant; readonly system: string; readonly preferred?: string; readonly vision: boolean; readonly lastInput: number;
+  readonly grant: JobGrant; readonly system: string; readonly preferred?: string; readonly vision: boolean; readonly fingerprint?: string; readonly lastInput: number;
   readonly messages: ModelMessage[];
 }
 
@@ -124,7 +126,7 @@ export class WorkerShelf {
       const data = JSON.parse(await readFile(path, 'utf8')) as ParkedFile;
       if (data.id !== id || data.ownerId !== ownerId || data.sessionId !== sessionId) return undefined;
       const entry: IdleWorker = {id, sessionId, ownerId, activityId, workerId: data.workerId, grant: data.grant, system: data.system, preferred: data.preferred,
-        vision: data.vision, resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
+        vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
       this.entries.set(this.key(sessionId, id), entry);
       this.arm();
       return entry;
@@ -158,7 +160,7 @@ export class WorkerShelf {
     if (!entry.messages) return;
     const path = this.file(entry.sessionId, entry.activityId, entry.id);
     const data: ParkedFile = {id: entry.id, sessionId: entry.sessionId, ownerId: entry.ownerId, activityId: entry.activityId, workerId: entry.workerId,
-      grant: entry.grant, system: entry.system, ...(entry.preferred !== undefined ? {preferred: entry.preferred} : {}), vision: entry.vision,
+      grant: entry.grant, system: entry.system, ...(entry.preferred !== undefined ? {preferred: entry.preferred} : {}), vision: entry.vision, ...(entry.fingerprint ? {fingerprint: entry.fingerprint} : {}),
       lastInput: entry.lastInput, messages: entry.messages};
     await mkdir(join(path, '..'), {recursive: true});
     const temporary = path + '.' + randomUUID().slice(0, 8) + '.tmp';
@@ -172,6 +174,13 @@ export class WorkerShelf {
     const entry = this.entries.get(this.key(sessionId, id));
     this.entries.delete(this.key(sessionId, id));
     if (entry) await rm(this.file(sessionId, entry.activityId, id), {force: true}).catch(() => {});
+    this.disarm();
+  }
+
+  /** Ends every idle or parked worker of one session, and removes that session's parked directory; other sessions keep theirs. */
+  async closeSession(sessionId: string): Promise<void> {
+    for (const [key, entry] of this.entries) if (entry.sessionId === sessionId && !entry.busy) this.entries.delete(key);
+    await rm(this.settings.dir(sessionId), {recursive: true, force: true}).catch(() => {});
     this.disarm();
   }
 

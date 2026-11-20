@@ -19,6 +19,7 @@ import {UserCancelledError} from '../kernel/agent.js';
 import {killActiveProcess, killActivityProcesses, killBackgroundJobs} from '../tools/process.js';
 import {createRuntimeContextMessage, type RuntimeContextMessage} from '../runtime/context-updates.js';
 import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker, userInterruptMarkerWithWorking} from '../prompts/runtime/interruption.js';
+import {diagnosticOf, stopReasonFor, type StopReasonCode} from '../runtime/stop-reason.js';
 
 import {builtinActors} from './builtins.js';
 
@@ -45,13 +46,15 @@ export function stopNotice(reason: StopReason | undefined, detail: string | unde
   if (reason === 'director_cancel') return createRuntimeContextMessage('interruption', directorStopMarker(detail?.trim() || DIRECTOR_STOP_DEFAULT_REASON), {activityId, slot: 'interruption', by: 'director'});
   return undefined;
 }
-export interface TaskOrigin extends Omit<TaskOriginData, 'authorization' | 'stopReason'> {
+export interface TaskOrigin extends Omit<TaskOriginData, 'authorization' | 'stopReason' | 'diagnostic'> {
   authorization?: readonly string[] | undefined;
   priority?: boolean;
 }
 export interface TaskResult<Id extends string = string> extends TaskOrigin {
   sessionId: string; ownerId: Id; activityId: string; source: string;
   summary: RoundSummary; delivery?: TaskDelivery; status: RoundStatus; error?: unknown; stopReason?: StopReason;
+  /** How the work ended, in the one outcome vocabulary (`../runtime/stop-reason.ts`), and the short error line when an error ended it. */
+  stop?: StopReasonCode; diagnostic?: string;
 }
 export interface ActorContext<Id extends string = string> extends TaskOrigin {
   readonly progress?: TaskProgressSnapshot;
@@ -106,6 +109,8 @@ interface Task<Id extends string> {ownerId: Id; prompt: string}
 interface QueuedTask<Id extends string> extends Task<Id> {
   activityId: string; source: string; origin: TaskOrigin; controller: AbortController;
   ready: Promise<void>; done: Promise<void>; resolve(): void; stopReason?: StopReason; stopDetail?: string;
+  /** How the task ended, set once when it settles; written to the checkpoint and the activity. */
+  stop?: StopReasonCode; diagnostic?: string;
   progress?: TaskProgressSnapshot;
   /** Final status and full report once the task has ended; read by tasks that run `after` it. */
   outcome?: {status: RoundStatus; title: string; text: string};
@@ -267,7 +272,7 @@ export class EnsembleRuntime<Id extends string> {
         activityId: active.activityId, source, inputKind: input,
       });
       if (mode === 'interrupt' && !human && !active.controller.signal.aborted) {
-        killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`);
+        killActivityProcesses(active.activityId, `Interrupted by ${source}: ${summary || message.slice(0, 80)}`, 'system', this.sessionId);
       }
     })());
     inbox.pending.add(write);
@@ -286,7 +291,7 @@ export class EnsembleRuntime<Id extends string> {
     const active = this.getActiveTask(actorId);
     if (!active) return {success: false, message: `No active running task found for actor '${actorId}'.`};
     const targetId = toolId || active.activityId;
-    const killed = toolId ? killActiveProcess(toolId, reason, 'director') : killActivityProcesses(active.activityId, reason, 'director') > 0;
+    const killed = toolId ? killActiveProcess(toolId, reason, 'director', this.sessionId) : killActivityProcesses(active.activityId, reason, 'director', this.sessionId) > 0;
     if (killed) {
       return {success: true, message: `Successfully cancelled tool process for ${actorId} (target: ${targetId}): ${reason}`};
     }
@@ -321,13 +326,14 @@ export class EnsembleRuntime<Id extends string> {
     if (index >= 0) {
       this.queue.splice(index, 1);
       this.controllers.delete(activityId); this.tasks.delete(activityId);
+      task.stop = stopReasonFor({status: 'cancelled', cause: reason});
       this.finished.set(activityId, {ownerId: task.ownerId, status: 'cancelled', title: 'Queued task cancelled', text: (reason === 'user' ? undefined : detail) ?? 'The task had not started.'});
-      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', detail: (reason === 'user' ? undefined : detail) ?? 'Queued task cancelled'});
+      this.store.activities.update(this.sessionId, activityId, {status: 'cancelled', stage: 'Interrupted', stopReason: task.stop, detail: (reason === 'user' ? undefined : detail) ?? 'Queued task cancelled'});
       void this.trackWrite(task.ready.catch(() => {}).then(async () => {
         // A task that never started keeps its queued checkpoint on shutdown, so the next session can restore it.
         if (reason !== 'shutdown') await this.checkpoint(task, 'cancelled');
         await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId, source: task.source,
-          ...task.origin, status: 'cancelled', stopReason: reason, summary: {title: 'Queued task cancelled', report: 'The task had not started.', source: 'local'}});
+          ...task.origin, status: 'cancelled', stopReason: reason, stop: task.stop!, summary: {title: 'Queued task cancelled', report: 'The task had not started.', source: 'local'}});
         await this.options.settled?.(activityId, 'cancelled');
       })).catch(() => {this.store.message(this.sessionId, task.ownerId, 'notice', 'Failed to save queued-cancel checkpoint; the task will not run automatically after restart', {activityId});});
       task.resolve();
@@ -361,7 +367,7 @@ export class EnsembleRuntime<Id extends string> {
     this.closed = true;
     for (const task of [...this.tasks.values()]) this.cancel(task.activityId, 'shutdown');
     await Promise.allSettled([...this.activeSlots.values()]);
-    killBackgroundJobs();
+    killBackgroundJobs(undefined, this.sessionId);
     await Promise.allSettled([...this.pendingWrites]);
   }
   private identityOrigin(origin: TaskOrigin) {
@@ -373,6 +379,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(origin.acceptance?.length ? {acceptance: [...origin.acceptance]} : {}),
       ...(origin.after?.length ? {after: [...origin.after]} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
+      ...(origin.fingerprint ? {fingerprint: origin.fingerprint} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
       ...(origin.coordinationWake ? {coordinationWake: true} : {}),
       ...(origin.recovery ? {recovery: {key: origin.recovery.key, attempt: origin.recovery.attempt,
@@ -382,7 +389,7 @@ export class EnsembleRuntime<Id extends string> {
   }
   private checkpoint(task: QueuedTask<Id>, status: 'queued' | 'paused' | 'running' | 'waiting_input' | RoundStatus, error?: string): Promise<void> {
     return this.history.checkpoint?.(this.sessionId, {activityId: task.activityId, ownerId: task.ownerId, prompt: task.prompt, source: task.source,
-      ...this.identityOrigin(task.origin), ...(task.stopReason ? {stopReason: task.stopReason} : {}), status, time: Date.now(),
+      ...this.identityOrigin(task.origin), ...(task.stop ?? task.stopReason ? {stopReason: (task.stop ?? task.stopReason)!} : {}), ...(task.diagnostic ? {diagnostic: task.diagnostic} : {}), status, time: Date.now(),
       ...(task.progress ? {progress: task.progress} : {}),
       ...(error ? {error: error.slice(0, 2048)} : {})}) ?? Promise.resolve();
   }
@@ -401,9 +408,10 @@ export class EnsembleRuntime<Id extends string> {
       const execution = (async () => {
         try {await task.ready; await this.run(task);}
         catch (error) {
-          this.store.activities.update(this.sessionId, task.activityId, {status: 'failed', stage: 'Checkpoint save failed', detail: error instanceof Error ? error.message : String(error)});
+          const diagnostic = diagnosticOf('error', error);
+          this.store.activities.update(this.sessionId, task.activityId, {status: 'failed', stage: 'Checkpoint save failed', stopReason: 'error', ...(diagnostic ? {diagnostic} : {}), detail: error instanceof Error ? error.message : String(error)});
           await this.options.handoff?.({sessionId: this.sessionId, ownerId: task.ownerId, activityId: task.activityId, source: task.source,
-            ...task.origin, status: 'failed', error, summary: {title: 'Task recording failed', report: 'The task has not run; the checkpoint could not be saved.', source: 'local'}});
+            ...task.origin, status: 'failed', error, stop: 'error', summary: {title: 'Task recording failed', report: 'The task has not run; the checkpoint could not be saved.', source: 'local'}});
           await this.options.settled?.(task.activityId, 'failed');
         }
       })().catch(() => {}).finally(() => {
@@ -626,19 +634,20 @@ export class EnsembleRuntime<Id extends string> {
       if (output.length && !recorded) await this.history.append({version: 1, ...identity, role: 'assistant', text: output.join('\n')});
       signal.throwIfAborted();
       const summary = await finish('completed');
+      task.stop = 'completed';
       if (summary) task.outcome = {status: 'completed', title: summary.title, text: delivery?.text ?? summary.report};
       if (summary) {
         this.store.activities.update(this.sessionId, activityId, {phase: 'finalizing', stage: 'Wrapping up', detail: summary.report});
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status: 'completed'});
-          else await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status: 'completed'});
+          else await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status: 'completed', stop: 'completed'});
         }
         catch {this.store.message(this.sessionId, ownerId, 'notice', 'Summary handoff did not finish; it can be read from the actor ledger.', {activityId});}
       }
       await checkpoint('completed');
       await settle('completed');
       this.controllers.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: 'Completed', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
+      this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: 'Completed', stopReason: 'completed', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
       if (!isDirector(ownerId) && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
@@ -655,6 +664,9 @@ export class EnsembleRuntime<Id extends string> {
       if (isUserCancel) task.stopReason = 'user';
       const status: RoundStatus = signal.aborted || isUserCancel ? 'cancelled' : 'failed';
       const detail = formatFailureDetail(error);
+      task.stop = stopReasonFor({status, cause: task.stopReason, error});
+      const diagnostic = diagnosticOf(task.stop, error);
+      if (diagnostic) task.diagnostic = diagnostic;
       // Tell the stopped actor's own ledger who stopped it, once, before the round is closed.
       const stopMarker = status === 'cancelled' ? stopNotice(task.stopReason, task.stopDetail, activityId) : undefined;
       if (stopMarker) await this.history.append({version: 1, ...identity, role: 'context', text: stopMarker.text, message: stopMarker}).catch(() => {});
@@ -666,21 +678,22 @@ export class EnsembleRuntime<Id extends string> {
         // On technical termination, hand off a local summary first instead of waiting for the failing model to compact.
         try {
           if (source === 'direct') await this.options.directAnchor?.({...identity, status});
-          await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status, error, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
+          await this.options.handoff?.({...identity, ...origin, source, summary, ...(delivery ? {delivery} : {}), status, error, stop: task.stop, ...(task.diagnostic ? {diagnostic: task.diagnostic} : {}), ...(task.stopReason ? {stopReason: task.stopReason} : {})});
         } catch {this.store.message(this.sessionId, ownerId, 'notice', 'Final summary handoff did not finish', {activityId});}
       } else {
-        await this.options.handoff?.({...identity, ...origin, source, status, error,
+        await this.options.handoff?.({...identity, ...origin, source, status, error, stop: task.stop, ...(task.diagnostic ? {diagnostic: task.diagnostic} : {}),
           summary: {title: 'Task incomplete', report: detail.slice(0, 2000), source: 'local'}, ...(task.stopReason ? {stopReason: task.stopReason} : {})});
       }
       await settle(status);
       this.controllers.delete(activityId);
-      this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? 'Interrupted' : 'Failed', detail, ...(summary ? {summary, title: summary.title} : {})});
+      this.store.activities.update(this.sessionId, activityId, {status, stage: status === 'cancelled' ? 'Interrupted' : 'Failed', detail, stopReason: task.stop,
+        ...(task.diagnostic ? {diagnostic: task.diagnostic} : {}), ...(summary ? {summary, title: summary.title} : {})});
       if (!isDirector(ownerId) && task.stopReason !== 'director_cancel') {
         const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
         const roleName = member?.name ?? ownerId;
         const noticeText = status === 'cancelled'
-          ? `[Notice] ${roleName} (${ownerId}) activity ${activityId} was cancelled (${task.stopReason ?? 'user'}).`
-          : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed: ${detail.replace(/\n+/g, ' · ').slice(0, 300)}.`;
+          ? `[Notice] ${roleName} (${ownerId}) activity ${activityId} was cancelled (${task.stopReason ?? 'user'}; stop: ${task.stop}).`
+          : `[Notice] ${roleName} (${ownerId}) activity ${activityId} failed (stop: ${task.stop}): ${detail.replace(/\n+/g, ' · ').slice(0, 300)}.`;
         this.store.message(this.sessionId, DIRECTOR_ID, 'notice', noticeText, {
           activityId,
           source: ownerId,
@@ -688,7 +701,7 @@ export class EnsembleRuntime<Id extends string> {
         });
       }
     } finally {
-      killBackgroundJobs(activityId);
+      killBackgroundJobs(activityId, this.sessionId);
       this.store.interactions.cancelActivity(this.sessionId, activityId);
       this.controllers.delete(activityId);
     }

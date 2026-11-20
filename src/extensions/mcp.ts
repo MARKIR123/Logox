@@ -80,21 +80,47 @@ export class Mcp {
   status() {
     return Object.keys(this.servers).filter(name => this.clients.has(name)).map(name => ({name, state: this.clients.get(name)!.status()}));
   }
+  /** A legacy adapter binds the one session it drives, so its MCP processes outlive /new, /resume and /rewind as before. */
+  private boundSessionId: string | undefined;
+  bindSession(sessionId: string | undefined): void {this.boundSessionId = sessionId;}
+  /** Scoped client key: server + session + owner. The base client is only for legacy callers that name no session. */
+  private scopeKey(server: string, sessionId: string, ownerId: string): string {return server + '\0' + sessionId + '\0' + ownerId;}
   private clientFor(server: string, ownerId?: string, sessionId?: string): McpClient | undefined {
     const base = this.clients.get(server);
     if (!base) return undefined;
-    if (!ownerId || isDirector(ownerId)) return base;
-    const key = `${server}:${ownerId}`;
+    if (!sessionId || this.boundSessionId !== undefined) {
+      if (!ownerId || isDirector(ownerId)) return base;
+      const legacyKey = server + ':' + ownerId;
+      let legacy = this.clients.get(legacyKey);
+      if (!legacy) {
+        const config = this.servers[server];
+        if (!config) return base;
+        legacy = new McpClient(sessionId && server === 'playwright'
+          ? {...config, args: withOutputDir(config.args, getActorScratchpadDir(this.cwd, sessionId, ownerId!))} : config, this.cwd);
+        this.clients.set(legacyKey, legacy);
+      }
+      return legacy;
+    }
+    const owner = ownerId ?? DIRECTOR_ID, key = this.scopeKey(server, sessionId, owner);
     let scoped = this.clients.get(key);
     if (!scoped) {
       const config = this.servers[server];
       if (!config) return base;
-      // A scoped browser writes automatically named output (screenshots without a filename) to its own actor's scratchpad.
-      scoped = new McpClient(sessionId && server === 'playwright'
-        ? {...config, args: withOutputDir(config.args, getActorScratchpadDir(this.cwd, sessionId, ownerId))} : config, this.cwd);
+      // A session-owned browser writes automatically named output (screenshots without a filename) to its own actor's scratchpad.
+      scoped = new McpClient(server === 'playwright'
+        ? {...config, args: withOutputDir(config.args, getActorScratchpadDir(this.cwd, sessionId, owner))} : config, this.cwd);
       this.clients.set(key, scoped);
     }
     return scoped;
+  }
+  /** Closes only the clients opened for one session; other sessions keep their MCP processes. */
+  async releaseSession(sessionId: string): Promise<void> {
+    const marker = '\0' + sessionId + '\0';
+    const entries = [...this.clients.entries()].filter(([key]) => key.includes(marker));
+    const results = await Promise.allSettled(entries.map(([, client]) => client.close()));
+    for (const [key] of entries) this.clients.delete(key);
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason instanceof Error ? result.reason : new Error(String(result.reason))] : []);
+    if (failures.length) throw new AggregateError(failures, 'Some MCP clients of session ' + sessionId + ' did not close');
   }
   private async list(server: string, client: McpClient, signal: AbortSignal) {
     const tools: RemoteTool[] = [], cursors = new Set<string>();

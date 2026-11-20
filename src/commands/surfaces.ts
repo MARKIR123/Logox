@@ -65,6 +65,11 @@ export class CommandSurfaces {
   private themeSnapshot: ThemePalette | undefined;
   getSnapshot = (): CommandSurface | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
+  private windowListeners = new Set<(ownerId: string) => void>();
+  /** The terminal subscribes here to switch to an actor's window when a page asks for it (`/tasks` "Open conversation"). */
+  subscribeWindow = (listener: (ownerId: string) => void): (() => void) => {this.windowListeners.add(listener); return () => this.windowListeners.delete(listener);};
+  /** Asks the terminal to show the conversation window of `ownerId`; a surface without a terminal listening ignores it. */
+  requestWindow(ownerId: string): void {for (const listener of this.windowListeners) listener(ownerId);}
   constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
     private readonly origin?: () => CommandOrigin) {}
   private completion(state: CommandSurface, active: boolean): CommandCompletion {

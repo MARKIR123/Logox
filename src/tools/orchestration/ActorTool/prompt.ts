@@ -18,6 +18,10 @@ export function dispatchedResult(tasks: readonly DispatchedTask[], batchId: stri
   return `Dispatched to ${targets} (Batch ${batchId}):\n${lines.join('\n')}\n${briefLine ? briefLine + '\n' : ''}${WAITING_CONTRACT}` + notes.map(note => '\n' + note).join('');
 }
 
+/** One line of the receipt for a task whose companion is still working on an earlier task: it starts when that one ends. */
+export const queuedBehindNote = (task: DispatchedTask, ownerName: string, runningTitle: string, runningId: string): string =>
+  `Queued: ${task.title} (${task.activityId}) waits behind ${ownerName}'s running task "${runningTitle.replace(/\s+/g, ' ').trim().slice(0, 80)}" (${runningId}); it starts when that ends.`;
+
 /** System prompt of the brief check: a read-only worker on the code model that reads the briefs before any companion starts. */
 export const BRIEF_CHECK_SYSTEM_PROMPT = `You check dispatch briefs before work starts in LOGOX. Each companion who receives a brief has not seen the conversation that produced it: the brief, the files it names and the repository are all they will have. Your job is to find what would make a companion build the wrong thing or stop to ask.
 

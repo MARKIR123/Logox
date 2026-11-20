@@ -60,7 +60,7 @@ test('cancellation during progress persistence preserves history without publish
     await blocked; ensemble.cancel(task.activityId); release(); await task.done;
     const checkpoint = (await journal.tasks('s')).find(entry => entry.activityId === task.activityId)!;
     assert.equal(checkpoint.status, 'cancelled');
-    assert.equal(checkpoint.stopReason, 'user');
+    assert.equal(checkpoint.stopReason, 'cancelled_by_user');
     assert.deepEqual(checkpoint.progress, {label: 'Reading layout'});
     assert.equal(store.activities.get('s', task.activityId)?.status, 'cancelled');
     assert.equal(store.activities.get('s', task.activityId)?.progress, undefined);

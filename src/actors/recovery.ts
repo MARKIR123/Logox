@@ -4,6 +4,7 @@ import {StateFile} from '../config/model-preferences.js';
 import {ProviderError} from '../providers/http.js';
 import type {TaskOrigin} from './ensemble.js';
 import type {RoundStatus} from '../context/contracts.js';
+import type {StopReasonCode} from '../runtime/stop-reason.js';
 import type {ExecutionRecoveryDecision, ExecutionRecoveryKind} from '../kernel/execution-recovery.js';
 
 const reportSchema = z.strictObject({rootActivityId: z.string(), report: z.string().max(12000)});
@@ -77,8 +78,8 @@ export class ActorRecovery {
     const reports = items.map(result => result.report);
     return reports.length ? 'Pending results from earlier actor tasks (new user instructions take priority):\n' + reports.join('\n\n') : '';
   }
-  async next(root: string, error: unknown, inherited?: TaskOrigin['recovery']): Promise<NonNullable<TaskOrigin['recovery']>> {
-    const key = faultKey(error);
+  async next(root: string, error: unknown, inherited?: TaskOrigin['recovery'], stop?: StopReasonCode): Promise<NonNullable<TaskOrigin['recovery']>> {
+    const key = faultKey(error, stop);
     const counts = this.state.roots[root] ?? {};
     // Providers are normalized by category/diagnostic code; the same failure does not reset on a new executor, and distinct failures count independently.
     const fault = error === undefined && inherited ? inherited.key : key;
@@ -161,7 +162,11 @@ export class ActorRecovery {
 export function modelUnavailable(error: unknown): boolean {
   return error instanceof ProviderError && ['model_missing', 'authentication', 'quota'].includes(error.category);
 }
-function faultKey(error: unknown): string {
+/** Outcomes that name their own class of failure; the wording of the error text never decides these. */
+const CLASSED: readonly StopReasonCode[] = ['max_tokens', 'refusal', 'stalled'];
+/** The failure class a recovery budget counts under: the runtime's stop reason when it names one, else the provider category, else (last resort) the error's own text. */
+export function faultKey(error: unknown, stop?: StopReasonCode): string {
+  if (stop && CLASSED.includes(stop)) return 'stop:' + stop;
   if (error instanceof ProviderError) return 'provider:' + error.category + ':' + (error.diagnostic?.code ?? error.diagnostic?.issue ?? 'request');
   const name = error instanceof Error ? error.name : 'Error';
   const text = error instanceof Error ? error.message : String(error);

@@ -53,7 +53,7 @@ import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
 import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {projectRulesSection} from '../prompts/boundary.js';
-import {workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
+import {workerPromptHash, workerSystem, automaSchema, executeAutomaDispatch, normalizeAutomaInput, type AutomaArgs, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
 import {WorkerShelf} from './orchestration/AutomaTool/workers.js';
 import {Semaphore} from '../kernel/semaphore.js';
 import {isReadOnlyTool} from './catalog.js';
@@ -299,27 +299,37 @@ export class Tools {
     readonly cwd: string,
     private readonly report: (context: ActorContext, text: string) => void = () => {},
     readonly permissions = new PermissionEngine(cwd),
-    /** `dataDir` is the project data folder holding `snapshots/` (default `projectDataDir(cwd, home)`). */
-    readonly options: {home?: string; dataDir?: string} = {}
+    /** `dataDir` is the project data folder holding `snapshots/`; `snapshots` shares one per-file lock across the sessions of a project. */
+    readonly options: {home?: string; dataDir?: string; snapshots?: Snapshots} = {}
   ) {
     const home = this.home = options.home ?? homedir();
-    this.snapshots = new Snapshots(join(options.dataDir ?? projectDataDir(cwd, home), 'snapshots'));
+    this.snapshots = options.snapshots ?? new Snapshots(join(options.dataDir ?? projectDataDir(cwd, home), 'snapshots'));
     this.modelStorage = new ToolModelStorage(join(home, '.logox', 'tool-models.json'));
     this.marks = modelMarkStore(join(home, '.logox'));
   }
 
   private registry: ToolRegistry | undefined;
-  setRegistry(registry: ToolRegistry): void {this.registry = registry;}
+  private readonly registries = new Map<string, ToolRegistry>();
+  /** Without a session the registry is the legacy, project-wide one; concurrent sessions must bind their own. */
+  setRegistry(registry: ToolRegistry, sessionId?: string): void {
+    if (sessionId === undefined) this.registry = registry; else this.registries.set(sessionId, registry);
+  }
+  private registryFor(sessionId: string): ToolRegistry | undefined {return this.registries.get(sessionId) ?? this.registry;}
   private activities: (() => readonly Activity[]) | undefined;
+  private readonly activitiesBySession = new Map<string, () => readonly Activity[]>();
   private readonly overreachNotified = new Set<string>();
   /** Supplies the live activity list so Edit/Write can note edits on files another actor's active assignment owns. */
-  setActivityProbe(probe: () => readonly Activity[]): void {this.activities = probe;}
+  setActivityProbe(probe: () => readonly Activity[], sessionId?: string): void {
+    if (sessionId === undefined) this.activities = probe; else this.activitiesBySession.set(sessionId, probe);
+  }
+  private activitiesFor(sessionId: string): (() => readonly Activity[]) | undefined {return this.activitiesBySession.get(sessionId) ?? this.activities;}
   private async withOverreachNote(path: string, context: ActorContext, run: () => Promise<ToolResult>): Promise<ToolResult> {
     const root = await realpath(this.cwd);
-    const owner = this.activities ? overreach(this.activities(), context.ownerId, path, root) : undefined;
+    const probe = this.activitiesFor(context.sessionId);
+    const owner = probe ? overreach(probe().filter(activity => activity.sessionId === context.sessionId), context.ownerId, path, root) : undefined;
     const result = await run();
     if (!owner || result.isError) return result;
-    const key = [context.ownerId, path, owner.activityId].join('\0');
+    const key = [context.sessionId, context.ownerId, path, owner.activityId].join('\0');
     if (this.overreachNotified.has(key)) return result;
     this.overreachNotified.add(key);
     const file = relative(root, path).replaceAll('\\', '/') || path;
@@ -328,37 +338,54 @@ export class Tools {
   }
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
-  private automa: AutomaEnvironment | undefined;
+  private legacyAutoma: AutomaEnvironment | undefined;
+  private readonly automas = new Map<string, AutomaEnvironment>();
   /** Finished workers that can still be continued: in memory, or parked on disk; they end with the dispatcher's task. */
   private readonly shelf = new WorkerShelf();
   /** One running-limit semaphore per session (`[automa] max_running`), shared by every dispatcher of it. */
   private readonly slots = new Map<string, Semaphore>();
-  private readonly dispatches = new Map<string, {readonly ownerId: string; readonly files: readonly string[]}>();
+  private readonly dispatches = new Map<string, {readonly sessionId: string; readonly ownerId: string; readonly files: readonly string[]}>();
   /** Per principal: dispatches refused whole, by their normalised arguments, so an identical retry is answered without planning again. */
   private readonly refusals = new Map<string, Map<string, string>>();
 
-  setAutomaEnvironment(environment: AutomaEnvironment): void {
-    this.automa = environment;
-    this.shelf.configure({now: environment.clock, idleParkMs: environment.idleParkMs?.(), dir: environment.workerDir});
+  setAutomaEnvironment(environment: AutomaEnvironment, sessionId?: string): void {
+    if (sessionId === undefined) this.legacyAutoma = environment; else this.automas.set(sessionId, environment);
+    // The shelf keeps sessions apart by id; a legacy environment configures it project-wide.
+    if (sessionId === undefined) this.shelf.configure({now: environment.clock, idleParkMs: environment.idleParkMs?.(), dir: environment.workerDir});
     this.shelf.onTick = () => this.sweepWorkers();
+  }
+  /** The legacy single-session view; with concurrent sessions no one environment is the project default. */
+  get automa(): AutomaEnvironment | undefined {
+    if (this.legacyAutoma) return this.legacyAutoma;
+    return this.automas.size === 1 ? this.automas.values().next().value : undefined;
+  }
+  private automaFor(sessionId: string): AutomaEnvironment | undefined {return this.automas.get(sessionId) ?? this.legacyAutoma;}
+  /** Releases everything a closed session registered here; other sessions keep their guards, probes, workers and environments. */
+  async releaseSession(sessionId: string): Promise<void> {
+    this.guards.delete(sessionId); this.registries.delete(sessionId); this.activitiesBySession.delete(sessionId);
+    this.automas.delete(sessionId); this.slots.delete(sessionId);
+    for (const key of [...this.dispatches.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.dispatches.delete(key);
+    for (const key of [...this.refusals.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.refusals.delete(key);
+    await this.shelf.closeSession(sessionId);
   }
 
   /** Closes the workers of tasks that have settled and parks those idle for too long; cheap when no worker waits. */
   async sweepWorkers(): Promise<void> {
     if (!this.shelf.size) return;
     await this.shelf.sweep((sessionId, activityId) => {
-      const activity = this.activities?.().find(item => item.sessionId === sessionId && item.activityId === activityId);
+      const activity = this.activitiesFor(sessionId)?.().find(item => item.sessionId === sessionId && item.activityId === activityId);
       return activity !== undefined && ['completed', 'failed', 'cancelled'].includes(activity.status);
     });
   }
 
   /** A write pattern held by someone other than `ownerId`: a peer's active assignment, or a peer's running job. */
-  private patternHolder(ownerId: string, pattern: string): string | undefined {
+  private patternHolder(ownerId: string, pattern: string, sessionId: string): string | undefined {
     const display = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
-    const activity = this.activities ? patternHolder(this.activities(), ownerId, pattern, this.cwd) : undefined;
+    const probe = this.activitiesFor(sessionId);
+    const activity = probe ? patternHolder(probe().filter(item => item.sessionId === sessionId), ownerId, pattern, this.cwd) : undefined;
     if (activity) return `${display(activity.ownerId)}'s active assignment "${(activity.taskTitle ?? activity.title).replace(/\s+/g, ' ').trim()}"`;
     for (const dispatch of this.dispatches.values()) {
-      if (dispatch.ownerId !== ownerId && dispatch.files.some(file => patternsOverlap(file, pattern, this.cwd))) return `a running Automa job of ${display(dispatch.ownerId)}`;
+      if (dispatch.sessionId === sessionId && dispatch.ownerId !== ownerId && dispatch.files.some(file => patternsOverlap(file, pattern, this.cwd))) return `a running Automa job of ${display(dispatch.ownerId)}`;
     }
     return undefined;
   }
@@ -385,7 +412,7 @@ export class Tools {
 
   /** The single Automa entry: every worker tool call re-enters `execute()` under the principal's identity. */
   private async runAutoma(args: AutomaArgs, context: ActorContext, inputNotes: readonly string[] = []): Promise<ToolResult> {
-    const environment = this.automa;
+    const environment = this.automaFor(context.sessionId);
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
     // Awaited before the one-dispatch check: from that check to `dispatches.set()` nothing may yield, or two calls of one actor would both pass.
@@ -412,9 +439,9 @@ export class Tools {
     const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained,
       maxJobs: environment.maxPerDispatch?.() ?? AUTOMA_DEFAULT_PER_DISPATCH,
       scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: workerSystem(rules, args.context),
-      holder: pattern => this.patternHolder(ownerId, pattern)});
+      holder: pattern => this.patternHolder(ownerId, pattern, sessionId)});
     if (!plan.ok) return refuseAndRemember(plan.error);
-    this.dispatches.set(key, {ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
+    this.dispatches.set(key, {sessionId, ownerId, files: plan.jobs.flatMap(job => job.denial ? [] : job.grant.writes)});
     try {
       await this.shelf.closeStale(sessionId, ownerId, activityId);
       const note = [...inputNotes, plan.note].filter(Boolean).join('\n');
@@ -426,17 +453,18 @@ export class Tools {
       const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
       const fresh = await this.shelf.allocate(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length);
       const jobs = plan.jobs.map(job => ({...job, id: job.job.continue ?? fresh.shift()!}));
-      const slots = this.slots.get(sessionId) ?? this.slots.set(sessionId, new Semaphore(() => this.automa?.maxRunning?.() ?? AUTOMA_DEFAULT_RUNNING)).get(sessionId)!;
+      const slots = this.slots.get(sessionId) ?? this.slots.set(sessionId, new Semaphore(() => environment.maxRunning?.() ?? AUTOMA_DEFAULT_RUNNING)).get(sessionId)!;
       const result = await executeAutomaDispatch({
         jobs, parallel, swarmName: profile.name, signal: context.signal,
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
         ...(environment.retries ? {retries: environment.retries()} : {}),
-        workers: this.shelf, slots,
+        workers: this.shelf, slots, promptHash: workerPromptHash(rules),
+        ...(context.stopReason ? {stopCause: context.stopReason} : {}),
         ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
         readOnly: call => isReadOnlyTool(call.name),
         executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
-        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
+        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener, sessionId),
         journalPath: environment.journalPath?.(sessionId),
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
@@ -453,7 +481,7 @@ export class Tools {
    * that reads the briefs and reports through `Finish`. Its usage is charged to the dispatcher as Automa work. It never throws for a failed run: the outcome says so.
    */
   async runBriefCheck(input: BriefCheckInput, context: ActorContext): Promise<BriefCheckOutcome> {
-    const environment = this.automa;
+    const environment = this.automaFor(context.sessionId);
     if (!environment) return {status: 'failed', reason: 'no model provider is configured'};
     const {sessionId, ownerId, activityId} = context;
     const {startTool: _step, reportSwarm: _swarm, ...principal} = context;
@@ -470,7 +498,7 @@ export class Tools {
         ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
         readOnly: call => isReadOnlyTool(call.name),
         executeTool: ({workerId, grant: given}, call) => this.execute(call, {...principal, via: {label: 'the brief check', workerId, grant: given}}),
-        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener),
+        trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener, sessionId),
         journalPath: environment.journalPath?.(sessionId),
         onEnd: end => {verdict = end;},
         ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
@@ -551,14 +579,14 @@ export class Tools {
     let allowed: boolean;
     do {
       allowed = await guard.authorize(target, args, context);
-      policy = guard.policy();
+      policy = guard.policy(context.sessionId);
       context.signal.throwIfAborted();
       for (const path of paths) {
         if ((await resolvedPath(path.original)) !== path.canonical) {
           throw new Error('Extension target path changed during approval');
         }
       }
-    } while (allowed && policy !== guard.policy());
+    } while (allowed && policy !== guard.policy(context.sessionId));
     return allowed;
   }
 
@@ -567,7 +595,8 @@ export class Tools {
       context.signal.throwIfAborted();
       const canonical = canonicalToolName(call.name);
       if (!canonical || !Object.hasOwn(schemas, canonical)) throw new Error('Unknown tool: ' + call.name);
-      if (this.registry && !this.registry.getToolsForActor(context.ownerId).some(tool => tool.name === canonical)) {
+      const registry = this.registryFor(context.sessionId);
+      if (registry && !registry.getToolsForActor(context.ownerId).some(tool => tool.name === canonical)) {
         return {text: 'Tool is unavailable for this actor: ' + canonical, isError: true, disposition: 'denied'};
       }
       const name = canonical as ToolName;
@@ -609,7 +638,7 @@ export class Tools {
       if (name === 'ShellJob') {
         const args = schemas.ShellJob.parse(parsed);
         context.startTool?.();
-        return await executeShellJob(args);
+        return await executeShellJob(args, context.sessionId);
       }
 
       if (name === 'Shell' && context.via && schemas.Shell.parse(parsed).run_in_background) {
@@ -677,7 +706,7 @@ export class Tools {
       do {
         const verdict = await guard.authorizeDetailed(target, permissionArgs, context);
         if (!verdict.allowed) return {text: deniedText(verdict.note), isError: true, disposition: 'denied'};
-        policy = guard.policy();
+        policy = guard.policy(context.sessionId);
         context.signal.throwIfAborted();
         for (const item of shellPaths) {
           if ((await resolvedPath(item.original)) !== item.canonical) throw new Error('Shell path changed during approval');
@@ -686,18 +715,18 @@ export class Tools {
         if (preparedVersion !== undefined && preparedVersion !== (await fileVersion(path))) {
           throw new Error('File modified while awaiting approval; changes aborted. Please re-read file and try again.');
         }
-      } while (policy !== guard.policy());
+      } while (policy !== guard.policy(context.sessionId));
 
       context.startTool?.();
 
       if (name === 'Read') {
-        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId);
+        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId, context.sessionId);
       }
       if (name === 'Write') {
-        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId, getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId)));
+        return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId, getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId), context.sessionId));
       }
       if (name === 'Edit') {
-        return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId));
+        return await this.withOverreachNote(path, context, () => executeEdit(schemas.Edit.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId, context.sessionId));
       }
       if (name === 'Glob') {
         return await executeGlob(schemas.Glob.parse(parsed), path, originalPath, context.signal);
@@ -707,7 +736,7 @@ export class Tools {
       }
       if (name === 'Shell') {
         const args = schemas.Shell.parse(parsed);
-        const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id});
+        const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id, sessionId: context.sessionId});
         return await (context.via && isExclusiveCommand(context.via.grant, args.command) ? this.snapshots.withLock('automa-exclusive-command', run) : run());
       }
       throw new Error('Unhandled tool: ' + name);

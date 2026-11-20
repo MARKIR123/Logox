@@ -54,6 +54,7 @@ test('json output carries status, final text, actor counts and usage, and the se
     assert.equal(h.stderr().trim().replace(/^Session /, ''), report.sessionId);
     assert.deepEqual(report.actors.logox.tasks, 1); assert.equal(report.actors.logox.toolCalls, 0);
     assert.deepEqual(report.automa, {jobs: 0, done: 0, blocked: 0, failed: 0});
+    assert.deepEqual(report.delegations, [], 'nothing was delegated');
     assert.ok(report.durationMs >= 0); assert.deepEqual(report.errors, []); assert.deepEqual(report.changedFiles, []);
     assert.ok(report.usage.inputTokens >= 10 && report.usage.outputTokens >= 5, JSON.stringify(report.usage));
     assert.ok(report.usage.byActor.logox.inputTokens >= 10); assert.ok(report.usage.byCategory.task.outputTokens >= 5);
@@ -92,6 +93,15 @@ test('the CLI waits for a dispatched companion and an Automa job and reports bot
     assert.ok(report.actors.logox.tasks >= 2, 'the Director ran again when the report arrived');
     assert.equal(report.automa.jobs, 1, JSON.stringify(report.automa));
     assert.equal(report.automa.done + report.automa.blocked + report.automa.failed, 1, 'the job had ended before the run did');
+    // The delegation record of the run: the companion and the worker, each with how it ended.
+    const child = report.delegations.find((item: {owner: string}) => item.owner === 'kalon');
+    assert.deepEqual({kind: child.kind, title: child.title, status: child.status, stopReason: child.stopReason, blockedBy: child.blockedBy}, {kind: 'actor', title: 'Child', status: 'completed', stopReason: 'completed', blockedBy: []});
+    assert.equal(typeof child.parentId, 'string'); assert.ok(child.durationMs >= 0); assert.ok(child.costUsd === null || typeof child.costUsd === 'number');
+    assert.equal(child.result.summary.length > 0, true); assert.deepEqual(child.result.notVerified, []);
+    const worker = report.delegations.find((item: {kind: string}) => item.kind === 'automa');
+    assert.match(worker.id, /^[A-Z]\d+$/); assert.equal(worker.title, 'Find the answer'); assert.equal(worker.status, 'done'); assert.equal(worker.stopReason, 'completed');
+    assert.equal(worker.route, 'read'); assert.equal(worker.parentId !== null, true); assert.equal(worker.result.summary, 'the answer is 42');
+    assert.equal(report.delegations.length, 2);
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 

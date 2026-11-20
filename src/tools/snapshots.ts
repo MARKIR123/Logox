@@ -6,11 +6,15 @@ import {z} from 'zod';
 
 const snapshotSchema = z.object({
   id: z.string(), activityId: z.string(), path: z.string(), time: z.number(),
+  /** The session whose writer produced this record; absent on records written before sessions were isolated. */
+  sessionId: z.string().optional(),
   before: z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/).nullable(), afterHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
 type Snapshot = z.infer<typeof snapshotSchema>;
 export interface RestoreResult {success: boolean; restored: string[]; failed: string[]; error?: string}
 function hash(bytes: Uint8Array): string {return createHash('sha256').update(bytes).digest('hex');}
+/** Observer and writer identity is `(sessionId, ownerId)`; an absent session is the legacy default. */
+function identity(sessionId: string | undefined, ownerId: string): string {return (sessionId ?? '') + '\0' + ownerId;}
 export async function bytesOrMissing(path: string): Promise<Buffer | null> {
   try {return await readFile(path);}
   catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error;}
@@ -28,13 +32,20 @@ export class Snapshots {
   private lastTime = 0;
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly observations = new Map<string, Map<string, string>>();
-  private readonly writers = new Map<string, {ownerId: string; activityId: string; afterHash: string; time: number}>();
+  private readonly writers = new Map<string, {sessionId?: string; ownerId: string; activityId: string; afterHash: string; time: number}>();
   private readonly writeListeners = new Map<string, (file: {path: string; before: Buffer | null; after: Buffer}) => void>();
   constructor(private readonly directory: string) {}
-  /** Reports each write made under `ownerId`, measured here at the write itself rather than taken from the writer's account. */
-  trackWrites(ownerId: string, listener: (file: {path: string; before: Buffer | null; after: Buffer}) => void): () => void {
-    this.writeListeners.set(ownerId, listener);
-    return () => {if (this.writeListeners.get(ownerId) === listener) this.writeListeners.delete(ownerId);};
+  private belongs(recordSessionId: string | undefined, sessionId: string | undefined): boolean {
+    // A caller without a session is the legacy single-session adapter: it owns one session and sees its records.
+    if (sessionId === undefined) return true;
+    // Records written before session identity existed remain visible to that scoped session as well.
+    return recordSessionId === sessionId || recordSessionId === undefined;
+  }
+  /** Reports each write made under `(sessionId, ownerId)`, measured here at the write itself rather than taken from the writer's account. */
+  trackWrites(ownerId: string, listener: (file: {path: string; before: Buffer | null; after: Buffer}) => void, sessionId?: string): () => void {
+    const key = identity(sessionId, ownerId);
+    this.writeListeners.set(key, listener);
+    return () => {if (this.writeListeners.get(key) === listener) this.writeListeners.delete(key);};
   }
   async withLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(path) ?? Promise.resolve();
@@ -50,27 +61,28 @@ export class Snapshots {
       if (this.locks.get(path) === tail) this.locks.delete(path);
     }
   }
-  observe(path: string, bytes: Uint8Array | null, ownerId?: string): void {
+  observe(path: string, bytes: Uint8Array | null, ownerId?: string, sessionId?: string): void {
     if (!ownerId || !bytes) return;
     let byOwner = this.observations.get(path);
     if (!byOwner) {byOwner = new Map(); this.observations.set(path, byOwner);}
-    byOwner.set(ownerId, hash(bytes));
+    byOwner.set(identity(sessionId, ownerId), hash(bytes));
   }
-  stalePeerWriter(path: string, currentBytes: Uint8Array | null, ownerId?: string): string | undefined {
+  stalePeerWriter(path: string, currentBytes: Uint8Array | null, ownerId?: string, sessionId?: string): string | undefined {
     if (!ownerId || !currentBytes) return undefined;
     const writer = this.writers.get(path);
-    if (!writer || writer.ownerId === ownerId) return undefined;
+    if (!writer || writer.ownerId === ownerId && writer.sessionId === sessionId) return undefined;
+    if (writer.sessionId !== sessionId) return undefined;
     const currentHash = hash(currentBytes);
     if (writer.afterHash !== currentHash) return undefined;
-    const observedHash = this.observations.get(path)?.get(ownerId);
+    const observedHash = this.observations.get(path)?.get(identity(sessionId, ownerId));
     return observedHash === currentHash ? undefined : writer.ownerId;
   }
-  async apply(path: string, before: Buffer | null, after: Buffer, activityId: string, signal: AbortSignal, ownerId?: string): Promise<void> {
+  async apply(path: string, before: Buffer | null, after: Buffer, activityId: string, signal: AbortSignal, ownerId?: string, sessionId?: string): Promise<void> {
     signal.throwIfAborted();
     if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('The file was modified by another operation; re-read it before editing');
     this.lastTime = Math.max(Date.now(), this.lastTime + 1);
     const afterHash = hash(after);
-    const snapshot: Snapshot = {id: randomUUID(), activityId, path, time: this.lastTime,
+    const snapshot: Snapshot = {id: randomUUID(), activityId, path, time: this.lastTime, ...(sessionId ? {sessionId} : {}),
       before: before?.toString('base64') ?? null, afterHash};
     await mkdir(this.directory, {recursive: true});
     const file = join(this.directory, snapshot.id + '.json');
@@ -80,9 +92,9 @@ export class Snapshots {
       if (!sameBytes(before, await bytesOrMissing(path))) throw new Error('The file changed during backup; modification not performed');
       await atomicWrite(path, after);
       if (ownerId) {
-        this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime});
-        this.observe(path, after, ownerId);
-        this.writeListeners.get(ownerId)?.({path, before, after});
+        this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime, ...(sessionId ? {sessionId} : {})});
+        this.observe(path, after, ownerId, sessionId);
+        this.writeListeners.get(identity(sessionId, ownerId))?.({path, before, after});
       }
     } catch (error) {await unlink(file).catch(() => {}); throw error;}
   }
@@ -97,22 +109,25 @@ export class Snapshots {
     return snapshots;
   }
   /** Absolute paths that Write or Edit changed under the given activities (Automa workers write under their dispatcher's activity); deleted-on-undo snapshots are gone. */
-  async changedPaths(activities: readonly string[]): Promise<string[]> {
+  async changedPaths(activities: readonly string[], sessionId?: string): Promise<string[]> {
     const wanted = new Set(activities);
-    return [...new Set((await this.records()).filter(item => wanted.has(item.entry.activityId)).map(item => item.entry.path))].sort();
+    return [...new Set((await this.records()).filter(item => wanted.has(item.entry.activityId) && this.belongs(item.entry.sessionId, sessionId)).map(item => item.entry.path))].sort();
   }
-  async undo(activities?: readonly string[]): Promise<string[]> {
-    const snapshots = (await this.records()).filter(item => !activities || activities.includes(item.entry.activityId));
+  /** Undoes the latest activity of this session (or of the legacy default when no session is named), never another session's writes. */
+  async undo(activities?: readonly string[], sessionId?: string): Promise<string[]> {
+    const snapshots = (await this.records()).filter(item => (!activities || activities.includes(item.entry.activityId)) &&
+      this.belongs(item.entry.sessionId, sessionId));
     const latest = snapshots[0]?.entry.activityId;
     if (!latest) return [];
     const batch = snapshots.filter(item => item.entry.activityId === latest);
-    const result = await this.restore([latest]);
+    const result = await this.restore([latest], sessionId);
     if (!result.success) throw new Error('Undo incomplete; restored: ' + (result.restored.join(', ') || 'none') + '; failed: ' + result.failed.join(', ') + '; ' + result.error);
     for (const {file} of batch) await unlink(file);
     return result.restored;
   }
-  async restore(activities: readonly string[]): Promise<RestoreResult> {
-    const batch = (await this.records()).filter(item => activities.includes(item.entry.activityId));
+  async restore(activities: readonly string[], sessionId?: string): Promise<RestoreResult> {
+    const batch = (await this.records()).filter(item => activities.includes(item.entry.activityId) &&
+      this.belongs(item.entry.sessionId, sessionId));
     const planned = new Map<string, Buffer | null>();
     const originals = new Map<string, Buffer | null>();
     const expected = new Map<string, string>();

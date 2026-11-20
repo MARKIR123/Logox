@@ -60,7 +60,7 @@ export function loadUiPreferences(homeDir: string, config: Config | undefined): 
 }
 
 export interface PagesDeps {
-  cwd: string; homeDir: string; config: Config; state: SessionState;
+  session: string; cwd: string; homeDir: string; config: Config; state: SessionState;
   store: RuntimeStore; surfaces: CommandSurfaces; statusbar: StatusbarPreferences; permissions: PermissionEngine; ui: UiPreferences;
   actors: ActorCatalog; actorServices: ActorServices; toolRegistry: ToolRegistry; extensions: ProjectExtensions;
   registry: ProviderRegistry; modelPool: ModelPool;
@@ -74,7 +74,7 @@ export interface PagesDeps {
 }
 
 export function createPages(deps: PagesDeps) {
-  const {cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry, extensions,
+  const {session, cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry, extensions,
     registry, modelPool, modelSelection, providersPage, status, buildContext, profileReady} = deps;
   const resources = extensions.resources;
   const pageIsOpen = () => {const open = surfaces.getSnapshot(); return open?.kind === 'page' || open?.kind === 'settings' && open.sub !== undefined;};
@@ -101,14 +101,14 @@ export function createPages(deps: PagesDeps) {
         return {message: 'Permission mode set to ' + nextMode, presentation: 'status', close: true};
       }
       if (tabId === 'permissions' && action.startsWith('delete_rule:')) {
-        await permissions.revoke(action.slice('delete_rule:'.length));
+        await permissions.revoke(action.slice('delete_rule:'.length), session);
         return {message: 'Permission rule deleted', presentation: 'status'};
       }
       if (tabId === 'permissions' && action.startsWith('add_rule:')) {
         const input = z.strictObject({scope: permissionScopeSchema, decision: permissionDecisionSchema, tool: z.string(), pattern: z.string()}).parse(JSON.parse(action.slice('add_rule:'.length)));
         const checked = validateRuleInput(input, permissions.userScopeAvailable);
         if (!checked.ok) throw new Error(checked.error);
-        await permissions.add(checked.rule);
+        await permissions.add(checked.rule, session);
         return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
       }
       if (tabId === 'providers') return providersPage.action(action);

@@ -33,7 +33,7 @@ function decode(bytes: Buffer): {text: string; bom: boolean} {
   }
 }
 
-export async function executeRead(args: ReadArgs, canonicalPath: string, snapshots?: Snapshots, ownerId?: string): Promise<ToolResult> {
+export async function executeRead(args: ReadArgs, canonicalPath: string, snapshots?: Snapshots, ownerId?: string, sessionId?: string): Promise<ToolResult> {
   const size = await stat(canonicalPath).then(info => info.size).catch(error => {
     if (error.code === 'ENOENT') return 0;
     throw error;
@@ -43,7 +43,7 @@ export async function executeRead(args: ReadArgs, canonicalPath: string, snapsho
   const bytes = await bytesOrMissing(canonicalPath);
   if (!bytes) throw new Error('File not found: ' + args.file_path);
   if (bytes.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
-  snapshots?.observe(canonicalPath, bytes, ownerId);
+  snapshots?.observe(canonicalPath, bytes, ownerId, sessionId);
 
   const ext = canonicalPath.slice(canonicalPath.lastIndexOf('.')).toLowerCase();
   const mime = imageMimes[ext];
