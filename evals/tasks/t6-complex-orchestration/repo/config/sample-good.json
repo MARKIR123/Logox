@@ -1,0 +1,24 @@
+{
+  "env": "production",
+  "host": "127.0.0.1",
+  "port": 8443,
+  "logLevel": "info",
+  "requestTimeoutMs": 5000,
+  "maxBodyBytes": 1048576,
+  "tls": {
+    "enabled": true
+  },
+  "auth": {
+    "secretEnv": "APP_AUTH_SECRET"
+  },
+  "rateLimit": {
+    "rpm": 1200
+  },
+  "database": {
+    "poolMin": 2,
+    "poolMax": 10
+  },
+  "cors": {
+    "origins": ["https://app.example.com"]
+  }
+}

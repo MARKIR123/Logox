@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hangzhou Weather Card</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2f7;
+      --card: #ffffff;
+      --ink: #111827;
+      --muted: #4b5563;
+      --border: #e5e7eb;
+      --tile: #f8fafc;
+      --sun: #d97706;
+      --cloud: #64748b;
+      --rain: #2563eb;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    .current {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .city {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+    .condition {
+      margin-top: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: capitalize;
+    }
+    .temp {
+      margin-top: 12px;
+      font-size: 52px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--ink);
+    }
+    .hero-icon {
+      width: 96px;
+      height: 96px;
+      flex-shrink: 0;
+    }
+    .forecast {
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .day-card {
+      background: var(--tile);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 10px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .day-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .day-icon {
+      width: 36px;
+      height: 36px;
+    }
+    .day-range {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <section class="current">
+      <div>
+        <h1 class="city">Hangzhou</h1>
+        <p class="condition">Cloudy</p>
+        <p class="temp">23°C</p>
+      </div>
+      <svg class="hero-icon" viewBox="0 0 96 96" aria-label="Cloudy">
+        <circle cx="34" cy="34" r="14" fill="#fbbf24"/>
+        <path d="M28 66h40a14 14 0 0 0 2-27.8A18 18 0 0 0 35 34a16 16 0 0 0-7 32Z" fill="#94a3b8"/>
+      </svg>
+    </section>
+
+    <section class="forecast" aria-label="3-day forecast">
+      <article class="day-card">
+        <span class="day-name">Tue</span>
+        <svg class="day-icon" viewBox="0 0 48 48" aria-label="Sunny">
+          <circle cx="24" cy="24" r="10" fill="#f59e0b"/>
+          <path d="M24 4v6M24 38v6M4 24h6M38 24h6M10 10l4 4M34 34l4 4M38 10l-4 4M14 34l-4 4" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <span class="day-range">26° / 16°</span>
+      </article>
+      <article class="day-card">
+        <span class="day-name">Wed</span>
+        <svg class="day-icon" viewBox="0 0 48 48" aria-label="Cloudy">
+          <path d="M13 34h22a8 8 0 0 0 1-15.9A10 10 0 0 0 17 15a9 9 0 0 0-4 19Z" fill="#64748b"/>
+        </svg>
+        <span class="day-range">22° / 15°</span>
+      </article>
+      <article class="day-card">
+        <span class="day-name">Thu</span>
+        <svg class="day-icon" viewBox="0 0 48 48" aria-label="Rainy">
+          <path d="M13 28h22a7 7 0 0 0 1-13.9A9 9 0 0 0 18 11a8 8 0 0 0-5 17Z" fill="#64748b"/>
+          <path d="M17 33l-2 7M24 33l-2 7M31 33l-2 7" stroke="#2563eb" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <span class="day-range">19° / 13°</span>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

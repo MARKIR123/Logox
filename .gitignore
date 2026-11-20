@@ -2,6 +2,7 @@ node_modules/
 .npm-cache/
 dist/
 coverage/
+evals/results/
 *.tsbuildinfo
 .env
 .env.*

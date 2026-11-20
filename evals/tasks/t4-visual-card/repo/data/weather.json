@@ -1,0 +1,26 @@
+{
+  "city": "Hangzhou",
+  "temperature": 23,
+  "unit": "C",
+  "condition": "cloudy",
+  "forecast": [
+    {
+      "day": "Tue",
+      "condition": "sunny",
+      "high": 26,
+      "low": 16
+    },
+    {
+      "day": "Wed",
+      "condition": "cloudy",
+      "high": 22,
+      "low": 15
+    },
+    {
+      "day": "Thu",
+      "condition": "rainy",
+      "high": 19,
+      "low": 13
+    }
+  ]
+}

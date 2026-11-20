@@ -1,0 +1,19 @@
+{
+  "id": "t6-complex-orchestration",
+  "title": "复杂编排：规则插件迁移与多格式审计报告",
+  "scenario": [
+    "brief-check",
+    "automa-fanout",
+    "multi-actor-coordination",
+    "interface-alignment",
+    "acceptance-review"
+  ],
+  "permissionMode": "auto",
+  "timeoutMinutes": 20,
+  "expect": {
+    "maxCostUsd": 2.0,
+    "director": "dispatch",
+    "automa": "expected",
+    "briefCheck": "expected"
+  }
+}

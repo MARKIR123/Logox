@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sessionId": "dry-run-t6",
+  "status": "completed",
+  "durationMs": 1000,
+  "final": "Migrated all 10 rule modules to ruleMeta/evaluate, updated src/engine.mjs, added src/reporter.mjs and CLI --format json/markdown and --strict support, updated README.md and tests, and verified with sample-good.json and sample-bad.json.",
+  "actors": {"logox": {"tasks": 1, "toolCalls": 3}, "techne": {"tasks": 1, "toolCalls": 5}, "aletheia": {"tasks": 1, "toolCalls": 4}},
+  "automa": {"jobs": 10, "done": 10, "blocked": 0, "failed": 0},
+  "usage": {"inputTokens": 100, "outputTokens": 50, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0.01},
+  "changedFiles": ["src/engine.mjs", "src/cli.mjs", "src/reporter.mjs", "README.md"],
+  "errors": []
+}

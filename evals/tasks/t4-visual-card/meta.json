@@ -1,0 +1,12 @@
+{
+  "id": "t4-visual-card",
+  "title": "离线天气卡片页面",
+  "scenario": ["kalon-visual", "browser-verify", "single-file-html"],
+  "permissionMode": "auto",
+  "timeoutMinutes": 15,
+  "expect": {
+    "maxCostUsd": 0.8,
+    "director": "dispatch",
+    "automa": "unexpected"
+  }
+}

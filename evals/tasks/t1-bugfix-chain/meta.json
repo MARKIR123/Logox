@@ -1,0 +1,12 @@
+{
+  "id": "t1-bugfix-chain",
+  "title": "多文件 bug 修复",
+  "scenario": ["single-thread-debug", "multi-file-bugfix"],
+  "permissionMode": "auto",
+  "timeoutMinutes": 10,
+  "expect": {
+    "maxCostUsd": 0.5,
+    "director": "any",
+    "automa": "unexpected"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sessionId": "dry-run-t3",
+  "status": "completed",
+  "durationMs": 1000,
+  "final": "30 秒请求超时的真实来源在第 3 层环境变量映射，不是配置文件或旧文件：\n\n1. `config/runtime.env:2` 配置了 `SVC_REQUEST_TIMEOUT_MS=30`。\n2. `src/config/env.mjs:28` 在映射 `SVC_REQUEST_TIMEOUT_MS` 时把原本应按毫秒解释的值当成了秒并乘以 `1000`（`Number(merged.SVC_REQUEST_TIMEOUT_MS) * 1000`），把 `30` 错换算成了 `30000` 毫秒（即 30 秒）。\n3. `src/config/loader.mjs:19` 将 `envOverrides` 合并在最末位，覆盖了 `config/default.json`（5000 毫秒）、`config/production.json`（8000 毫秒）和 `src/config/defaults.mjs`（3000 毫秒）。\n4. `src/http/client.mjs:5` 读取 `config.requestTimeoutMs` 作为请求超时。\n\n另外，`config/legacy-timeout.json` 未被任何代码读取，`config/heartbeat.json` 仅用于健康检查心跳，都不是请求超时的来源。",
+  "actors": {"logox": {"tasks": 1, "toolCalls": 5}},
+  "automa": {"jobs": 0, "done": 0, "blocked": 0, "failed": 0},
+  "usage": {"inputTokens": 100, "outputTokens": 50, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0.01},
+  "changedFiles": [],
+  "errors": []
+}

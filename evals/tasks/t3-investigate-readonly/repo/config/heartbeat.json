@@ -1,0 +1,4 @@
+{
+  "heartbeatTimeoutSec": 30,
+  "intervalMs": 5000
+}

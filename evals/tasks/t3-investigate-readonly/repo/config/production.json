@@ -1,0 +1,4 @@
+{
+  "requestTimeoutMs": 8000,
+  "retryCount": 2
+}

@@ -1,0 +1,12 @@
+{
+  "id": "t5-coordinated-feature",
+  "title": "给词频工具加 JSON 输出并对齐库接口",
+  "scenario": ["multi-actor-coordination", "interface-alignment", "feature-addition"],
+  "permissionMode": "auto",
+  "timeoutMinutes": 15,
+  "expect": {
+    "maxCostUsd": 1.0,
+    "director": "dispatch",
+    "automa": "any"
+  }
+}

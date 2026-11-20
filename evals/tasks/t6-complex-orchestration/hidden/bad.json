@@ -1,0 +1,13 @@
+{
+  "env": "production",
+  "host": "0.0.0.0",
+  "port": 0,
+  "logLevel": "trace",
+  "requestTimeoutMs": 20,
+  "maxBodyBytes": -5,
+  "tls": { "enabled": false },
+  "auth": { "secret": "plain" },
+  "rateLimit": { "rpm": 0 },
+  "database": { "poolMin": 10, "poolMax": 2 },
+  "cors": { "origins": [] }
+}

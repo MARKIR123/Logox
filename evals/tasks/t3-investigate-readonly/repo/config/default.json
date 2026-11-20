@@ -1,0 +1,6 @@
+{
+  "env": "production",
+  "requestTimeoutMs": 5000,
+  "connectTimeoutMs": 2000,
+  "retryCount": 1
+}

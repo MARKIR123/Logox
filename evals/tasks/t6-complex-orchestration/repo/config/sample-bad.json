@@ -1,0 +1,24 @@
+{
+  "env": "production",
+  "host": "0.0.0.0",
+  "port": 70000,
+  "logLevel": "debug",
+  "requestTimeoutMs": 50,
+  "maxBodyBytes": 0,
+  "tls": {
+    "enabled": false
+  },
+  "auth": {
+    "secret": "hardcoded-dev-secret"
+  },
+  "rateLimit": {
+    "rpm": 50000
+  },
+  "database": {
+    "poolMin": 12,
+    "poolMax": 4
+  },
+  "cors": {
+    "origins": ["*"]
+  }
+}

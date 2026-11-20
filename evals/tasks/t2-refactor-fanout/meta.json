@@ -1,0 +1,12 @@
+{
+  "id": "t2-refactor-fanout",
+  "title": "把旧日志接口换成新接口",
+  "scenario": ["automa-fanout", "mechanical-edit"],
+  "permissionMode": "auto",
+  "timeoutMinutes": 15,
+  "expect": {
+    "maxCostUsd": 1.0,
+    "director": "dispatch",
+    "automa": "expected"
+  }
+}

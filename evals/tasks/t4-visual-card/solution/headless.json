@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sessionId": "dry-run-t4",
+  "status": "completed",
+  "durationMs": 1000,
+  "final": "Created standalone index.html weather card with inline CSS and custom SVG icons.",
+  "actors": {"logox": {"tasks": 1, "toolCalls": 1}, "kalon": {"tasks": 1, "toolCalls": 3}},
+  "automa": {"jobs": 0, "done": 0, "blocked": 0, "failed": 0},
+  "usage": {"inputTokens": 100, "outputTokens": 50, "cacheReadTokens": 0, "cacheWriteTokens": 0, "costUsd": 0.01},
+  "changedFiles": ["index.html"],
+  "errors": []
+}
