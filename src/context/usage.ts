@@ -65,7 +65,7 @@ export function usageRows(records: readonly UsageRecord[], config: Config): TabR
   for (const [key, total] of groups) {
     const [model, category] = z.tuple([z.string(), z.string()]).parse(JSON.parse(key));
     const cost = costOf([{id: 'group', model, category: 'task', ...total}], config);
-    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa', 'keepalive', 'anamnesis'].includes(category) ? category : 'summary')),
+    rows.push(row.blank(), row.heading(model + ' · ' + (['task', 'approval', 'automa', 'fork', 'keepalive', 'anamnesis'].includes(category) ? category : 'summary')),
       row.field('Input / output', total.input + ' / ' + total.output + ' token'),
       row.field('Cache read / write', total.cacheRead + ' / ' + total.cacheWrite + ' token'),
       row.field('Estimated cost', cost === undefined ? 'unknown (no price)' : (cost.partial ? '~' : '') + cost.amount.toFixed(6) + ' ' + cost.currency + (cost.partial ? ' (partial: cache rate billed as input)' : '')));
@@ -83,8 +83,8 @@ export interface UsagePageInput {
   /** Providers billed by subscription: their cost is an API-equivalent estimate. */
   subscriptions?: ReadonlySet<string> | undefined;
 }
-const CATEGORIES = ['task', 'summary', 'approval', 'automa', 'keepalive', 'anamnesis'] as const;
-const CATEGORY_NAMES: Record<typeof CATEGORIES[number], string> = {task: 'Task', summary: 'Summary', approval: 'Approval', automa: 'Automa', keepalive: 'Keep-alive', anamnesis: 'Anamnesis'};
+const CATEGORIES = ['task', 'summary', 'approval', 'automa', 'fork', 'keepalive', 'anamnesis'] as const;
+const CATEGORY_NAMES: Record<typeof CATEGORIES[number], string> = {task: 'Task', summary: 'Summary', approval: 'Approval', automa: 'Automa', fork: 'Fork', keepalive: 'Keep-alive', anamnesis: 'Anamnesis'};
 interface Sums {input: number; output: number; cacheRead: number; cacheWrite: number; requests: number}
 function sums(records: readonly UsageRecord[]): Sums {
   const total: Sums = {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: records.length};
@@ -121,7 +121,7 @@ export function sessionUsageRows(input: UsagePageInput): TabRow[] {
   if (estimated.length) rows.push(row.muted('API-equivalent estimate, not billed on a subscription: ' + estimated.join(', ')));
   if (!all.length) return [...rows, row.blank(), row.muted('No response usage recorded yet.')];
   for (const owner of owners) {
-    const own = owner.records.filter(record => record.category !== 'automa');
+    const own = owner.records.filter(record => record.category !== 'automa' && record.category !== 'fork');
     rows.push(row.blank(), row.heading(owner.name));
     if (own.length) rows.push(...usageTotalRows(own, config)); else rows.push(row.muted('No usage yet'));
   }
@@ -131,6 +131,14 @@ export function sessionUsageRows(input: UsagePageInput): TabRow[] {
     for (const {owner, records} of dispatched) {
       const total = sums(records);
       rows.push(row.field('Dispatched by ' + owner.name, costText(records, config) + ' · ' + count(total.input) + ' in / ' + count(total.output) + ' out · cache hit ' + cacheShare(total) + ' · ' + requestsText(total)));
+    }
+  }
+  const forked = owners.map(owner => ({owner, records: owner.records.filter(record => record.category === 'fork')})).filter(item => item.records.length);
+  if (forked.length) {
+    rows.push(row.blank(), row.heading('Forks'));
+    for (const {owner, records} of forked) {
+      const total = sums(records);
+      rows.push(row.field('Forked by ' + owner.name, costText(records, config) + ' · ' + count(total.input) + ' in / ' + count(total.output) + ' out · cache hit ' + cacheShare(total) + ' · ' + requestsText(total)));
     }
   }
   const models = new Map<string, UsageRecord[]>();

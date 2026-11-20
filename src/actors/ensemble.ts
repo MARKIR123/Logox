@@ -1,5 +1,6 @@
 import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {JobGrant} from '../tools/orchestration/AutomaTool/grant.js';
+import type {ParentTurn} from '../tools/orchestration/AutomaTool/fork.js';
 import {formatFailureDetail} from '../providers/http.js';
 import {stripNarration} from '../runtime/narration.js';
 import type {AutomaSwarm} from '../runtime/contracts.js';
@@ -61,7 +62,9 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   saveProgress?(progress: TaskProgressSnapshot): Promise<void>;
   readonly source?: string;
   /** Set when a stateless worker acts for this actor: permissions stay the principal's, reads never count as the principal's own. */
-  readonly via?: {readonly label: string; readonly workerId: string; readonly grant: JobGrant};
+  readonly via?: {readonly label: string; readonly workerId: string; readonly grant: JobGrant; /** A fork: a copy of the principal, not a worker with a brief. */ readonly fork?: boolean};
+  /** Set by the kernel while it runs a turn's tool calls: the request that turn was sent as, so `Automa` can fork from it (`fork.ts`). Absent in a worker's context. */
+  readonly parentTurn?: ParentTurn;
   startTool?(): void;
   reportSwarm?(swarm: AutomaSwarm): void;
   wait?(reason: string): () => void;

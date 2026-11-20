@@ -66,6 +66,8 @@ export const automaConfigSchema = z.object({
   max_per_dispatch: z.number().int().min(1).max(32).default(16),
   /** Workers running at once across the whole session; the rest queue. */
   max_running: z.number().int().min(1).max(64).default(24),
+  /** Forks (`fork: true` jobs) one dispatcher runs at once; the rest queue. A fork costs about ten times a worker, so the limit is small. */
+  max_forks_running: z.number().int().min(1).max(8).default(3),
 });
 const modelKindsSchema =z.record(z.string().min(1), z.enum(['openai_compat', 'anthropic']));
 const schema = z.object({
@@ -94,7 +96,7 @@ const schema = z.object({
     max_tokens: z.number().int().positive().default(16384),
     timeout: z.number().positive().default(600),
   }).default({thinking_effort: 'auto', name: 'openai', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
-  automa: automaConfigSchema.default({max_parallel: 4, max_per_dispatch: 16, max_running: 24}),
+  automa: automaConfigSchema.default({max_parallel: 4, max_per_dispatch: 16, max_running: 24, max_forks_running: 3}),
   /** Anamnesis, the idle-time memory keeper: `recap` writes a note for the returning user, `dream` reviews the transcript into memory records. The switches only gate the automatic trigger. */
   anamnesis: z.object({
     recap: z.boolean().default(true),

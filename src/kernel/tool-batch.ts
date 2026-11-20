@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {randomUUID} from 'node:crypto';
-import type {ModelMessage, ModelRequest, ModelTurn, ToolCall} from '../runtime/messages.js';
+import type {ModelMessage, ModelRequest, ModelTurn, Provider, ToolCall} from '../runtime/messages.js';
+import {modelKey} from '../context/cost.js';
 import type {Step} from '../runtime/contracts.js';
 import {validateToolCall, canonicalToolName, type ToolResult} from '../tools/tools.js';
 import {extractDiscoveredToolNames, resolveToolLoad} from '../tools/discovery.js';
@@ -30,6 +31,8 @@ export interface ToolBatch {
   readonly turn: ModelTurn;
   readonly thinkingId: string;
   readonly truncated: boolean;
+  /** The provider object that answered `request`; a fork of one of this batch's calls sends to it. */
+  readonly provider: Provider;
 }
 
 /** What the loop needs after the batch: the Automa reminder to deliver and whether the batch was answered with the restriction text. */
@@ -110,7 +113,7 @@ async function validateBatch(run: AgentRun, ready: ReadyRequest, calls: readonly
  */
 export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<ToolBatchResult> {
   const {options, steps} = run;
-  const {ready, prepared, request, turn, thinkingId, truncated} = batch;
+  const {ready, prepared, request, turn, thinkingId, truncated, provider} = batch;
   const {instruction} = ready;
   const refusal = instruction.refuseTools;
   const calls = turn.message.toolCalls ?? [];
@@ -120,7 +123,10 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
   else if (schemaErrors.size) options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note: 'Tool argument validation failed; ' +
     (voidBatch ? 'the whole batch was not executed: ' : 'the other read-only calls ran: ') + [...schemaErrors.values()][0]}});
   const reasoning = turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
-  await run.persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, steps.get(thinkingId));
+  const stored: Extract<ModelMessage, {role: 'assistant'}> = truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})};
+  await run.persist(stored, steps.get(thinkingId));
+  // What `Automa` forks from: this turn's request exactly as it was sent, and the assistant message exactly as it was just stored (never rebuilt).
+  const parentTurn = {request, message: stored, provider, model: prepared ? modelKey(prepared.model.identity) : ''};
   if (prepared) options.context?.observe(run.context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
   // The same conditions `execute` below answers with an error before running anything; marks the stored result for the request projection.
   const neverRan = (call: ToolCall) => isFinishRound(call.name) ? truncated || voidBatch
@@ -147,7 +153,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
       const waiting = async <T>(reason: string, operation: () => Promise<T>): Promise<T> => {
         const resume = steps.wait(id, reason); try {return await operation();} finally {resume();}
       };
-      const toolContext = {...context, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
+      const toolContext = {...context, parentTurn, startTool: () => steps.start(id), wait: (reason: string) => steps.wait(id, reason),
         reportSwarm: (swarm: NonNullable<Step['swarm']>) => steps.swarm(id, swarm),
         permission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.permission(input)),
         ...context.askPermission ? {askPermission: (input: Parameters<typeof context.permission>[0]) => waiting('Awaiting permission', () => context.askPermission!(input))} : {},

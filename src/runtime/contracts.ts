@@ -171,6 +171,8 @@ const automaJobStateSchema = z.strictObject({
   title: z.string(),
   /** The plan node the job carries out (`Automa` job field `node`). */
   node: z.string().optional(),
+  /** `fork`: a copy of the dispatcher with its whole context (`fork: true`), not a worker with a brief. Absent for a worker. */
+  kind: z.literal('fork').optional(),
   /** `waiting`: ordered after jobs that have not ended yet (`after`); `skipped`: never started because a job it follows did not end `done`. */
   state: z.enum(['queued', 'running', 'done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted', 'waiting', 'skipped']),
   /** Ids of the jobs this one follows. */

@@ -43,6 +43,8 @@ export interface Delegation {
   readonly diagnostic?: string;
   readonly assignment: {readonly title: string; readonly owns: readonly string[]; readonly acceptance: readonly string[]};
   readonly result?: DelegationResult;
+  /** Automa jobs only: the job is a fork (a copy of its dispatcher with its whole context), not a worker with a brief. */
+  readonly fork?: boolean;
   /** Automa jobs only: the readable worker id (`T1`), the route and the model. */
   readonly jobId?: string;
   readonly route?: 'read' | 'code' | 'vision';
@@ -139,7 +141,7 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
         ...(job.state === 'queued' ? {waiting: {kind: 'queued' as const, text: 'queued for a worker slot'}} : {}),
         ...(job.state === 'waiting' ? {waiting: {kind: 'blocked' as const, text: 'waiting on ' + (unfinished.length ? unfinished : job.after ?? []).join(', ')}} : {}),
         ...(swarm.background ? {background: true, ...(job.delivered !== undefined ? {delivered: job.delivered} : {})} : {}),
-        durationMs, ...(stop ? {stopReason: stop} : {}), jobId, ...(job.route ? {route: job.route} : {}), ...(job.model ? {model: job.model} : {}),
+        durationMs, ...(stop ? {stopReason: stop} : {}), jobId, ...(job.kind === 'fork' ? {fork: true} : {}), ...(job.route ? {route: job.route} : {}), ...(job.model ? {model: job.model} : {}),
         assignment: {title: job.title, owns: [], acceptance: []},
         ...(settled && stop ? {result: {summary: oneLine(job.summary ?? job.title), ...(job.evidence?.length ? {evidence: job.evidence} : {}), ...(job.notVerified?.length ? {notVerified: job.notVerified} : {}),
           ...(job.question ? {question: job.question} : {}), stopReason: stop, reportRef: id}} : {}),

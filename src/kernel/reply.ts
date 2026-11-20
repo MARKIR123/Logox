@@ -1,4 +1,4 @@
-import type {ModelRequest, ModelTurn} from '../runtime/messages.js';
+import type {ModelRequest, ModelTurn, Provider} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
 import type {Step} from '../runtime/contracts.js';
 import {ECHO_REMINDER, ECHO_STOP_ERROR, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
@@ -66,12 +66,14 @@ export interface Reply {
   readonly turn: ModelTurn;
   readonly thinkingId: string;
   readonly thinkingStep: Step;
+  /** The provider object that answered this request (a fork sends to the same one). */
+  readonly usedProvider: Provider;
 }
 
 /** Handles one classified reply. Statement order is part of the contract: ledger writes, store updates and requests happen in this order. */
 export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply): Promise<Next> {
   const {options, state, steps, narration, persist, drainInbox, holdClose, recoverOutput, directorWaiting} = run;
-  const {ready, request, turn, thinkingId, thinkingStep} = reply;
+  const {ready, request, turn, thinkingId, thinkingStep, usedProvider} = reply;
   const {prepared} = ready;
   const reasoningOf = () => turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
   const finishAsOutcome = async (): Promise<Next> => {
@@ -153,7 +155,7 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
     }
     case 'tools': {
       const {truncated} = kind;
-      const result = await runToolBatch(run, {ready, prepared, request, turn, thinkingId, truncated});
+      const result = await runToolBatch(run, {ready, prepared, request, turn, thinkingId, truncated, provider: usedProvider});
       // Delivered after the results as a request-only note, so the tool results stay clean in history.
       if (result.automaNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.automaNote, {slot: 'automa'}));
       if (result.loopNote) await ready.appendUpdate(createRuntimeContextMessage('reminder', result.loopNote, {slot: 'loop'}));

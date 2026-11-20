@@ -29,6 +29,11 @@ export interface WorkerTerminal<T> {
   readonly alone: string;
   /** The tool result stored for an accepted call, so a kept worker's history stays paired. */
   readonly accepted: string;
+  /**
+   * The terminal tool is not in the tool list the requests carry (a fork sends its dispatcher's tools): a call to it is still accepted by name, and a turn with
+   * text and no tool call ends the run with that text as its result (`plain`), for a provider or model that cannot call an undeclared tool.
+   */
+  readonly undeclared?: {plain(text: string): T} | undefined;
   settle(call: ToolCall): {readonly ok: true; readonly value: T} | {readonly ok: false; readonly text: string};
 }
 
@@ -39,6 +44,12 @@ export interface WorkerRun<T> {
   readonly vision?: boolean | undefined;
   readonly system: string;
   readonly tools: readonly ToolDefinition[];
+  /**
+   * A fork: its requests are the dispatcher's own request `frame` (system, tools and every option exactly as sent) followed by `prefix` (the dispatcher's
+   * messages and the turn that called it, sent as they are, never projected again) and then the projection of `messages`. `system`, `tools` and `cacheKey`
+   * are not used.
+   */
+  readonly fork?: {readonly frame: Omit<ModelRequest, 'messages'>; readonly prefix: readonly ModelMessage[]} | undefined;
   /** The history; grows in place, so the caller can keep it. */
   readonly messages: ModelMessage[];
   readonly signal: AbortSignal;
@@ -64,7 +75,7 @@ export interface WorkerRun<T> {
 }
 
 export type WorkerEnd<T> =
-  | {readonly kind: 'finished'; readonly value: T; readonly imagesOmitted: boolean}
+  | {readonly kind: 'finished'; readonly value: T; readonly imagesOmitted: boolean; /** Ended by a plain reply (`WorkerTerminal.undeclared`), not by the terminal tool. */ readonly plain?: true}
   /** Three turns in a row without a tool call: a stall rule, not a budget. */
   | {readonly kind: 'stalled'; readonly lastText: string; readonly imagesOmitted: boolean};
 
@@ -97,9 +108,10 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     const projected = normalizeMessages(capabilities.appendOnlyHistory === true ? messages : withoutAnsweredTransient(messages));
     const blind = run.vision === false ? omitImages(projected, run.model, 'worker') : undefined;
     if (blind?.omitted) imagesOmitted = true;
-    const request: ModelRequest = {system: run.system, messages: blind?.messages ?? projected,
-      tools: run.tools.map(tool => {const {$schema: _schema, ...parameters} = tool.parameters; return {...tool, parameters};}),
-      supportsVision: run.vision !== false, cacheKey: run.cacheKey, cacheRetention: {role: 'short'}};
+    const request: ModelRequest = run.fork ? {...run.fork.frame, messages: [...run.fork.prefix, ...blind?.messages ?? projected]}
+      : {system: run.system, messages: blind?.messages ?? projected,
+        tools: run.tools.map(tool => {const {$schema: _schema, ...parameters} = tool.parameters; return {...tool, parameters};}),
+        supportsVision: run.vision !== false, cacheKey: run.cacheKey, cacheRetention: {role: 'short'}};
     const answered = await respondWithRetries(run, request);
     run.onUsage?.(answered);
     // The same step as an actor's turn: a call written as text becomes a real one, repeated runtime text leaves the reply.
@@ -115,6 +127,8 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     await run.onTurn?.(turn);
     const calls = turn.message.toolCalls ?? [];
     if (!calls.length) {
+      // A fork that cannot call its terminal tool ends with a plain reply: its text is the result.
+      if (terminal.undeclared && turn.stop !== 'length' && !turn.echo && turn.message.text.trim()) return {kind: 'finished', value: terminal.undeclared.plain(turn.message.text.trim()), imagesOmitted, plain: true};
       // A turn with no tool call leaves the job open; only a streak of them is a stall.
       echoes = turn.echo ? echoes + 1 : 0;
       if (++silent >= LOOP_STREAK) return {kind: 'stalled', lastText: echoes >= LOOP_STREAK ? ECHO_STOP_ERROR : turn.message.text.trim(), imagesOmitted};

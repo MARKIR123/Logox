@@ -200,7 +200,8 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         const call = messageToolCall(message);
         const ui = getToolUI(call?.name ?? '');
         (ui.render ?? renderDefaultTool)({builder: chunk, message, ...(call ? {call} : {}),
-          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail, ...(stoppable ? {stop} : {}), ...(pairs.has(message.id) ? {pairing: pairs.get(message.id)!} : {})});
+          ...(frame ? {frame} : {}), open: open(message.id), isOpen: open, accent: rail, ownerSymbol: isDirector(message.ownerId) ? '◈' : roles[message.ownerId]?.symbol ?? '◇',
+          ...(stoppable ? {stop} : {}), ...(pairs.has(message.id) ? {pairing: pairs.get(message.id)!} : {})});
       } else if (message.kind) chunk.pushOrdinaryCard({id: message.id, ownerId: message.ownerId, kind: 'Thinking',
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),

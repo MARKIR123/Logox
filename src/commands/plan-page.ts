@@ -33,7 +33,7 @@ export function nodeLabel(node: DerivedNode): string {
 }
 /** `aletheia · 1/3 · ready`: owner, progress of a parent (accepted of live children), status, and what a pending node waits for. */
 export function nodeDescription(node: DerivedNode): string {
-  return [node.owner, node.progress ? `${node.progress.accepted}/${node.progress.total}` : undefined, node.status, node.blockedBy.length ? 'after ' + node.blockedBy.join(', ') : undefined].filter(Boolean).join(' · ');
+  return [node.owner + (node.forked ? ' ⑂' : ''), node.progress ? `${node.progress.accepted}/${node.progress.total}` : undefined, node.status, node.blockedBy.length ? 'after ' + node.blockedBy.join(', ') : undefined].filter(Boolean).join(' · ');
 }
 
 export function createPlanCommand(deps: PlanPageDeps) {
@@ -59,7 +59,7 @@ export function createPlanCommand(deps: PlanPageDeps) {
     const path = (id: string): string => {const target = plan.nodes.find(item => item.id === id); return target ? id + ' ' + target.title : id;};
     const body: TabRow[] = [
       row.heading('Node'),
-      row.field('Id', node.id), row.field('Title', node.title), row.field('Owner', name(node.owner)),
+      row.field('Id', node.id), row.field('Title', node.title), row.field('Owner', name(node.owner) + (node.forked ? ' ⑂' : '')),
       row.field('Status', PLAN_GLYPHS[node.status] + ' ' + node.status),
       ...(node.progress ? [row.field('Progress', `${node.progress.accepted} of ${node.progress.total} sub-nodes accepted`)] : []),
       ...(node.parent ? [row.field('Parent', path(node.parent))] : []),

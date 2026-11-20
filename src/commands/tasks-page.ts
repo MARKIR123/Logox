@@ -38,7 +38,7 @@ const money = (usd: number) => '$' + (usd >= 1 ? usd.toFixed(2) : usd.toFixed(4)
 /** The status words of a row: the status with its stop reason once settled (an ordinary completion needs none), what it waits on, how long it ran, what it cost. */
 export function statusText(node: Delegation, cost: number | undefined): string {
   const stopped = node.stopReason && node.stopReason !== 'completed' ? ' (stop: ' + node.stopReason + ')' : '';
-  return [node.status + stopped, node.waiting?.text, node.durationMs !== undefined ? formatDuration(node.durationMs) : undefined, cost !== undefined ? money(cost) : undefined, deliveryText(node)].filter(Boolean).join(' · ');
+  return [node.fork ? 'kind: fork' : undefined, node.status + stopped, node.waiting?.text, node.durationMs !== undefined ? formatDuration(node.durationMs) : undefined, cost !== undefined ? money(cost) : undefined, deliveryText(node)].filter(Boolean).join(' · ');
 }
 
 /** A background Automa job: in the background while it works, then whether its result has reached the dispatcher. */
@@ -92,7 +92,8 @@ export function createTasksCommand(deps: TasksPageDeps) {
     const result = node.result;
     const body: TabRow[] = [
       row.heading('Assignment'),
-      row.field('Owner', node.kind === 'automa' ? 'Automa worker of ' + name(node.ownerId) : name(node.ownerId)),
+      row.field('Owner', node.kind === 'automa' ? (node.fork ? 'Fork of ' : 'Automa worker of ') + name(node.ownerId) : name(node.ownerId)),
+      ...(node.fork ? [row.field('Kind', 'fork')] : []),
       row.field('Title', node.assignment.title),
       ...(node.assignment.owns.length ? [row.field('Owns', node.assignment.owns.join(', '))] : []),
       ...(node.assignment.acceptance.length ? [row.text('Acceptance:'), ...node.assignment.acceptance.map(item => row.bullet(item))] : []),
@@ -138,7 +139,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
     const priced = await costs().catch(() => new Map<string, number>());
     const rows = delegationRows(project());
     const items: PickerItem[] = rows.map(({node, depth}) => ({id: node.id,
-      label: '  '.repeat(depth) + (node.kind === 'automa' ? node.jobId + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title,
+      label: '  '.repeat(depth) + (node.kind === 'automa' ? node.jobId + (node.fork ? ' ⑂' : '') + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title,
       description: statusText(node, priced.get(node.id))}));
     await open({title: 'Tasks', description: items.length ? 'Enter opens a row · Esc closes' : '', current: '', ...(focus ? {focus} : {}), items, emptyText: TASKS_EMPTY_TEXT},
       async () => ({items}), async id => {

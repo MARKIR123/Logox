@@ -307,7 +307,8 @@ export function applyPlanOps(plan: Plan | undefined, ops: readonly PlanOp[], act
 
 // ---------------------------------------------------------------------------------------------------------------------------------- linked work
 /** One unit of work a node can be linked to: a delegation record (`delegations.ts:Delegation` has this shape). */
-export interface PlanWork {readonly id: string; readonly status: string; /** When the work started, if known (a delegation record's `startedAt`). */ readonly startedAt?: number | undefined}
+export interface PlanWork {readonly id: string; readonly status: string; /** When the work started, if known (a delegation record's `startedAt`). */ readonly startedAt?: number | undefined;
+  /** The work is a fork (a copy of its dispatcher). */ readonly fork?: boolean | undefined}
 export type WorkPhase = 'running' | 'waiting' | 'completed' | 'failed';
 /** What a record's status says: a running task or job runs; one waiting for approval, an answer, a place in the queue or its prerequisites waits; the rest ended. */
 export function workPhase(status: string): WorkPhase {
@@ -328,7 +329,9 @@ export interface DerivedNode extends PlanNode {
   /** The prerequisites still open. */
   readonly blockedBy: readonly string[];
   /** The linked work the runtime knows, with its phase. */
-  readonly work: readonly {readonly id: string; readonly phase: WorkPhase}[];
+  readonly work: readonly {readonly id: string; readonly phase: WorkPhase; readonly fork?: true}[];
+  /** A linked job is a fork: the owner is shown as the actor plus `⑂`. */
+  readonly forked?: true;
   /** When the earliest work still running for this node (or, for a parent, below it) started; absent when nothing runs or no start is known. The sidebar's elapsed clock. */
   readonly runningSince?: number;
 }
@@ -338,11 +341,11 @@ export interface DerivedPlan extends Omit<Plan, 'nodes'> {
 }
 
 /** The linked work of a node that the runtime knows, in link order. */
-export function linkedWork(node: PlanNode, work: readonly PlanWork[]): {id: string; phase: WorkPhase}[] {
+export function linkedWork(node: PlanNode, work: readonly PlanWork[]): {id: string; phase: WorkPhase; fork?: true}[] {
   const byId = new Map(work.map(item => [item.id, item] as const));
   return node.links.flatMap(link => {
     const found = byId.get(link.activityId ?? link.automaJob ?? '');
-    return found ? [{id: found.id, phase: workPhase(found.status)}] : [];
+    return found ? [{id: found.id, phase: workPhase(found.status), ...(found.fork ? {fork: true as const} : {})}] : [];
   });
 }
 
@@ -418,7 +421,7 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
       done: list.filter(child => statuses.get(child.id) === 'accepted' || statuses.get(child.id) === 'done').length, total: list.length});
     return {...node, status: statusOf(node.id)!, depth: depthOf(node.id), ...(parent !== undefined ? {parent} : {}), children: children.map(child => child.id),
       ...(live.length ? {progress: counts(live)} : {}),
-      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {})};
+      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(linkedWork(node, work).some(item => item.fork) ? {forked: true as const} : {}), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {})};
   });
   const top = nodes.filter(node => depthOf(node.id) === 1 && !node.abandoned);
   const topCounts = {accepted: top.filter(node => statuses.get(node.id) === 'accepted').length,

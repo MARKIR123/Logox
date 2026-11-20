@@ -65,7 +65,9 @@ import {grantTools, isExclusiveCommand, pathDenial, planDispatch, type JobGrant}
 import {DEFAULT_AUTOMA_PROFILE, type AutomaProfile} from './orchestration/AutomaTool/preset.js';
 import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
-import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME, BACKGROUND_RECEIPT_SENTENCE, BACKGROUND_UNAVAILABLE, WAIT_ALONE, backgroundDeliverySummary, backgroundReceiptLine, waitUnknown} from './orchestration/AutomaTool/prompt.js';
+import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME, BACKGROUND_RECEIPT_SENTENCE, BACKGROUND_UNAVAILABLE, FORK_NOT_HERE, FORK_NO_CONTEXT, FORK_REFUSAL, FORK_REFUSED_TOOLS, WAIT_ALONE, backgroundDeliverySummary, backgroundReceiptLine, forksUncachedLine, waitUnknown} from './orchestration/AutomaTool/prompt.js';
+import {forkBase} from './orchestration/AutomaTool/fork.js';
+import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
 import {TOOL_CANCELLED_TEXT} from '../prompts/runtime/interruption.js';
@@ -256,6 +258,7 @@ const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim().slice
 const AUTOMA_DEFAULT_PARALLEL = 4;
 const AUTOMA_DEFAULT_PER_DISPATCH = 16;
 const AUTOMA_DEFAULT_RUNNING = 24;
+const AUTOMA_DEFAULT_FORKS = 3;
 
 /** What the application supplies so Automa can run; tests supply fakes. */
 export interface AutomaEnvironment {
@@ -275,6 +278,8 @@ export interface AutomaEnvironment {
   maxPerDispatch?(): number;
   /** Workers running at once across the session (`[automa] max_running`); the rest wait as queued. */
   maxRunning?(): number;
+  /** Forks one dispatcher runs at once (`[automa] max_forks_running`); the rest queue. */
+  maxForks?(): number;
   /** Read-only calls of one worker turn that run side by side (`permissions.readonly_concurrency`). */
   readonlyConcurrency?(): number;
   /** Where parked workers are written: `<dir>/<activityId>/<id>.json` (`state/sessions/<sessionId>/subagents/automa`). */
@@ -287,7 +292,7 @@ export interface AutomaEnvironment {
   /** Provider retries per worker request (the kernel's `max_retries`). */
   retries?(): number;
   journalPath?(sessionId: string): string;
-  charge?(context: ActorContext, usage: ModelTurn['usage'], model: string): void;
+  charge?(context: ActorContext, usage: ModelTurn['usage'], model: string, category?: 'fork'): void;
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
   /**
    * Hands the results of background jobs to the dispatcher's running task as one message (the path peer messages take: queued at the next step boundary, never
@@ -364,6 +369,8 @@ export class Tools {
   private readonly shelf = new WorkerShelf();
   /** One running-limit semaphore per session (`[automa] max_running`), shared by every dispatcher of it. */
   private readonly slots = new Map<string, Semaphore>();
+  /** One fork-limit semaphore per dispatcher (`[automa] max_forks_running`), by `[sessionId, ownerId]`. */
+  private readonly forkSlots = new Map<string, Semaphore>();
   /** Write patterns held by running dispatches (wait or background), by `[sessionId, ownerId, n]`. */
   private readonly dispatches = new Map<string, {readonly sessionId: string; readonly ownerId: string; readonly files: readonly string[]}>();
   private dispatchCount = 0;
@@ -390,6 +397,7 @@ export class Tools {
   async releaseSession(sessionId: string): Promise<void> {
     this.guards.delete(sessionId); this.registries.delete(sessionId); this.activitiesBySession.delete(sessionId);
     this.automas.delete(sessionId); this.slots.delete(sessionId);
+    for (const key of [...this.forkSlots.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.forkSlots.delete(key);
     this.background.cancelSession(sessionId);
     for (const key of [...this.dispatches.keys()]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.dispatches.delete(key);
     for (const key of [...this.starting]) if ((JSON.parse(key) as [string, string])[0] === sessionId) this.starting.delete(key);
@@ -425,6 +433,9 @@ export class Tools {
    */
   private async workerDenial(name: ToolName, parsed: unknown, context: ActorContext): Promise<string | undefined> {
     const grant = context.via!.grant;
+    // A fork's tool list is its dispatcher's, so what it may not do is refused here, when it is called, not by a shorter list.
+    if (context.via!.fork && ((FORK_REFUSED_TOOLS as readonly string[]).includes(name) || this.registryFor(context.sessionId)?.getMetadata(name)?.category === 'orchestration')) return FORK_REFUSAL;
+    if (name === 'Automa' && ((parsed as AutomaArgs).jobs ?? []).some(job => job.fork)) return FORK_NOT_HERE;
     if (!grantTools(grant).includes(name)) return `Tool \`${name}\` is not available to a worker. Available: ${grantTools(grant).join(', ')}.`;
     if (name !== 'Edit' && name !== 'Write') return undefined;
     const target = filePathOf(parsed);
@@ -439,7 +450,7 @@ export class Tools {
   }
 
   /** The single Automa entry: every worker tool call re-enters `execute()` under the principal's identity. */
-  private async runAutoma(args: AutomaArgs, context: ActorContext, inputNotes: readonly string[] = []): Promise<ToolResult> {
+  private async runAutoma(args: AutomaArgs, context: ActorContext, inputNotes: readonly string[] = [], call?: ToolCall): Promise<ToolResult> {
     const environment = this.automaFor(context.sessionId);
     if (!environment) return {text: 'Automa requires a model provider, and none is configured.', isError: true};
     const refuse = (text: string): ToolResult => ({text, isError: true, disposition: 'denied'});
@@ -459,6 +470,10 @@ export class Tools {
       return refuse(text);
     };
     if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of finished workers.');
+    // A fork is a copy of an actor: never inside a worker or a fork, and only where the request behind this call is known.
+    const forking = (args.jobs ?? []).some(job => job.fork);
+    if (forking && context.via) return refuse(FORK_NOT_HERE);
+    if (forking && !context.parentTurn && (args.jobs ?? []).some(job => job.fork && !job.continue)) return refuse(FORK_NO_CONTEXT);
     // A job that names a plan node needs that node in the active plan; the refusal says which ids exist (not remembered: the plan may gain the node next).
     for (const job of args.jobs ?? []) if (job.node) {
       const refusal = environment.plans ? environment.plans.check(job.node) : planUnknownLinkNode(job.node, []);
@@ -469,7 +484,7 @@ export class Tools {
     const followed = [...new Set((args.jobs ?? []).flatMap(job => job.after ?? []).filter(entry => !/^#\d+$/.test(entry)))];
     const named = new Set([...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? []), ...followed]);
     const retained = (await Promise.all([...named].map(id => this.shelf.find(sessionId, ownerId, activityId, id))))
-      .flatMap(worker => worker ? [{id: worker.id, grant: worker.grant, system: worker.system}] : []);
+      .flatMap(worker => worker ? [{id: worker.id, grant: worker.grant, system: worker.system, ...(worker.kind === 'fork' ? {fork: true} : {})}] : []);
     await this.shelf.prepare(sessionId, ownerId);
     if (this.starting.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
     const background = args.mode === 'background';
@@ -499,7 +514,7 @@ export class Tools {
       for (const id of released) await this.shelf.close(sessionId, id);
       if (!plan.jobs.length) return {text: [`Released ${released.join(', ') || 'nothing'}.`, note].filter(Boolean).join('\n'), isError: false};
       const name = (environment.actorName?.(ownerId) ?? ownerId.charAt(0).toUpperCase() + ownerId.slice(1));
-      const {startTool: _principalStep, reportSwarm, ...principal} = context;
+      const {startTool: _principalStep, reportSwarm, parentTurn: _parentTurn, ...principal} = context;
       const parallel = args.parallel ?? plan.parallel ?? environment.maxParallel?.() ?? AUTOMA_DEFAULT_PARALLEL;
       // The ids were previewed above; taking them is synchronous, so they are the ones the model was told.
       const fresh = this.shelf.reserve(sessionId, ownerId, plan.jobs.filter(job => !job.job.continue).length, true);
@@ -512,7 +527,20 @@ export class Tools {
       const link = () => {controller.abort(context.signal.reason); this.background.cancelActivity(activityId);};
       if (background) {if (context.signal.aborted) link(); else context.signal.addEventListener('abort', link, {once: true});}
       const signal = background ? controller.signal : context.signal;
+      // Forks: this dispatcher's own request, captured by the kernel for this very call; its limit of forks at once; and whether its provider caches prefixes.
+      const forkJobs = jobs.filter(job => job.fork);
+      let fork: DispatchOptions['fork'], forkNote: string | undefined;
+      if (forkJobs.length) {
+        const parent = context.parentTurn;
+        const forkKey = JSON.stringify([sessionId, ownerId]);
+        const forkSlots = this.forkSlots.get(forkKey) ?? this.forkSlots.set(forkKey, new Semaphore(() => environment.maxForks?.() ?? AUTOMA_DEFAULT_FORKS)).get(forkKey)!;
+        const capabilities = parent ? await parent.provider.resolveCapabilities?.(signal).catch(() => undefined) ?? parent.provider.capabilities ?? FALLBACK_CAPABILITIES : FALLBACK_CAPABILITIES;
+        const caching = capabilities.caching !== 'none';
+        fork = {base: parent && call ? forkBase(parent, call.id) : undefined, caching, slots: forkSlots};
+        if (parent && !caching) forkNote = forksUncachedLine(parent.model.split('/')[0] || 'this provider');
+      }
       const common: DispatchOptions = {
+        ...(fork ? {fork} : {}),
         jobs, parallel, swarmName: profile.name, signal,
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
@@ -521,16 +549,17 @@ export class Tools {
         ...(context.stopReason ? {stopCause: context.stopReason} : {}),
         ...(environment.readonlyConcurrency ? {readonlyConcurrency: environment.readonlyConcurrency()} : {}),
         readOnly: call => isReadOnlyTool(call.name),
-        executeTool: ({workerId, grant}, call) => this.execute(call, {...principal, signal, via: {label: `${name}'s ${profile.name}`, workerId, grant}}),
+        executeTool: ({workerId, grant, fork: forked}, call) => this.execute(call, {...principal, signal, via: {label: forked ? `${name}'s fork` : `${name}'s ${profile.name}`, workerId, grant, ...(forked ? {fork: true} : {})}}),
         trackWrites: (workerId, listener) => this.snapshots.trackWrites(workerId, listener, sessionId),
         journalPath: environment.journalPath?.(sessionId),
         ...(reportSwarm ? {onProgress: reportSwarm} : {}),
         ...(environment.priceUsage ? {priceUsage: environment.priceUsage} : {}),
-        ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string) => environment.charge!(context, usage, model)} : {}),
+        ...(environment.charge ? {charge: (usage: ModelTurn['usage'], model: string, category?: 'fork') => environment.charge!(context, usage, model, category)} : {}),
       };
       if (!background) {
         const result = await executeAutomaDispatch(common);
-        return note ? {...result, text: result.text + '\n\n' + note} : result;
+        const notes = [note, forkNote].filter(Boolean).join('\n');
+        return notes ? {...result, text: result.text + '\n\n' + notes} : result;
       }
       const scope = {sessionId, ownerId, activityId};
       let run!: DispatchRun, board!: BackgroundDispatch;
@@ -547,7 +576,7 @@ export class Tools {
         context.signal.removeEventListener('abort', link);
         this.dispatches.delete(dispatchKey);
       });
-      return {text: [...run.initial.map(item => backgroundReceiptLine(item.id, item.title, item.state, item.after)), BACKGROUND_RECEIPT_SENTENCE, ...(released.length ? [`Released ${released.join(', ')}.`] : []), ...(note ? [note] : [])].join('\n'), isError: false};
+      return {text: [...run.initial.map(item => backgroundReceiptLine(item.id, item.title, item.state, item.after)), BACKGROUND_RECEIPT_SENTENCE, ...(released.length ? [`Released ${released.join(', ')}.`] : []), ...(note ? [note] : []), ...(forkNote ? [forkNote] : [])].join('\n'), isError: false};
     } finally {
       this.starting.delete(key);
       if (!detached) this.dispatches.delete(dispatchKey);
@@ -684,6 +713,14 @@ export class Tools {
     try {
       context.signal.throwIfAborted();
       const canonical = canonicalToolName(call.name);
+      // Before its arguments are parsed: whatever a fork passes to a dispatching or coordinating tool, the answer is the same refusal.
+      if (context.via?.fork && canonical && ((FORK_REFUSED_TOOLS as readonly string[]).includes(canonical) || this.registryFor(context.sessionId)?.getMetadata(canonical)?.category === 'orchestration')) {
+        return {text: FORK_REFUSAL, isError: true, disposition: 'denied'};
+      }
+      if (context.via?.fork && (!canonical || !Object.hasOwn(schemas, canonical))) {
+        // A fork sends its dispatcher's whole tool list (extension tools included); the ones only the dispatcher's kernel runs are answered, not thrown.
+        return {text: `Tool \`${call.name}\` is not available to a fork. Available: ${grantTools(context.via.grant).join(', ')}.`, isError: true, disposition: 'denied'};
+      }
       if (!canonical || !Object.hasOwn(schemas, canonical)) throw new Error('Unknown tool: ' + call.name);
       const registry = this.registryFor(context.sessionId);
       if (registry && !registry.getToolsForActor(context.ownerId).some(tool => tool.name === canonical)) {
@@ -722,7 +759,7 @@ export class Tools {
           return {text: 'Operation denied. Please respect this decision and pursue alternative approaches without repeating the same action.', isError: true, disposition: 'denied'};
         }
         context.startTool?.();
-        return await this.runAutoma(args, context, automaNotes);
+        return await this.runAutoma(args, context, automaNotes, call);
       }
 
       if (name === 'ShellJob') {

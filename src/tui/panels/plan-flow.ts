@@ -101,7 +101,8 @@ interface Context {
 /** The second line of a node: owner, status, progress, clock; whole parts are dropped from the right until it fits. */
 function statusLine(node: DerivedNode, options: FlowOptions, width: number): {cells: FlowCell[]; ownerX0: number; ownerX1: number} {
   const owner = options.owners(node.owner);
-  const ownerText = owner.symbol + ' ' + owner.name;
+  // A node carried out by a fork shows its owner as the actor plus `⑂`.
+  const ownerText = owner.symbol + ' ' + owner.name + (node.forked ? ' ⑂' : '');
   const glyph = PLAN_GLYPHS[node.status], tone = STATUS_TONE[node.status];
   const progress = node.progress ? `${node.progress.accepted}/${node.progress.total}` : '';
   const since = node.status === 'running' ? node.runningSince : undefined;

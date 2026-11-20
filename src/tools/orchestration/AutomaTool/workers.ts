@@ -7,6 +7,7 @@ import type {ModelMessage} from '../../../runtime/messages.js';
 import {replaceFile} from '../../../store/replace-file.js';
 import type {ResolvedAutomaModel} from './AutomaTool.js';
 import type {JobGrant} from './grant.js';
+import type {ForkBase} from './fork.js';
 
 /** A finished worker whose context reached this many input tokens is parked at once: re-sending it costs more than a fresh brief. */
 export const AUTOMA_RETAINED_INPUT_LIMIT = 64_000;
@@ -31,6 +32,10 @@ export interface IdleWorker {
   readonly fingerprint?: string | undefined;
   /** How its last job ended and the result block the dispatcher got, so a job that follows this worker (`after`) can start from it. Absent for workers parked by older versions. */
   readonly last?: WorkerResult | undefined;
+  /** `fork`: a copy of its dispatcher; `messages` then hold only what follows `fork.prefix`. */
+  readonly kind?: 'fork' | undefined;
+  /** A fork's request frame and the messages sent before its own, kept in memory (shared by the forks of a dispatch); lost on a restart, after which the fork cannot be continued. */
+  readonly fork?: ForkBase | undefined;
   /** Undefined after a restart, until the next continue resolves it again. */
   resolved: ResolvedAutomaModel | undefined;
   /** Undefined while parked. */
@@ -53,6 +58,7 @@ interface ParkedFile {
   readonly id: string; readonly sessionId: string; readonly ownerId: string; readonly activityId: string; readonly workerId: string;
   readonly grant: JobGrant; readonly system: string; readonly preferred?: string; readonly vision: boolean; readonly fingerprint?: string; readonly lastInput: number;
   readonly last?: WorkerResult;
+  readonly kind?: 'fork';
   readonly messages: ModelMessage[];
 }
 
@@ -150,7 +156,7 @@ export class WorkerShelf {
       const data = JSON.parse(await readFile(path, 'utf8')) as ParkedFile;
       if (data.id !== id || data.ownerId !== ownerId || data.sessionId !== sessionId) return undefined;
       const entry: IdleWorker = {id, sessionId, ownerId, activityId, workerId: data.workerId, grant: data.grant, system: data.system, preferred: data.preferred,
-        vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), ...(data.last ? {last: data.last} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
+        vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), ...(data.last ? {last: data.last} : {}), ...(data.kind ? {kind: data.kind} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
       this.entries.set(this.key(sessionId, id), entry);
       this.arm();
       return entry;
@@ -185,7 +191,7 @@ export class WorkerShelf {
     const path = this.file(entry.sessionId, entry.activityId, entry.id);
     const data: ParkedFile = {id: entry.id, sessionId: entry.sessionId, ownerId: entry.ownerId, activityId: entry.activityId, workerId: entry.workerId,
       grant: entry.grant, system: entry.system, ...(entry.preferred !== undefined ? {preferred: entry.preferred} : {}), vision: entry.vision, ...(entry.fingerprint ? {fingerprint: entry.fingerprint} : {}),
-      ...(entry.last ? {last: entry.last} : {}), lastInput: entry.lastInput, messages: entry.messages};
+      ...(entry.last ? {last: entry.last} : {}), ...(entry.kind ? {kind: entry.kind} : {}), lastInput: entry.lastInput, messages: entry.messages};
     await mkdir(join(path, '..'), {recursive: true});
     const temporary = path + '.' + randomUUID().slice(0, 8) + '.tmp';
     await writeFile(temporary, JSON.stringify(data));

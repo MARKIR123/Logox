@@ -52,7 +52,7 @@ export function watermarks(model: ModelCapacity, policy: BudgetPolicy) {
   const low = Math.min(Math.floor(model.window * policy.low_watermark_ratio), policy.target_budget_tokens ?? Infinity, high - 1);
   return {high, low, safety: Math.max(16, Math.min(128, Math.floor(model.window / 32)))};
 }
-export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval', 'automa', 'keepalive', 'anamnesis']),
+export const usageRecordSchema = z.strictObject({id: z.string().min(1), model: z.string(), category: z.enum(['task', 'summary', 'approval', 'automa', 'fork', 'keepalive', 'anamnesis']),
   input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
   cacheRead: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative(),
   /** Part of `cacheWrite` stored with the 1-hour lifetime (billed at 2x instead of 1.25x). */

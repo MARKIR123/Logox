@@ -233,7 +233,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         if (kind.kind !== 'finish_round_outside_round' && kind.kind !== 'finish_round' && kind.kind !== 'tools' && prepared && !run.context.signal.aborted) {
           options.context?.observe(run.context, request, turn, prepared.model);
         }
-        if (await settleReply(run, kind, {ready, request, turn, thinkingId, thinkingStep}) === 'done') {outcome = 'completed'; return;}
+        if (await settleReply(run, kind, {ready, request, turn, thinkingId, thinkingStep, usedProvider: got.usedProvider}) === 'done') {outcome = 'completed'; return;}
       }
     } finally {
       // Natural end or not, the actors waiting on this one are told to stop waiting, and its own questions lapse.

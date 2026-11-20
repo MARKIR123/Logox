@@ -31,7 +31,11 @@ import {AUTOMA_RETAINED_INPUT_LIMIT, type IdleWorker, type WorkerShelf} from './
 import {Semaphore} from '../../../kernel/semaphore.js';
 import {finishSchema, parseFinish, type FinishArgs} from './finish.js';
 import type {AutomaRoute} from './preset.js';
-import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, queuedJobsLine} from './prompt.js';
+import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, FORK_PLAIN_END_NOTE, forkCacheNote, queuedForksLine, queuedJobsLine} from './prompt.js';
+import {forkOpening, type ForkBase} from './fork.js';
+
+/** A fork whose first response read less than this share of its input from cache gets the cost note. */
+const FORK_CACHE_NOTE_BELOW = 50;
 
 export const AUTOMA_SCOPES = ['exact', 'bounded', 'open'] as const;
 export type AutomaScope = typeof AUTOMA_SCOPES[number];
@@ -47,6 +51,7 @@ const automaJobSchema = z.strictObject({
   vision: z.boolean().optional().describe('Rare: true when the job must look at images (screenshots, mockups, image files). Omit otherwise'),
   after: z.array(z.string().min(1).max(80)).min(1).max(8).optional().describe('Jobs this one follows, by id (T1), "#n" position or exact title, or a finished worker by its id. It starts when they are all done and receives their results'),
   node: z.string().min(1).max(40).optional().describe('Rare: the plan node (see Plan) this job carries out; the node\'s status then follows the job'),
+  fork: z.boolean().optional().describe('Rare: true runs the job as a copy of yourself with your full context; the brief then only says which part. Costs far more than a worker'),
 });
 
 export const AUTOMA_MODES = ['wait', 'background'] as const;
@@ -65,7 +70,7 @@ export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node']);
+const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node', 'fork']);
 const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
@@ -125,6 +130,8 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
       if (job.keep === false && !job.continue) delete job.keep;
       if (job.vision === 'true' || job.vision === 'false') job.vision = job.vision === 'true';
       if (job.vision !== true) delete job.vision;
+      if (job.fork === 'true' || job.fork === 'false') job.fork = job.fork === 'true';
+      if (job.fork !== true) delete job.fork;
       // `after` may arrive as one string, or as `depends_on` / `needs`; numbers are positions ("#2").
       for (const alias of ['depends_on', 'dependsOn', 'needs']) {
         if (job.after === undefined && job[alias] !== undefined) job.after = job[alias];
@@ -261,7 +268,12 @@ export interface DispatchOptions {
   readonly readonlyConcurrency?: number;
   /** True for a call that only observes (`catalog.ts:isReadOnlyTool`); supplied by `Tools`, which may import the catalog. */
   readOnly?(call: ToolCall): boolean;
-  executeTool(worker: {workerId: string; grant: JobGrant}, call: ToolCall): Promise<ToolResult>;
+  /**
+   * Forks: the dispatcher's captured request (`fork.ts:forkBase()`) for the fresh fork jobs of this call, whether its provider caches prefixes (the result then
+   * reports each fork's cache share), and the dispatcher's own limit of forks running at once (`[automa] max_forks_running`). A continued fork brings its own base.
+   */
+  readonly fork?: {readonly base: ForkBase | undefined; readonly caching: boolean; readonly slots: Pick<Semaphore, 'acquire'> & Partial<Pick<Semaphore, 'saturated' | 'capacity' | 'running' | 'waiting'>>} | undefined;
+  executeTool(worker: {workerId: string; grant: JobGrant; fork?: boolean}, call: ToolCall): Promise<ToolResult>;
   trackWrites(workerId: string, listener: (file: WrittenFile) => void): () => void;
   journalPath?: string | undefined;
   onProgress?(swarm: AutomaSwarm): void;
@@ -271,7 +283,8 @@ export interface DispatchOptions {
   readonly background?: boolean | undefined;
   /** Called when jobs end, with their result blocks: one job, or a job that did not end `done` together with the jobs it kept from starting. */
   onResults?(results: readonly JobOutcome[]): void;
-  charge?(usage: ModelTurn['usage'], model: string): void;
+  /** `category` is `fork` for a fork's turn, absent for a worker's. */
+  charge?(usage: ModelTurn['usage'], model: string, category?: 'fork'): void;
   /** Ledger form of a worker turn's usage (tokens, model, provider, priced cost); stored on the turn's `message` event. */
   priceUsage?(usage: NonNullable<ModelTurn['usage']>, model: string): TurnUsage | undefined;
 }
@@ -370,11 +383,13 @@ interface ResultParts {
 }
 
 /** The runtime's result block for one job; everything the worker wrote is escaped, everything measured is added by the runtime. */
-export function resultBlock(head: {id: string; title: string; status: JobStatus; elapsedMs: number; model: string; stop?: StopReasonCode | undefined}, parts: ResultParts): string {
+export function resultBlock(head: {id: string; title: string; status: JobStatus; elapsedMs: number; model: string; stop?: StopReasonCode | undefined; kind?: 'fork' | undefined; cache?: number | undefined}, parts: ResultParts): string {
   const list = (label: string, items: readonly string[] | undefined) => items?.length ? [label + ':', ...items.map(item => '- ' + escapeBlock(item))] : [];
   // `status` is what the worker reported; `stop` says how the run ended and is shown only when it was not an ordinary completion.
   const stop = head.stop && head.stop !== 'completed' ? ` stop="${head.stop}"` : '';
-  return [`<automa-result id="${attribute(head.id)}" title="${attribute(head.title)}" status="${head.status}"${stop} took="${took(head.elapsedMs)}" model="${attribute(head.model)}">`,
+  // A fork says so, and what share of its first request's input was read from the provider's cache.
+  const kind = head.kind ? ` kind="${head.kind}"` : '', cache = head.cache !== undefined ? ` cache="${head.cache}%"` : '';
+  return [`<automa-result id="${attribute(head.id)}"${kind} title="${attribute(head.title)}" status="${head.status}"${stop} took="${took(head.elapsedMs)}" model="${attribute(head.model)}"${cache}>`,
     'Summary: ' + escapeBlock(parts.summary),
     ...list('Evidence', parts.evidence), ...list('Not verified', parts.notVerified),
     ...(parts.question ? ['Question: ' + escapeBlock(parts.question)] : []),
@@ -404,7 +419,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const followed = jobs.map((_, index) => [...needs[index]!.map(prerequisite => jobs[prerequisite]!.id), ...workerNeeds[index]!]);
   const ordered = followed.some(list => list.length > 0);
   const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
-    ...(planned.job.node ? {node: planned.job.node} : {}),
+    ...(planned.job.node ? {node: planned.job.node} : {}), ...(planned.fork ? {kind: 'fork' as const} : {}),
     ...(followed[index]!.length ? {after: followed[index]!} : {}), ...(options.background ? {delivered: false} : {})}));
   const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {})});
   const finished: boolean[] = jobs.map(() => false);
@@ -423,6 +438,8 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   };
 
   const receipts: string[] = new Array(jobs.length).fill('');
+  /** A fork's cache share of its first response's input, in percent (`cache` of its result block); only where the provider caches prefixes. */
+  const cacheShare: (number | undefined)[] = jobs.map(() => undefined);
   const statuses: AutomaJobState['state'][] = jobs.map(() => 'queued');
 
   /** How a job ended, in the one outcome vocabulary: a worker that finished (whatever it reported) completed; the rest are mapped by `stopReasonFor`. */
@@ -435,7 +452,8 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const finishCore = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute, how: {error?: unknown; stalled?: boolean} = {}, shelve?: Omit<IdleWorker, 'last'>) => {
     const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started, stop = stopOf(status, how);
     finished[index] = true;
-    const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model, stop}, {...parts, acceptance: planned.job.acceptance});
+    const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model, stop, ...(planned.fork ? {kind: 'fork' as const} : {}),
+      ...(cacheShare[index] !== undefined ? {cache: cacheShare[index]} : {})}, {...parts, acceptance: planned.job.acceptance});
     receipts[index] = receipt; statuses[index] = status;
     // Shelved before anything hears of the result, so a dispatcher that answers it at once can continue the worker.
     // (A worker that could not be parked simply cannot be continued.)
@@ -443,7 +461,8 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
     options.onEnd?.({index, status, summary: parts.summary, question: parts.question});
     const {startedAt: _startedAt, tool: _tool, ...settled} = states[index]!;
     const shown = route ?? (planned.grant.writes.length ? 'code' as const : 'read' as const);
-    states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000), route: shown, ...(model ? {model} : {}), stopReason: stop, summary: parts.summary.slice(0, 600),
+    // A fork has no worker route: it runs on its dispatcher's own model.
+    states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000), ...(planned.fork ? {} : {route: shown}), ...(model ? {model} : {}), stopReason: stop, summary: parts.summary.slice(0, 600),
       ...(parts.evidence?.length ? {evidence: parts.evidence.slice(0, 8)} : {}), ...(parts.notVerified?.length ? {notVerified: parts.notVerified.slice(0, 8)} : {}), ...(parts.question ? {question: parts.question} : {})};
     publish();
     await journal(index, 'end', {id, state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision),
@@ -488,27 +507,43 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   // A dispatch of many jobs with one shared system prompt starts job 0 alone: once its first response is back, the provider's prefix cache can
   // serve the shared prefix to the others. They start when it has answered, failed or ended.
   // Never with an order between the jobs: job 0 may be the one that waits.
-  const staggered = !ordered && jobs.length > 3 && new Set(jobs.map(planned => planned.system)).size === 1;
+  // (Forks share the dispatcher's own, already warm, prefix: they never wait for one another.)
+  const staggered = !ordered && jobs.length > 3 && !jobs.some(planned => planned.fork) && new Set(jobs.map(planned => planned.system)).size === 1;
   let openStart!: () => void;
   const firstAnswered = new Promise<void>(resolve => {openStart = resolve;});
 
-  let queuedForSlot = 0;
+  let queuedForSlot = 0, queuedForFork = 0;
   const runJob = async (index: number): Promise<void> => {
     const planned = jobs[index]!, id = planned.id;
     if (planned.denial) {await finish(index, 'denied', Date.now(), '', {summary: planned.denial}); return;}
     if (signal.aborted) {await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
     if (staggered && index !== 0) await firstAnswered;
+    // A fork waits for its dispatcher's own limit first (`[automa] max_forks_running`), so it holds no session slot while it waits; counted once, like a slot.
+    const isFork = planned.fork === true;
+    let releaseFork: (() => void) | undefined;
+    if (isFork && options.fork) {
+      if (options.fork.slots.saturated) queuedForFork++;
+      try {releaseFork = await options.fork.slots.acquire(signal);}
+      catch {await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
+    }
     // Queued until a running slot is free (`[automa] max_running`, across every dispatcher of the session).
     let releaseSlot: (() => void) | undefined;
     // A job that has to wait for a free slot is counted once; the dispatch's result says so in one line.
     if (options.slots?.saturated) queuedForSlot++;
     try {releaseSlot = await options.slots?.acquire(signal);}
-    catch {await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
+    catch {releaseFork?.(); await finish(index, 'cancelled', Date.now(), '', {summary: 'Cancelled before it started.'}); return;}
     const started = Date.now();
     const idle = planned.job.continue ? await options.workers.find(options.sessionId, options.principal, options.activityId, planned.job.continue) : undefined;
     if (planned.job.continue && !idle) {
-      releaseSlot?.();
+      releaseSlot?.(); releaseFork?.();
       await finish(index, 'failed', started, '', {summary: `Worker ${planned.job.continue} is closed or unknown; dispatch a new job.`});
+      return;
+    }
+    // A fork continues from the request frame it started with, which lives in this process only.
+    const forkBase = isFork ? idle ? idle.fork : options.fork?.base : undefined;
+    if (isFork && !forkBase) {
+      releaseSlot?.(); releaseFork?.();
+      await finish(index, 'failed', started, '', {summary: idle ? `Fork ${planned.job.continue} was parked before a restart and cannot be continued; dispatch a new job.` : 'No request of the dispatcher is available to fork from; dispatch a worker with a brief.'});
       return;
     }
     if (idle) options.workers.hold(idle);
@@ -526,12 +561,16 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
     const measured = () => ({changed: changeLine(written, options.root), ran: ranLine(ran), denied: refused.join(', ')});
     let change: string | undefined, fingerprint: string | undefined;
     try {
-      const resolved = options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision, grant.writes.length > 0);
+      // A fork never routes: it runs on its dispatcher's own model and effort, and sees images when that model did.
+      const resolved: ResolvedAutomaModel = forkBase ? {provider: forkBase.provider, model: forkBase.model, vision: forkBase.vision}
+        : options.resolveModel(idle ? idle.preferred : planned.model, idle ? idle.vision : planned.job.vision, grant.writes.length > 0);
       // A worker continued after its definition changed still continues; it and its dispatcher are told once (the fingerprint is renewed below).
       fingerprint = definitionFingerprint({...(options.promptHash !== undefined ? {prompt: [options.promptHash]} : {}), grant: [JSON.stringify([grant.writes, grant.exclusive, grant.tools ?? null])], model: resolved.model});
       change = idle && fingerprint ? definitionChangeNote(id, definitionChanges(idle.fingerprint, fingerprint)) : undefined;
       const prior = [...needs[index]!.map(prerequisite => receipts[prerequisite]!), ...external[index]!.flatMap(item => item.block ? [item.block] : [])];
-      const text = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle), prior);
+      const jobText = jobMessage(planned, getActorScratchpadDir(options.cwd, options.sessionId, options.principal), Boolean(idle), prior);
+      // A fresh fork opens with the directive and its title; a continued one, like a continued worker, only gets its next step.
+      const text = isFork && !idle ? forkOpening(planned.job.title, jobText) : jobText;
       const messages: ModelMessage[] = idle ? [...await options.workers.messages(idle), {role: 'user', text: change ? change + '\n\n' + text : text}] : [{role: 'user', text}];
       modelName = resolved.model;
       route = resolved.route;
@@ -539,13 +578,20 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
       if (planned.job.vision && resolved.vision === false) {
         stopTracking();
         if (idle) options.workers.unhold(idle);
-        await finish(index, 'denied', started, modelName, {summary: `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`}, route);
+        releaseFork?.();
+        await finish(index, 'denied', started, modelName, {summary: isFork ? `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs images, and your own model does not send them; a fork cannot look at them. Dispatch a worker with \`vision: true\`.`
+          : `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`}, route);
         return;
       }
+      // A fork's tool list is its dispatcher's, whatever it holds: Finish may be missing from it, and is then taken by name or, failing that, by a plain reply.
+      const finishDeclared = forkBase?.frame.tools.some(tool => tool.name === FINISH_TOOL_NAME) ?? true;
+      let plainEnd = false;
       const end = await runWorker<FinishArgs>({
-        provider: resolved.provider, model: resolved.model, vision: resolved.vision, system: planned.system, tools: automaToolDefinitions(grant), messages, signal,
-        cwd: options.cwd, sessionId: options.sessionId, workerId, cacheKey: promptCacheKey(options.sessionId, 'automa:' + options.activityId), retries: options.retries ?? DEFAULT_PROVIDER_RETRIES,
-        terminal: {name: FINISH_TOOL_NAME, reminder: AUTOMA_NO_TOOL_REMINDER, alone: AUTOMA_FINISH_ALONE, accepted: AUTOMA_FINISH_ACCEPTED, settle: call => parseFinish(call.arguments)},
+        provider: resolved.provider, model: resolved.model, vision: resolved.vision, system: planned.system, tools: forkBase ? forkBase.frame.tools : automaToolDefinitions(grant), messages, signal,
+        ...(forkBase ? {fork: {frame: forkBase.frame, prefix: forkBase.prefix}} : {}),
+        cwd: options.cwd, sessionId: options.sessionId, workerId, cacheKey: forkBase?.frame.cacheKey ?? promptCacheKey(options.sessionId, 'automa:' + options.activityId), retries: options.retries ?? DEFAULT_PROVIDER_RETRIES,
+        terminal: {name: FINISH_TOOL_NAME, reminder: AUTOMA_NO_TOOL_REMINDER, alone: AUTOMA_FINISH_ALONE, accepted: AUTOMA_FINISH_ACCEPTED, settle: call => parseFinish(call.arguments),
+          ...(forkBase && !finishDeclared ? {undeclared: {plain: (reply: string): FinishArgs => {plainEnd = true; return {status: 'done', summary: reply.length > 600 ? reply.slice(0, 599).trimEnd() + '…' : reply};}}} : {})},
         ...(options.readOnly ? {readOnly: options.readOnly} : {}), concurrency: options.readonlyConcurrency,
         executeCall: async call => {
           const title = callTitle(call);
@@ -553,7 +599,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
           const row = {name: call.name, title, state: 'running' as const};
           states[index] = {...states[index]!, tool: title, calls: [...states[index]!.calls, row].slice(-CALLS_SHOWN_PER_JOB)};
           publish();
-          const result = await options.executeTool({workerId, grant}, call);
+          const result = await options.executeTool({workerId, grant, ...(isFork ? {fork: true} : {})}, call);
           const outcome = result.isError ? 'failed' as const : 'completed' as const;
           const {tool: _shown, ...rest} = states[index]!;
           const calls = rest.calls.map(item => item === row ? {...item, state: outcome} : item);
@@ -571,7 +617,11 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
         },
         onUsage: turn => {
           if (index === 0) openStart();
-          options.charge?.(turn.usage, resolved.model);
+          options.charge?.(turn.usage, resolved.model, ...(isFork ? ['fork' as const] : []));
+          // The first response of a fork says whether its inherited prefix was read from cache: that is what makes a fork affordable.
+          if (isFork && options.fork?.caching && cacheShare[index] === undefined && turn.usage && turn.usage.input > 0) {
+            cacheShare[index] = Math.round(100 * Math.min(turn.usage.cacheRead ?? 0, turn.usage.input) / turn.usage.input);
+          }
         },
         onTurn: async turn => {
           lastInput = turn.usage?.input ?? lastInput;
@@ -585,10 +635,12 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
       // Whatever the outcome, a worker that ended through the loop (Finish, or the stall rule) stays on the shelf with its history.
       const shelve: Omit<IdleWorker, 'last'> = {id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, grant, system: planned.system,
         preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false,
-        ...(fingerprint ? {fingerprint} : {})};
-      const large = idle && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
+        ...(fingerprint ? {fingerprint} : {}), ...(forkBase ? {kind: 'fork' as const, fork: forkBase} : {})};
+      const large = idle && !isFork && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
+      const share = cacheShare[index];
+      const cold = isFork && share !== undefined && share < FORK_CACHE_NOTE_BELOW ? forkCacheNote(share) : undefined;
       // The block prefixes `Note: ` itself.
-      const note = [change?.replace(/^Note: /, ''), large].filter(Boolean).join('\n') || undefined;
+      const note = [change?.replace(/^Note: /, ''), large, cold, plainEnd ? FORK_PLAIN_END_NOTE : undefined].filter(Boolean).join('\n') || undefined;
       if (end.kind === 'stalled') {
         await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note}, route, {stalled: true}, shelve);
         return;
@@ -604,6 +656,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
       await finish(index, signal.aborted ? 'cancelled' : 'failed', started, modelName, {summary: signal.aborted ? 'Cancelled.' : error instanceof Error ? error.message : String(error), ...measured(), ...(change ? {note: change.replace(/^Note: /, '')} : {})}, route, {error});
     } finally {
       releaseSlot?.();
+      releaseFork?.();
     }
   };
   // The jobs of one dispatch that run at once (`parallel`); a job that waits for the jobs it follows has not asked for a place yet.
@@ -629,8 +682,10 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
 
   // Where each job stands as the call returns: the first `parallel` jobs that follow nothing run (unless the session's running slots are all taken), the rest queue.
   let startable = 0;
+  // Forks also need a place under their dispatcher's own limit: the room that is free now.
+  let forkRoom = options.fork?.slots.capacity !== undefined ? Math.max(0, options.fork.slots.capacity - (options.fork.slots.running ?? 0) - (options.fork.slots.waiting ?? 0)) : Infinity;
   const initial = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, after: followed[index]!,
-    state: needs[index]!.length ? 'waiting' as const : startable++ < options.parallel && !options.slots?.saturated ? 'running' as const : 'queued' as const}));
+    state: needs[index]!.length ? 'waiting' as const : startable++ < options.parallel && !options.slots?.saturated && (!planned.fork || forkRoom-- > 0) ? 'running' as const : 'queued' as const}));
 
   const run = async (): Promise<ToolResult> => {
     await ensureActorScratchpadDir(options.cwd, options.sessionId, options.principal).catch(() => {});
@@ -652,7 +707,8 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
     const done = count('done'), skipped = count('skipped');
     const header = `Automa dispatch · ${options.swarmName} · ${done}/${jobs.length} done` + (skipped ? ` · ${skipped} skipped` : '') + (options.released?.length ? ` · released ${options.released.join(', ')}` : '');
     // Said once per dispatch, never per job: how many of its jobs had to wait for a running slot, and the limit behind it.
-    const limits = queuedForSlot > 0 && options.slots?.capacity ? [queuedJobsLine(queuedForSlot, jobs.length, options.slots.capacity)] : [];
+    const limits = [...queuedForSlot > 0 && options.slots?.capacity ? [queuedJobsLine(queuedForSlot, jobs.length, options.slots.capacity)] : [],
+      ...queuedForFork > 0 && options.fork?.slots.capacity ? [queuedForksLine(queuedForFork, jobs.filter(planned => planned.fork).length, options.fork.slots.capacity)] : []];
     return {text: [header, ...limits, ...receipts, TRUST_LINE].join('\n\n'), isError: done === 0 && count('blocked') === 0, ...(count('denied') === jobs.length ? {disposition: 'denied' as const} : {})};
   };
   return {initial, done: run(), markDelivered: ids => {

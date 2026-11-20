@@ -14,6 +14,7 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - Jobs without \`writes\` run on a fast read model; jobs with \`writes\` run on a stronger code model. Give a read-only job \`writes\` only if it must edit.
 - \`after\` orders jobs: a job starts when the jobs it names (by id \`T1\`…, \`#n\` or title) are done, and receives their results. Jobs without \`after\` run in parallel; a job whose prerequisite does not finish is skipped. Ordered jobs may write the same files.
 - \`mode: "background"\` returns at once and delivers each result as a message when it is ready, so you can act on the first findings while the rest run. Use it when early results let you move on; use the default when you need all results together. \`{"wait": ["T3"]}\` waits for specific background jobs.
+- \`fork: true\` runs the job as a copy of yourself that starts with your full context instead of a brief: use it for a part that needs your understanding, not for searches or mechanical edits. It costs far more than a worker; at most a few run at once.
 - \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 - Workers read whatever you can read and run commands; every call is judged by your permission rules and can never exceed them.
 - Every finished worker can be continued with \`continue: "<id from the result>"\` and a new \`brief\`; it keeps its context. \`release\` ends workers you no longer need; all of them end with your task.
@@ -55,6 +56,35 @@ export const waitUnknown = (unknown: readonly string[], known: readonly string[]
 export const BACKGROUND_UNAVAILABLE = 'Background mode is not available here. Fix: omit `mode`, or use `"mode":"wait"`.';
 /** The summary line of a delivery of results (shown beside the message header). */
 export const backgroundDeliverySummary = (ids: readonly string[]): string => 'Automa results ' + ids.join(', ');
+
+/** The tool result of the dispatching call in every fork's first request; identical for every fork of a dispatch so the prefix is shared. */
+export const FORK_RESULT_TEXT = 'Forked. Your part follows.';
+/** The result stored for another call of the same assistant message (it stays paired, and is identical for every fork). */
+export const FORK_SIBLING_RESULT_TEXT = 'Handled by your original.';
+/** The user message that opens a fork, before the job's own fields. */
+export const FORK_DIRECTIVE = `You are a fork of yourself, running one part of the work in parallel while your original continues. You know everything your original knew up to this point. Do only the part below; leave everything else to your original.
+- You cannot dispatch, fork, message teammates or change the plan; those calls are refused. Work with the files and commands you need for your part.
+- End by calling Finish exactly once with what you did and the evidence. Your original reads only that.`;
+/** A fork called an orchestration tool. */
+export const FORK_REFUSAL = 'Forks cannot dispatch, fork, message teammates or change the plan. Do your part with your other tools.';
+/** `fork: true` outside an actor's own call. */
+export const FORK_NOT_HERE = '`fork: true` is only available to an actor, not inside a worker or fork. Fix: do the part yourself, or give a worker a short brief without `fork`.';
+/** `fork: true` where no request of the dispatcher is known (no kernel turn behind the call). */
+export const FORK_NO_CONTEXT = '`fork: true` needs the request that produced this call, and none is available here. Fix: omit `fork` and give a worker a brief.';
+/** A provider that caches no prefix: forks are still allowed. */
+export const forksUncachedLine = (provider: string): string => `Forks on ${provider} are not cached; each costs a full read of your context. Prefer workers with a brief.`;
+/** One line per dispatch: forks waited for a place because a dispatcher runs a limited number of them at once (`[automa] max_forks_running`). */
+export const queuedForksLine = (queued: number, total: number, maxForks: number): string =>
+  `Queued ${queued} of ${total} forks: you run at most ${maxForks} forks at once.`;
+/** The result's note for a fork whose prefix was mostly not read from cache. */
+export const forkCacheNote = (percent: number): string =>
+  `this fork's prefix was not served from cache (${percent}%); a fresh worker with a short brief is cheaper.`;
+/** The result's note for a fork that ended with a plain reply (the provider did not accept or the model did not emit Finish). */
+export const FORK_PLAIN_END_NOTE = 'this fork ended with a plain reply instead of Finish; its last text is the summary.';
+/** The fork's tools that are refused at execution: its tool list stays identical to the dispatcher's, so the prefix does not change. */
+export const FORK_REFUSED_TOOLS = ['Actor', 'Automa', 'SendMessage', 'Plan', 'CraftActor', 'CancelActor', 'AskUserQuestion', 'ReadActor'] as const;
+/** The marker beside a fork's row, owner or kind: `⑂`. */
+export const FORK_MARK = '⑂';
 
 export const AUTOMA_ANIMATION_FRAMES = ['◜', '◠', '◝', '◞', '◡', '◟'] as const;
 

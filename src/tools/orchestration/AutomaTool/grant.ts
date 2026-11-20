@@ -75,12 +75,16 @@ export interface AutomaJobArgs {
   readonly after?: readonly string[] | undefined;
   /** The plan node this job carries out (`Plan`); the runtime links the job to it when the dispatch starts. */
   readonly node?: string | undefined;
+  /** The job runs as a copy of its dispatcher with the dispatcher's whole context (a fork) instead of a worker with a brief. */
+  readonly fork?: boolean | undefined;
 }
 
 export interface RetainedGrant {
   readonly id: string;
   readonly grant: JobGrant;
   readonly system: string;
+  /** A finished fork: its continue stays a fork. */
+  readonly fork?: boolean | undefined;
 }
 
 export interface PlannedJob {
@@ -95,6 +99,8 @@ export interface PlannedJob {
   /** Resolved `after`: positions of the jobs of this call it follows, and ids of finished workers it follows (`graph.ts`). */
   readonly needs?: readonly number[] | undefined;
   readonly needsWorkers?: readonly string[] | undefined;
+  /** A fork: it runs as a copy of the dispatcher (`fork.ts`), on the dispatcher's own model; `system` and `model` are not used. */
+  readonly fork?: boolean | undefined;
 }
 
 const WORKSPACE_WIDE = /^(?:\.\/?|\*+|\*\*\/\*+|\.\/\*+|\.\/\*\*\/\*+|\/)$/;
@@ -154,6 +160,7 @@ export function planDispatch(input: {
   for (const job of input.jobs) {
     if (!job.continue) continue;
     if (!live.has(job.continue)) return refuse(`Worker ${job.continue} is closed or unknown; dispatch a new job.`);
+    if (job.fork === true && !input.retained.find(item => item.id === job.continue)?.fork) return refuse(`Worker ${job.continue} is a worker, not a fork. Fix: omit \`fork\` to continue it, or dispatch a new job with \`fork: true\`.`);
     if (continuing.has(job.continue)) return refuse(`Worker ${job.continue} is continued by two jobs of this call; continue it once, with one brief.`);
     continuing.add(job.continue);
   }
@@ -182,7 +189,8 @@ export function planDispatch(input: {
       const instance = input.retained.find(item => item.id === resume)!;
       if (job.writes) notes.push(`Worker "${resume}" keeps the writes it was created with; \`writes\` on "${job.title}" was ignored.`);
       const {writes: _writes, keep: _keep, ...rest} = job;
-      planned.push({job: {...rest, continue: resume}, grant: instance.grant, system: instance.system, ...coordinate(heldBy(instance.grant.writes))});
+      const {fork: _fork, ...continued} = rest;
+      planned.push({job: {...continued, continue: resume}, grant: instance.grant, system: instance.system, ...(instance.fork ? {fork: true} : {}), ...coordinate(heldBy(instance.grant.writes))});
       continue;
     }
     const writes: string[] = [];
@@ -193,9 +201,9 @@ export function planDispatch(input: {
       if (found.kind === 'outside') {notes.push(`\`writes\` entry "${entry}" on "${job.title}" is outside the workspace and was dropped (your scratchpad is always writable without a grant).`); continue;}
       if (!writes.includes(found.pattern)) writes.push(found.pattern);
     }
-    const {writes: _given, keep: _keep, ...rest} = job;
+    const {writes: _given, keep: _keep, fork, ...rest} = job;
     const grant: JobGrant = {writes, exclusive: profile.exclusive ?? []};
-    planned.push({job: {...rest, ...(writes.length ? {writes} : {})}, grant, system, model: style.model ?? profile.model, ...coordinate(heldBy(writes))});
+    planned.push({job: {...rest, ...(fork ? {fork: true} : {}), ...(writes.length ? {writes} : {})}, grant, system, ...(fork ? {fork: true} : {model: style.model ?? profile.model}), ...coordinate(heldBy(writes))});
   }
   const sequence = resolveAfter(planned.map((item, index) => ({id: input.ids?.[index] ?? '#' + (index + 1), title: item.job.title, after: item.job.after})),
     {live, ...(input.foreign ? {foreign: input.foreign} : {})});

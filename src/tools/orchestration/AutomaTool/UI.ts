@@ -10,7 +10,7 @@ import {insetFrame, type SceneRow, type SceneSegment} from '../../../tui/timelin
 import {connect, seconds} from '../../../tui/timeline/group-row.js';
 import {messageToolCall, renderDefaultTool} from '../../../tui/timeline/tool-ui.js';
 import {expanderId, pushToolBody, type ToolLine} from '../../../tui/timeline/tool-card.js';
-import {AUTOMA_ANIMATION_FRAMES} from './prompt.js';
+import {AUTOMA_ANIMATION_FRAMES, FORK_MARK} from './prompt.js';
 
 const SEP = ' · ';
 const LIVE = new Set(['running', 'waiting', 'queued']);
@@ -67,6 +67,9 @@ const stateLabel = (job: AutomaJobState, background: boolean): string =>
 const jobStep = (job: AutomaJobState): Step | undefined => job.state === 'running' && job.startedAt !== undefined
   ? {state: 'running', title: job.title, elapsedMs: 0, runningSince: job.startedAt} : undefined;
 
+/** The dispatcher's symbol and `⑂`: how a fork row is marked. */
+const forkMark = (context: ToolRenderContext): string => (context.ownerSymbol ?? '◇') + FORK_MARK;
+
 function renderSwarm(context: ToolRenderContext): void {
   const {builder, message, frame, open, accent} = context;
   const swarm = message.step!.swarm!;
@@ -109,10 +112,13 @@ function renderSwarm(context: ToolRenderContext): void {
         const live = jobStep(job);
         if (!live) return;
         const id = jobId(index);
-        const room = Math.max(1, indented.innerWidth - 2 - SEP.length - SWARM_TIME_WIDTH);
+        // A fork wears its dispatcher's symbol with `⑂` where a worker has the spinning dot (a fixed mark: only the clock moves).
+        const mark = job.kind === 'fork' ? forkMark(context) : undefined;
+        const room = Math.max(1, indented.innerWidth - 2 - SEP.length - SWARM_TIME_WIDTH - (mark ? stringWidth(mark) - 1 : 0));
         const from = builder.rows.length;
         builder.pushFramedLine(id + '-live', accent, [
-          {text: AUTOMA_ANIMATION_FRAMES[0]!, color: palette.automa, selectionKey: id + ':swarm_icon', selectionOffset: 0},
+          mark ? {text: mark, color: accent, selectionKey: id + ':fork_icon', selectionOffset: 0}
+            : {text: AUTOMA_ANIMATION_FRAMES[0]!, color: palette.automa, selectionKey: id + ':swarm_icon', selectionOffset: 0},
           {text: ' ' + fit(job.title, room), color: palette.fg, selectionKey: id + ':job_title', selectionOffset: 0},
           {text: SEP, color: palette.muted, separator: true, selectionKey: id + ':job_sep', selectionOffset: 0},
           {text: swarmElapsed(stepElapsed(live)), color: palette.muted, selectionKey: id + ':swarm_time', selectionOffset: 0},
@@ -133,7 +139,7 @@ function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, 
   const {builder, message, accent} = context;
   const bad = job.state === 'failed' || job.state === 'denied';
   const running = jobStep(job);
-  const tag = job.id ? job.id + SEP : '';
+  const tag = (job.kind === 'fork' ? forkMark(context) + ' ' : '') + (job.id ? job.id + SEP : '');
   const label = stateLabel(job, background);
   const text = (open ? '▾ ' : '▸ ') + tag + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - label.length - 8 - tag.length)) + SEP + label;
   const color = bad ? palette.error : job.state === 'running' ? palette.fg : palette.muted;
