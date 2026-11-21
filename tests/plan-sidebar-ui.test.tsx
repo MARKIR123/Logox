@@ -41,8 +41,8 @@ async function fixture() {
 const NODES = [
   {title: 'Design', owner: 'logox', nodes: [{title: 'Palette', owner: 'techne', acceptance: ['all colours named']}, {title: 'Contrast', owner: 'kalon', after: ['1.1']}]},
   {title: 'Ship', owner: 'techne', after: ['1']}];
-/** The card of the first node (`▌◌ Palette`) is on the screen text: a bar, the status glyph and the title. */
-const hasCard = (text: string, title = 'Palette') => new RegExp('▌\\S ' + title).test(text);
+/** The card of the first node (`╭─ ◌ Palette ─╮`) is on the screen text: its top border, the status glyph and the title. */
+const hasCard = (text: string, title = 'Palette') => new RegExp('╭─ \\S ' + title).test(text);
 const create = (app: Application, nodes: object[] = NODES) => app.plans.apply([{op: 'create', title: 'Theme preview', nodes: nodes as never}], 'logox');
 const runningTechne = (app: Application, activityId = 'tech') => app.store.activities.create({sessionId: app.sessionId, activityId, ownerId: 'techne', kind: 'actor', title: 'Techne · Builder',
   taskTitle: 'Build the palette', status: 'running', stage: 'On stage', detail: '', rootActivityId: 'root', startedAt: Date.now() - 130_000});
@@ -103,13 +103,13 @@ test('linked work moves a node through running to done; the clock ticks beside i
     await create(app);
     rig = await mount(app, 120, 32);
     await waitFor(() => rig.screen(), text => hasCard(text), {label: 'the sidebar from the start (a resumed plan)'});
-    assert.match(rig.screen(), /▌◌ Palette/, 'a card: bar, the ready glyph, the title');
-    assert.match(rig.screen(), /▌◌ Palette[^\n]*\n[^\n]*▌ techne/, 'row 2 names the owner');
+    assert.match(rig.screen(), /╭─ ◌ Palette/, 'a card: its top border, the ready glyph, the title');
+    assert.match(rig.screen(), /╭─ ◌ Palette[^\n]*\n[^\n]*╰─ techne/, 'the bottom border names the owner');
     await act(async () => {runningTechne(app); app.plans.link('1.1', {activityId: 'tech'});});
-    await waitFor(() => rig.screen(), text => /▌● Palette[^\n]*\n[^\n]*▌ techne · 2:1\d/.test(text), {label: 'running with its clock'});
+    await waitFor(() => rig.screen(), text => /╭─ ● Palette[^\n]*\n[^\n]*╰─ techne [─]+ +2:1\d +─╯/.test(text), {label: 'running with its clock at the right of the bottom border'});
     await act(async () => {app.store.activities.update(app.sessionId, 'tech', {status: 'completed', stage: 'Completed', stopReason: 'completed', finishedAt: Date.now()});});
-    await waitFor(() => rig.screen(), text => /▌◉ Palette/.test(text), {label: 'done'});
-    assert.ok(!/▌● Palette/.test(rig.screen()));
+    await waitFor(() => rig.screen(), text => /╭─ ◉ Palette/.test(text), {label: 'done'});
+    assert.ok(!/╭─ ● Palette/.test(rig.screen()));
     // Accepting every top-level node finishes the plan.
     await act(async () => {
       for (const id of ['1.1', '1.2', '2']) assert.ok((await app.plans.apply([{op: 'accept', id, evidence: ['checked']}], 'logox')).ok);
@@ -252,7 +252,7 @@ test('unrelated store changes neither rebuild the flow nor repaint the sidebar',
     await waitFor(() => rig.screen(), text => text.includes('unrelated message 2'), {label: 'the timeline updated'});
     assert.equal(flowStats.builds, builds, 'the layout is not rebuilt');
     // A scroll of the timeline repaints the side column (it moves with the rows), but never with a different picture: every paint of the card's title row is the same text.
-    const paints = new Set(rig.output.text.match(/◌(?:\x1b\[[\d;]*m)* Palette[^\x1b]*/g));
+    const paints = new Set(rig.output.text.match(/◌(?:\x1b\[[\d;]*m)* (?:\x1b\[[\d;]*m)*Palette[^\x1b]*/g));
     assert.equal(paints.size, 1, 'the sidebar row never changed: ' + [...paints].join(' | '));
     // A change of the plan does repaint it.
     await act(async () => {assert.ok((await app.plans.apply([{op: 'update', id: '1.1', title: 'Palette v2'}], 'logox')).ok);});

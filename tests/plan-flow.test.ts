@@ -8,6 +8,7 @@ import {buildFlow, fit, flowHit, flowStats, rowWidth, type FlowLayout} from '../
 import {DOCK_MIN_COLUMNS, flowOptionsFor, paintSidebar, tooltipFor, planProgress, sidebarGeometry, sidebarWidth, stepKey, stepMouse, emptyView, followTarget, clampSidebarWidth, dragWidth, maxSidebarWidth, SIDEBAR_MIN, TIMELINE_MIN} from '../src/tui/panels/plan-sidebar.js';
 import {formatClock} from '../src/tui/terminal/text.js';
 import {palette} from '../src/tui/appearance/theme.js';
+import {faintColor} from '../src/tui/appearance/colors.js';
 
 const names: Record<string, {symbol: string; name: string}> = {logox: {symbol: '◈', name: 'logox'}, techne: {symbol: '◎', name: 'techne'}, aletheia: {symbol: '✦', name: 'aletheia'},
   kalon: {symbol: '❖', name: 'kalon'}, automa: {symbol: '◦', name: 'automa'}};
@@ -30,11 +31,11 @@ const diamond: NewNode[] = [{title: 'Design', owner: 'logox', nodes: [
 
 const wide: NewNode[] = [{title: 'Design', owner: 'logox', nodes: Array.from({length: 6}, (_, index) => ({title: 'Step ' + (index + 1), owner: index % 2 ? 'techne' : 'kalon'}))}];
 
-/** The row index of the first card row (`▌◉ Title`) of a node with this title. */
-const cardRow = (lines: readonly string[], title: string) => lines.findIndex(line => new RegExp('▌\\S ' + title + '( |$)').test(line));
+/** The row index of the top border (`╭─ ◉ Title ─╮`) of a node with this title (the bottom border is the next row). */
+const cardRow = (lines: readonly string[], title: string) => lines.findIndex(line => new RegExp('╭─ \\S ' + title + '( |$)').test(line));
 
-test('perRow: as many cards of at least 14 cells (3 cells between) as fit, 2 from 36 columns, 3 from 51, more on a wide panel; the same input gives the same layout', () => {
-  assert.deepEqual([36, 40, 47, 48, 50, 51, 56, 68, 71, 120].map(total => flowOptionsFor(total).perRow), [2, 2, 2, 2, 2, 3, 3, 4, 4, 7]);
+test('perRow: as many cards of at least 15 cells (2 cells between) as fit, 2 from 36 columns, 3 from 52, more on a wide panel; the same input gives the same layout', () => {
+  assert.deepEqual([36, 40, 47, 48, 50, 51, 52, 56, 68, 71, 120].map(total => flowOptionsFor(total).perRow), [2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 7]);
   const rowsOf = (total: number) => {
     const flow = flowAt(plan(wide), total);
     const lines = text(flow);
@@ -45,18 +46,18 @@ test('perRow: as many cards of at least 14 cells (3 cells between) as fit, 2 fro
     const {flow, lines} = rowsOf(total);
     assert.ok(lines.every(line => stringWidth(line) <= total - 3), 'inside the panel at ' + total);
     const boxes = flow.boxes.filter(box => box.parent === '1');
-    assert.ok(boxes.every(box => box.x1 - box.x0 >= 14), 'no card is narrower than 14 cells at ' + total);
+    assert.ok(boxes.every(box => box.x1 - box.x0 >= 15), 'no card is narrower than 15 cells at ' + total);
     assert.deepEqual(text(flowAt(plan(wide), total)), lines, 'deterministic at ' + total);
   }
-  // Six siblings sit 3 + 3 at 56 columns with a blank row between the wrapped rows, and all in one row at 120.
+  // Six siblings sit 3 + 3 at 56 columns, the wrapped rows directly below each other (the borders separate the cards), and all in one row at 120.
   const flow56 = rowsOf(56).flow;
   const tops = [...new Set(flow56.boxes.filter(box => box.parent === '1').map(box => box.y0))];
   assert.equal(tops.length, 2);
-  assert.equal(text(flow56)[tops[1]! - 1], '', 'one blank row between the wrapped rows');
+  assert.equal(tops[1]! - tops[0]!, 2, 'no blank row between the wrapped rows');
   assert.equal(new Set(rowsOf(120).flow.boxes.filter(box => box.parent === '1').map(box => box.y0)).size, 1);
-  // Cards of a row are three cells apart.
+  // Cards of a row are two cells apart.
   const first = flow56.boxes.filter(box => box.parent === '1' && box.y0 === tops[0]);
-  assert.deepEqual(first.slice(1).map((box, at) => box.x0 - first[at]!.x1), [3, 3]);
+  assert.deepEqual(first.slice(1).map((box, at) => box.x0 - first[at]!.x1), [2, 2]);
 });
 
 test('layers: a node sits one layer below its deepest sibling prerequisite, in id order', () => {
@@ -64,22 +65,22 @@ test('layers: a node sits one layer below its deepest sibling prerequisite, in i
   assert.deepEqual(flow.order, ['1', '1.1', '1.2', '1.3', '1.4']);
   const lines = text(flow);
   const at = (needle: string) => lines.findIndex(line => line.includes(needle));
-  assert.ok(at('Palette') < at('Contrast') && at('Contrast') <= at('Tokens') && at('Tokens') < at('Preview'));
+  assert.ok(at('Palette') < at('Contra') && at('Contra') <= at('Tokens') && at('Tokens') < at('Preview'));
   assert.ok(lines.every(line => stringWidth(line) <= 33), 'no row is wider than the flow');
 });
 
-test('at 36 columns: two cards share a row, a layer that does not fit wraps with a blank row between, an arrow enters the next layer, no label rows', () => {
+test('at 36 columns: two cards share a row, a layer that does not fit wraps directly below, an arrow enters the next layer, no label rows', () => {
   const flow = flowAt(plan(diamond), 36);
   const lines = text(flow);
   assert.ok(!lines.some(line => /parallel|steps?$/.test(line)), 'no parallel label and no step note rows');
   assert.ok(lines.some(line => line.includes('▼')), 'an arrow enters a layer');
-  assert.ok(lines.some(line => line.includes('Contrast') && line.includes('Tokens')), 'two per row at 36');
-  // Three siblings of one layer: two share a row, the third wraps under the first with one blank row between.
+  assert.ok(lines.some(line => line.includes('Contra') && line.includes('Tokens')), 'two per row at 36');
+  // Three siblings of one layer: two share a row, the third wraps under the first with nothing between.
   const three = flowAt(plan([{title: 'Phase', owner: 'logox', nodes: [{title: 'A', owner: 'kalon'}, {title: 'B', owner: 'techne'}, {title: 'C', owner: 'techne'}]}]), 36);
   const rows = text(three);
   assert.equal(cardRow(rows, 'A'), cardRow(rows, 'B'));
-  assert.equal(cardRow(rows, 'C'), cardRow(rows, 'A') + 3, 'two card rows, one blank row, then the wrapped card');
-  assert.equal(rows[cardRow(rows, 'A') + 2], '');
+  assert.equal(cardRow(rows, 'C'), cardRow(rows, 'A') + 2, 'two card rows, then the wrapped card right below');
+  assert.match(rows[cardRow(rows, 'A') + 1]!, /^╰─ kalon/);
   // 1.4 waits for 1.2 and 1.3, both in the layer above: the arrow says so, no note.
   assert.ok(!lines.some(line => line.includes('↳ after')));
 });
@@ -93,6 +94,7 @@ test('layers are rows, arrows mean then: parallel boxes share a row without an a
   assert.ok(row('C') < row('D'));
   // The bus has rounded corners: both prerequisites join above the target.
   const bus = lines[row('A') + 2]!;
+  assert.match(lines[row('A') + 1]!, /^╰─ kalon .*─╯ +╰─ techne/, 'the cards end in their bottom borders right above the bus');
   assert.match(bus, /^ +╰─+┬─+╯$/, 'both prerequisites join above the target, on the centres of the cards: ' + bus);
   // Where no edge can be drawn between the two rows (the prerequisite sits in another chunk) one arrow is centred.
   const flow = flowAt(plan(wide), 120);
@@ -102,7 +104,7 @@ test('layers are rows, arrows mean then: parallel boxes share a row without an a
   const arrows = between.filter(line => line.includes('▼'));
   assert.equal(arrows.length, 1, 'A is in the first of two wrapped rows, so no bus fits: one centred arrow marks the layer boundary');
   assert.equal(arrows[0]!.trim(), '▼');
-  assert.ok(!between.some(line => /[├┼┤┬┴╭╮╰╯]/.test(line)));
+  assert.ok(!between.some(line => !/[A-Za-z]/.test(line) && /[├┼┤┬┴╭╮╰╯]/.test(line)), 'no bus row (a row of connector marks without a card)');
 });
 
 test('connectors are drawn in the faint line tone with rounded corners, and light up with the hovered node', () => {
@@ -168,10 +170,10 @@ test('children: accepted subtrees start collapsed, others expanded, and a click 
   const open = plan(nodes);
   let lines = text(flowAt(open, 36));
   assert.ok(lines.some(line => line.includes('Leaf a')), 'open by default');
-  assert.ok(lines.some(line => /^▾ One/.test(line)) && lines.some(line => /▌\S Inner +▾ $/.test(line)), 'the fold glyph sits in the header of a phase and at the right end of the title row of a card');
+  assert.ok(lines.some(line => /^▾ One/.test(line)) && lines.some(line => /╭─ \S Inner [─]+ ▾ ─╮$/.test(line)), 'the fold glyph sits in the header of a phase and in the top border of a card');
   assert.ok(!lines.some(line => /steps?$/.test(line)), 'no step note rows');
   lines = text(flowAt(open, 36, new Map([['1.1', false]])));
-  assert.ok(!lines.some(line => line.includes('Leaf a')) && lines.some(line => /▌\S Inner +▸ $/.test(line)));
+  assert.ok(!lines.some(line => line.includes('Leaf a')) && lines.some(line => /╭─ \S Inner [─]+ ▸ ─╮$/.test(line)));
   // A fully accepted phase starts collapsed; opening it shows the children again.
   const accepted = derivePlan({...open, nodes: open.nodes.map(node => ['1.1.1', '1.1.2'].includes(node.id) ? {...node, accepted: {by: 'logox', at: 1, evidence: ['x']}} : node)}, []);
   assert.equal(accepted.nodes.find(node => node.id === '1')!.status, 'accepted');
@@ -181,7 +183,7 @@ test('children: accepted subtrees start collapsed, others expanded, and a click 
   // Nested children are indented by two cells.
   const inner = text(flowAt(open, 36)).find(line => line.includes('Leaf a'))!;
   const outer = text(flowAt(open, 36)).find(line => line.includes('Inner'))!;
-  assert.equal(inner.indexOf('▌') - outer.indexOf('▌'), 2);
+  assert.equal(inner.indexOf('╭') - outer.indexOf('╭'), 2);
 });
 
 test('CJK titles are cut on cell boundaries with an ellipsis and every card row has the same width', () => {
@@ -189,10 +191,9 @@ test('CJK titles are cut on cell boundaries with an ellipsis and every card row 
   const lines = text(flow);
   const top = lines.find(line => line.includes('对比度'))!;
   assert.ok(top.includes('…'), top);
-  const cardRows = lines.filter(line => line.startsWith('▌'));
-  assert.equal(cardRows.length, 2);
-  assert.deepEqual([...new Set(cardRows.map(line => stringWidth(line)))], [33], 'two cards share the whole width (16 + 2 + 15)');
-  assert.equal(fit('对比度算法', 7), '对比度…');
+  const cardRows = lines.filter(line => /^[╭╰]/.test(line));
+  assert.equal(cardRows.length, 2, 'two border rows, both cards side by side');
+  assert.deepEqual([...new Set(cardRows.map(line => stringWidth(line)))], [33], 'two cards share the whole width (16 + 2 + 15)');  assert.equal(fit('对比度算法', 7), '对比度…');
   assert.equal(fit('abc', 3), 'abc');
 });
 
@@ -257,10 +258,10 @@ test('paint: header, progress, fixed width lines, scrolling, hover and selection
   const plainFold = fold(emptyView);
   assert.notEqual(fold({...emptyView, hovered: '1'}), plainFold, 'hover highlights the fold glyph of a phase');
   assert.notEqual(fold({...emptyView, selected: '1'}), plainFold, 'selection marks it too');
-  const bar = (view: Parameters<typeof paint>[0], at = 0) => paint(view).flat().filter(segment => segment.text === '▌')[at]!.color;
-  assert.equal(bar(emptyView), '#336699', 'the bar wears the owner colour');
-  assert.notEqual(bar({...emptyView, hovered: '1.1'}), bar(emptyView), 'hover brightens the bar of a card');
-  assert.equal(bar({...emptyView, selected: '1.1'}), palette.accent, 'selection makes it the accent');
+  const border = (view: Parameters<typeof paint>[0], at = 0) => paint(view).flat().filter(segment => segment.text.startsWith('╭─'))[at]!.color;
+  assert.notEqual(border(emptyView), '#336699', 'the border rests at a faint level of the owner colour');
+  assert.equal(border({...emptyView, hovered: '1.1'}), '#336699', 'hover brings it to the full owner colour');
+  assert.equal(border({...emptyView, selected: '1.1'}), palette.accent, 'selection makes it the accent');
   // The tooltip shows the hovered node's first check, else its note, else a hint.
   assert.match(paint({...emptyView, hovered: '1.2'}).at(-1)!.map(segment => segment.text).join(''), /No check or note yet/);
   assert.match(paint(emptyView, true).at(-1)!.map(segment => segment.text).join(''), /Enter open/);
@@ -405,59 +406,101 @@ function pelicanPlan(work: PlanWork[] = finished, link: Record<string, string[]>
   return derivePlan({...base, nodes: base.nodes.map(node => node.id === '1.3' ? {...node, note: 'Both checks pass; the loop is clean'} : node)}, work);
 }
 
-test('a node is a two-row card: bar, glyph and title over the owner only (no duration, no result), clipped by width', () => {
+test('a node is a two-row rounded card whose borders carry the content: glyph and title on top, owner and meta below (the finished duration, never the result), clipped by width', () => {
   const derived = pelicanPlan();
   const at = (total: number) => {
     const lines = text(flowAt(derived, total));
     return {lines, first: cardRow(lines, 'Draw'), last: cardRow(lines, 'Verify')};
   };
   const wideCards = at(120);
-  assert.match(wideCards.lines[wideCards.first]!, /^▌◉ Draw the coastal pelican/);
-  assert.match(wideCards.lines[wideCards.first + 1]!, /^▌ kalon {3,}▌ techne\s*$/, 'a done card says only its owner');
-  assert.match(wideCards.lines[wideCards.last + 1]!, /^▌ aletheia\s*$/, 'no result, no duration');
+  assert.match(wideCards.lines[wideCards.first]!, /^╭─ ◉ Draw the coastal pelican [─]+╮ +╭─ ◉ Build the ride animation [─]+╮$/);
+  assert.match(wideCards.lines[wideCards.first + 1]!, /^╰─ kalon [─]+ 3m12s ─╯ +╰─ techne [─]+ 4m05s ─╯$/, 'a done card: owner left, finished duration right');
+  assert.match(wideCards.lines[wideCards.last + 1]!, /^╰─ aletheia [─]+ 2m ─╯$/, 'the duration, no result');
   for (const total of [36, 50, 56, 120]) {
     const {lines} = at(total);
     assert.ok(lines.every(line => stringWidth(line) <= total - 3), 'inside the panel at ' + total);
     assert.ok(lines.every(line => !/\d\.\d/.test(line)), 'no node id at ' + total);
-    assert.ok(lines.every(line => !/\dm\d|\dm\b|Both checks/.test(line)), 'no duration or result on a card at ' + total);
+    assert.ok(lines.every(line => !/Both checks/.test(line)), 'no result on a card at ' + total);
+    assert.ok(lines.filter(line => /^[╭╰]/.test(line)).every(line => /[╮╯]$/.test(line)), 'every border row of a card ends in its corner at ' + total);
   }
   const narrow = at(36);
-  assert.match(narrow.lines[narrow.first]!, /^▌◉ Draw the c… {4}▌◉ Build the … $/, 'a trailing cell, the 3-cell gap');
-  // Waiting: a blocked node names who it waits for.
+  assert.match(narrow.lines[narrow.first]!, /^╭─ ◉ Draw t… ─+╮ {2}╭─ ◉ Build… ─+╮$/, 'two cards, the 2-cell gap: ' + narrow.lines[narrow.first]);
+  // Waiting: a blocked node names who it waits for; a pending node has the empty glyph.
   const blocked = text(flowAt(pelicanPlan([], undefined), 120));
-  assert.match(blocked[cardRow(blocked, 'Verify') + 1]!, /^▌ aletheia · blocked by kalon, techne/);
-  assert.match(blocked[cardRow(blocked, 'Verify')]!, /^▌○ /, 'pending glyph');
-  // Running: the owner and a live clock placeholder.
+  assert.match(blocked[cardRow(blocked, 'Verify') + 1]!, /^╰─ aletheia [─]+ blocked by kalon, techne ─╯$/);
+  assert.match(blocked[cardRow(blocked, 'Verify')]!, /^╭─ ○ /, 'pending glyph');
+  // Running: the owner and a live clock placeholder in the right of the border.
   const running = flowAt(pelicanPlan([{id: 'a', status: 'running', startedAt: 1}], {'1.1': ['a']}), 120);
   const row2 = running.rows.find(row => row.some(item => item.text === 'kalon'))!;
   assert.ok(row2.some(item => item.clock !== undefined), 'a running card carries the clock');
-  assert.equal(row2.filter(item => item.text === ' · ').length, 1, 'owner and clock only');
-  // A parent shows no child progress on row 2 (the fold glyph tells it is a parent).
+  assert.equal(row2.find(item => item.clock !== undefined)!.text.length, 5);
+  // A parent shows no child progress on its card (the fold glyph tells it is a parent).
   const nested = text(flowAt(plan([{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf', owner: 'automa'}]}]}]), 50));
   assert.ok(nested.every(line => !/techne.*\d\/\d/.test(line)), 'no 1/1 on the card');
 });
 
-test('a card: the bar wears the owner colour, the title cell carries the node id; an interrupted node stays muted with a faint title; a parent has its fold glyph at the right end; a fork keeps its mark', () => {
+test('the bottom border per state: running clock, blocked or waiting reason, finished duration, failed, interrupted; workers after the owner; a fork keeps its mark', () => {
+  const bottom = (derived: ReturnType<typeof plan>, title: string, total = 120) => { const lines = text(flowAt(derived, total)); return lines[cardRow(lines, title) + 1]!; };
+  const base = (work: PlanWork[], link: Record<string, string[]> = {'1.1': ['a']}) => pelicanPlan(work, link);
+  assert.match(bottom(base([{id: 'a', status: 'running', startedAt: 1}]), 'Draw'), /^╰─ kalon [─]+ {7}─╯/, 'running: a 5-cell clock placeholder, a space either side');
+  assert.match(bottom(base([{id: 'a', status: 'completed', durationMs: 45_000}]), 'Draw'), /^╰─ kalon [─]+ 45s ─╯/);
+  assert.match(bottom(base([{id: 'a', status: 'failed', durationMs: 1000}]), 'Draw'), /^╰─ kalon [─]+ failed ─╯/);
+  assert.match(bottom(base([{id: 'a', status: 'cancelled', unfinished: true}]), 'Draw'), /^╰─ kalon [─]+ interrupted ─╯/);
+  assert.match(bottom(base([], {}), 'Draw'), /^╰─ kalon [─]+─╯/, 'a ready node has no meta');
+  const waiting = base([{id: 'a', status: 'running', startedAt: 1}]);
+  assert.match(bottom(waiting, 'Verify'), /^╰─ aletheia [─]+ blocked by kalon, techne ─╯$/);
+  const forked = base([{id: 'a', status: 'running', startedAt: 1, fork: true}]);
+  assert.match(bottom(forked, 'Draw'), /^╰─ kalon ⑂ [─]+/, 'a fork');
+  const workers = plan([{title: 'Phase', owner: 'logox', nodes: [{title: 'Scan', owner: 'techne'}]}], [{id: 'a/T1', status: 'completed'}, {id: 'a/T2', status: 'running'}, {id: 'a/T3', status: 'completed'}], {'1.1': ['a/T1', 'a/T2', 'a/T3']});
+  assert.match(bottom(workers, 'Scan', 56), /^╰─ techne ◦3 [─]+/, 'the worker count follows the owner');
+  // A card that is narrow drops the meta whole before the owner is touched, then the workers; the owner is only clipped.
+  for (const total of [36, 50, 56, 120]) {
+    const lines = text(flowAt(base([{id: 'a', status: 'completed', durationMs: 192_000}, {id: 'b', status: 'completed', durationMs: 245_000}, {id: 'c', status: 'running', startedAt: 1}], {'1.1': ['a'], '1.2': ['b'], '1.3': ['c']}), total));
+    const row = lines[cardRow(lines, 'Verify') + 1]!;
+    assert.ok(row.startsWith('╰─ aletheia'), 'the owner is intact at ' + total + ': ' + row);
+    assert.ok(stringWidth(row) <= total - 3);
+  }
+  const tight = text(flowAt(base([{id: 'a', status: 'completed', durationMs: 192_000}]), 36));
+  assert.match(tight[cardRow(tight, 'Draw') + 1]!, /^╰─ kalon ─+╯ {2}╰─ techne ─+╯$/, 'the 3m12s of a 16-cell card does not fit beside the owner and is dropped whole: ' + tight[cardRow(tight, 'Draw') + 1]);
+  const roomy = text(flowAt(base([{id: 'a', status: 'completed', durationMs: 192_000}]), 56));
+  assert.match(roomy[cardRow(roomy, 'Draw') + 1]!, /^╰─ kalon ─+ 3m12s ─╯/, 'and it shows once the card is wide enough');
+  const waits = text(flowAt(pelicanPlan([], undefined), 36));
+  assert.ok(waits.every(line => !line.includes('blocked by') && !line.includes('blocked b')), 'a wait that cannot fit is dropped whole at 36 columns');
+  assert.ok(waits.some(line => /^╰─ aletheia [─]+╯$/.test(line)), 'the owner stays: ' + waits.join('|'));
+});
+
+test('a card carries the fold glyph in its top border: the only fold target, the glyph and a cell either side', () => {
+  const nested = plan([{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf', owner: 'kalon'}]}]}]);
+  const layout = flowAt(nested, 36);
+  const inner = layout.boxes.find(box => box.id === '1.1')!;
+  const top = text(layout)[inner.y0]!;
+  assert.match(top, /╭─ \S Inner [─]+ ▾ ─╮$/);
+  const glyph = top.indexOf('▾');
+  assert.equal(inner.fold!.y, inner.y0, 'on the top border');
+  assert.equal(inner.fold!.x0, glyph - 1); assert.equal(inner.fold!.x1, glyph + 2);
+  assert.equal(inner.x1 - glyph, 4, 'the glyph sits before a space, the last dash and the corner');
+  const leaf = layout.boxes.find(box => box.id === '1.1.1')!;
+  assert.equal(leaf.fold, undefined, 'a leaf has no fold target');
+  assert.ok(!text(layout)[leaf.y0]!.includes('▾'));
+});
+
+test('a card: border cells carry the owner and node, the title cell carries the node id; an interrupted node has a faint border and title', () => {
   const flow = flowAt(pelicanPlan(), 56);
   const first = flow.rows.find(row => row.some(cell => cell.text.includes('Draw')))!.filter(cell => cell.text !== '');
-  assert.equal(first[0]!.text, '▌'); assert.equal(first[0]!.bar, true); assert.equal(first[0]!.owner, 'kalon');
-  assert.equal(first[3]!.title, '1.1', 'the title cell');
+  assert.equal(first[0]!.text, '╭─ '); assert.equal(first[0]!.frame, 'owner'); assert.equal(first[0]!.owner, 'kalon'); assert.equal(first[0]!.node, '1.1');
+  assert.equal(first[2]!.text, ' '); assert.equal(first[3]!.title, '1.1', 'the title cell');
   assert.equal(first[1]!.tone, 'success');
   assert.equal(rowWidth(first), 53, 'two cards and the gap fill the whole flow width');
+  const bottom = flow.rows.find(row => row.some(cell => cell.text === 'kalon'))!;
+  assert.equal(bottom.find(cell => cell.text === 'kalon')!.tone, 'owner');
+  assert.ok(bottom.filter(cell => cell.frame).every(cell => cell.node === '1.1' || cell.node === '1.2'));
   const interrupted = pelicanPlan([{id: 'a', status: 'cancelled', unfinished: true}], {'1.1': ['a']});
   assert.equal(flowAt(interrupted, 56).rows.flat().find(cell => cell.text === '⊘')?.tone, 'muted');
   assert.equal(flowAt(interrupted, 56).rows.flat().find(cell => cell.title === '1.1')?.tone, 'faint', 'the interrupted title recedes');
-  const forked = pelicanPlan([{id: 'a', status: 'running', startedAt: 1, fork: true}], {'1.1': ['a']});
-  assert.ok(text(flowAt(forked, 120)).some(line => /^▌ kalon ⑂ · /.test(line)), 'owner ⑂ for a fork');
-  const nested = plan([{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf', owner: 'automa'}]}]}]);
-  const layout = flowAt(nested, 36);
-  const inner = layout.boxes.find(box => box.id === '1.1')!;
-  const row = layout.rows[inner.y0]!.filter(cell => cell.text !== '');
-  assert.equal(row.at(-2)!.text, '▾'); assert.equal(row.at(-1)!.text, ' ');
-  assert.equal(inner.fold!.x0, inner.x1 - 3, 'the fold target is the glyph (and a cell either side)');
+  assert.equal(flowAt(interrupted, 56).rows.flat().find(cell => cell.text === '╭─ ' && cell.node === '1.1')?.frame, 'faint', 'and so does its border');
 });
 
-test('no fill: no painted sidebar row carries a background, at rest, hovered or selected, and hover and selection recolour the bar and the title only', () => {
+test('no fill: no painted sidebar row carries a background, at rest, hovered or selected, and hover and selection recolour the border and the title only', () => {
   const derived = plan(diamond);
   const flow = flowAt(derived, 56);
   const paint = (view = emptyView) => paintSidebar({plan: derived, flow, view, width: 56, height: 30, focused: false, ownerColor: () => '#336699'});
@@ -465,19 +508,29 @@ test('no fill: no painted sidebar row carries a background, at rest, hovered or 
     assert.ok(paint(view).flat().every(segment => segment.bg === undefined), 'no background colour in any segment');
   }
   const seg = (view: Parameters<typeof paint>[0], needle: string) => paint(view).flat().find(segment => segment.text.includes(needle))!;
-  const bar = (view: Parameters<typeof paint>[0]) => paint(view).flat().find(segment => segment.text === '▌')!;
+  const border = (view: Parameters<typeof paint>[0]) => paint(view).flat().find(segment => segment.text.startsWith('╭─ '))!;
+  const bottom = (view: Parameters<typeof paint>[0]) => paint(view).flat().find(segment => segment.text.startsWith('╰─'))!;
   assert.equal(seg(emptyView, 'Palette').color, palette.fg);
   assert.equal(seg({...emptyView, hovered: '1.1'}, 'Palette').color, palette.strong, 'hover: the title takes the strong tone');
   assert.notEqual(seg({...emptyView, hovered: '1.1'}, 'Palette').bold, true);
   assert.equal(seg({...emptyView, selected: '1.1'}, 'Palette').color, palette.accent, 'selected: bold accent title');
   assert.equal(seg({...emptyView, selected: '1.1'}, 'Palette').bold, true);
   assert.equal(seg({...emptyView, hovered: '1.1'}, 'Contrast').color, palette.fg, 'another card keeps its colour');
-  assert.equal(bar(emptyView).color, '#336699');
-  assert.notEqual(bar({...emptyView, hovered: '1.1'}).color, '#336699', 'hover brightens the bar');
-  assert.equal(bar({...emptyView, selected: '1.1'}).color, palette.accent, 'selection makes the bar accent');
-  // Between two cards of a row: three bare cells.
+  assert.notEqual(border(emptyView).color, '#336699', 'at rest the border is the owner colour at a faint level');
+  assert.notEqual(border(emptyView).color, palette.fg);
+  assert.equal(border({...emptyView, hovered: '1.1'}).color, '#336699', 'hover: the full owner colour');
+  assert.equal(border({...emptyView, selected: '1.1'}).color, palette.accent, 'selection makes the border accent');
+  assert.equal(bottom({...emptyView, selected: '1.1'}).color, palette.accent, 'the bottom border too');
+  assert.equal(border({...emptyView, hovered: '1.2'}).color, border(emptyView).color, 'another card keeps its border');
+  assert.equal(border({...emptyView, hovered: '1.1', selected: '1.1'}).color, palette.accent, 'selected wins over hovered');
+  // An interrupted card's border is faint, not the owner colour.
+  const interrupted = pelicanPlan([{id: 'a', status: 'cancelled', unfinished: true}], {'1.1': ['a']});
+  const ifl = flowAt(interrupted, 56);
+  const faint = paintSidebar({plan: interrupted, flow: ifl, view: emptyView, width: 56, height: 30, focused: false, ownerColor: () => '#336699'}).flat().find(segment => segment.text.startsWith('╭─ '))!;
+  assert.equal(faint.color, faintColor());
+  // Between two cards of a row: two bare cells.
   const row = paint().find(line => line.some(segment => segment.text.includes('Contrast')))!;
-  assert.match(row.map(segment => segment.text).join(''), /Contrast.*\s{3}▌/);
+  assert.match(row.map(segment => segment.text).join(''), /Contrast.*╮ {2}╭─/);
 });
 
 test('the tooltip carries what the card leaves out: title, status, duration and summary', () => {
@@ -497,25 +550,26 @@ test('a phase header counts in a muted tone, failed and interrupted included', (
   assert.match(counts.text, /^\d\/3 · 1 interrupted$/); assert.equal(counts.tone, 'muted');
 });
 
-test('clicks: the owner name on row 2 jumps to the actor, the bar and the title select, the fold glyph at the right end of a parent folds; a card hit box covers the bar', () => {
+test('clicks: the owner name in the bottom border jumps to the actor, the border and the title select, the fold glyph in the top border of a parent folds; a card hit box covers both borders', () => {
   const nested = plan([{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf', owner: 'kalon'}]}, {title: 'Side', owner: 'kalon'}]}]);
   const flow = flowAt(nested, 50), geometry = sidebarGeometry(30);
   const inner = flow.boxes.find(box => box.id === '1.1')!;
   const press = (x: number, y: number, time = 0) => stepMouse(flow, emptyView, geometry, {x: x + 2, y: geometry.header + y, action: 'press'}, time);
   assert.equal(inner.y1 - inner.y0, 1, 'two rows');
-  assert.equal(inner.owner.y, inner.y0 + 1, 'the owner is on row 2');
-  assert.equal(inner.owner.x0, 2);
+  assert.equal(inner.owner.y, inner.y0 + 1, 'the owner is in the bottom border');
+  assert.equal(inner.owner.x0, inner.x0 + 3, 'after the corner, a dash and a space');
+  assert.equal(inner.owner.x1 - inner.owner.x0, 'techne'.length);
   assert.deepEqual(press(inner.owner.x0, inner.owner.y).effects, [{kind: 'focus'}, {kind: 'owner', id: '1.1'}]);
   assert.deepEqual(press(inner.owner.x1 - 1, inner.owner.y).effects, [{kind: 'focus'}, {kind: 'owner', id: '1.1'}]);
-  assert.deepEqual(press(inner.owner.x0, inner.y0).effects, [{kind: 'focus'}], 'the title row selects');
+  assert.deepEqual(press(inner.owner.x0, inner.y0).effects, [{kind: 'focus'}], 'the top border selects');
   assert.equal(press(inner.owner.x0, inner.y0).view.selected, '1.1');
-  assert.equal(press(0, inner.y0).view.selected, '1.1', 'the bar belongs to the card');
-  assert.equal(press(0, inner.y1).view.selected, '1.1');
-  assert.deepEqual(press(inner.owner.x1 + 1, inner.owner.y).effects, [{kind: 'focus'}], 'the rest of row 2 selects');
-  const fold = press(inner.x1 - 2, inner.y0);
+  assert.equal(press(inner.x0, inner.y0).view.selected, '1.1', 'the corner belongs to the card');
+  assert.equal(press(inner.x0, inner.y1).view.selected, '1.1');
+  assert.deepEqual(press(inner.owner.x1 + 1, inner.owner.y).effects, [{kind: 'focus'}], 'the rest of the bottom border selects');
+  const fold = press(inner.fold!.x0 + 1, inner.y0);
   assert.equal(fold.view.expanded.get('1.1'), false, 'the fold glyph folds');
   assert.equal(fold.view.lastClick, undefined);
-  assert.equal(press(inner.x1 - 6, inner.y0).view.expanded.get('1.1'), undefined, 'the title does not');
+  assert.equal(press(inner.fold!.x0 - 4, inner.y0).view.expanded.get('1.1'), undefined, 'the title does not');
 });
 
 test('the cards of a printed row share the full width: a lone card is the whole width, two are halves, three thirds; connectors land on the centres of the actual cards', () => {
@@ -526,19 +580,28 @@ test('the cards of a printed row share the full width: a lone card is the whole 
   };
   const n = (count: number): NewNode[] => Array.from({length: count}, (_, i) => ({title: 'Step ' + (i + 1), owner: 'kalon'}));
   assert.deepEqual(sizes(n(1), 56).rows, [[53]]);
-  assert.deepEqual(sizes(n(2), 56).rows, [[25, 25]], 'two cards: 53 minus the gap, halves');
-  assert.deepEqual(sizes(n(3), 56).rows, [[16, 16, 15]], 'thirds; the remainder goes to the first cards');
-  assert.deepEqual(sizes(n(4), 56).rows, [[25, 25], [25, 25]], 'four wrap evenly, 2 + 2');
+  assert.deepEqual(sizes(n(2), 56).rows, [[26, 25]], 'two cards: 53 minus the gap, halves');
+  assert.deepEqual(sizes(n(3), 56).rows, [[17, 16, 16]], 'thirds; the remainder goes to the first cards');
+  assert.deepEqual(sizes(n(4), 56).rows, [[26, 25], [26, 25]], 'four wrap evenly, 2 + 2');
   // The pelican shape: a layer of two above a layer of three keeps each row full width.
   const after = ['1.1', '1.2'];
   const mixed = sizes([...n(2), {title: 'Third', owner: 'techne', after}, {title: 'Fourth', owner: 'techne', after}, {title: 'Fifth', owner: 'techne', after}], 56);
-  assert.deepEqual(mixed.rows, [[25, 25], [16, 16, 15]]);
+  assert.deepEqual(mixed.rows, [[26, 25], [17, 16, 16]]);
   // Each connector stem is under the centre of its card.
-  const bus = text(mixed.flow).find(line => line.includes('╭') && line.includes('╮'))!;
+  const bus = text(mixed.flow).find(line => line.includes('╭') && line.includes('╮') && !/[A-Za-z]/.test(line))!;
   const boxes = mixed.flow.boxes.filter(box => box.parent === '1');
   const centre = (id: string) => { const box = boxes.find(item => item.id === id)!; return box.x0 + Math.floor((box.x1 - box.x0) / 2); };
   assert.equal(bus[centre('1.1')], '┴', 'a source stem under the first card centre'); assert.equal(bus[centre('1.2')], '┴', 'and under the second');
   assert.equal(bus.indexOf('╭'), centre('1.3')); assert.equal(bus.lastIndexOf('╮'), centre('1.5'), 'targets on the centres of the three cards below');
+  // The stems leave the bottom border of the source cards and the arrows land on the top border of the targets, both at the card centres.
+  const all = text(mixed.flow), busAt = all.indexOf(bus);
+  const above = all[busAt - 1]!, arrows = all[busAt + 1]!, below = all[busAt + 2]!;
+  for (const id of ['1.1', '1.2']) assert.match(above[centre(id)]!, /[─\s\S]/, 'inside the bottom border of ' + id), assert.ok(above[centre(id)] !== ' ', 'the source card has border under its centre: ' + id);
+  for (const id of ['1.3', '1.4', '1.5']) {
+    assert.equal(arrows[centre(id)], '▼', 'an arrow over the centre of ' + id);
+    assert.ok(below[centre(id)] !== ' ' && below[centre(id)] !== undefined, 'the arrow points at the top border of ' + id);
+    assert.ok(below[centre(id) - 1] !== ' ' && below[centre(id) + 1] !== ' ');
+  }
 });
 
 test('a result that is only an echoed Goal line or message envelope is never shown on a card', () => {

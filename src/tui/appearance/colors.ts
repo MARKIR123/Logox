@@ -21,8 +21,8 @@ export const QUIET_RAIL = 0.55;
 export const quietRail = (color: string): string => mixHex(color, palette.bg, QUIET_RAIL);
 /** Faint text: muted mixed toward the background (line numbers, durations, overflow hints). */
 export const faintColor = (): string => mixHex(palette.muted, palette.bg, 0.6);
-/** The owner colour of a task-sidebar card's left bar, lifted toward the strong text colour while hovered (the cards have no fill). */
-export const brightBar = (color: string): string => /^#[\da-f]{6}$/i.test(color) && /^#[\da-f]{6}$/i.test(palette.strong) ? mixHex(palette.strong, color, 0.4) : color;
+/** The border of a task-sidebar card at rest: the owner colour mixed toward the background (hover lifts it to the full owner colour). */
+export const frameColor = (color: string): string => /^#[\da-f]{6}$/i.test(color) ? mixHex(color, palette.bg, 0.5) : color;
 /** Mix share of the owner color per nesting depth: depth 1 is a block on the surface, deeper blocks step up so a child stays distinguishable from its parent. */
 export const TINT_STEPS: readonly number[] = [0.06, 0.11, 0.16];
 /** Expanded-card tint: the owning actor color mixed into the background by nesting depth (1 = outermost open card); background color only ever means "expanded". */

@@ -116,7 +116,7 @@ test('with no plan the task graph is reachable through /tasks; a double click op
     const click = async (needle: string, x0 = 79) => {const {x, y} = find(needle, x0); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
     /** A click on the title row of a card (the tooltip row repeats the title of the hovered node, so a plain text search would find that). */
     const clickCard = async (title: string) => {
-      const pattern = new RegExp('▌\\S ' + title), y = output.lines.findIndex(line => pattern.test(line.slice(79)));
+      const pattern = new RegExp('╭─ \\S ' + title), y = output.lines.findIndex(line => pattern.test(line.slice(79)));
       assert.ok(y >= 0, title + ' card on screen:\n' + screen());
       const x = 79 + output.lines[y]!.slice(79).search(pattern) + 3;
       await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);
@@ -125,15 +125,15 @@ test('with no plan the task graph is reachable through /tasks; a double click op
     assert.ok(!/no plan/.test(screen()), 'a session without a plan does not open the sidebar by itself');
     assert.match(screen(), /▸ Tasks \d+\/\d+/, 'the footer chip offers it');
     await act(async () => {await app.submit('/tasks');}); await instance.waitUntilRenderFlush();
-    await waitFor(() => sidebar(), text => /Tasks · no plan/.test(text) && /▌\S Build the parser/.test(text) && /▌\S Polish the output/.test(text), {label: 'the task graph of the work'});
-    assert.match(sidebar(), /▌\S Find the callers/);
+    await waitFor(() => sidebar(), text => /Tasks · no plan/.test(text) && /╭─ \S Build/.test(text) && /╭─ \S Polish/.test(text), {label: 'the task graph of the work'});
+    assert.match(sidebar(), /╭─ \S Find/);
     assert.doesNotMatch(sidebar(), /\b\d+(\.\d+)+\b/, 'no node id on the sidebar');
-    await clickCard('Build the parser'); await clickCard('Build the parser');
+    await clickCard('Build'); await clickCard('Build');
     await waitFor(() => screen(), text => /Assignment/.test(text) && /src\/parser/.test(text), {label: 'the delegation detail'});
     assert.match(screen(), /o Open conversation/);
     await send('\x1b');
-    await waitFor(() => screen(), text => !/Assignment/.test(text) && /▌\S Polish the output/.test(sidebar()), {label: 'back on the sidebar'});
-    await clickCard('Build the parser'); await clickCard('Build the parser');
+    await waitFor(() => screen(), text => !/Assignment/.test(text) && /╭─ \S Polish/.test(sidebar()), {label: 'back on the sidebar'});
+    await clickCard('Build'); await clickCard('Build');
     await waitFor(() => screen(), text => /o Open conversation/.test(text), {label: 'the detail page again'});
     await click('o Open conversation', 0);
     await waitFor(() => surface(app), current => current === null, {label: 'the page closed'});

@@ -9,7 +9,7 @@
  */
 import stringWidth from 'string-width';
 import type {DerivedPlan, LeafProgress} from '../../runtime/plan.js';
-import {brightBar, faintColor} from '../appearance/colors.js';
+import {faintColor, frameColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
 import {fit, flowHit, formatTook, perFit, resultText, type FlowCell, type FlowLayout, type FlowOptions, type FlowRow, type FlowTone} from './plan-flow.js';
@@ -36,7 +36,7 @@ export const clampSidebarWidth = (requested: number, width: number): number => M
 export const sidebarWidth = (width: number, preferred?: number): number => preferred === undefined ? defaultSidebarWidth(width) : clampSidebarWidth(preferred, width);
 /** The sidebar width while its border is dragged to terminal column `x` (the sidebar spans the right-hand `width - x` columns). */
 export const dragWidth = (width: number, x: number): number => clampSidebarWidth(width - x, width);
-/** The flow width of a panel `width` cells wide and how many cards a row may hold there (`perFit`): 2 at 36..49 columns, 3 from 50, more in a full-screen view. */
+/** The flow width of a panel `width` cells wide and how many cards a row may hold there (`perFit`): 2 at 36..51 columns, 3 from 52, more in a full-screen view. */
 export const flowOptionsFor = (width: number): Pick<FlowOptions, 'width' | 'perRow'> => ({width: width - CONTENT_X - 1, perRow: perFit(width - CONTENT_X - 1)});
 
 /** What a panel draws: the session's task graph with its plan, the task graph of a session without a plan (`work`), or a plan of an earlier session (read-only). */
@@ -135,16 +135,16 @@ function toneColor(tone: FlowTone): string {
 function segmentOf(cell: FlowCell, input: PaintInput): SideSegment {
   const {hovered, selected} = input.view;
   let color: string;
-  // A card has no fill. Its bar: the owner's colour, accent when selected, brighter on hover. Its title: brighter on hover, bold accent when selected.
+  // A card has no fill. Its border: the owner's colour at a faint level, the full owner colour on hover, accent when selected. Its title: strong on hover, bold accent when selected.
   let bold = false;
-  if (cell.bar) color = cell.node === selected ? palette.accent : cell.node === hovered ? brightBar(input.ownerColor(cell.owner ?? '')) : input.ownerColor(cell.owner ?? '');
+  if (cell.frame) color = cell.node === selected ? palette.accent : cell.node === hovered ? input.ownerColor(cell.owner ?? '') : cell.frame === 'faint' ? faintColor() : frameColor(input.ownerColor(cell.owner ?? ''));
   else if (cell.title !== undefined && (cell.title === selected || cell.title === hovered)) {
     color = cell.title === selected ? palette.accent : palette.strong; bold = cell.title === selected;
   } else if (cell.tone === 'owner') color = input.ownerColor(cell.owner ?? '');
   else if (cell.node !== undefined) color = cell.node === hovered ? palette.accent : cell.node === selected ? palette.strong : toneColor(cell.tone);
   else if (cell.links && hovered !== undefined && cell.links.includes(hovered)) color = palette.accent;
   else color = toneColor(cell.tone);
-  return {text: cell.text, color, ...(bold || cell.bold || !cell.bar && cell.node !== undefined && cell.node === selected ? {bold: true} : {}), ...(cell.italic ? {italic: true} : {}),
+  return {text: cell.text, color, ...(bold || cell.bold || !cell.frame && cell.node !== undefined && cell.node === selected ? {bold: true} : {}), ...(cell.italic ? {italic: true} : {}),
     ...(cell.clock !== undefined ? {clock: cell.clock} : {})};
 }
 function merge(segments: readonly SideSegment[]): SideSegment[] {
