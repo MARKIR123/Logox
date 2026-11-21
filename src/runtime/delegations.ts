@@ -77,6 +77,8 @@ export function endedWithoutResult(item: Pick<Delegation, 'status' | 'stopReason
   return item.stopReason !== undefined ? UNFINISHED_STOPS.has(item.stopReason) && item.status !== 'completed' && item.status !== 'done' : UNFINISHED_STATUS.has(item.status);
 }
 /** The text without its leading `⏵ ...` status lines (a companion opens each reply with one; it says what the reply is doing, not what it found). */
+/** Text that begins with the echoed input instead of a result: `Goal: …` (the fallback report) or a `[Message from X · …]` / `[Interrupt from X]` envelope. */
+export const isEnvelope = (text: string): boolean => /^\s*(?:Goal:\s*)?\[(?:Message|Interrupt) from /i.test(text) || /^\s*Goal:\s/.test(text);
 export function withoutStatusLine(text: string): string {
   const lines = text.split('\n');
   while (lines.length) {
@@ -153,7 +155,9 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
     const durationMs = startedAt === undefined ? undefined : Math.max(0, (finishedAt ?? (settled ? startedAt : now)) - startedAt);
     // The structured summary (the model's round summary line) when there is one, else the report without its status line, else what the activity last said.
     const written = recorded?.source === 'model';
-    const summary = oneLine(written ? recorded!.title : withoutStatusLine(recorded?.report ?? '') || activity.diagnostic || spoken.get(activity.activityId) || recorded?.title || '');
+    // A text that is only the input echoed back (the `Goal:` line of the fallback report, a `[Message from X · …]` envelope) says nothing about the result: the next candidate is used.
+    const candidates = written ? [recorded!.title] : [withoutStatusLine(recorded?.report ?? ''), activity.diagnostic, spoken.get(activity.activityId), recorded?.title];
+    const summary = oneLine(candidates.find(text => text && !isEnvelope(text)) ?? '');
     nodes.push({
       id: activity.activityId, kind: isDirector(activity.ownerId) ? 'director' : 'actor', ownerId: activity.ownerId, title: activity.taskTitle ?? activity.title, status: activity.status,
       ...(parentId ? {parentId} : {}), rootId, children: [], blockedBy, ...(follows.length ? {after: follows} : {}), ...(activity.batchId ? {batchId: activity.batchId} : {}), ...(waiting ? {waiting} : {}),

@@ -21,6 +21,23 @@ export const QUIET_RAIL = 0.55;
 export const quietRail = (color: string): string => mixHex(color, palette.bg, QUIET_RAIL);
 /** Faint text: muted mixed toward the background (line numbers, durations, overflow hints). */
 export const faintColor = (): string => mixHex(palette.muted, palette.bg, 0.6);
+/**
+ * The background of a task-sidebar card cell: at rest a faint share of the foreground mixed into the background, hovered and selected a deeper share of the
+ * accent. Only the resting tint follows `Tool card tint` (none = no fill); a hover or selection always shows. Derived from palette tokens only, so every theme
+ * works; a palette that is not 6-digit hex (nothing to mix) gets no tint.
+ */
+export const CARD_TINT = {rest: 0.07, hover: 0.15, selected: 0.22} as const;
+export function cardTint(state: keyof typeof CARD_TINT): string | undefined {
+  const hex = /^#[\da-f]{6}$/i;
+  if (!hex.test(palette.bg) || !hex.test(palette.fg) || !hex.test(palette.accent)) return undefined;
+  if (state === 'rest') {
+    const scale = toolTintScale[uiSettings().toolTint];
+    return scale > 0 ? mixHex(palette.fg, palette.bg, CARD_TINT.rest * scale) : undefined;
+  }
+  return mixHex(palette.accent, palette.bg, CARD_TINT[state]);
+}
+/** The owner colour of a card's left bar, lifted toward the strong text colour while hovered. */
+export const brightBar = (color: string): string => /^#[\da-f]{6}$/i.test(color) && /^#[\da-f]{6}$/i.test(palette.strong) ? mixHex(palette.strong, color, 0.4) : color;
 /** Mix share of the owner color per nesting depth: depth 1 is a block on the surface, deeper blocks step up so a child stays distinguishable from its parent. */
 export const TINT_STEPS: readonly number[] = [0.06, 0.11, 0.16];
 /** Expanded-card tint: the owning actor color mixed into the background by nesting depth (1 = outermost open card); background color only ever means "expanded". */

@@ -186,8 +186,8 @@ test('the mouse opens a plan node\'s detail from the sidebar and a click on a li
     const screen = () => output.lines.join('\n');
     const find = (needle: string) => {const y = output.lines.findLastIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle)};};
     const click = async (needle: string) => {const {x, y} = find(needle); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
-    await waitFor(() => screen(), text => /╭ Palette/.test(text) && /Ship/.test(text), {label: 'the sidebar'});
-    await click('╭ Palette'); await click('╭ Palette');
+    await waitFor(() => screen(), text => /▌\S Palette/.test(text) && /Ship/.test(text), {label: 'the sidebar'});
+    await click('Palette'); await click('Palette');
     await waitFor(() => screen(), text => /Acceptance/.test(text) && /all colours named/.test(text), {label: 'the detail page'});
     await click('Open Techne');
     await waitFor(() => screen(), text => /Assignment/.test(text) && /Build the palette/.test(text), {label: 'the delegation detail'});

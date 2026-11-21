@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {activitySchema, type AutomaSwarm} from '../src/runtime/contracts.js';
-import {activityCosts, delegationRows, projectDelegations, type Delegation} from '../src/runtime/delegations.js';
+import {activityCosts, delegationRows, isEnvelope, projectDelegations, type Delegation} from '../src/runtime/delegations.js';
 
 const base = {sessionId: 's', stage: '', detail: ''};
 /** The two-companion dispatch of one Director round: Techne builds, Kalon runs `after` Techne; Techne also dispatched Automa jobs. */
@@ -109,6 +109,20 @@ test('older records without the new fields project: no stop reason, no duration,
   // A stored record with none of the new fields still parses.
   const parsed = activitySchema.parse({sessionId: 's', activityId: 'x', ownerId: 'techne', kind: 'actor', title: 't', status: 'completed', stage: '', detail: '', version: 1});
   assert.equal(parsed.stopReason, undefined);
+});
+
+test('a result summary never starts with the echoed input: the Goal line of the fallback report and a message envelope give way to the next candidate, else nothing', () => {
+  const store = new RuntimeStore();
+  const done = {...base, kind: 'actor' as const, status: 'completed' as const, stage: 'Completed', stopReason: 'completed' as const};
+  store.activities.create({...done, activityId: 'a', ownerId: 'techne', title: 'Techne · Builder', taskTitle: 'Echo',
+    summary: {title: 'Goal: [Message from aletheia · check the bell]', source: 'local', report:'Goal: [Message from aletheia · check the bell]\nStatus: done'}} as never);
+  store.activities.create({...done, activityId: 'b', ownerId: 'kalon', title: 'Kalon · Aesthete', taskTitle: 'Plain',
+    summary: {title: '[Message from aletheia · check]', source: 'local', report:'[Message from aletheia · check]\nplease'}} as never);
+  store.message('s', 'techne', 'assistant', 'The bell is fixed.', {activityId: 'a'});
+  const nodes = project(store);
+  assert.equal(byId(nodes, 'a').result?.summary, 'The bell is fixed.', 'the next candidate: what the activity last said');
+  assert.equal(byId(nodes, 'b').result?.summary, '', 'nothing when only the envelope is left');
+  assert.ok(isEnvelope('Goal: [Message from x]\nhi') && isEnvelope('[Interrupt from x]') && isEnvelope('Goal: fix it') && !isEnvelope('Fixed the bell.'));
 });
 
 test('activityCosts sums the priced USD turns of each activity from the ledger', () => {

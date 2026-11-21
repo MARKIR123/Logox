@@ -309,6 +309,7 @@ export function applyPlanOps(plan: Plan | undefined, ops: readonly PlanOp[], act
 // ---------------------------------------------------------------------------------------------------------------------------------- linked work
 /** One unit of work a node can be linked to: a delegation record (`delegations.ts:Delegation` has this shape). */
 export interface PlanWork {readonly id: string; readonly status: string; /** When the work started, if known (a delegation record's `startedAt`). */ readonly startedAt?: number | undefined;
+  /** How long the work took, once it has ended (a delegation record's `durationMs`). */ readonly durationMs?: number | undefined;
   /** The work is a fork (a copy of its dispatcher). */ readonly fork?: boolean | undefined;
   /** The work ended without a result of its own (`delegations.ts:endedWithoutResult`): a failure is then read as `interrupted`. */ readonly unfinished?: boolean | undefined}
 export type WorkPhase = 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
@@ -340,6 +341,8 @@ export interface DerivedNode extends PlanNode {
   readonly forked?: true;
   /** When the earliest work still running for this node (or, for a parent, below it) started; absent when nothing runs or no start is known. The sidebar's elapsed clock. */
   readonly runningSince?: number;
+  /** The time (ms) the node's own finished work took, summed; absent while nothing linked has ended or no duration is known. The sidebar card's duration. */
+  readonly took?: number;
 }
 export interface DerivedPlan extends Omit<Plan, 'nodes'> {
   readonly nodes: readonly DerivedNode[];
@@ -424,6 +427,11 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
       for (let at: string | undefined = node.id; at !== undefined; at = parentOf(at)) since.set(at, Math.min(since.get(at) ?? Infinity, started));
     }
   }
+  const durations = new Map(work.flatMap(item => item.durationMs === undefined ? [] : [[item.id, item.durationMs] as const]));
+  const tookOf = (node: PlanNode): number | undefined => {
+    const ended = linkedWork(node, work).filter(item => item.phase !== 'running' && item.phase !== 'waiting' && durations.has(item.id));
+    return ended.length ? ended.reduce((sum, item) => sum + durations.get(item.id)!, 0) : undefined;
+  };
   const leavesOf = (id: string): PlanNode[] => (kids.get(id) ?? []).filter(child => !child.abandoned).flatMap(child => (kids.get(child.id) ?? []).some(grand => !grand.abandoned) ? leavesOf(child.id) : [child]);
   const derived: DerivedNode[] = nodes.map(node => {
     const parent = parentOf(node.id);
@@ -433,7 +441,8 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
       done: list.filter(child => statuses.get(child.id) === 'accepted' || statuses.get(child.id) === 'done').length, total: list.length});
     return {...node, status: statusOf(node.id)!, depth: depthOf(node.id), ...(parent !== undefined ? {parent} : {}), children: children.map(child => child.id),
       ...(live.length ? {progress: counts(live), leaves: leafCounts(leavesOf(node.id), statuses)} : {}),
-      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(linkedWork(node, work).some(item => item.fork) ? {forked: true as const} : {}), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {})};
+      blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(linkedWork(node, work).some(item => item.fork) ? {forked: true as const} : {}), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {}),
+      ...(tookOf(node) !== undefined && !since.has(node.id) ? {took: tookOf(node)!} : {})};
   });
   const top = nodes.filter(node => depthOf(node.id) === 1 && !node.abandoned);
   const topCounts = {accepted: top.filter(node => statuses.get(node.id) === 'accepted').length,

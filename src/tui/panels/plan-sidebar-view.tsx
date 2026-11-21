@@ -6,7 +6,7 @@ import {formatClock} from '../terminal/text.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
 
 export function SideLine({line, now = Date.now()}: {line: readonly SideSegment[] | undefined; now?: number}) {
-  return <Text wrap="truncate">{(line ?? []).map((segment, at) => <Text key={at} {...(segment.color ? {color: segment.color} : {})} bold={Boolean(segment.bold)} italic={Boolean(segment.italic)}>
+  return <Text wrap="truncate">{(line ?? []).map((segment, at) => <Text key={at} {...(segment.color ? {color: segment.color} : {})} {...(segment.bg ? {backgroundColor: segment.bg} : {})} bold={Boolean(segment.bold)} italic={Boolean(segment.italic)}>
     {segment.clock === undefined ? segment.text : formatClock(now - segment.clock).padEnd(segment.text.length)}</Text>)}</Text>;
 }
 

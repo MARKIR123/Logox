@@ -150,7 +150,7 @@ export function taskGraph(plan: Pick<Plan, 'id' | 'title' | 'status' | 'createdA
   }
   const nodes: PlanNode[] = [...drafts.values()].map(draft => ({id: draft.id, title: draft.title, owner: draft.owner, after: draft.after, acceptance: draft.acceptance, links: draft.links,
     ...(draft.accepted ? {accepted: draft.accepted} : {}), ...(draft.abandoned ? {abandoned: true} : {}), ...(draft.note ? {note: draft.note} : {})}));
-  const work: PlanWork[] = delegations.map(item => ({id: item.id, status: item.status, startedAt: item.startedAt, ...(item.fork ? {fork: true} : {}), ...(item.unfinished ? {unfinished: true} : {})}));
+  const work: PlanWork[] = delegations.map(item => ({id: item.id, status: item.status, startedAt: item.startedAt, ...(item.durationMs !== undefined ? {durationMs: item.durationMs} : {}), ...(item.fork ? {fork: true} : {}), ...(item.unfinished ? {unfinished: true} : {})}));
   const live = delegations.some(item => ['running', 'queued', 'waiting_input', 'paused', 'waiting'].includes(item.status));
   const base: Plan = plan
     ? {id: plan.id, title: plan.title, status: plan.status, createdAt: plan.createdAt, updatedAt: plan.updatedAt, sessionId: plan.sessionId, nodes, ...(plan.note ? {note: plan.note} : {})}
