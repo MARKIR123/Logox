@@ -30,7 +30,7 @@ node evals/run.mjs --tasks t1 --keep
 | `--tasks <列表>` | 逗号分隔的任务 ID 或前缀（如 `t1,t4`），默认全部任务 |
 | `--repeat <N>` | 每个任务重复运行次数，默认 `1` |
 | `--label <名称>` | 为本次结果目录命名（`evals/results/<时间>-<label>/`） |
-| `--keep` | 保留复制出的临时工作目录，并在 `summary.md` 末尾列出路径 |
+| `--keep` | 保留复制出的临时工作目录及其 `~/.logox/projects/` 数据，并在 `summary.md` 末尾列出路径；不加时两者都在归档进结果目录后删除 |
 | `--open-terminal` | （Windows）自动打开独立终端窗口实时 `tail` 本次 `live.log` 详细进度 |
 | `--quiet` | 关闭当前终端内的实时任务日志打印（仍写入 `live.log` 和 `progress.log`） |
 | `--provider <名称>` | 透传给 Logox 的 `--provider` |
@@ -66,6 +66,8 @@ node evals/run.mjs --compare automa-v2 automa-v3
 - `<taskId>/progress.log`：Logox `--verbose` 标准错误日志
 - `<taskId>/check.json`：任务检查脚本输出的判定详情
 - `<taskId>/session.json`：从 `~/.logox/projects/<键>/state/sessions/<sessionId>/` 提取的附加遥测（若无会话文件则为 `null`）
+- `<taskId>/logox-data/`：该次运行的完整 Logox 项目数据（`~/.logox/projects/<键>/` 的副本，含所有会话账本），供事后复盘
+- `<taskId>/logox-project/`：临时工作目录里的 `.logox/`（计划、团队笔记等）
 - `<taskId>/screenshot.png`：`t4-visual-card` 由 Playwright 截取的页面截图（仅供人工审阅，不计分）
 - `summary.json` 与 `summary.md`：汇总数据与 Markdown 报告
 

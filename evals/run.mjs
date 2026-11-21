@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {spawn} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync, realpathSync} from 'node:fs';
 import {appendFile, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
@@ -10,6 +10,7 @@ import {runCommand} from './lib/exec.mjs';
 import {initBaselineRepo} from './lib/git.mjs';
 import {computeCompositeScore} from './lib/scoring.mjs';
 import {readSessionMetrics} from './lib/session.mjs';
+import {projectDataDir} from '../scripts/project-data.mjs';
 
 const evalsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(evalsDir, '..');
@@ -73,6 +74,27 @@ function parseJsonLoose(text) {
     }
     return null;
   }
+}
+
+/** The Logox project-data folders a temporary work directory may have been filed under (its path as given and as resolved by the OS). */
+function projectDataDirsFor(workDir) {
+  const paths = new Set([resolve(workDir)]);
+  for (const real of [realpathSync, realpathSync.native]) {
+    try { paths.add(real(workDir)); } catch { /* already removed */ }
+  }
+  return [...new Set([...paths].map(path => projectDataDir(path)))];
+}
+
+/**
+ * Keeps what Logox wrote about a run beside its result (`logox-data/` = the project-data folder with every session ledger, `logox-project/` = the
+ * work directory's `.logox/` with plans and bulletin), so the temporary folders can go.
+ */
+async function archiveRunData(workDir, taskResultDir) {
+  for (const dir of projectDataDirsFor(workDir)) {
+    if (existsSync(dir)) await cp(dir, join(taskResultDir, 'logox-data'), {recursive: true});
+  }
+  const projectLogox = join(workDir, '.logox');
+  if (existsSync(projectLogox)) await cp(projectLogox, join(taskResultDir, 'logox-project'), {recursive: true});
 }
 
 async function setupWorkDir(taskDir, applySolution = false) {
@@ -582,6 +604,7 @@ async function main() {
         }
       } finally {
         if (!keepThisDir) {
+          for (const dir of projectDataDirsFor(workDir)) await rm(dir, {recursive: true, force: true});
           await rm(workDir, {recursive: true, force: true});
         }
       }
