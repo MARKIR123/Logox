@@ -43,7 +43,7 @@ test('blockedBy follows the states: it empties when the blocker ends, and the se
   assert.deepEqual(byId(after, 'kal').waiting, {kind: 'queued', text: 'queued'});
   const tech = byId(after, 'tech');
   assert.equal(tech.stopReason, 'completed');
-  assert.deepEqual({summary: tech.result?.summary, stopReason: tech.result?.stopReason, reportRef: tech.result?.reportRef}, {summary: 'Built it. Tests pass.', stopReason: 'completed', reportRef: 'tech'});
+  assert.deepEqual({summary: tech.result?.summary, stopReason: tech.result?.stopReason, reportRef: tech.result?.reportRef}, {summary: 'Parser built', stopReason: 'completed', reportRef: 'tech'}, 'the structured round summary line');
   assert.equal(typeof tech.result?.finishedAt, 'number');
   assert.equal(typeof tech.durationMs, 'number');
   // The delivery that holds the full report is named instead of the activity id.

@@ -8,7 +8,7 @@
  * footer (a rule and the tooltip line). A screen too short for both drops the rules.
  */
 import stringWidth from 'string-width';
-import type {DerivedPlan} from '../../runtime/plan.js';
+import type {DerivedPlan, LeafProgress} from '../../runtime/plan.js';
 import {faintColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
@@ -53,10 +53,15 @@ export interface SidebarView {
 }
 export const emptyView: SidebarView = {expanded: new Map(), scroll: 0, scrolledAt: -Infinity};
 
-/** Accepted of total work items: the live nodes that have no live children. A synthesized node (nothing accepts it) counts when it is done. */
-export function planProgress(plan: DerivedPlan, synthetic?: ReadonlySet<string>): {readonly accepted: number; readonly total: number} {
-  const leaves = plan.nodes.filter(node => node.status !== 'abandoned' && !node.children.some(id => plan.nodes.find(child => child.id === id)?.status !== 'abandoned'));
-  return {accepted: leaves.filter(node => node.status === 'accepted' || node.status === 'done' && synthetic?.has(node.id)).length, total: leaves.length};
+/**
+ * The outcome of the work items: the live nodes that have no live children (the same leaves a phase counts, `DerivedNode.leaves`, so header and phases agree).
+ * `done` counts accepted and done work alike, failed and interrupted ones are counted apart.
+ */
+export function planProgress(plan: DerivedPlan): LeafProgress {
+  const live = (id: string) => plan.nodes.find(child => child.id === id)?.status !== 'abandoned';
+  const leaves = plan.nodes.filter(node => node.status !== 'abandoned' && !node.children.some(live));
+  const count = (...wanted: string[]) => leaves.filter(node => wanted.includes(node.status)).length;
+  return {done: count('done', 'accepted'), failed: count('failed'), interrupted: count('interrupted'), total: leaves.length};
 }
 
 const maxScroll = (flow: FlowLayout, geometry: SidebarGeometry) => Math.max(0, flow.rows.length - geometry.body);
@@ -168,7 +173,7 @@ export function paintSidebar(input: PaintInput): SideSegment[][] {
   const content = width - CONTENT_X;
   const lines: SideSegment[][] = [];
   const kind = input.kind ?? 'plan';
-  const progress = planProgress(plan, input.synthetic);
+  const progress = planProgress(plan);
   if (geometry.header >= 1) {
     const title: FlowCell[] = kind === 'work'
       ? [{text: 'Tasks', tone: 'strong', bold: true}, {text: ' · no plan', tone: 'muted'}]
@@ -178,11 +183,11 @@ export function paintSidebar(input: PaintInput): SideSegment[][] {
   if (geometry.header >= 2) {
     const tone: FlowTone = plan.status === 'active' ? 'accent' : plan.status === 'done' ? 'success' : 'muted';
     const statusText = kind === 'earlier' ? 'read-only · ' + plan.status : kind === 'work' ? (plan.status === 'active' ? 'working' : 'settled') : plan.status;
-    const head = `${progress.accepted}/${progress.total} ` + (kind === 'work' ? 'done ' : '');
+    const head = `${progress.done}/${progress.total} ` + (kind === 'work' ? 'done ' : '') + (progress.failed ? `· ${progress.failed} failed ` : '');
     const room = Math.min(16, content - statusText.length - 3 - head.length);
     const cells: FlowCell[] = [{text: statusText, tone}, {text: ' · ', tone: 'muted'}, {text: head, tone: 'fg'}];
     if (room >= 4) {
-      const filled = progress.total ? Math.round(room * progress.accepted / progress.total) : 0;
+      const filled = progress.total ? Math.round(room * progress.done / progress.total) : 0;
       cells.push({text: '━'.repeat(filled), tone: 'success'}, {text: '─'.repeat(room - filled), tone: 'line'});
     }
     lines.push(line(input, plain(cells, input)));
@@ -256,7 +261,7 @@ export interface SidebarPointer {
   readonly x: number; readonly y: number;
   readonly action: 'press' | 'move' | 'wheel_up' | 'wheel_down';
 }
-/** Mouse over the sidebar: hover, wheel, click (select and fold), double click (details) and the owner name (jump to its card). */
+/** Mouse over the sidebar: hover, wheel, click (select; the fold glyph folds), double click (details) and the owner name (jump to its card). */
 export function stepMouse(flow: FlowLayout, view: SidebarView, geometry: SidebarGeometry, pointer: SidebarPointer, now: number): SidebarStep {
   const onHeader = pointer.y < geometry.header;
   if (onHeader && (pointer.action === 'move' || pointer.action === 'press')) {
@@ -273,6 +278,7 @@ export function stepMouse(flow: FlowLayout, view: SidebarView, geometry: Sidebar
   if (hit.onOwner) return {view: {...view, selected: hit.box.id, lastClick: undefined}, effects: [...effects, {kind: 'owner', id: hit.box.id}], consumed: true};
   const double = view.lastClick?.id === hit.box.id && now - view.lastClick.time <= DOUBLE_CLICK_MS;
   let next: SidebarView = {...view, selected: hit.box.id, lastClick: double ? undefined : {id: hit.box.id, time: now}};
-  if (hit.box.hasChildren) next = toggled(next, hit.box.id, !hit.box.open);
+  // Only the fold glyph folds: a click anywhere else selects, so the second click of a double click never lands on a layout that moved.
+  if (hit.onFold && hit.box.hasChildren) next = toggled({...next, lastClick: undefined}, hit.box.id, !hit.box.open);
   return {view: next, effects: double ? [...effects, {kind: 'open', id: hit.box.id}] : effects, consumed: true};
 }

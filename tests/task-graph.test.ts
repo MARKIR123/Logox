@@ -49,7 +49,8 @@ test('work only: phases, steps and tasks with owners, after edges, fork marking 
   // Settled work reads done or failed, never accepted.
   const settled = round().map(item => item.id === 'tech' ? {...item, status: 'completed' as const} : item.id === 'tech/T2' ? {...item, status: 'failed' as const} : item.id === 'kal' ? {...item, status: 'completed' as const} : item);
   const after = taskGraph(undefined, settled, 's')!;
-  assert.deepEqual(after.plan.nodes.map(item => item.status), ['failed', 'failed', 'done', 'failed', 'done']);
+  assert.deepEqual(after.plan.nodes.map(item => item.status), ['done', 'done', 'done', 'failed', 'done'], 'result-oriented: the failed worker stays failed, its dispatcher and the phase are done');
+  assert.deepEqual(by(after, '1').leaves, {done: 2, failed: 1, interrupted: 0, total: 3});
   assert.ok(after.plan.nodes.every(item => item.status !== 'accepted'));
   assert.equal(after.plan.status, 'done');
 });

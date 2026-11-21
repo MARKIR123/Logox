@@ -20,6 +20,8 @@ export interface DelegationResult {
   readonly finishedAt?: number;
   /** The delivery that holds the full report (`terminal:<activityId>:<status>`), else the activity id (read it with `ReadActor`). */
   readonly reportRef: string;
+  /** The work wrote a report of its own (a model-written round summary, a worker's summary); absent when the text is the runtime's fallback. */
+  readonly final?: true;
 }
 export type WaitingKind = 'blocked' | 'approval' | 'question' | 'queued' | 'paused';
 export interface Delegation {
@@ -45,6 +47,10 @@ export interface Delegation {
   readonly diagnostic?: string;
   readonly assignment: {readonly title: string; readonly owns: readonly string[]; readonly acceptance: readonly string[]};
   readonly result?: DelegationResult;
+  /** Actors only: the activity this one resumes (`resumeTaskId`), a continuation of the same task. */
+  readonly resumes?: string;
+  /** The work ended without a result of its own (see `endedWithoutResult()`). */
+  readonly unfinished?: true;
   /** Automa jobs only: the job is a fork (a copy of its dispatcher with its whole context), not a worker with a brief. */
   readonly fork?: boolean;
   /** Automa jobs only: the readable worker id (`T1`), the route and the model. */
@@ -59,6 +65,28 @@ export interface Delegation {
 const LIVE: ReadonlySet<string> = new Set(['queued', 'running', 'waiting_input', 'paused']);
 const SETTLED_JOB: ReadonlySet<string> = new Set(['done', 'blocked', 'failed', 'cancelled', 'denied', 'interrupted', 'skipped']);
 const SUMMARY_LIMIT = 400;
+const UNFINISHED_STOPS: ReadonlySet<string> = new Set(['interrupted', 'shutdown', 'stalled', 'cancelled_by_user', 'cancelled_by_director', 'error', 'max_tokens']);
+const UNFINISHED_STATUS: ReadonlySet<string> = new Set(['failed', 'interrupted', 'cancelled']);
+/**
+ * Work that ended without handing back a result: stopped by quota, a timeout, an interrupt or an error (a stop reason of `interrupted`, `shutdown`, `stalled`,
+ * `cancelled_by_*`, `error`, `max_tokens`, or a failed / interrupted / cancelled status when no stop reason was recorded) and carrying no report of its own.
+ * A failure that did report (a model-written summary, a stop reason of `completed` under a failed status) is a result and not unfinished.
+ */
+export function endedWithoutResult(item: Pick<Delegation, 'status' | 'stopReason' | 'result'>): boolean {
+  if (item.result?.final) return false;
+  return item.stopReason !== undefined ? UNFINISHED_STOPS.has(item.stopReason) && item.status !== 'completed' && item.status !== 'done' : UNFINISHED_STATUS.has(item.status);
+}
+/** The text without its leading `⏵ ...` status lines (a companion opens each reply with one; it says what the reply is doing, not what it found). */
+export function withoutStatusLine(text: string): string {
+  const lines = text.split('\n');
+  while (lines.length) {
+    const head = lines[0]!.trim().replace(/^[`*_\s]+/, '');
+    if (head === '') {lines.shift(); continue;}
+    if (!head.startsWith('⏵')) break;
+    lines.shift();
+  }
+  return lines.join('\n').trim();
+}
 const oneLine = (text: string, limit = SUMMARY_LIMIT) => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > limit ? flat.slice(0, limit - 1).trimEnd() + '…' : flat;
@@ -92,6 +120,14 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
   const references = new Map((input.deliveries ?? []).filter(item => item.sourceActivityId && (item.kind === 'report' || item.kind === 'failure')).map(item => [item.sourceActivityId!, item.id] as const));
   const interactions = snapshot.interactions.filter(item => item.sessionId === sessionId && item.status === 'pending');
   const nodes: Delegation[] = [];
+  // What each activity last said (assistant text, no reasoning), and the round summary of a Director round whose last words came from a continuation of it.
+  const spoken = new Map<string, string>();
+  for (const message of snapshot.messages) if (message.activityId && message.role === 'assistant' && message.kind !== 'thinking' && message.text.trim()) spoken.set(message.activityId, withoutStatusLine(message.text));
+  const continued = new Map<string, Activity>();
+  for (const activity of snapshot.activities) {
+    const root = activity.rootActivityId ?? activity.activityId;
+    if (activity.sessionId === sessionId && isDirector(activity.ownerId) && root !== activity.activityId && activity.summary) continued.set(root, activity);
+  }
   const parents = new Map<string, string | undefined>();
 
   for (const activity of activities) {
@@ -112,16 +148,20 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
     const stop = normalizeStopReason(activity.stopReason);
     const settled = activity.status === 'completed' || activity.status === 'failed' || activity.status === 'cancelled';
     const finalStop = settled ? stop ?? (activity.status === 'completed' ? 'completed' : activity.status === 'failed' ? 'error' : 'interrupted') : undefined;
+    const recorded = activity.summary ?? (isDirector(activity.ownerId) ? continued.get(activity.activityId)?.summary : undefined);
     const startedAt = activity.startedAt, finishedAt = activity.finishedAt;
     const durationMs = startedAt === undefined ? undefined : Math.max(0, (finishedAt ?? (settled ? startedAt : now)) - startedAt);
-    const summary = activity.summary ? oneLine(activity.summary.report || activity.summary.title) : activity.diagnostic ?? '';
+    // The structured summary (the model's round summary line) when there is one, else the report without its status line, else what the activity last said.
+    const written = recorded?.source === 'model';
+    const summary = oneLine(written ? recorded!.title : withoutStatusLine(recorded?.report ?? '') || activity.diagnostic || spoken.get(activity.activityId) || recorded?.title || '');
     nodes.push({
       id: activity.activityId, kind: isDirector(activity.ownerId) ? 'director' : 'actor', ownerId: activity.ownerId, title: activity.taskTitle ?? activity.title, status: activity.status,
       ...(parentId ? {parentId} : {}), rootId, children: [], blockedBy, ...(follows.length ? {after: follows} : {}), ...(activity.batchId ? {batchId: activity.batchId} : {}), ...(waiting ? {waiting} : {}),
       ...(startedAt !== undefined ? {startedAt} : {}), ...(finishedAt !== undefined ? {finishedAt} : {}), ...(durationMs !== undefined ? {durationMs} : {}),
       ...(finalStop ? {stopReason: finalStop} : {}), ...(activity.diagnostic ? {diagnostic: activity.diagnostic} : {}),
       assignment: {title: activity.taskTitle ?? activity.title, owns: [...activity.ownedFiles ?? []], acceptance: [...activity.acceptance ?? []]},
-      ...(settled && finalStop ? {result: {summary, ...(finishedAt !== undefined ? {finishedAt} : {}), stopReason: finalStop, reportRef: references.get(activity.activityId) ?? activity.activityId}} : {}),
+      ...(settled && finalStop ? {result: {summary, ...(finishedAt !== undefined ? {finishedAt} : {}), stopReason: finalStop, reportRef: references.get(activity.activityId) ?? activity.activityId, ...(written ? {final: true as const} : {})}} : {}),
+      ...(activity.resumeTaskId && activity.resumeTaskId !== activity.activityId ? {resumes: activity.resumeTaskId} : {}),
     });
   }
 
@@ -147,7 +187,7 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
         ...(swarm.background ? {background: true, ...(job.delivered !== undefined ? {delivered: job.delivered} : {})} : {}),
         durationMs, ...(stop ? {stopReason: stop} : {}), jobId, ...(job.kind === 'fork' ? {fork: true} : {}), ...(job.route ? {route: job.route} : {}), ...(job.model ? {model: job.model} : {}),
         assignment: {title: job.title, owns: [], acceptance: []},
-        ...(settled && stop ? {result: {summary: oneLine(job.summary ?? job.title), ...(job.evidence?.length ? {evidence: job.evidence} : {}), ...(job.notVerified?.length ? {notVerified: job.notVerified} : {}),
+        ...(settled && stop ? {result: {summary: oneLine(withoutStatusLine(job.summary ?? '') || job.title), ...(job.summary?.trim() && (job.state === 'done' || job.state === 'blocked') ? {final: true as const} : {}), ...(job.evidence?.length ? {evidence: job.evidence} : {}), ...(job.notVerified?.length ? {notVerified: job.notVerified} : {}),
           ...(job.question ? {question: job.question} : {}), stopReason: stop, reportRef: id}} : {}),
       });
     });
@@ -156,7 +196,11 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
   const all = [...nodes, ...jobs.values()];
   const children = new Map<string, string[]>();
   for (const node of all) if (node.parentId) children.set(node.parentId, [...children.get(node.parentId) ?? [], node.id]);
-  return all.map(node => children.has(node.id) ? {...node, children: children.get(node.id)!} : node);
+  return all.map(node => {
+    const full = children.has(node.id) ? {...node, children: children.get(node.id)!} : node;
+    // A Director round that ended in error is a failure of the round itself; its other stops (an interrupt) leave the request unfinished.
+    return endedWithoutResult(full) && !(node.kind === 'director' && node.stopReason === 'error') ? {...full, unfinished: true as const} : full;
+  });
 }
 
 /** One row of the `/tasks` list: a delegation and how deep it sits. */

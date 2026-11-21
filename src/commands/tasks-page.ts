@@ -8,7 +8,7 @@
 import type {TabRow} from '../runtime/command-surface.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import {projectDelegations, type Delegation} from '../runtime/delegations.js';
-import {taskGraph} from '../runtime/task-graph.js';
+import {foldAttempts, taskGraph} from '../runtime/task-graph.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
@@ -87,6 +87,8 @@ export function createTasksCommand(deps: TasksPageDeps) {
   const project = () => projectDelegations({snapshot: store.getSnapshot(), sessionId: session, deliveries: deliveries()});
 
   const openDetail = async (node: Delegation, cost: number | undefined, backTo: () => Promise<void>) => {
+    // The earlier attempts folded into this one (the sidebar draws them as one node), oldest first.
+    const all = project(), folded = foldAttempts(all), earlier = all.filter(item => folded.get(item.id) === node.id);
     const result = node.result;
     const body: TabRow[] = [
       row.heading('Assignment'),
@@ -107,7 +109,9 @@ export function createTasksCommand(deps: TasksPageDeps) {
       ...(node.jobId ? [row.field('Worker', node.jobId + (node.route ? ' · ' + node.route + ' route' : '') + (node.model ? ' · ' + node.model : ''))] : []),
       ...(node.batchId ? [row.field('Batch', node.batchId)] : []),
       ...(node.parentId ? [row.field('Parent', node.parentId)] : []),
-      ...(result ? [row.blank(), row.heading('Result'), row.field('Summary', result.summary || '(none recorded)'),
+      ...(earlier.length ? [row.blank(), row.heading('Earlier attempts'), ...earlier.map(item => row.bullet(name(item.ownerId) + ' · ' + item.status + (item.stopReason && item.stopReason !== 'completed' ? ' (stop: ' + item.stopReason + ')' : '') +
+        (item.durationMs !== undefined ? ' · ' + formatDuration(item.durationMs) : '') + (item.result?.summary ? ' · ' + item.result.summary.slice(0, 160) : '')))] : []),
+      ...(result ? [row.blank(), row.heading('Result'), row.field('Summary', result.summary || '(the task left no text)'),
         ...(result.evidence?.length ? [row.text('Evidence:'), ...result.evidence.map(item => row.bullet(item))] : []),
         ...(result.notVerified?.length ? [row.text('Not verified:'), ...result.notVerified.map(item => row.bullet(item))] : []),
         ...(result.question ? [row.field('Question', result.question)] : []),

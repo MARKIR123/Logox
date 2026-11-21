@@ -129,12 +129,15 @@ test('hover highlights a node border, click folds a parent, double click opens t
     const before = rig.output.text.length;
     await rig.mouse('move', at.x + 3, at.y);
     await waitFor(() => rig.output.text.slice(before), text => text.includes(rgb(palette.accent) + '╭ '), {label: 'the hovered border in the accent colour'});
-    // Click on the phase: its children fold away (and come back).
+    // A click on the title only selects: the layout stays put. The fold glyph (four cells before the id) folds the children away and back.
     const design = rig.find('1 Design');
     await rig.click(design.x + 2, design.y);
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ 2 steps'), {label: 'folded'});
     await delay(400); // a second click inside 350 ms would be a double click
-    await rig.click(design.x + 2, design.y);
+    assert.ok(rig.screen().includes('1.1 Palette'), 'a click on the title does not fold');
+    await rig.click(design.x - 4, design.y);
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && /▸ \S 1 Design/.test(text), {label: 'folded'});
+    await delay(400);
+    await rig.click(design.x - 4, design.y);
     await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'unfolded'});
     // The wheel over the sidebar scrolls it (a marker appears in the header rule) and leaves the timeline alone.
     const top = rig.output.lines[2]!;

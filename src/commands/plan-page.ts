@@ -15,7 +15,7 @@ import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions} from './surfaces.js';
 
 export const PLAN_EMPTY_TEXT = 'There is no plan yet. The Director creates one with Plan when a request has more than one piece of work.';
-export const PLAN_GLYPHS: Readonly<Record<NodeStatus, string>> = {pending: '○', ready: '◌', running: '●', waiting: '◐', done: '◉', accepted: '✓', failed: '✗', abandoned: '–'};
+export const PLAN_GLYPHS: Readonly<Record<NodeStatus, string>> = {pending: '○', ready: '◌', running: '●', waiting: '◐', done: '◉', accepted: '✓', failed: '✗', interrupted: '⊘', abandoned: '–'};
 const AUTO = '@auto', WORK = '@work', ADOPT = '@adopt:';
 
 export interface PlanPageDeps {
@@ -45,7 +45,7 @@ export function createPlanPages(deps: PlanPageDeps) {
       row.heading('Node'),
       row.field('Id', node.id), row.field('Title', node.title), row.field('Owner', name(node.owner) + (node.forked ? ' ⑂' : '')),
       row.field('Status', PLAN_GLYPHS[node.status] + ' ' + node.status),
-      ...(node.progress ? [row.field('Progress', `${node.progress.accepted} of ${node.progress.total} sub-nodes accepted`)] : []),
+      ...(node.leaves ? [row.field('Progress', `${node.leaves.done} of ${node.leaves.total} tasks complete` + (node.leaves.failed ? `, ${node.leaves.failed} failed` : '') + (node.leaves.interrupted ? `, ${node.leaves.interrupted} interrupted` : ''))] : []),
       ...(node.parent ? [row.field('Parent', path(node.parent))] : []),
       ...(node.after.length ? [row.field('After', node.after.map(path).join('; '))] : []),
       ...(node.blockedBy.length ? [row.field('Waiting for', node.blockedBy.join(', '))] : []),

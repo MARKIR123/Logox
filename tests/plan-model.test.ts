@@ -137,14 +137,14 @@ test('remove is refused while linked work is in progress', () => {
 });
 
 test('work phases map every activity and job status', () => {
-  assert.deepEqual(['running', 'queued', 'waiting_input', 'paused', 'waiting', 'blocked', 'completed', 'done', 'failed', 'cancelled', 'denied', 'skipped', 'interrupted'].map(workPhase),
+  assert.deepEqual(['running', 'queued', 'waiting_input', 'paused', 'waiting', 'blocked', 'completed', 'done', 'failed', 'cancelled', 'denied', 'skipped', 'interrupted'].map(status => workPhase(status)),
     ['running', 'waiting', 'waiting', 'waiting', 'waiting', 'waiting', 'completed', 'completed', 'failed', 'failed', 'failed', 'failed', 'failed']);
 });
 
 test('statuses are derived from linked work and roll up through parents', () => {
   const base = sample();
   const link = (...pairs: [string, string][]): Plan => ({...base, nodes: base.nodes.map(node => ({...node, links: pairs.filter(([id]) => id === node.id).map(([, work]) => work.includes('/') ? {automaJob: work} : {activityId: work})}))});
-  const status = (plan: Plan, work: {id: string; status: string}[]) => Object.fromEntries(derivePlan(plan, work).nodes.map(node => [node.id, node.status]));
+  const status = (plan: Plan, work: {id: string; status: string; unfinished?: boolean}[]) => Object.fromEntries(derivePlan(plan, work).nodes.map(node => [node.id, node.status]));
 
   // Nothing linked: a node whose prerequisites are open is pending, the rest are ready; parents are ready while nothing runs.
   assert.deepEqual(status(base, []), {'1': 'ready', '1.1': 'ready', '1.2': 'pending', '1.2.1': 'ready', '2': 'ready'});
@@ -157,25 +157,44 @@ test('statuses are derived from linked work and roll up through parents', () => 
   assert.equal(done['1.1'], 'done'); assert.equal(done['1.2'], 'ready');
   // Failure: a failed activity with nothing newer is failed; a newer completed link replaces it; a newer running one shows running.
   assert.equal(status(link(['1.1', 'a1']), [{id: 'a1', status: 'failed'}])['1.1'], 'failed');
-  assert.equal(status(link(['1.1', 'a1']), [{id: 'a1', status: 'cancelled'}])['1'], 'failed');
+  assert.equal(status(link(['1.1', 'a1']), [{id: 'a1', status: 'cancelled'}])['1.1'], 'failed');
+  assert.equal(status(link(['1.1', 'a1']), [{id: 'a1', status: 'cancelled'}])['1'], 'ready', 'a parent never inherits the failure; its other child has not started');
+  // Work that ended without a result is interrupted, not failed; a later completion replaces it.
+  assert.equal(status(link(['1.1', 'a1']), [{id: 'a1', status: 'failed', unfinished: true}])['1.1'], 'interrupted');
+  assert.equal(status(link(['1.1', 'a1'], ['1.1', 'a2']), [{id: 'a1', status: 'failed', unfinished: true}, {id: 'a2', status: 'completed'}])['1.1'], 'done');
+  assert.equal(status(link(['1.1', 'a1'], ['1.1', 'a2']), [{id: 'a1', status: 'completed'}, {id: 'a2', status: 'failed', unfinished: true}])['1.1'], 'interrupted');
   assert.equal(status(link(['1.1', 'a1'], ['1.1', 'a2']), [{id: 'a1', status: 'failed'}, {id: 'a2', status: 'completed'}])['1.1'], 'done');
   assert.equal(status(link(['1.1', 'a1'], ['1.1', 'a2']), [{id: 'a1', status: 'failed'}, {id: 'a2', status: 'running'}])['1.1'], 'running');
   assert.equal(status(link(['1.1', 'a1'], ['1.1', 'a2']), [{id: 'a1', status: 'completed'}, {id: 'a2', status: 'failed'}])['1.1'], 'failed');
   // Automa jobs link by `<activity>/<job>`; unknown links count for nothing.
   assert.equal(status(link(['1.2.1', 'a9/T1']), [{id: 'a9/T1', status: 'done'}])['1.2.1'], 'done');
   assert.equal(status(link(['1.2.1', 'gone']), [])['1.2.1'], 'ready');
-  // Roll-up: all children accepted -> accepted; all done -> done; a failed child with none running fails the parent; running beats failed.
+  // Roll-up: all children accepted -> accepted; all done -> done; running or waiting while a child is live; a parent never inherits a failure (it is done once nothing is live).
   const accepted: Plan = {...base, nodes: base.nodes.map(node => ['1.1', '1.2.1'].includes(node.id) ? {...node, accepted: {by: 'logox', at: 1, evidence: ['x']}} : node)};
   const rolled = Object.fromEntries(derivePlan(accepted, []).nodes.map(node => [node.id, node.status]));
   assert.equal(rolled['1.2'], 'accepted'); assert.equal(rolled['1'], 'accepted'); assert.equal(rolled['2'], 'ready');
   const mixed = status(link(['1.1', 'a1'], ['1.2.1', 'j1/T1']), [{id: 'a1', status: 'failed'}, {id: 'j1/T1', status: 'running'}]);
   assert.equal(mixed['1'], 'running');
-  assert.equal(status(link(['1.1', 'a1'], ['1.2.1', 'j1/T1']), [{id: 'a1', status: 'failed'}, {id: 'j1/T1', status: 'done'}])['1'], 'failed');
+  const resilient = status(link(['1.1', 'a1'], ['1.2.1', 'j1/T1']), [{id: 'a1', status: 'failed'}, {id: 'j1/T1', status: 'done'}]);
+  assert.equal(resilient['1'], 'done', 'a failed child does not fail the parent'); assert.equal(resilient['1.1'], 'failed');
+  assert.equal(derivePlan(link(['1.1', 'a1'], ['1.2.1', 'j1/T1']), [{id: 'a1', status: 'failed'}, {id: 'j1/T1', status: 'done'}]).nodes.find(node => node.id === '1')!.leaves!.failed, 1, 'the failure stays in the leaf counts');
   assert.equal(status(link(['1.1', 'a1'], ['1.2.1', 'j1/T1']), [{id: 'a1', status: 'completed'}, {id: 'j1/T1', status: 'done'}])['1'], 'done');
   // Abandoned nodes leave their parent's roll-up and count as satisfied prerequisites.
   const dropped = ok(applyPlanOp(base, {op: 'abandon', id: '1.1'}, 'logox', env()));
   assert.equal(derivePlan(dropped, []).nodes.find(node => node.id === '1.2')!.status, 'ready');
   assert.equal(derivePlan(dropped, []).nodes.find(node => node.id === '1.1')!.status, 'abandoned');
+});
+
+test('leaf progress counts every complete leaf (done or accepted) and tells failed and interrupted ones apart; a phase and the plan total agree', () => {
+  const base = sample();
+  const link = (...pairs: [string, string][]): Plan => ({...base, nodes: base.nodes.map(node => ({...node, links: pairs.filter(([id]) => id === node.id).map(([, work]) => work.includes('/') ? {automaJob: work} : {activityId: work})}))});
+  const derived = derivePlan(link(['1.1', 'a1'], ['1.2.1', 'j1/T1'], ['2', 'a2']), [{id: 'a1', status: 'completed'}, {id: 'j1/T1', status: 'failed'}, {id: 'a2', status: 'failed', unfinished: true}]);
+  const by = (id: string) => derived.nodes.find(node => node.id === id)!;
+  assert.deepEqual(by('1').leaves, {done: 1, failed: 1, interrupted: 0, total: 2}, 'leaves 1.1 (done) and 1.2.1 (failed)');
+  assert.deepEqual(by('1.2').leaves, {done: 0, failed: 1, interrupted: 0, total: 1});
+  assert.equal(by('1.1').leaves, undefined);
+  assert.equal(by('2').status, 'interrupted');
+  assert.equal(by('1').status, 'done', 'a failed leaf does not fail its parents');
 });
 
 test('progress counts and the outline', () => {
@@ -211,7 +230,7 @@ test('the change feed lists only what others changed and ignores progress that i
   const linked: Plan = {...plan, nodes: plan.nodes.map(node => node.id === '1.1' ? {...node, links: [{activityId: 'a1'}]} : node)};
   assert.deepEqual(planChanges(derived(linked, [{id: 'a1', status: 'running'}]), seen), []);
   assert.deepEqual(planChanges(derived(linked, [{id: 'a1', status: 'completed'}]), seen), ['~ 1.1 Palette: done']);
-  assert.deepEqual(planChanges(derived(linked, [{id: 'a1', status: 'failed'}]), seen), ['~ 1 Design: failed', '~ 1.1 Palette: failed']);
+  assert.deepEqual(planChanges(derived(linked, [{id: 'a1', status: 'failed'}]), seen), ['~ 1.1 Palette: failed']);
   // A companion adding a sub-step, retitling and removing.
   const grown = ok(applyPlanOp(plan, {op: 'add', parent: '1.1', nodes: [{title: 'Sample rows', owner: 'automa'}]}, 'kalon', env()));
   assert.deepEqual(planChanges(derived(grown), seen), ['+ 1.1.1 Sample rows [ready] automa (under 1.1)']);

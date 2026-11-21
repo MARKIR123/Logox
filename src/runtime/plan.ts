@@ -18,7 +18,8 @@ export const AUTOMA_OWNER = 'automa';
 export const PLAN_USER = 'user';
 
 export type PlanStatus = 'active' | 'done' | 'abandoned';
-export type NodeStatus = 'pending' | 'ready' | 'running' | 'waiting' | 'done' | 'failed' | 'accepted' | 'abandoned';
+/** `interrupted`: the work ended without a result (quota, timeout, a stop) and nothing took it up again; it is unfinished, not a failure. */
+export type NodeStatus = 'pending' | 'ready' | 'running' | 'waiting' | 'done' | 'failed' | 'interrupted' | 'accepted' | 'abandoned';
 export interface PlanLink {readonly activityId?: string; readonly automaJob?: string}
 export interface PlanAccepted {readonly by: string; readonly at: number; readonly evidence: readonly string[]}
 export interface PlanNode {
@@ -308,17 +309,20 @@ export function applyPlanOps(plan: Plan | undefined, ops: readonly PlanOp[], act
 // ---------------------------------------------------------------------------------------------------------------------------------- linked work
 /** One unit of work a node can be linked to: a delegation record (`delegations.ts:Delegation` has this shape). */
 export interface PlanWork {readonly id: string; readonly status: string; /** When the work started, if known (a delegation record's `startedAt`). */ readonly startedAt?: number | undefined;
-  /** The work is a fork (a copy of its dispatcher). */ readonly fork?: boolean | undefined}
-export type WorkPhase = 'running' | 'waiting' | 'completed' | 'failed';
+  /** The work is a fork (a copy of its dispatcher). */ readonly fork?: boolean | undefined;
+  /** The work ended without a result of its own (`delegations.ts:endedWithoutResult`): a failure is then read as `interrupted`. */ readonly unfinished?: boolean | undefined}
+export type WorkPhase = 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
 /** What a record's status says: a running task or job runs; one waiting for approval, an answer, a place in the queue or its prerequisites waits; the rest ended. */
-export function workPhase(status: string): WorkPhase {
+export function workPhase(status: string, unfinished = false): WorkPhase {
   if (status === 'running') return 'running';
   if (['queued', 'waiting_input', 'paused', 'waiting', 'blocked'].includes(status)) return 'waiting';
   if (status === 'completed' || status === 'done') return 'completed';
-  return 'failed';
+  return unfinished ? 'interrupted' : 'failed';
 }
 
 export interface NodeProgress {readonly accepted: number; readonly done: number; readonly total: number}
+/** The settled outcome of the leaves under a parent: `done` counts accepted and done work, so every sort of node can be complete. */
+export interface LeafProgress {readonly done: number; readonly failed: number; readonly interrupted: number; readonly total: number}
 export interface DerivedNode extends PlanNode {
   readonly status: NodeStatus;
   readonly depth: number;
@@ -326,6 +330,8 @@ export interface DerivedNode extends PlanNode {
   readonly children: readonly string[];
   /** Parents only: how many live children are accepted or done. */
   readonly progress?: NodeProgress;
+  /** Parents only: the leaves below (nodes without live children) by outcome; what the sidebar counts, so a phase and the header agree. */
+  readonly leaves?: LeafProgress;
   /** The prerequisites still open. */
   readonly blockedBy: readonly string[];
   /** The linked work the runtime knows, with its phase. */
@@ -345,17 +351,18 @@ export function linkedWork(node: PlanNode, work: readonly PlanWork[]): {id: stri
   const byId = new Map(work.map(item => [item.id, item] as const));
   return node.links.flatMap(link => {
     const found = byId.get(link.activityId ?? link.automaJob ?? '');
-    return found ? [{id: found.id, phase: workPhase(found.status), ...(found.fork ? {fork: true as const} : {})}] : [];
+    return found ? [{id: found.id, phase: workPhase(found.status, found.unfinished), ...(found.fork ? {fork: true as const} : {})}] : [];
   });
 }
 
-/** The status of work-bearing nodes: live work wins; otherwise a failure with nothing completed after it is a failure, else done. */
+/** The status of work-bearing nodes: live work wins; otherwise a failure with nothing completed after it is a failure, work that ended unfinished is `interrupted`, else done. */
 function fromWork(items: readonly {phase: WorkPhase}[]): NodeStatus | undefined {
   if (!items.length) return undefined;
   if (items.some(item => item.phase === 'running')) return 'running';
   if (items.some(item => item.phase === 'waiting')) return 'waiting';
   const lastDone = items.findLastIndex(item => item.phase === 'completed');
-  return items.some((item, index) => item.phase === 'failed' && index > lastDone) ? 'failed' : 'done';
+  const tail = items.slice(lastDone + 1);
+  return tail.some(item => item.phase === 'failed') ? 'failed' : tail.some(item => item.phase === 'interrupted') ? 'interrupted' : 'done';
 }
 
 /** Statuses and roll-ups of a plan from the work its nodes are linked to. Pure: the same plan and records give the same answer. */
@@ -388,13 +395,17 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
     if (node.abandoned) status = 'abandoned';
     else if (node.accepted) status = 'accepted';
     else {
-      const parts = [...(own ? [own] : []), ...children.map(child => statusOf(child.id)!)];
+      const kidStatus = children.map(child => statusOf(child.id)!);
+      const parts = [...(own ? [own] : []), ...kidStatus];
+      // Result-oriented: a parent never inherits a failure or an interruption from a child (the child and the progress text carry it); only its own work can fail it.
       if (!parts.length) status = idle;
       else if (parts.every(part => part === 'accepted')) status = 'accepted';
       else if (parts.every(part => part === 'accepted' || part === 'done')) status = 'done';
       else if (parts.includes('running')) status = 'running';
       else if (parts.includes('waiting')) status = 'waiting';
-      else if (parts.includes('failed')) status = 'failed';
+      else if (own === 'failed' || own === 'interrupted') status = own;
+      else if (kidStatus.some(part => part === 'pending' || part === 'ready')) status = idle;
+      else if (kidStatus.length) status = !kidStatus.some(part => part === 'done' || part === 'accepted') && kidStatus.includes('interrupted') ? 'interrupted' : 'done';
       else status = idle;
     }
     visiting.delete(id);
@@ -413,6 +424,7 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
       for (let at: string | undefined = node.id; at !== undefined; at = parentOf(at)) since.set(at, Math.min(since.get(at) ?? Infinity, started));
     }
   }
+  const leavesOf = (id: string): PlanNode[] => (kids.get(id) ?? []).filter(child => !child.abandoned).flatMap(child => (kids.get(child.id) ?? []).some(grand => !grand.abandoned) ? leavesOf(child.id) : [child]);
   const derived: DerivedNode[] = nodes.map(node => {
     const parent = parentOf(node.id);
     const children = kids.get(node.id) ?? [];
@@ -420,13 +432,19 @@ export function derivePlan(plan: Plan, work: readonly PlanWork[]): DerivedPlan {
     const counts = (list: readonly PlanNode[]): NodeProgress => ({accepted: list.filter(child => statuses.get(child.id) === 'accepted').length,
       done: list.filter(child => statuses.get(child.id) === 'accepted' || statuses.get(child.id) === 'done').length, total: list.length});
     return {...node, status: statusOf(node.id)!, depth: depthOf(node.id), ...(parent !== undefined ? {parent} : {}), children: children.map(child => child.id),
-      ...(live.length ? {progress: counts(live)} : {}),
+      ...(live.length ? {progress: counts(live), leaves: leafCounts(leavesOf(node.id), statuses)} : {}),
       blockedBy: node.after.filter(ref => !satisfied(ref)), work: linkedWork(node, work), ...(linkedWork(node, work).some(item => item.fork) ? {forked: true as const} : {}), ...(since.has(node.id) ? {runningSince: since.get(node.id)!} : {})};
   });
   const top = nodes.filter(node => depthOf(node.id) === 1 && !node.abandoned);
   const topCounts = {accepted: top.filter(node => statuses.get(node.id) === 'accepted').length,
     done: top.filter(node => statuses.get(node.id) === 'accepted' || statuses.get(node.id) === 'done').length, total: top.length};
   return {...plan, nodes: derived, progress: topCounts};
+}
+
+/** The outcomes of `leaves` (see `LeafProgress`). */
+export function leafCounts(leaves: readonly Pick<PlanNode, 'id'>[], statuses: ReadonlyMap<string, NodeStatus>): LeafProgress {
+  const count = (...wanted: NodeStatus[]) => leaves.filter(leaf => wanted.includes(statuses.get(leaf.id)!)).length;
+  return {done: count('done', 'accepted'), failed: count('failed'), interrupted: count('interrupted'), total: leaves.length};
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------- text for models

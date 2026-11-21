@@ -287,8 +287,8 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     return docked ? {lines, side: {x: dockX, width: dockWidth, lines}} : {lines};
   };
 
-  const progress = plan ? planProgress(plan, graph!.synthetic) : undefined;
-  const chipLabel = !progress ? '' : graph!.kind === 'earlier' ? ' ▸ Earlier tasks ' : ` ▸ Tasks ${progress.accepted}/${progress.total} `;
+  const progress = plan ? planProgress(plan) : undefined;
+  const chipLabel = !progress ? '' : graph!.kind === 'earlier' ? ' ▸ Earlier tasks ' : ` ▸ Tasks ${progress.done}/${progress.total} `;
   const chip = plan && !panelVisible && progress ? {label: chipLabel, width: stringWidth(chipLabel)} : undefined;
   return {plan, docked, overlay, wide, focused: docked && focus === 'plan', keyboardOwner, panelVisible, timelineWidth, dockX, overlayX, overlayWidth, dockWidth,
     chip, chipHover, setChipHover, shortcut, request, show, hide, openOverlay, handleKey, handleMouse, render};

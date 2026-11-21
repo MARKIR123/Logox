@@ -83,7 +83,7 @@ test('a delegation opens its detail: assignment, status, result; Esc closes it',
     const lines = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!.lines.join('\n');
     assert.match(lines, /Owner: Techne/); assert.match(lines, /Title: Build the parser/); assert.match(lines, /Owns: src\/parser\/\*\*/); assert.match(lines, /all tests pass/);
     assert.match(lines, /Status: completed/); assert.match(lines, /Stop reason: completed/); assert.match(lines, /Cost: \$0\.0123/);
-    assert.match(lines, /Summary: Built the parser; tests pass\./); assert.match(lines, /Full report: tech/);
+    assert.match(lines, /Summary: Parser built/); assert.match(lines, /Full report: tech/);
     assert.deepEqual((page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!.actions?.map(action => action.label), ['Open conversation']);
     app.surfaces.cancel();
     await waitFor(() => surface(app), current => current === null, {label: 'closed'});
