@@ -10,7 +10,6 @@ import {TerminalScreen} from './terminal-screen.js';
 import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import {App} from '../src/tui/app.js';
 import {palette} from '../src/tui/appearance/theme.js';
-import {cardTint} from '../src/tui/appearance/colors.js';
 import {flowStats} from '../src/tui/panels/plan-flow.js';
 import {loadConfig} from '../src/config/config.js';
 import type {Provider} from '../src/runtime/messages.js';
@@ -132,10 +131,8 @@ test('hover highlights a node border, click folds a parent, double click opens t
     const at = rig.find('Palette', rig.sidebarX);
     const before = rig.output.text.length;
     await rig.mouse('move', at.x + 3, at.y);
-    const bg = (hex: string) => `\x1b[48;2;${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}m`;
-    assert.ok(rig.output.text.includes(bg(cardTint('rest')!) + ''), 'the cards are tinted at rest');
-    await waitFor(() => rig.output.text.slice(before), text => text.includes(bg(cardTint('hover')!)), {label: 'the hovered card in the deeper tint'});
-    void rgb;
+    // A hovered card has no fill: its title is repainted in the strong tone.
+    await waitFor(() => rig.output.text.slice(before), text => text.includes(rgb(palette.strong)), {label: 'the hovered card title brightens'});
     // A click on the title only selects: the layout stays put. The fold glyph (two cells before the title) folds the children away and back.
     const design = rig.find('Design');
     await rig.click(design.x + 2, design.y);
@@ -255,7 +252,7 @@ test('unrelated store changes neither rebuild the flow nor repaint the sidebar',
     await waitFor(() => rig.screen(), text => text.includes('unrelated message 2'), {label: 'the timeline updated'});
     assert.equal(flowStats.builds, builds, 'the layout is not rebuilt');
     // A scroll of the timeline repaints the side column (it moves with the rows), but never with a different picture: every paint of the card's title row is the same text.
-    const paints = new Set(rig.output.text.match(/\x1b\[48;2;[\d;]+m◌ Palette[^\x1b]*/g));
+    const paints = new Set(rig.output.text.match(/◌(?:\x1b\[[\d;]*m)* Palette[^\x1b]*/g));
     assert.equal(paints.size, 1, 'the sidebar row never changed: ' + [...paints].join(' | '));
     // A change of the plan does repaint it.
     await act(async () => {assert.ok((await app.plans.apply([{op: 'update', id: '1.1', title: 'Palette v2'}], 'logox')).ok);});

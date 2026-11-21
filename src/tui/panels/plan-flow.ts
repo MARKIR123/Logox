@@ -11,16 +11,16 @@
  *     collapsed (`expanded` overrides either way).
  *  2. A group is a set of siblings. A node's layer is 0 without prerequisites among its siblings, else 1 + the largest layer of those prerequisites.
  *     Layers are drawn top to bottom, nodes of a layer in id order. One layer is one row of side-by-side cards.
- *  3. A layer that does not fit wraps onto the next row (one blank row between, rows filled evenly): as many cards per row as fit `MIN_BOX` (14) cells each with `GAP` (2)
- *     cells between (`perFit()`: 2 below 50 cells of room, 3 from 50, ...), at most `FlowOptions.perRow`. The cards of a printed row share the full width evenly (a lone card
+ *  3. A layer that does not fit wraps onto the next row (one blank row between, rows filled evenly): as many cards per row as fit `MIN_BOX` (14) cells each with `GAP` (3)
+ *     cells between (`perFit()`: 2 below 48 cells of room, 3 from 48, ...), at most `FlowOptions.perRow`. The cards of a printed row share the full width evenly (a lone card
  *     is full width, two are halves, three thirds); connectors land on the centres of the actual cards. A node that is open and has children stands alone in
  *     its row and its children follow as a group indented by two cells.
  *  4. Between the last row of layer k-1 and the first row of layer k an arrow connector is drawn in the faint `line` tone: where the prerequisites sit in those two
  *     rows, a bus (rounded `╭ ╮ ╰ ╯` corners, `┬ ┴ ├ ┼ ┤ ─` with `▼` over each target); otherwise one centred `▼`. Only a prerequisite that skips a layer or sits in
  *     another group is a `↳ after <title>` note under the node, so no line ever crosses a node. Ids are never drawn.
- *  5. A node is a borderless 2-row card: row 1 a left bar `▌` (the owner's colour), the status glyph, the title and, for a parent, its fold glyph at the right end;
- *     row 2 the owner, then `elapsed or duration`, then a short result or what it waits for, whole parts dropped from the right until it fits. Every card cell
- *     but the bar carries `tint` (the node id): the painter fills it with a faint background that hover and selection deepen.
+ *  5. A node is a borderless, fill-less 2-row card: row 1 a left bar `▌` (the owner's colour), the status glyph, the title and, for a parent, its fold glyph at the
+ *     right end; row 2 only the owner, then the live clock while running or what it waits for, then `◦3` workers; whole parts dropped from the right until it
+ *     fits. Duration and result live in the tooltip and the detail page. The title cell carries `title` (the node id) so hover and selection can recolour it.
  */
 import stringWidth from 'string-width';
 import {PLAN_GLYPHS} from '../../commands/plan-page.js';
@@ -41,8 +41,8 @@ export interface FlowCell {
   readonly node?: string;
   /** A connector cell between these nodes (it takes the hover colour of either). */
   readonly links?: readonly string[];
-  /** A cell of this node's card (the bar excepted): the painter gives it the card background, deeper when the node is hovered or selected. */
-  readonly tint?: string;
+  /** The title cell of this node's card: the painter brightens it on hover and makes it bold accent when selected (a card has no fill). */
+  readonly title?: string;
   /** The left bar of a card: owner colour, accent when selected, brighter on hover. */
   readonly bar?: true;
   /** The text is a fixed-width placeholder for the elapsed time since this epoch time (ms); the painter fills it. */
@@ -96,7 +96,7 @@ export function fit(text: string, width: number): string {
 }
 /** The narrowest card the layout draws, and the cells between cards of a row. */
 export const MIN_BOX = 14;
-export const GAP = 2;
+export const GAP = 3;
 /** How many cards of at least `MIN_BOX` cells fit side by side in `room` cells (`GAP` cells between them). */
 export const perFit = (room: number): number => Math.max(1, Math.floor((room + GAP) / (MIN_BOX + GAP)));
 /** `45s`, `3m12s`, `2m`, `1h05m`: how long finished work took. */
@@ -129,7 +129,7 @@ interface Context {
   readonly ownerOf: Map<string, string>;
 }
 
-/** The progress of a parent's leaves (`3/5 · 1 failed`); `short` leaves the failures out. A node with workers and no leaves shows their number. */
+/** The progress of a parent's leaves (`3/5 · 1 failed`); `short` leaves the failures out. A node with workers and no leaves shows their number (`◦3`). */
 export function progressText(node: DerivedNode, short = false): string {
   const leaves = node.leaves;
   if (!leaves) {
@@ -139,39 +139,38 @@ export function progressText(node: DerivedNode, short = false): string {
   return `${leaves.done}/${leaves.total}` + (short ? '' : (leaves.failed ? ` · ${leaves.failed} failed` : '') + (leaves.interrupted ? ` · ${leaves.interrupted} interrupted` : ''));
 }
 
-/** What a node says on the right of its second line besides time and progress: its result, or what it waits for; nothing for work in flight. */
-function tailText(node: DerivedNode, ctx: Context): string {
-  if (node.status === 'running') return '';
-  if (node.status === 'pending' || node.status === 'waiting' || node.status === 'ready') {
-    const names = [...new Set(node.blockedBy.map(id => ctx.options.owners(ctx.ownerOf.get(id) ?? '').name))];
-    if (names.length) return 'blocked by ' + names.join(', ');
-    return node.status === 'waiting' ? 'waiting' : '';
-  }
+/** What a card says about waiting on its second line: who it waits for (`blocked by kalon`) or `waiting`; nothing for work that is running or finished. */
+function waitText(node: DerivedNode, ctx: Context): string {
+  if (node.status !== 'pending' && node.status !== 'waiting' && node.status !== 'ready') return '';
+  const names = [...new Set(node.blockedBy.map(id => ctx.options.owners(ctx.ownerOf.get(id) ?? '').name))];
+  if (names.length) return 'blocked by ' + names.join(', ');
+  return node.status === 'waiting' ? 'waiting' : '';
+}
+/** The latest line of a node's result, without message envelopes (shown in the tooltip, never on the card). */
+export function resultText(node: DerivedNode): string {
   const note = node.note?.split('\n').map(line => line.trim()).filter(Boolean).at(-1) ?? '';
   return isEnvelope(note) ? '' : note;
 }
 
 /**
- * The second line of a card after the bar and a space: the owner (a click target), then ` · progress`, ` · elapsed or took` and ` · result or wait`; a part
- * that does not fit whole is dropped (the last, a text, is clipped when at least 4 cells remain).
+ * The second line of a card after the bar and a space: the owner (a click target), then ` · ` parts that are dropped whole when they do not fit: the live clock
+ * (running) or the wait (`blocked by techne`, clipped when at least 4 cells remain), then the number of workers (`◦3`). No duration, result or child progress.
  */
 function detailLine(node: DerivedNode, ctx: Context, width: number): {cells: FlowCell[]; ownerX1: number} {
   const owner = ctx.options.owners(node.owner);
   const ownerText = fit(owner.name + (node.forked ? ' ⑂' : ''), Math.max(1, width));
-  const tint = {tint: node.id};
-  const cells: FlowCell[] = [cell(ownerText, 'muted', {...tint})];
+  const cells: FlowCell[] = [cell(ownerText, 'muted')];
   let used = stringWidth(ownerText);
   const add = (parts: FlowCell[], size: number): boolean => {
     if (used + 3 + size > width) return false;
-    cells.push(cell(' · ', 'faint', tint), ...parts); used += 3 + size;
+    cells.push(cell(' · ', 'faint'), ...parts); used += 3 + size;
     return true;
   };
-  const progress = progressText(node);
-  if (progress) add([cell(progress, node.leaves?.failed ? 'warning' : 'faint', tint)], stringWidth(progress));
-  if (node.status === 'running' && node.runningSince !== undefined) add([cell(' '.repeat(CLOCK_WIDTH), 'faint', {...tint, clock: node.runningSince})], CLOCK_WIDTH);
-  else if (node.took !== undefined) {const took = formatTook(node.took); add([cell(took, 'faint', tint)], stringWidth(took));}
-  const tail = tailText(node, ctx);
-  if (tail && width - used - 3 >= 4) {const shown = fit(tail, width - used - 3); add([cell(shown, 'faint', {...tint, italic: true})], stringWidth(shown));}
+  if (node.status === 'running' && node.runningSince !== undefined) add([cell(' '.repeat(CLOCK_WIDTH), 'faint', {clock: node.runningSince})], CLOCK_WIDTH);
+  const wait = waitText(node, ctx);
+  if (wait && width - used - 3 >= 4) {const shown = fit(wait, width - used - 3); add([cell(shown, 'faint', {italic: true})], stringWidth(shown));}
+  const workers = node.leaves ? 0 : node.links.filter(link => link.automaJob).length;
+  if (workers) {const text = '◦' + workers; add([cell(text, 'faint')], stringWidth(text));}
   return {cells, ownerX1: stringWidth(ownerText)};
 }
 
@@ -189,20 +188,20 @@ function notesOf(undrawn: readonly string[], ctx: Context, width: number): FlowR
 }
 const foldGlyph = (isOpen: boolean): string => isOpen ? '▾' : '▸';
 
-/** A node as a borderless two-row card: `▌◉ Title        ▾` over `▌ owner · 3m12s · result`. The bar is the owner's colour; the rest of the card is tinted. */
+/** A node as a borderless, fill-less two-row card: `▌◉ Title        ▾` over `▌ owner · 12s`. The bar is the owner's colour; an interrupted card's title is faint. */
 function boxBlock(node: DerivedNode, ctx: Context, width: number, isOpen: boolean, undrawn: readonly string[]): Block {
   const parent = (ctx.byParent.get(node.id)?.length ?? 0) > 0;
-  const tint = {tint: node.id};
   const bar = cell('▌', 'owner', {owner: node.owner, bar: true, node: node.id});
   // Row 1: bar, status glyph, a space, the title, then a parent's fold glyph and a space (a leaf keeps one trailing space).
   const running = node.status === 'running';
   const label = fit(node.title, Math.max(1, width - 3 - (parent ? 3 : 1)));
-  const head: FlowCell[] = [bar, cell(PLAN_GLYPHS[node.status], STATUS_TONE[node.status], tint), cell(' ', 'fg', tint), cell(label, running ? 'strong' : 'fg', {...tint, ...(running ? {bold: true} : {})})];
+  const titleTone: FlowTone = node.status === 'interrupted' ? 'faint' : running ? 'strong' : 'fg';
+  const head: FlowCell[] = [bar, cell(PLAN_GLYPHS[node.status], STATUS_TONE[node.status]), cell(' ', 'fg'), cell(label, titleTone, {title: node.id, ...(running ? {bold: true} : {})})];
   const pad = width - rowWidth(head) - (parent ? 2 : 1);
-  const first: FlowRow = [...head, cell(' '.repeat(Math.max(0, pad)), 'fg', tint), ...(parent ? [cell(foldGlyph(isOpen), 'muted', {...tint, node: node.id})] : []), cell(' ', 'fg', tint)];
+  const first: FlowRow = [...head, cell(' '.repeat(Math.max(0, pad)), 'fg'), ...(parent ? [cell(foldGlyph(isOpen), 'muted')] : []), cell(' ', 'fg')];
   // Row 2: bar, a space, the details.
   const detail = detailLine(node, ctx, width - 2);
-  const second: FlowRow = [bar, cell(' ', 'fg', tint), ...detail.cells, cell(' '.repeat(Math.max(0, width - 2 - rowWidth(detail.cells))), 'fg', tint)];
+  const second: FlowRow = [bar, cell(' ', 'fg'), ...detail.cells, cell(' '.repeat(Math.max(0, width - 2 - rowWidth(detail.cells))), 'fg')];
   return {rows: [first, second, ...notesOf(undrawn, ctx, width)], ownerX0: 2, ownerX1: 2 + detail.ownerX1, ...(parent ? {fold: {x0: width - 2, x1: width - 1}} : {})};
 }
 
@@ -238,7 +237,7 @@ function phaseBlock(node: DerivedNode, ctx: Context, width: number, isOpen: bool
     tail.push(cell('━'.repeat(filled), 'accent'), cell('━'.repeat(barWidth - filled), 'faint'));
     if (counts) tail.push(spaces(1));
   }
-  if (counts) tail.push(cell(counts, node.leaves?.failed ? 'warning' : 'muted'));
+  if (counts) tail.push(cell(counts, 'muted'));
   const ownerX0 = leadWidth + stringWidth(title) + gap;
   const first: FlowRow = [...lead, cell(title, 'strong', {...mark, bold: true}), spaces(gap), ...tail];
   return {rows: [first, ...notesOf(undrawn, ctx, width)], ownerX0: ownerText ? ownerX0 : 0, ownerX1: ownerText ? ownerX0 + own : 0, ...(parent ? {fold: {x0: 0, x1: 1}} : {})};

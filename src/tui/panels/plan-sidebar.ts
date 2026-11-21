@@ -9,10 +9,10 @@
  */
 import stringWidth from 'string-width';
 import type {DerivedPlan, LeafProgress} from '../../runtime/plan.js';
-import {brightBar, cardTint, faintColor} from '../appearance/colors.js';
+import {brightBar, faintColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
-import {fit, flowHit, perFit, type FlowCell, type FlowLayout, type FlowOptions, type FlowRow, type FlowTone} from './plan-flow.js';
+import {fit, flowHit, formatTook, perFit, resultText, type FlowCell, type FlowLayout, type FlowOptions, type FlowRow, type FlowTone} from './plan-flow.js';
 
 /** The sidebar docks beside the timeline only at this many columns or more; narrower terminals open it as an overlay. */
 export const DOCK_MIN_COLUMNS = 110;
@@ -135,14 +135,16 @@ function toneColor(tone: FlowTone): string {
 function segmentOf(cell: FlowCell, input: PaintInput): SideSegment {
   const {hovered, selected} = input.view;
   let color: string;
-  // A card's bar: the owner's colour, accent when selected, brighter on hover.
+  // A card has no fill. Its bar: the owner's colour, accent when selected, brighter on hover. Its title: brighter on hover, bold accent when selected.
+  let bold = false;
   if (cell.bar) color = cell.node === selected ? palette.accent : cell.node === hovered ? brightBar(input.ownerColor(cell.owner ?? '')) : input.ownerColor(cell.owner ?? '');
-  else if (cell.tone === 'owner') color = input.ownerColor(cell.owner ?? '');
+  else if (cell.title !== undefined && (cell.title === selected || cell.title === hovered)) {
+    color = cell.title === selected ? palette.accent : palette.strong; bold = cell.title === selected;
+  } else if (cell.tone === 'owner') color = input.ownerColor(cell.owner ?? '');
   else if (cell.node !== undefined) color = cell.node === hovered ? palette.accent : cell.node === selected ? palette.strong : toneColor(cell.tone);
   else if (cell.links && hovered !== undefined && cell.links.includes(hovered)) color = palette.accent;
   else color = toneColor(cell.tone);
-  const bg = cell.tint === undefined ? undefined : cardTint(cell.tint === selected ? 'selected' : cell.tint === hovered ? 'hover' : 'rest');
-  return {text: cell.text, color, ...(bg ? {bg} : {}), ...(cell.bold || !cell.bar && cell.node !== undefined && cell.node === selected ? {bold: true} : {}), ...(cell.italic ? {italic: true} : {}),
+  return {text: cell.text, color, ...(bold || cell.bold || !cell.bar && cell.node !== undefined && cell.node === selected ? {bold: true} : {}), ...(cell.italic ? {italic: true} : {}),
     ...(cell.clock !== undefined ? {clock: cell.clock} : {})};
 }
 function merge(segments: readonly SideSegment[]): SideSegment[] {
@@ -186,10 +188,11 @@ export function tooltipFor(plan: DerivedPlan, view: SidebarView, focused: boolea
     if (kind === 'work') return focused ? '↑↓←→ · Enter open · p plans · Esc' : 'No plan · click selects · double-click opens the task';
     return focused ? '↑↓←→ · Enter open · p plans · Esc' : 'Click selects · double-click opens details';
   }
-  if (kind === 'work') return node.note ? 'Result: ' + node.note : node.title + ' · ' + node.status;
+  // The card shows only the owner and a clock; the duration and the result live here: `<title> · <status> · <duration> · <summary>` (clipped by the caller).
+  const summary = resultText(node);
+  if (kind === 'work' || node.took !== undefined || summary) return [node.title, node.status, node.took === undefined ? '' : formatTook(node.took), summary].filter(Boolean).join(' · ');
   if (node.acceptance.length) return 'Check: ' + node.acceptance[0];
-  const note = node.note?.split('\n').filter(Boolean).at(-1);
-  return note ? 'Note: ' + note : 'No check or note yet.';
+  return 'No check or note yet.';
 }
 
 /** The sidebar as `height` lines of segments, each exactly `width` cells wide. */
