@@ -81,16 +81,16 @@ test('the sidebar appears beside the timeline when a plan is created, with the t
     await waitFor(() => rig.screen(), text => text.includes('TIMELINELEFT'), {label: 'the timeline'});
     assert.ok(!rig.screen().includes('Theme preview'), 'no plan, no sidebar');
     await act(async () => {await create(app);});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && text.includes('Theme preview'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette') && text.includes('Theme preview'), {label: 'the sidebar'});
     // The sidebar is the right-hand column; the timeline text stays on the left and the composer and footer keep their place.
-    assert.ok(rig.find('1.1 Palette').x >= rig.sidebarX, 'the flow is in the right-hand column');
+    assert.ok(rig.find('╭ Palette').x >= rig.sidebarX, 'the flow is in the right-hand column');
     assert.ok(rig.find('TIMELINELEFT').x < rig.sidebarX);
     assert.ok(sidebarLines(rig).some(line => line.startsWith('│')), 'the border column');
     assert.match(sidebarLines(rig)[1]!, /active · 0\/3/);
     assert.ok(!rig.output.lines.at(-1)!.includes('▸ Tasks'), 'no chip while the sidebar is shown');
     await act(async () => {app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINESECOND');});
     await waitFor(() => rig.screen(), text => text.includes('TIMELINESECOND'), {label: 'the timeline keeps working'});
-    assert.ok(rig.screen().includes('1.1 Palette'));
+    assert.ok(rig.screen().includes('╭ Palette'));
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -100,8 +100,8 @@ test('linked work moves a node through running to done; the clock ticks beside i
     const app = await f.open();
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar from the start (a resumed plan)'});
-    assert.match(rig.screen(), /1\.1 Palette[^\n]*\n[^\n]*◌ ready/);
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar from the start (a resumed plan)'});
+    assert.match(rig.screen(), /╭ Palette[^\n]*\n[^\n]*◌ ready/);
     await act(async () => {runningTechne(app); app.plans.link('1.1', {activityId: 'tech'});});
     await waitFor(() => rig.screen(), text => /● running\s+2:1\d/.test(text), {label: 'running with its clock'});
     await act(async () => {app.store.activities.update(app.sessionId, 'tech', {status: 'completed', stage: 'Completed', stopReason: 'completed', finishedAt: Date.now()});});
@@ -111,8 +111,8 @@ test('linked work moves a node through running to done; the clock ticks beside i
     await act(async () => {
       for (const id of ['1.1', '1.2', '2']) assert.ok((await app.plans.apply([{op: 'accept', id, evidence: ['checked']}], 'logox')).ok);
     });
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('Tasks 3/3'), {label: 'hidden, with the chip'});
-    assert.match(rig.screen(), /Plan p1 is done · \/tasks or Ctrl\+B shows the task graph again|▸ Tasks 3\/3/);
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette') && text.includes('Tasks 3/3'), {label: 'hidden, with the chip'});
+    assert.match(rig.screen(), /Plan "Theme preview" is done · \/tasks or Ctrl\+B shows the task graph again|▸ Tasks 3\/3/);
     assert.ok(rig.output.lines.at(-1)!.includes('▸ Tasks 3/3'), 'the chip is on the footer row');
   } finally {if (rig) await unmount(rig); await f.close();}
 });
@@ -123,22 +123,22 @@ test('hover highlights a node border, click folds a parent, double click opens t
     const app = await f.open();
     await create(app, [...NODES, ...Array.from({length: 7}, (_, index) => ({title: 'Extra phase ' + index, owner: 'techne', nodes: [{title: 'Step', owner: 'kalon'}]}))]);
     rig = await mount(app, 120, 30);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     const rgb = (hex: string) => `\x1b[38;2;${parseInt(hex.slice(1, 3), 16)};${parseInt(hex.slice(3, 5), 16)};${parseInt(hex.slice(5, 7), 16)}m`;
-    const at = rig.find('╭ 1.1 Palette');
+    const at = rig.find('╭ Palette');
     const before = rig.output.text.length;
     await rig.mouse('move', at.x + 3, at.y);
     await waitFor(() => rig.output.text.slice(before), text => text.includes(rgb(palette.accent) + '╭ '), {label: 'the hovered border in the accent colour'});
     // A click on the title only selects: the layout stays put. The fold glyph (four cells before the id) folds the children away and back.
-    const design = rig.find('1 Design');
+    const design = rig.find('Design');
     await rig.click(design.x + 2, design.y);
     await delay(400); // a second click inside 350 ms would be a double click
-    assert.ok(rig.screen().includes('1.1 Palette'), 'a click on the title does not fold');
+    assert.ok(rig.screen().includes('╭ Palette'), 'a click on the title does not fold');
     await rig.click(design.x - 4, design.y);
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && /▸ \S 1 Design/.test(text), {label: 'folded'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette') && /▸ \S Design/.test(text), {label: 'folded'});
     await delay(400);
     await rig.click(design.x - 4, design.y);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'unfolded'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'unfolded'});
     // The wheel over the sidebar scrolls it (a marker appears in the header rule) and leaves the timeline alone.
     const top = rig.output.lines[2]!;
     assert.ok(!top.includes('▲'));
@@ -162,9 +162,9 @@ test('a click on the owner name jumps to that actor\'s latest card in the timeli
     for (let i = 0; i < 40; i++) app.store.message(app.sessionId, 'logox', 'assistant', 'Tail line ' + i);
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && text.includes('Tail line 39'), {label: 'ready'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette') && text.includes('Tail line 39'), {label: 'ready'});
     assert.ok(!rig.screen().includes('TECHNECARDBODY'), 'the card is off screen');
-    const row = rig.find('1.1 Palette');
+    const row = rig.find('╭ Palette');
     const owner = rig.find('techne', rig.sidebarX);
     assert.ok(owner.y > row.y);
     await rig.click(owner.x + 1, owner.y);
@@ -178,7 +178,7 @@ test('keyboard: Ctrl+B shows and focuses, arrows move, Enter opens, Esc returns 
     const app = await f.open();
     await create(app);
     rig = await mount(app, 120, 32, {getStatus: (ownerId: string) => ({ownerId, name: ownerId, state: 'ready'})});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     await rig.send('hi');
     assert.ok(rig.screen().includes('hi'), 'typing reaches the composer while the sidebar is unfocused');
     await rig.send('\x02'); // Ctrl+B focuses
@@ -195,18 +195,18 @@ test('keyboard: Ctrl+B shows and focuses, arrows move, Enter opens, Esc returns 
     await rig.send('x');
     assert.ok(/❯ hix/.test(rig.screen()), 'the key was typed into the composer:\n' + rig.screen());
     await rig.send('\x02'); await rig.send('\x02'); // focus, then hide
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden by the shortcut; the chip shows'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden by the shortcut; the chip shows'});
     // The chip is a button: hover shows its hint, a click shows the sidebar again.
     const chip = rig.find('▸ Tasks 0/3');
     await rig.mouse('move', chip.x + 2, chip.y);
     await waitFor(() => rig.screen(), text => text.includes('click or Ctrl+B shows it'), {label: 'the chip hint on the notification row'});
     await rig.click(chip.x + 2, chip.y);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && !text.includes('▸ Tasks 0/3'), {label: 'shown again'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette') && !text.includes('▸ Tasks 0/3'), {label: 'shown again'});
     // /tasks sidebar hides it too.
     await act(async () => {await app.submit('/tasks sidebar hide');});
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: '/tasks sidebar hide'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette'), {label: '/tasks sidebar hide'});
     await act(async () => {await app.submit('/tasks');});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: '/tasks toggles'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: '/tasks toggles'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -218,20 +218,20 @@ test('a hidden sidebar stays hidden when the next plan starts; below 110 columns
     rig = await mount(app, 90, 28);
     await act(async () => {await create(app);});
     await waitFor(() => rig.screen(), text => text.includes('▸ Tasks 0/3'), {label: 'only the chip at 90 columns'});
-    assert.ok(!rig.screen().includes('1.1 Palette'), 'never squeezes the timeline');
+    assert.ok(!rig.screen().includes('╭ Palette'), 'never squeezes the timeline');
     assert.ok(rig.find('TIMELINEWORD').x < 5);
     await rig.send('\x02');
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && text.includes('Esc or Ctrl+B closes'), {label: 'the overlay'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette') && text.includes('Esc or Ctrl+B closes'), {label: 'the overlay'});
     await rig.send('\x1b');
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('TIMELINEWORD'), {label: 'the overlay closed'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette') && text.includes('TIMELINEWORD'), {label: 'the overlay closed'});
     // The overlay closes on a click outside the panel, too.
     await rig.send('\x02');
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the overlay again'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the overlay again'});
     await rig.click(2, 10);
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: 'closed by a click'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette'), {label: 'closed by a click'});
     // Widen: a plan created while narrow shows up docked.
     await act(async () => {rig.output.resize(120, 28);});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'docked after widening'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'docked after widening'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -241,13 +241,13 @@ test('unrelated store changes neither rebuild the flow nor repaint the sidebar',
     const app = await f.open();
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     await delay(60);
     const builds = flowStats.builds, mark = rig.output.text.length;
     for (let i = 0; i < 3; i++) await act(async () => {app.store.message(app.sessionId, 'logox', 'assistant', 'unrelated message ' + i); await delay(30);});
     await waitFor(() => rig.screen(), text => text.includes('unrelated message 2'), {label: 'the timeline updated'});
     assert.equal(flowStats.builds, builds, 'the layout is not rebuilt');
-    assert.ok(!rig.output.text.slice(mark).includes('1.1 Palette'), 'no sidebar row was painted again');
+    assert.ok(!rig.output.text.slice(mark).includes('╭ Palette'), 'no sidebar row was painted again');
     // A change of the plan does repaint it.
     await act(async () => {assert.ok((await app.plans.apply([{op: 'update', id: '1.1', title: 'Palette v2'}], 'logox')).ok);});
     await waitFor(() => rig.screen(), text => text.includes('Palette v2'), {label: 'the plan change'});
@@ -313,13 +313,14 @@ test('a plan and work nobody linked to it are one graph: a worker of a planned s
     await create(app);
     runningTechne(app); app.plans.link('1.1', {activityId: 'tech'});
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     assert.ok(!rig.screen().includes('Find the callers'));
     await act(async () => {swarmJob(app, 'tech', 'T1', 'Find the callers');});
-    await waitFor(() => rig.screen(), text => text.includes('1.1.1 Find the callers') && text.includes('Tasks Theme preview'), {label: 'the worker joins its step'});
+    await waitFor(() => rig.screen(), text => text.includes('Find the callers') && text.includes('Tasks Theme preview'), {label: 'the worker joins its step'});
     assert.equal(app.plans.peek()?.nodes.length, 4, 'the plan itself is unchanged');
     // Double click on the synthesized node opens the delegation detail, not a plan node.
-    const node = rig.find('1.1.1 Find the callers');
+    const node = rig.find('╭ Find the callers');
+    assert.doesNotMatch(rig.screen().split('\n').map(line => line.slice(rig.sidebarX)).join('\n'), /\b\d+(\.\d+)+\b/, 'no node id on the sidebar');
     await rig.click(node.x + 2, node.y); await rig.click(node.x + 2, node.y);
     await waitFor(() => (surface(app) as Extract<CommandSurface, {kind: 'page'}> | null)?.title, title => title === 'Delegation · Find the callers', {label: 'the delegation detail'});
   } finally {if (rig) await unmount(rig); await f.close();}
@@ -336,10 +337,10 @@ test('a session with neither plan nor work shows the latest plan of an earlier s
     assert.equal(app.plans.peek(), undefined);
     rig = await mount(app, 120, 32);
     await waitFor(() => rig.screen(), text => text.includes('▸ Earlier tasks'), {label: 'the chip offers the earlier plan'});
-    assert.ok(!rig.screen().includes('1.1 Palette'), 'it does not open by itself');
+    assert.ok(!rig.screen().includes('╭ Palette'), 'it does not open by itself');
     await act(async () => {await app.submit('/tasks');});
-    await waitFor(() => rig.screen(), text => text.includes('Earlier tasks Theme preview') && text.includes('1.1 Palette') && text.includes('re-activate: /tasks plans'), {label: 'the earlier plan, read-only'});
-    const node = rig.find('1.1 Palette');
+    await waitFor(() => rig.screen(), text => text.includes('Earlier tasks Theme preview') && text.includes('╭ Palette') && text.includes('re-activate: /tasks plans'), {label: 'the earlier plan, read-only'});
+    const node = rig.find('╭ Palette');
     await rig.click(node.x + 2, node.y); await rig.click(node.x + 2, node.y);
     await waitFor(() => (surface(app) as Extract<CommandSurface, {kind: 'page'}> | null)?.title, title => title === 'Plan node · Palette', {label: 'the node of the earlier plan'});
     assert.equal(app.plans.peek(), undefined, 'nothing was adopted');
@@ -357,14 +358,14 @@ test('dragging the border resizes the docked sidebar live within its range, rele
     const app = await f.open();
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     const width = 119; // usable width: one column less than the terminal
     assert.equal(borderX(rig), rig.sidebarX);
     assert.equal(rig.sidebarX, width - 40, 'the default is 34%');
     await rig.send(press(rig.sidebarX, 10));
     await rig.send(dragTo(rig.sidebarX - 8, 10));
     await waitFor(() => borderX(rig), x => x === rig.sidebarX - 8, {label: 'the sidebar grew by eight columns'});
-    assert.ok(rig.screen().includes('1.1 Palette'), 'the flow was laid out again at the new width');
+    assert.ok(rig.screen().includes('╭ Palette'), 'the flow was laid out again at the new width');
     // Far to the left: the timeline keeps its 60 columns (and the gap), so the sidebar stops at 58.
     await rig.send(dragTo(5, 10));
     await waitFor(() => borderX(rig), x => x === width - 58, {label: 'clamped at the wide end'});
@@ -397,7 +398,7 @@ test('a remembered sidebar width is used at start, re-clamped when the terminal 
     app.surfaces.sidebarWidthStore!.set(56);
     await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === 56, {label: 'saved'});
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     assert.equal(borderX(rig), 119 - 56);
     await act(async () => {rig.output.resize(112, 32);});
     await waitFor(() => borderX(rig), x => x === 111 - 50, {label: 'clamped to 50 at 112 columns'});
@@ -417,16 +418,16 @@ test('the header row carries a collapse button in the border: hover says Collaps
     const app = await f.open();
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the sidebar'});
     const x = rig.sidebarX;
     assert.equal(rig.output.lines[0]![x], '›', 'the glyph is on the header row');
     assert.equal(rig.output.lines[6]![x], '│', 'the border continues below');
     await rig.mouse('move', x, 0);
     await waitFor(() => rig.screen(), text => /Collapse/.test(text), {label: 'the tooltip'});
     await rig.click(x, 0);
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden, with the chip'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden, with the chip'});
     await rig.clickText('▸ Tasks');
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'shown again by the chip'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'shown again by the chip'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -437,14 +438,14 @@ test('the overlay of a narrow terminal has the collapse button but no resize han
     await create(app);
     rig = await mount(app, 100, 30);
     await act(async () => {await app.submit('/tasks');});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the overlay'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette'), {label: 'the overlay'});
     const x = rig.output.lines[0]!.indexOf('›');
     assert.ok(x > 0, 'the glyph is drawn');
     const before = borderX(rig, 6);
     await rig.send(press(before, 10)); await rig.send(dragTo(before - 10, 10)); await rig.send(release(before - 10, 10));
     assert.equal(borderX(rig, 6), before, 'the overlay is not resizable');
     await rig.click(x, 0);
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: 'closed'});
+    await waitFor(() => rig.screen(), text => !text.includes('╭ Palette'), {label: 'closed'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -455,7 +456,7 @@ test('timeline text selection still works next to the docked sidebar, also when 
     app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINELEFT hello');
     await create(app);
     rig = await mount(app, 120, 32);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && text.includes('TIMELINELEFT'), {label: 'both'});
+    await waitFor(() => rig.screen(), text => text.includes('╭ Palette') && text.includes('TIMELINELEFT'), {label: 'both'});
     const at = rig.find('TIMELINELEFT');
     await rig.send(press(at.x, at.y) + dragTo(rig.sidebarX + 10, at.y) + release(rig.sidebarX + 10, at.y));
     const copied = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(rig.output.text);

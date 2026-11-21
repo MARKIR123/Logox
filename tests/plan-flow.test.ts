@@ -54,7 +54,7 @@ test('layers: a node sits one layer below its deepest sibling prerequisite, in i
   assert.deepEqual(flow.order, ['1', '1.1', '1.2', '1.3', '1.4']);
   const lines = text(flow);
   const at = (needle: string) => lines.findIndex(line => line.includes(needle));
-  assert.ok(at('1.1 Palette') < at('1.2 Contrast') && at('1.2 Contrast') < at('1.3 Tokens') && at('1.3 Tokens') < at('1.4 Preview'));
+  assert.ok(at('Palette') < at('Contrast') && at('Contrast') < at('Tokens') && at('Tokens') < at('Preview'));
   assert.ok(lines.every(line => stringWidth(line) <= 33), 'no row is wider than the flow');
 });
 
@@ -63,7 +63,7 @@ test('stacked at 36 columns: a layer that does not fit wraps with nothing betwee
   const lines = text(flow);
   assert.ok(!lines.some(line => /parallel|steps?$/.test(line)), 'no parallel label and no step note rows');
   assert.ok(lines.some(line => line.includes('▼')), 'an arrow enters a layer');
-  assert.ok(!lines.some(line => line.includes('1.2') && line.includes('1.3')), 'never side by side at 36');
+  assert.ok(!lines.some(line => line.includes('Contrast') && line.includes('Tokens')), 'never side by side at 36');
   // 1.2 and 1.3 are one layer wrapped onto two rows: the second box starts right under the first.
   const second = flow.boxes.find(box => box.id === '1.2')!, third = flow.boxes.find(box => box.id === '1.3')!;
   assert.equal(third.y0, second.y1 + 1, 'nothing between the rows of one layer');
@@ -75,31 +75,31 @@ test('layers are rows, arrows mean then: parallel boxes share a row without an a
   const chain = plan([{title: 'Phase', owner: 'logox', nodes: [{title: 'A', owner: 'kalon'}, {title: 'B', owner: 'techne'}, {title: 'C', owner: 'techne', after: ['1.1', '1.2']}, {title: 'D', owner: 'kalon', after: ['1.3']}]}]);
   const lines = text(flowAt(chain, 56));
   const row = (needle: string) => lines.findIndex(line => line.includes(needle));
-  assert.equal(row('1.1 A'), row('1.2 B'), 'A and B run in parallel on one row');
-  assert.ok(lines.slice(row('1.1 A'), row('1.3 C')).filter(line => line.includes('▼')).length === 1, 'one arrow row between layer 0 and layer 1');
-  assert.ok(row('1.3 C') < row('1.4 D'));
+  assert.equal(row('╭ A '), row('╭ B '), 'A and B run in parallel on one row');
+  assert.ok(lines.slice(row('╭ A '), row('╭ C ')).filter(line => line.includes('▼')).length === 1, 'one arrow row between layer 0 and layer 1');
+  assert.ok(row('╭ C ') < row('╭ D '));
   // Where no edge can be drawn between the two rows (the prerequisite sits in another chunk) one arrow is centred.
   const flow = flowAt(plan(wide), 120);
   assert.ok(!text(flow).some(line => line.includes('▼')), 'siblings with no prerequisites have no arrows');
   const stacked = text(flowAt(plan([{title: 'Phase', owner: 'logox', nodes: [{title: 'A', owner: 'kalon'}, {title: 'B', owner: 'kalon'}, {title: 'C', owner: 'techne', after: ['1.1']}]}]), 36));
-  const between = stacked.slice(stacked.findIndex(line => line.includes('1.1 A')), stacked.findIndex(line => line.includes('1.3 C')));
+  const between = stacked.slice(stacked.findIndex(line => line.includes('╭ A ')), stacked.findIndex(line => line.includes('╭ C ')));
   const arrows = between.filter(line => line.includes('▼'));
   assert.equal(arrows.length, 1, 'A is in the first of two wrapped rows, so no bus fits: one centred arrow marks the layer boundary');
   assert.equal(arrows[0]!.trim(), '▼');
   assert.ok(!between.some(line => /[┌┬┐├┼┤└┴┘]/.test(line.replace(/[╭╮╰╯]/g, ''))));
 });
 
-test('a phase is one line: glyph, id, title, progress; the owner only when it is not the Director; a failed leaf is told next to the count', () => {
+test('a phase is one line: glyph, title, progress; the owner only when it is not the Director; a failed leaf is told next to the count', () => {
   const derived = plan([{title: 'Phase', owner: 'logox', nodes: [{title: 'A', owner: 'techne'}, {title: 'B', owner: 'techne'}, {title: 'C', owner: 'techne'}]}, {title: 'Techne phase', owner: 'techne', nodes: [{title: 'X', owner: 'kalon'}]}],
     [{id: 'a', status: 'completed'}, {id: 'b', status: 'failed'}, {id: 'c', status: 'running'}], {'1.1': ['a'], '1.2': ['b'], '1.3': ['c']});
   const flow = flowAt(derived, 56);
   const lines = text(flow);
   const phase = flow.boxes.find(box => box.id === '1')!;
   assert.equal(phase.y1, phase.y0, 'one line, no owner line and no step note');
-  assert.match(lines[phase.y0]!, /▾ ● 1 Phase ━+ 1\/3 · 1 failed$/);
+  assert.match(lines[phase.y0]!, /▾ ● Phase ━+ 1\/3 · 1 failed$/);
   assert.ok(!lines[phase.y0]!.includes('logox'), 'the Director is not named');
   const other = flow.boxes.find(box => box.id === '2')!;
-  assert.match(lines[other.y0]!, /2 Techne phase ━+ ◎ techne {2}0\/1$/);
+  assert.match(lines[other.y0]!, /^[━▾▸] \S Techne phase ━+ ◎ techne {2}0\/1$/);
   assert.ok(other.owner.x1 > other.owner.x0 && other.owner.y === other.y0, 'the owner of a phase is a click target on its header');
   assert.equal(phase.owner.x1, phase.owner.x0, 'none for the Director');
 });
@@ -108,7 +108,7 @@ test('side by side from 48 columns: two per row, a bus connector joins the layer
   for (const total of [48, 56]) {
     const flow = flowAt(plan(diamond), total);
     const lines = text(flow);
-    assert.ok(lines.some(line => line.includes('1.2') && line.includes('1.3')), 'two nodes share a row at ' + total);
+    assert.ok(lines.some(line => line.includes('Contrast') && line.includes('Tokens')), 'two nodes share a row at ' + total);
     assert.ok(!lines.some(line => line.includes('∥ parallel')), 'no marker needed when they share a row');
     const bus = lines.filter(line => /[┌┬┐├┼┤└┴┘]/.test(line.replace(/[╭╮╰╯]/g, '')));
     assert.ok(bus.length >= 2, 'bus rows at ' + total + ':\n' + lines.join('\n'));
@@ -122,7 +122,7 @@ test('a prerequisite that skips a layer is a note under the node, not a line', (
   const flow = flowAt(plan([{title: 'Phase', owner: 'logox', nodes: [
     {title: 'A', owner: 'techne'}, {title: 'B', owner: 'techne', after: ['1.1']}, {title: 'C', owner: 'techne', after: ['1.1', '1.2']}]}]), 36);
   const lines = text(flow);
-  assert.ok(lines.some(line => line.includes('↳ after 1.1')), lines.join('\n'));
+  assert.ok(lines.some(line => line.includes('↳ after A')) && !lines.some(line => /\d\.\d/.test(line)), lines.join('\n'));
   assert.equal(lines.filter(line => line.includes('▼')).length, 2, 'one arrow per drawn edge: A to B, B to C');
 });
 
@@ -130,20 +130,20 @@ test('children: accepted subtrees start collapsed, others expanded, and a click 
   const nodes: NewNode[] = [{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf a', owner: 'automa'}, {title: 'Leaf b', owner: 'automa'}]}]}, {title: 'Two', owner: 'logox', nodes: [{title: 'Other', owner: 'techne'}]}];
   const open = plan(nodes);
   let lines = text(flowAt(open, 36));
-  assert.ok(lines.some(line => line.includes('1.1.1 Leaf a')), 'open by default');
-  assert.ok(lines.some(line => /^▾ .* 1 One/.test(line)) && lines.some(line => /^╭ 1\.1 Inner .*▾ ╮$/.test(line)), 'the fold glyph sits in the header of a phase and in the top border of a box');
+  assert.ok(lines.some(line => line.includes('Leaf a')), 'open by default');
+  assert.ok(lines.some(line => /^▾ .* One/.test(line)) && lines.some(line => /^╭ Inner .*▾ ╮$/.test(line)), 'the fold glyph sits in the header of a phase and in the top border of a box');
   assert.ok(!lines.some(line => /steps?$/.test(line)), 'no step note rows');
   lines = text(flowAt(open, 36, new Map([['1.1', false]])));
-  assert.ok(!lines.some(line => line.includes('Leaf a')) && lines.some(line => /^╭ 1\.1 Inner .*▸ ╮$/.test(line)));
+  assert.ok(!lines.some(line => line.includes('Leaf a')) && lines.some(line => /^╭ Inner .*▸ ╮$/.test(line)));
   // A fully accepted phase starts collapsed; opening it shows the children again.
   const accepted = derivePlan({...open, nodes: open.nodes.map(node => ['1.1.1', '1.1.2'].includes(node.id) ? {...node, accepted: {by: 'logox', at: 1, evidence: ['x']}} : node)}, []);
   assert.equal(accepted.nodes.find(node => node.id === '1')!.status, 'accepted');
   lines = text(flowAt(accepted, 36));
-  assert.ok(!lines.some(line => line.includes('1.1 Inner')) && lines.some(line => /^▸ .* 1 One/.test(line)));
-  assert.ok(text(flowAt(accepted, 36, new Map([['1', true]]))).some(line => line.includes('1.1 Inner')));
+  assert.ok(!lines.some(line => line.includes('Inner')) && lines.some(line => /^▸ .* One/.test(line)));
+  assert.ok(text(flowAt(accepted, 36, new Map([['1', true]]))).some(line => line.includes('Inner')));
   // Nested children are indented by two cells.
-  const inner = text(flowAt(open, 36)).find(line => line.includes('1.1.1 Leaf a'))!;
-  const outer = text(flowAt(open, 36)).find(line => line.includes('1.1 Inner'))!;
+  const inner = text(flowAt(open, 36)).find(line => line.includes('Leaf a'))!;
+  const outer = text(flowAt(open, 36)).find(line => line.includes('Inner'))!;
   assert.equal(inner.indexOf('╭') - outer.indexOf('╭'), 2);
 });
 
@@ -223,7 +223,7 @@ test('paint: header, progress, fixed width lines, scrolling, hover and selection
   const boxBorder = (view: Parameters<typeof paint>[0]) => paint(view).flat().find(segment => segment.text.includes('╭'))!.color;
   assert.notEqual(boxBorder({...emptyView, hovered: '1.1'}), boxBorder(emptyView), 'hover highlights the border of a node box');
   // The tooltip shows the hovered node's first check, else its note, else a hint.
-  assert.match(paint({...emptyView, hovered: '1.2'}).at(-1)!.map(segment => segment.text).join(''), /1\.2 has no check or note yet/);
+  assert.match(paint({...emptyView, hovered: '1.2'}).at(-1)!.map(segment => segment.text).join(''), /No check or note yet/);
   assert.match(paint(emptyView, true).at(-1)!.map(segment => segment.text).join(''), /Enter open/);
   // Scrolled content starts later and the header rule marks it.
   const scrolled = paint({...emptyView, scroll: 4});
@@ -231,12 +231,12 @@ test('paint: header, progress, fixed width lines, scrolling, hover and selection
   assert.equal(followTarget(derived, flow), '1.2');
 });
 
-test('the task graph paints under its own header: work without a plan, an earlier plan, faint ids for synthesized nodes, a header click or p opens the switcher', () => {
+test('the task graph paints under its own header: work without a plan, an earlier plan, no ids drawn, a header click or p opens the switcher', () => {
   const delegation = (id: string, extra: Partial<Delegation> = {}): Delegation => ({id, kind: 'actor', ownerId: 'techne', title: id, status: 'running', rootId: id, children: [], blockedBy: [], assignment: {title: extra.title ?? id, owns: [], acceptance: []}, ...extra});
   const graph = taskGraph(undefined, [delegation('R', {kind: 'director', ownerId: 'logox', title: 'Fix it', status: 'completed'}), delegation('tech', {title: 'Build', parentId: 'R', rootId: 'R'}),
     delegation('tech/T1', {kind: 'automa', jobId: 'T1', title: 'Look', status: 'done', parentId: 'tech', rootId: 'R'})], 's')!;
   const width = 40, height = 24;
-  const flow = buildFlow(graph.plan, {...flowOptionsFor(width), expanded: new Map(), owners, synthetic: graph.synthetic});
+  const flow = buildFlow(graph.plan, {...flowOptionsFor(width), expanded: new Map(), owners});
   const paint = (kind: 'plan' | 'work' | 'earlier', view = emptyView, focused = false) => paintSidebar({plan: graph.plan, flow, view, width, height, focused, kind, synthetic: graph.synthetic, ownerColor: id => id});
   const row = (lines: ReturnType<typeof paint>, at: number) => lines[at]!.map(segment => segment.text).join('');
   const work = paint('work');
@@ -245,13 +245,12 @@ test('the task graph paints under its own header: work without a plan, an earlie
   assert.match(row(work, 1), /working · 1\/1 done/, 'a done synthesized leaf counts as finished');
   assert.deepEqual(planProgress(graph.plan), {done: 1, failed: 0, interrupted: 0, total: 1}, 'a done synthesized leaf is complete');
   assert.match(row(work, work.length - 1), /No plan · click selects/);
-  assert.match(row(paint('work', {...emptyView, hovered: '1.1.1'}), work.length - 1), /1\.1\.1 · done/);
+  assert.match(row(paint('work', {...emptyView, hovered: '1.1.1'}), work.length - 1), /Look · done/);
   assert.match(row(paint('earlier'), 0), /Earlier tasks Tasks/);
   assert.match(row(paint('earlier'), 1), /read-only · active/);
   assert.match(row(paint('earlier'), work.length - 1), /Read-only · re-activate: \/tasks plans/);
-  // The ids of synthesized nodes are drawn in the faint tone, the plan's own in the muted tone.
-  const idCell = (synthetic: ReadonlySet<string>) => buildFlow(graph.plan, {...flowOptionsFor(width), expanded: new Map(), owners, synthetic}).rows.flat().find(cell => cell.text === '1.1')?.tone;
-  assert.equal(idCell(graph.synthetic), 'faint'); assert.equal(idCell(new Set()), 'muted');
+  // No node id is drawn, for synthesized nodes either.
+  assert.ok(!flow.rows.flat().some(cell => /\b\d+(\.\d+)+\b/.test(cell.text)));
   // Header: hover shows the hint, a click or p asks for the switcher.
   const geometry = sidebarGeometry(height);
   let step = stepMouse(flow, emptyView, geometry, {x: 5, y: 0, action: 'move'}, 0);
@@ -319,7 +318,7 @@ test('the sidebar width: default 34%, a remembered width re-clamped into 36..min
 
 test('the border column: the first row is the collapse button, below it the resize handle (docked only); double click resets, other columns keep their behaviour', () => {
   const graph = taskGraph(plan([{title: 'A', owner: 'techne'}]), [], 's')!;
-  const flow = buildFlow(graph.plan, {...flowOptionsFor(40), expanded: new Map(), owners, synthetic: graph.synthetic});
+  const flow = buildFlow(graph.plan, {...flowOptionsFor(40), expanded: new Map(), owners});
   const geometry = sidebarGeometry(30);
   const hover = stepMouse(flow, emptyView, geometry, {x: 0, y: 0, action: 'move', draggable: true}, 0);
   assert.equal(hover.view.hoveredEdge, 'collapse');
@@ -340,4 +339,20 @@ test('the border column: the first row is the collapse button, below it the resi
   assert.equal(stepMouse(flow, emptyView, geometry, {x: 0, y: 8, action: 'press'}, 0).effects.some(effect => effect.kind === 'drag'), false, 'no handle without draggable');
   assert.equal(paint(emptyView, true)[8]![0]!.color, paint(emptyView, false, true)[8]![0]!.color, 'the handle keeps the accent colour while dragged');
   assert.equal(stringWidth('›'), 1);
+});
+
+test('node ids are never drawn: no sidebar row, tooltip or phase line holds a dotted id, at any width and with folds open or shut', () => {
+  const nested: NewNode[] = [{title: 'One', owner: 'logox', nodes: [{title: 'Inner', owner: 'techne', nodes: [{title: 'Leaf a', owner: 'automa'}, {title: 'Leaf b', owner: 'automa', after: ['1.1.1']}]}, {title: 'Sibling', owner: 'kalon', after: ['1.1']}]},
+    {title: 'Two', owner: 'logox', after: ['1'], nodes: [{title: 'Other', owner: 'techne'}]}];
+  const derived = plan(nested);
+  const idPattern = /\b\d+(\.\d+)+\b/;
+  for (const total of [36, 40, 56, 120]) {
+    for (const hovered of [undefined, '1', '1.1', '1.1.2', '2.1']) {
+      const flow = flowAt(derived, total, new Map([['1.1', true]]));
+      const lines = paintSidebar({plan: derived, flow, view: {...emptyView, hovered, selected: hovered}, width: total, height: 40, focused: true, ownerColor: () => '#fff'});
+      for (const line of lines) assert.doesNotMatch(line.map(segment => segment.text).join(''), idPattern);
+    }
+  }
+  const flow = flowAt(derived, 36);
+  assert.ok(text(flow).some(line => line.includes('↳ after One')), 'a prerequisite in another group is named by its title');
 });

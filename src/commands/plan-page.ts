@@ -40,15 +40,16 @@ export function createPlanPages(deps: PlanPageDeps) {
   const openDetail = async (plan: DerivedPlan, node: DerivedNode, backTo: () => Promise<void>) => {
     const known = node.links.map(link => link.activityId ?? link.automaJob!).map(id => ({id, title: workTitle(id)}));
     const actions: TabAction[] = known.flatMap((link, index) => link.title !== undefined && index < 9 ? [{id: 'link:' + link.id, label: 'Open ' + link.title, key: String(index + 1)}] : []);
-    const path = (id: string): string => {const target = plan.nodes.find(item => item.id === id); return target ? id + ' ' + target.title : id;};
+    // Ids are the model's; the person reads titles.
+    const path = (id: string): string => plan.nodes.find(item => item.id === id)?.title ?? 'an earlier step';
     const body: TabRow[] = [
       row.heading('Node'),
-      row.field('Id', node.id), row.field('Title', node.title), row.field('Owner', name(node.owner) + (node.forked ? ' ⑂' : '')),
+      row.field('Title', node.title), row.field('Owner', name(node.owner) + (node.forked ? ' ⑂' : '')),
       row.field('Status', PLAN_GLYPHS[node.status] + ' ' + node.status),
       ...(node.leaves ? [row.field('Progress', `${node.leaves.done} of ${node.leaves.total} tasks complete` + (node.leaves.failed ? `, ${node.leaves.failed} failed` : '') + (node.leaves.interrupted ? `, ${node.leaves.interrupted} interrupted` : ''))] : []),
       ...(node.parent ? [row.field('Parent', path(node.parent))] : []),
       ...(node.after.length ? [row.field('After', node.after.map(path).join('; '))] : []),
-      ...(node.blockedBy.length ? [row.field('Waiting for', node.blockedBy.join(', '))] : []),
+      ...(node.blockedBy.length ? [row.field('Waiting for', node.blockedBy.map(path).join('; '))] : []),
       row.blank(), row.heading('Acceptance'),
       ...(node.acceptance.length ? node.acceptance.map(item => row.bullet(item)) : [row.muted('No acceptance checks written.')]),
       row.blank(), row.heading('Evidence'),
@@ -57,7 +58,7 @@ export function createPlanPages(deps: PlanPageDeps) {
       ...(node.note ? [row.blank(), row.heading('Note'), ...node.note.split('\n').map(line => row.text(line))] : []),
       row.blank(), row.heading('Linked work'),
       ...(known.length ? known.map((link, index) => row.text((index < 9 && link.title !== undefined ? `${index + 1}  ` : '•  ') + (link.title ?? link.id) +
-        (node.work.find(item => item.id === link.id) ? ' · ' + node.work.find(item => item.id === link.id)!.phase : ''))) : [row.muted('Nothing is linked yet: work started with node ' + node.id + ' appears here.')]),
+        (node.work.find(item => item.id === link.id) ? ' · ' + node.work.find(item => item.id === link.id)!.phase : ''))) : [row.muted('Nothing is linked yet: work started for this step appears here.')]),
     ];
     const pageActions: PageActions = {
       onSaveToggles: () => ({}),
@@ -71,7 +72,7 @@ export function createPlanPages(deps: PlanPageDeps) {
       },
     };
     if (surfaces.getSnapshot()) surfaces.close();
-    surfaces.openPage('Plan node · ' + node.title, [{id: 'detail', title: node.id + ' · ' + name(node.owner), ...tabContent(body), ...(actions.length ? {actions} : {})}], 'detail', pageActions);
+    surfaces.openPage('Plan node · ' + node.title, [{id: 'detail', title: name(node.owner), ...tabContent(body), ...(actions.length ? {actions} : {})}], 'detail', pageActions);
   };
 
   /** The detail page of one node of the session's plan (the sidebar's double-click and Enter), or of the earlier session's plan named by `planId` (read-only); Esc closes it. */
@@ -89,9 +90,9 @@ export function createPlanPages(deps: PlanPageDeps) {
     const items: PickerItem[] = [{id: AUTO, label: 'Follow the session', description: 'The plan, else the work done so far, else the latest earlier plan'}];
     if (deps.hasWork()) items.push({id: WORK, label: 'Work so far', description: 'The delegated work of this session as a graph (no plan)'});
     for (const header of headers) {
-      items.push({id: header.id, label: header.id + ' · ' + header.title,
+      items.push({id: header.id, label: header.title,
         description: [header.status, header.nodes + ' nodes', header.current ? 'this session' : 'earlier session, read-only', formatAge(header.updatedAt)].join(' · ')});
-      if (!header.current && header.status !== 'abandoned') items.push({id: ADOPT + header.id, label: '  Re-activate ' + header.id + ' in this session',
+      if (!header.current && header.status !== 'abandoned') items.push({id: ADOPT + header.id, label: '  Re-activate "' + header.title + '" in this session',
         description: board.active() ? 'Another plan is active: abandon it first' : 'Work then links to it again'});
     }
     await open({title: 'Plans', description: 'Enter shows it in the sidebar · Esc closes', current: '', items, emptyText: PLAN_EMPTY_TEXT},
@@ -102,7 +103,7 @@ export function createPlanPages(deps: PlanPageDeps) {
           const adopted = await board.adopt(id.slice(ADOPT.length));
           if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
           surfaces.requestSidebarSource({kind: 'plan', id: id.slice(ADOPT.length)}); surfaces.requestPlanSidebar('show');
-          return {message: 'Plan ' + id.slice(ADOPT.length) + ' is active in this session again.', presentation: 'status' as const};
+          return {message: 'Plan "' + (headers.find(header => header.id === id.slice(ADOPT.length))?.title ?? 'earlier plan') + '" is active in this session again.', presentation: 'status' as const};
         }
         surfaces.requestSidebarSource({kind: 'plan', id}); surfaces.requestPlanSidebar('show');
         return {};

@@ -108,7 +108,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
       ...(cost !== undefined ? [row.field('Cost', money(cost))] : []),
       ...(node.jobId ? [row.field('Worker', node.jobId + (node.route ? ' · ' + node.route + ' route' : '') + (node.model ? ' · ' + node.model : ''))] : []),
       ...(node.batchId ? [row.field('Batch', node.batchId)] : []),
-      ...(node.parentId ? [row.field('Parent', node.parentId)] : []),
+      ...(node.parentId ? [row.field('Parent', all.find(item => item.id === node.parentId)?.title ?? 'an earlier task')] : []),
       ...(earlier.length ? [row.blank(), row.heading('Earlier attempts'), ...earlier.map(item => row.bullet(name(item.ownerId) + ' · ' + item.status + (item.stopReason && item.stopReason !== 'completed' ? ' (stop: ' + item.stopReason + ')' : '') +
         (item.durationMs !== undefined ? ' · ' + formatDuration(item.durationMs) : '') + (item.result?.summary ? ' · ' + item.result.summary.slice(0, 160) : '')))] : []),
       ...(result ? [row.blank(), row.heading('Result'), row.field('Summary', result.summary || '(the task left no text)'),

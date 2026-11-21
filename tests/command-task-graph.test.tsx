@@ -101,7 +101,7 @@ test('a plan node\'s detail shows its fields; a link opens the delegation detail
     await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Palette', {label: 'the node detail'});
     const page = surface(app) as Page;
     const lines = page.tabs[0]!.lines.join('\n');
-    assert.match(lines, /Title: Palette/); assert.match(lines, /Owner: Techne/); assert.match(lines, /Status: ● running/); assert.match(lines, /Parent: 1 Design/);
+    assert.match(lines, /Title: Palette/); assert.match(lines, /Owner: Techne/); assert.match(lines, /Status: ● running/); assert.match(lines, /Parent: Design$/m); assert.doesNotMatch(lines, /^Id:/m); assert.doesNotMatch(lines, /\b\d+(\.\d+)+\b/);
     assert.match(lines, /all colours named/); assert.match(lines, /Not accepted yet\./); assert.match(lines, /1  Techne · Build the palette · running/);
     assert.deepEqual(page.tabs[0]!.actions?.map(action => [action.id, action.key]), [['link:tech', '1']]);
     await app.surfaces.triggerTabAction(page.id, 'detail', 'link:tech');
@@ -186,15 +186,15 @@ test('the mouse opens a plan node\'s detail from the sidebar and a click on a li
     const screen = () => output.lines.join('\n');
     const find = (needle: string) => {const y = output.lines.findLastIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle)};};
     const click = async (needle: string) => {const {x, y} = find(needle); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
-    await waitFor(() => screen(), text => /1\.1 Palette/.test(text) && /2 Ship/.test(text), {label: 'the sidebar'});
-    await click('1.1 Palette'); await click('1.1 Palette');
+    await waitFor(() => screen(), text => /╭ Palette/.test(text) && /Ship/.test(text), {label: 'the sidebar'});
+    await click('╭ Palette'); await click('╭ Palette');
     await waitFor(() => screen(), text => /Acceptance/.test(text) && /all colours named/.test(text), {label: 'the detail page'});
     await click('Open Techne');
     await waitFor(() => screen(), text => /Assignment/.test(text) && /Build the palette/.test(text), {label: 'the delegation detail'});
     await send('\x1b');
     await waitFor(() => screen(), text => /Acceptance/.test(text), {label: 'back on the node'});
     await send('\x1b');
-    await waitFor(() => screen(), text => /2 Ship/.test(text) && !/Acceptance/.test(text), {label: 'back on the sidebar'});
+    await waitFor(() => screen(), text => /Ship/.test(text) && !/Acceptance/.test(text), {label: 'back on the sidebar'});
   } finally {
     try {await act(async () => instance?.unmount());} catch {}
     input.destroy(); output.destroy();

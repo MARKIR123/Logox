@@ -5,7 +5,7 @@
  * Reading rule: an arrow means "then"; boxes with no arrow between them run in parallel.
  *
  * Algorithm (deterministic, no crossing minimisation):
- *  1. Top-level nodes are phases, stacked in id order, each one line: fold glyph, status glyph, id, title, a rule, then the owner (only when it is not the
+ *  1. Top-level nodes are phases, stacked in id order, each one line: fold glyph, status glyph, title, a rule, then the owner (only when it is not the
  *     Director) and the progress of the leaves below (`3/5 · 1 failed`). An open phase lays its children out as a group; an accepted or abandoned phase
  *     starts collapsed (`expanded` overrides either way).
  *  2. A group is a set of siblings. A node's layer is 0 without prerequisites among its siblings, else 1 + the largest layer of those prerequisites.
@@ -15,8 +15,8 @@
  *     its row and its children follow as a group indented by two cells.
  *  4. Between the last row of layer k-1 and the first row of layer k an arrow connector is drawn: where the prerequisites sit in those two rows, a bus
  *     (`┌ ┬ ┐ ├ ┼ ┤ └ ┴ ┘ ─` with `▼` over each target); otherwise one centred `▼`. Only a prerequisite that skips a layer or sits in another group is a
- *     `↳ after 1.1` note under the node, so no line ever crosses a node.
- *  5. A node is a 3-row box (`╭ id title ─ ▾ ╮` with the fold glyph of a parent in the top border, `│ owner  status progress clock │`, `╰─╯`).
+ *     `↳ after <title>` note under the node, so no line ever crosses a node. Ids are never drawn.
+ *  5. A node is a 3-row box (`╭ title ─ ▾ ╮` with the fold glyph of a parent in the top border, `│ owner  status progress clock │`, `╰─╯`).
  */
 import stringWidth from 'string-width';
 import {PLAN_GLYPHS} from '../../commands/plan-page.js';
@@ -68,8 +68,6 @@ export interface FlowOptions {
   readonly expanded: ReadonlyMap<string, boolean>;
   /** The symbol and name an owner is shown with. */
   readonly owners: (id: string) => {readonly symbol: string; readonly name: string};
-  /** Nodes synthesized from delegations (`src/runtime/task-graph.ts`): their id is drawn faint, nothing else differs. */
-  readonly synthetic?: ReadonlySet<string>;
 }
 /** Counts layouts built; tests assert an unrelated store change builds none. */
 export const flowStats = {builds: 0};
@@ -108,6 +106,8 @@ interface Context {
   readonly rows: FlowRow[];
   readonly boxes: FlowBox[];
   readonly byParent: Map<string | undefined, DerivedNode[]>;
+  /** Node titles by id: the person never sees ids, so a prerequisite is named by its title. */
+  readonly titles: Map<string, string>;
 }
 
 /** The progress of a parent's leaves (`3/5 · 1 failed`); `short` leaves the failures out. A node with workers and no leaves shows their number. */
@@ -147,33 +147,38 @@ function statusLine(node: DerivedNode, options: FlowOptions, width: number): {ce
 }
 
 /** The note under a node for the prerequisites no arrow shows (those that skip a layer or sit in another group). */
-function notesOf(undrawn: readonly string[], width: number): FlowRow[] {
-  return undrawn.length ? [[spaces(2), cell(fit('↳ after ' + undrawn.join(', '), width - 2), 'faint')]] : [];
+function notesOf(undrawn: readonly string[], ctx: Context, width: number): FlowRow[] {
+  const room = width - 2;
+  if (!undrawn.length || room <= 0) return [];
+  // Each prerequisite by its title, joined with `, `; the titles share what is left of the line equally and a cut one ends with `…`.
+  const prefix = '↳ after ';
+  const titles = undrawn.map(id => ctx.titles.get(id) ?? '…');
+  const share = Math.max(1, Math.floor((room - stringWidth(prefix) - (titles.length - 1) * 2) / titles.length));
+  let text = prefix + titles.map(title => fit(title, share)).join(', ');
+  if (stringWidth(text) > room) text = fit(text, room);
+  return [[spaces(2), cell(text, 'faint')]];
 }
 const foldGlyph = (isOpen: boolean): string => isOpen ? '▾' : '▸';
 
 function boxBlock(node: DerivedNode, ctx: Context, width: number, isOpen: boolean, undrawn: readonly string[]): Block {
   const inner = width - 4;
   const parent = (ctx.byParent.get(node.id)?.length ?? 0) > 0;
-  // A parent carries its fold glyph in the top border: `╭ 1.2 Title ──── ▾ ╮`.
+  // A parent carries its fold glyph in the top border: `╭ Title ──── ▾ ╮`.
   const tail = parent ? 3 : 0;
-  const label = fit(node.id + ' ' + node.title, Math.max(1, width - 5 - tail));
+  const label = fit(node.title, Math.max(1, width - 5 - tail));
   const fill = Math.max(1, width - 4 - stringWidth(label) - tail);
   const border = (text: string) => cell(text, 'line', {node: node.id});
   const rest = [border(' ' + '─'.repeat(fill)), ...(parent ? [border(' '), cell(foldGlyph(isOpen), 'muted', {node: node.id}), border(' ')] : []), border('╮')];
-  // The id is part of the label: it was cut apart only to give it its own tone; when the label was clipped inside the id the whole label is one cell.
-  const labelRow: FlowRow = label.startsWith(node.id)
-    ? [border('╭ '), cell(node.id, ctx.options.synthetic?.has(node.id) ? 'faint' : 'muted'), cell(label.slice(node.id.length), node.status === 'running' ? 'strong' : 'fg', {bold: node.status === 'running'}), ...rest]
-    : [border('╭ '), cell(label, 'fg'), ...rest];
+  const labelRow: FlowRow = [border('╭ '), cell(label, node.status === 'running' ? 'strong' : 'fg', {bold: node.status === 'running'}), ...rest];
   const line = statusLine(node, ctx.options, inner);
   const used = rowWidth(line.cells);
   const middle: FlowRow = [border('│ '), ...line.cells, spaces(inner - used), border(' │')];
   const bottom: FlowRow = [border('╰' + '─'.repeat(width - 2) + '╯')];
   const glyphX = 2 + stringWidth(label) + 1 + fill + 1;
-  return {rows: [labelRow, middle, bottom, ...notesOf(undrawn, width)], ownerX0: 2 + line.ownerX0, ownerX1: 2 + line.ownerX1, ...(parent ? {fold: {x0: glyphX, x1: glyphX + 1}} : {})};
+  return {rows: [labelRow, middle, bottom, ...notesOf(undrawn, ctx, width)], ownerX0: 2 + line.ownerX0, ownerX1: 2 + line.ownerX1, ...(parent ? {fold: {x0: glyphX, x1: glyphX + 1}} : {})};
 }
 
-/** A phase, one line: `▾ ● 1 Title ━━━━ owner 3/5 · 1 failed`; the owner only when it is not the Director. */
+/** A phase, one line: `▾ ● Title ━━━━ owner 3/5 · 1 failed`; the owner only when it is not the Director. */
 function phaseBlock(node: DerivedNode, ctx: Context, width: number, isOpen: boolean, undrawn: readonly string[]): Block {
   const parent = (ctx.byParent.get(node.id)?.length ?? 0) > 0;
   const rule = (text: string) => cell(text, 'line', {node: node.id});
@@ -183,16 +188,15 @@ function phaseBlock(node: DerivedNode, ctx: Context, width: number, isOpen: bool
   const right = [ownerText, progress].filter(Boolean);
   const rightWidth = right.reduce((sum, part) => sum + stringWidth(part), 0) + Math.max(0, right.length - 1) * 2;
   const lead = [parent ? cell(foldGlyph(isOpen), 'muted', {node: node.id}) : rule('━'), spaces(1), cell(PLAN_GLYPHS[node.status], STATUS_TONE[node.status]), spaces(1)];
-  const idText = node.id + ' ';
-  const leadWidth = 4 + stringWidth(idText);
+  const leadWidth = 4;
   const title = fit(node.title, Math.max(1, width - leadWidth - rightWidth - (rightWidth ? 4 : 3)));
   const fill = Math.max(1, width - leadWidth - stringWidth(title) - 1 - (rightWidth ? rightWidth + 1 : 0));
   const ownerX0 = leadWidth + stringWidth(title) + 1 + fill + 1;
   const tail: FlowCell[] = [];
   if (ownerText) tail.push(cell(ownerText, 'owner', {owner: node.owner}));
   if (progress) tail.push(...(ownerText ? [spaces(2)] : []), cell(progress, node.leaves?.failed ? 'warning' : 'muted'));
-  const first: FlowRow = [...lead, cell(idText, ctx.options.synthetic?.has(node.id) ? 'faint' : 'muted'), cell(title, 'strong', {bold: true}), spaces(1), rule('━'.repeat(fill)), ...(tail.length ? [spaces(1), ...tail] : [])];
-  return {rows: [first, ...notesOf(undrawn, width)], ownerX0: ownerText ? ownerX0 : 0, ownerX1: ownerText ? ownerX0 + stringWidth(ownerText) : 0, ...(parent ? {fold: {x0: 0, x1: 1}} : {})};
+  const first: FlowRow = [...lead, cell(title, 'strong', {bold: true}), spaces(1), rule('━'.repeat(fill)), ...(tail.length ? [spaces(1), ...tail] : [])];
+  return {rows: [first, ...notesOf(undrawn, ctx, width)], ownerX0: ownerText ? ownerX0 : 0, ownerX1: ownerText ? ownerX0 + stringWidth(ownerText) : 0, ...(parent ? {fold: {x0: 0, x1: 1}} : {})};
 }
 
 const open = (node: DerivedNode, ctx: Context): boolean => ctx.options.expanded.get(node.id) ?? defaultOpen(node);
@@ -333,7 +337,7 @@ export function buildFlow(plan: DerivedPlan, options: FlowOptions): FlowLayout {
   flowStats.builds++;
   const byParent = new Map<string | undefined, DerivedNode[]>();
   for (const node of plan.nodes) byParent.set(node.parent, [...byParent.get(node.parent) ?? [], node]);
-  const ctx: Context = {options, rows: [], boxes: [], byParent};
+  const ctx: Context = {options, rows: [], boxes: [], byParent, titles: new Map(plan.nodes.map(node => [node.id, node.title] as const))};
   const top = byParent.get(undefined) ?? [];
   if (!top.length) ctx.rows.push([cell('No steps yet.', 'muted', {italic: true})]);
   top.forEach((node, index) => {

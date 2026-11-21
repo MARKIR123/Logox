@@ -143,7 +143,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     if (!plan || !panelVisible) return undefined;
     const cached = flowCache.current;
     if (cached && cached.plan === plan && cached.width === panelWidth && cached.ownersKey === ownersKey && cached.expanded === expanded) return cached.flow;
-    const flow = buildFlow(plan, {...flowOptionsFor(panelWidth), expanded, owners: ownerLabel, synthetic: graph!.synthetic});
+    const flow = buildFlow(plan, {...flowOptionsFor(panelWidth), expanded, owners: ownerLabel});
     flowCache.current = {plan, width: panelWidth, ownersKey, expanded, flow};
     return flow;
   };
@@ -162,10 +162,10 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   const openOverlay = () => {board?.refresh(); setOverlay(true);};
   const closeOverlay = () => {setOverlay(false); if (focus === 'plan') setFocus('input');};
 
-  const previous = useRef<{id: string; status: DerivedPlan['status']} | undefined>(undefined);
+  const previous = useRef<{id: string; title: string; status: DerivedPlan['status']} | undefined>(undefined);
   useEffect(() => {
     const before = previous.current;
-    previous.current = boardPlan ? {id: boardPlan.id, status: boardPlan.status} : undefined;
+    previous.current = boardPlan ? {id: boardPlan.id, title: boardPlan.title, status: boardPlan.status} : undefined;
     if (boardPlan?.status === 'active' && wide && autoFor.current !== boardPlan.id) {
       autoFor.current = boardPlan.id;
       if (choice.current !== 'hidden') setShown(true);
@@ -175,7 +175,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
       const done = boardPlan?.id === before.id && boardPlan.status === 'done';
       setShown(false); setOverlay(false);
       if (focus === 'plan') setFocus('input');
-      flash(`Plan ${before.id} ${done ? 'is done' : 'was closed'} · /tasks or Ctrl+B shows the task graph again`, 5000, 'info');
+      flash(`Plan "${before.title}" ${done ? 'is done' : 'was closed'} · /tasks or Ctrl+B shows the task graph again`, 5000, 'info');
     }
   }, [boardPlan?.id, boardPlan?.status, wide]);
   // Another graph has other node ids: selection and folds do not carry over.

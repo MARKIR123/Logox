@@ -183,10 +183,10 @@ export function tooltipFor(plan: DerivedPlan, view: SidebarView, focused: boolea
     if (kind === 'work') return focused ? '↑↓←→ · Enter open · p plans · Esc' : 'No plan · click selects · double-click opens the task';
     return focused ? '↑↓←→ · Enter open · p plans · Esc' : 'Click selects · double-click opens details';
   }
-  if (kind === 'work') return node.note ? 'Result: ' + node.note : node.id + ' · ' + node.status;
+  if (kind === 'work') return node.note ? 'Result: ' + node.note : node.title + ' · ' + node.status;
   if (node.acceptance.length) return 'Check: ' + node.acceptance[0];
   const note = node.note?.split('\n').filter(Boolean).at(-1);
-  return note ? 'Note: ' + note : node.id + ' has no check or note yet.';
+  return note ? 'Note: ' + note : 'No check or note yet.';
 }
 
 /** The sidebar as `height` lines of segments, each exactly `width` cells wide. */
