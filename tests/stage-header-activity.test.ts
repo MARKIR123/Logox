@@ -32,7 +32,7 @@ const approve = (store: RuntimeStore, activityId: string, ownerId: string) => st
   tool: 'Write', arguments: {file_path: 'a.ts'}, reason: 'Write a.ts'});
 const iconOf = (row: SceneRow) => decorateRow(row, Date.now()).segments!.find(segment => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(segment.text) || segment.selectionKey?.endsWith(':activity_icon'));
 
-test('the header reads `Name · stage`; without a stage it is the name alone, never a tool title, Thinking or a clock', () => {
+test('the header is the name alone: the model\'s ⏵ stage, tool titles, Thinking and clocks never follow it', () => {
   const f = fixture();
   const think = f.steps.thinking(); f.store.appendMessage(think, 'hmm');
   assert.match(f.header(), spun('Logox'), 'no stage yet while thinking');
@@ -41,19 +41,19 @@ test('the header reads `Name · stage`; without a stage it is the name alone, ne
   assert.match(f.header(), spun('Logox'), 'no stage yet while a tool runs');
   f.stage('Verifying the build');
   const text = f.header();
-  assert.match(text, spun('Logox', ' Verifying the build'));
-  assert.ok(!/npm run|Shell|Thinking|\d+(\.\d)?s\b/.test(text), 'no tool title, no Thinking, no elapsed time: ' + text);
+  assert.match(text, spun('Logox'), 'the Director window shows its tool calls itself: no activity after the name');
+  assert.ok(!/Verifying|npm run|Shell|Thinking|\d+(\.\d)?s\b/.test(text), 'no stage, tool title, Thinking or elapsed time: ' + text);
   assert.equal(iconOf(f.headerRow()), undefined, 'no spinner in the header');
   assert.equal(f.headerRow().animation, undefined, 'the header carries no animation');
-  assert.equal(f.headerRow().segments!.find(s => s.selectionKey?.endsWith(':activity_sep'))!.color, faintColor(), 'the separator is faint');
+  assert.equal(f.headerRow().segments!.find(s => s.selectionKey?.endsWith(':activity_sep')), undefined, 'no separator without a wait state');
   f.stage('Packaging the result');
-  assert.match(f.header(), spun('Logox', ' Packaging the result'), 'the latest stage wins');
+  assert.match(f.header(), spun('Logox'), 'a later stage does not show either');
 });
 
-test('temporary states replace the stage text and the stage comes back afterwards', () => {
+test('temporary wait states follow the name while they hold and disappear afterwards', () => {
   const f = fixture();
   f.tool(); f.stage('Checking the layout');
-  const base = spun('Logox', ' Checking the layout');
+  const base = spun('Logox');
   assert.match(f.header(), base);
 
   // Pending answer / approval: static (no spinner) and no clock.
@@ -66,6 +66,7 @@ test('temporary states replace the stage text and the stage comes back afterward
   const permission = approve(f.store, 'main', 'logox');
   assert.match(f.header(), /^Logox · Awaiting approval\s*$/);
   assert.equal(iconOf(f.headerRow()), undefined);
+  assert.equal(f.headerRow().segments!.find(s => s.selectionKey?.endsWith(':activity_sep'))!.color, faintColor(), 'the separator is faint');
   f.store.interactions.cancel(permission.requestId);
   assert.match(f.header(), base);
   // A request of another owner never changes the Logox header.
@@ -95,24 +96,23 @@ test('temporary states replace the stage text and the stage comes back afterward
   g.steps.finish(readId, 'completed', 'Read\nok');
   assert.match(g.header(), /^Logox · Waiting on Kalon\s*$/);
   g.store.activities.update('s', 'k', {status: 'completed'});
-  assert.match(g.header(), spun('Logox', ' Handing out the work'));
+  assert.match(g.header(), spun('Logox'));
 });
 
-test('a finished round has no spinner: the name keeps only the last stage as quiet text', () => {
+test('a finished round has no spinner and no stage: just the name', () => {
   const f = fixture();
   const id = f.tool(); f.stage('Checking the layout'); f.stage('Final polish');
   f.steps.finish(id, 'completed', 'Shell\nok'); f.store.activities.update('s', 'main', {status: 'completed'});
   const row = f.headerRow();
   assert.equal(row.animation, undefined);
-  assert.equal(row.text.trim(), 'Logox · Final polish');
+  assert.equal(row.text.trim(), 'Logox');
   assert.ok(!/\d+s\b/.test(row.text), 'no elapsed time');
-  assert.equal(row.segments!.find(s => s.selectionKey?.endsWith(':activity'))!.color, palette.muted);
   const quiet = fixture();
   const done = quiet.tool(); quiet.steps.finish(done, 'completed', 'Shell\nok'); quiet.store.activities.update('s', 'main', {status: 'completed'});
   assert.equal(quiet.headerRow().text.trim(), 'Logox', 'no stage was written: just the name');
 });
 
-test('an actor window header follows the same rules for that actor', () => {
+test('an actor window header is the name alone, with only wait states after it', () => {
   const store = new RuntimeStore();
   store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor', title: 'Rig', taskTitle: 'Rig', status: 'running', stage: 'x', detail: ''});
   store.message('s', 'kalon', 'user', 'Do it.', {activityId: 'k', inputKind: 'director', source: 'logox'});
@@ -124,16 +124,16 @@ test('an actor window header follows the same rules for that actor', () => {
   const id = steps.tool({id: 'x', name: 'Shell', arguments: JSON.stringify({command: 'sleep 99'})}); steps.start(id);
   assert.match(header(), spun('Kalon'));
   store.message('s', 'kalon', 'assistant', '⏵ Sketching the wing', {activityId: 'k'});
-  assert.match(header(), spun('Kalon', ' Sketching the wing'));
+  assert.match(header(), spun('Kalon'), 'no activity after the name in the actor\'s own window');
   const question = ask(store, 'k', 'kalon');
   assert.match(header(), /^Kalon · Awaiting your answer\s*$/);
   store.interactions.cancel(question.requestId);
   store.activities.update('s', 'k', {phase: 'retry', detail: 'Connection interrupted. Retrying (1/5)...'});
   assert.match(header(), spun('Kalon', ' Retrying \\(1/5\\)'));
   store.activities.update('s', 'k', {phase: 'tool'});
-  assert.match(header(), spun('Kalon', ' Sketching the wing'));
+  assert.match(header(), spun('Kalon'));
   steps.finish(id, 'completed', 'Shell\nok'); store.activities.update('s', 'k', {status: 'completed'});
-  assert.equal(header().trim(), 'Kalon · Sketching the wing');
+  assert.equal(header().trim(), 'Kalon');
 });
 
 test('actor card subtitle: layer 1 from events, the reply\'s own ⏵ line on top, temporary states override, nothing stale after the end', () => {
@@ -242,4 +242,28 @@ test('a reply with no ⏵ line gets a fallback stage label from its latest tool 
   assert.match(card(), /Rig the pedals · Thinking/);
   assert.ok(!/Dispatching|Tracing/.test(card()), 'a new reply starts clean');
   steps.finish(next, 'completed');
+});
+
+test('the current activity shows only on a folded actor card: not on an open card, the actor window\'s own card, or any header', () => {
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'main', ownerId: 'logox', kind: 'director', title: 'Main', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'user', 'user', 'Go.', {activityId: 'main', inputKind: 'human'});
+  store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor', title: 'Rig', taskTitle: 'Rig the pedals', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'kalon', 'user', 'Rig it.', {activityId: 'k', inputKind: 'director', source: 'logox'});
+  const steps = new Steps(store, {sessionId: 's', activityId: 'k', ownerId: 'kalon'});
+  const id = steps.tool({id: 'x', name: 'Shell', arguments: JSON.stringify({command: 'sleep 99'})}); steps.start(id);
+  store.message('s', 'kalon', 'assistant', '⏵ Tracing the pedal phase', {activityId: 'k'});
+  const text = (view: string, folds: Record<string, boolean>, match: (row: SceneRow) => boolean) =>
+    buildStageRows(store.getSnapshot(), 's', view, 130, folds, null).filter(match).map(row => row.text.replace(/\s+/g, ' ').trim()).join('\n');
+  const live = /Tracing the pedal phase|Shell\(sleep 99\)/;
+  // Folded in the Director window: the activity is the only view of it.
+  assert.match(text('logox', {}, row => row.messageId === 'k'), /Kalon · Rig the pedals · Tracing the pedal phase · Shell\(sleep 99\)/);
+  // Open: the tool rows are visible, so the title row is the main title only.
+  const open = text('logox', {k: true}, row => row.messageId === 'k');
+  assert.match(open, /Kalon · Rig the pedals/);
+  assert.ok(!live.test(open), 'open card title row: ' + open);
+  // The Director's speaker header never carries it.
+  assert.ok(!live.test(text('logox', {}, row => row.messageId.endsWith('-who'))));
+  // The actor's own window: neither its header nor its outer card carries it.
+  assert.ok(!live.test(text('kalon', {}, row => row.messageId.endsWith('-who') || row.messageId === 'k')));
 });

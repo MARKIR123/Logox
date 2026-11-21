@@ -55,9 +55,9 @@ function activityTitle(activity: RuntimeSnapshot['activities'][number], override
   if (mainTitle && subTitle && subTitle !== mainTitle) return `${mainTitle} · ${subTitle}`;
   return mainTitle || subTitle || activity.summary?.title || activity.title;
 }
-/** The live subtitle of a running card with no temporary state; undefined otherwise. */
-function activityLive(activity: RuntimeSnapshot['activities'][number], activityMessages: readonly Message[] | undefined, override?: string): LiveStatus | undefined {
-  return activity.status === 'running' && !override ? liveStatus(activityMessages ?? []) : undefined;
+/** The live subtitle of a running card with no temporary state; undefined otherwise. Only a folded card carries it: an open card shows its tool rows, and an actor's own window never summarizes itself. */
+function activityLive(activity: RuntimeSnapshot['activities'][number], activityMessages: readonly Message[] | undefined, override: string | undefined, folded: boolean): LiveStatus | undefined {
+  return folded && activity.status === 'running' && !override ? liveStatus(activityMessages ?? []) : undefined;
 }
 /** The retry counter the agent loop reports as `Connection interrupted. Retrying (1/5)...`. */
 function retryLabel(detail: string): string {
@@ -315,7 +315,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // 'UpdateTaskProgress' stays for ledgers saved before the tool was removed.
   const hiddenSteps = ['LoadTools', '_FinishRound', '_GitStatus', 'UpdateTaskProgress', 'Actor'];
   let finalRound = false;
-  const describeRound = (r: Round, until: number): TurnActivity | undefined => {
+  const describeRound = (r: Round): TurnActivity | undefined => {
     const thinkingNow = r.messages.some(m => m.kind === 'thinking' && m.step?.state === 'running');
     const tool = r.messages.findLast(m => m.kind === 'tool' && m.step && ['running', 'waiting'].includes(m.step.state) && !hiddenSteps.includes(m.step.call?.name ?? ''));
     const waiting = [...r.actors.values()].filter(item => ['running', 'waiting_input', 'queued'].includes(item.status));
@@ -323,17 +323,15 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const live = thinkingNow || !!tool || waiting.length > 0 || r.messages.some(m => m.step && ['running', 'waiting'].includes(m.step.state)) ||
       (finalRound && r.messages.some(m => m.activityId && ['running', 'waiting_input'].includes(activities.get(m.activityId)?.status ?? '') &&
         (activities.get(m.activityId)?.kind !== 'actor' || !isDirector(view))));
-    // The round's latest `⏵` stage (quiet text once the round is done).
-    const stage = candidates.findLast(m => m.ownerId === r.who && m.role === 'assistant' && !m.kind && (m.time ?? 0) >= r.since && (m.time ?? 0) <= until && extractNarration(m.text))?.text;
-    const intent = stage ? extractNarration(stage)?.narration.replace(/\s+/g, ' ').trim() : undefined;
-    if (!live) return intent ? {label: intent} : undefined;
+    // The `⏵` stage is never part of a speaker header: the window's own tool rows say what it does. Only a wait state is named.
+    if (!live) return undefined;
     const temporary = temporaryState(r.who);
     if (temporary) return {label: temporary.label};
     if (!thinkingNow && !tool && waiting.length) {
       const names = waiting.map(item => roles[item.ownerId]?.name ?? item.ownerId);
       return {label: 'Waiting on ' + (names.length > 2 ? names.slice(0, 2).join(', ') + ` +${names.length - 2}` : names.join(', '))};
     }
-    return intent ? {label: intent} : undefined;
+    return undefined;
   };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
@@ -412,18 +410,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   };
   const renderThinking = (items: readonly Message[], frame: FrameWrap, _activityId: string, ownerId: string) =>
     pushThinking(builder, items, frame, ownerId);
-  const flushRound = (until = Infinity) => {
+  const flushRound = () => {
     if (!round) return;
     const r: Round = round; round = null;
     const chunk = createBuilder(width, hovered, roles, viewColor);
-    const state = describeRound(r, until);
+    const state = describeRound(r);
     chunk.pushTurnHeader(r.id + '-who', r.who, undefined, undefined, state);
     pushThinking(chunk, r.thinking, undefined, r.who);
     builder.rows.splice(r.insertAt, 0, ...chunk.rows);
   };
   const ensureRound = (who: string, message: Message): Round => {
     if (round?.who === who) return round;
-    flushRound(message.time);
+    flushRound();
     builder.pushBlank(); // between rounds: no rail, no speaker owns it
     round = {who, id: message.id, insertAt: builder.rows.length, since: lastUserTime ?? message.time ?? Date.now(), thinking: [], messages: [], actors: new Map()};
     return round;
@@ -442,7 +440,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     .sort((a, b) => (a.createdAt ?? Infinity) - (b.createdAt ?? Infinity)) : [];
   let notesPlaced = 0;
   const placeNote = (activity: (typeof notes)[number]) => {
-    flushRound(activity.createdAt);
+    flushRound();
     builder.pushBlank();
     appendAnamnesisCard(builder, {id: activity.activityId, title: activity.stage,
       status: statuses[activity.status] ?? activity.status, bodyLines: [activity.detail],
@@ -485,7 +483,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       seen.add(activity.activityId);
       if (gapBefore(true)) builder.pushBlank(viewColor);
       const override = temporaryState(activity.ownerId, activity.activityId)?.label;
-      const live = activityLive(activity, staged.get(activity.activityId), override);
+      const live = activityLive(activity, staged.get(activity.activityId), override, !open(activity.activityId));
       getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
         messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [], renderThinking,
@@ -498,7 +496,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
         const override = temporaryState(activity.ownerId, activity.activityId)?.label;
-        const live = activityLive(activity, staged.get(activity.activityId), override);
+        const live = activityLive(activity, staged.get(activity.activityId), override, false);
         getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
           messages: staged.get(activity.activityId) ?? [], pending: [], renderThinking, thinking, originalPrompt: actorGoal(activity),
@@ -542,7 +540,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       }
       // A steered message arrived inside a running round: it stays a row of that round instead of closing it.
       const steered = source === 'human' && message.source === 'steered';
-      if (!steered) {flushRound(message.time); lastUserTime = message.time;}
+      if (!steered) {flushRound(); lastUserTime = message.time;}
       builder.pushBlank();
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' ? message.source ?? message.ownerId : 'user',
@@ -550,7 +548,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       body(message);
     } else {
       if (systemLike) {
-        flushRound(message.time);
+        flushRound();
         builder.pushBlank();
       } else if (!message.kind && !(isDirector(view) && actor) && gapBefore(false)) builder.pushBlank(viewColor);
       body(message);

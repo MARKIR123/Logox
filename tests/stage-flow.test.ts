@@ -35,7 +35,8 @@ test('the card shows the live state, never the label of a legacy stage snapshot,
   const f = fixture();
   for (const view of ['logox', 'techne']) {
     const rows = buildStageRows(f.store.getSnapshot(), 's', view, 99, {a: true}, null);
-    assert.match(rows.find(row => row.messageId === 'a')!.text, /完成鹈鹕骑车动画 · Thinking/, 'a request is generating: the thinking state');
+    assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /Thinking/, 'an open card (and an actor\'s own window) never repeats the live state');
+    if (view === 'logox') assert.match(buildStageRows(f.store.getSnapshot(), 's', view, 99, {}, null).find(row => row.messageId === 'a')!.text, /完成鹈鹕骑车动画 · Thinking/, 'folded: a request is generating, the thinking state');
     assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /正在核对骑行动作/, 'the legacy active-stage label is no longer a subtitle');
     assert.ok(!rows.some(row => /\d\/\d/.test(row.text)));
     assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
@@ -136,7 +137,8 @@ test('progress labels never draw on the card; the live state appears only while 
     steps.thinking();
     for (const view of ['logox', 'techne']) {
       const rows = buildStageRows(store.getSnapshot(), 's', view, 99, {a: true}, null);
-      assert.match(rows.find(row => row.messageId === 'a')!.text, /Animation task · Thinking/);
+      assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /Thinking/, 'an open card shows no live state');
+      if (view === 'logox') assert.match(buildStageRows(store.getSnapshot(), 's', view, 99, {}, null).find(row => row.messageId === 'a')!.text, /Animation task · Thinking/);
       assert.doesNotMatch(rows.find(row => row.messageId === 'a')!.text, /Comparing screenshots/, 'a progress label is not the subtitle');
       assert.ok(!rows.some(row => row.messageId.endsWith('-stage')));
       assert.ok(!rows.some(row => row.messageId === initial));

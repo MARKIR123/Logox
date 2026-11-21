@@ -139,17 +139,21 @@ test('a model-written status line is a faint one-line heading above the tools of
   }
 });
 
-test('the live header uses the latest status line; the card shows it with the running tool', () => {
+test('the Director header never names the status line; only a folded card shows it with the running tool', () => {
   const f = fixture('techne');
   f.stage('Tracing the pedal phase');
   f.call('Shell', {command: 'sleep 9'}, {run: true});
   const lines = f.rows().map(text);
-  assert.ok(lines.some(line => /Rig · Tracing the pedal phase · Shell\(sleep 9\)/.test(line)), 'card subtitle: ' + lines.join('|'));
+  assert.ok(lines.some(line => /Rig\s+Running/.test(line)), 'an open card has no subtitle: ' + lines.join('|'));
+  assert.ok(!lines.some(line => /^⊞ Techne .*(Tracing the pedal phase|Shell\(sleep 9\))/.test(line)), 'the open card title row repeats nothing');
+  const folded = f.rows(100, {b: false}).map(text);
+  assert.ok(folded.some(line => /Rig · Tracing the pedal phase · Shell\(sleep 9\)/.test(line)), 'a folded card shows the subtitle: ' + folded.join('|'));
   assert.ok(lines.some(line => /Logox .*Waiting on Techne/.test(line)));
   const g = fixture();
   g.stage('Verifying the build');
   g.call('Shell', {command: 'sleep 9'}, {run: true});
-  assert.ok(g.rows().some(row => /^Logox · Verifying the build/.test(text(row))), 'live header uses the stage');
+  assert.ok(g.rows().some(row => /^Logox\s*$/.test(text(row))), 'the Director header is the name alone');
+  assert.ok(!g.rows().some(row => /^Logox · /.test(text(row))), 'no activity after the Director name');
 });
 
 // --- Same-file edit merge ---
