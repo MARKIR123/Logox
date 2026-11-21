@@ -18,10 +18,11 @@
  *  4. Between the last row of layer k-1 and the first row of layer k an arrow connector is drawn in the faint `line` tone: where the prerequisites sit in those two
  *     rows, a bus (rounded `╭ ╮ ╰ ╯` corners, `┬ ┴ ├ ┼ ┤ ─` with `▼` over each target); otherwise one centred `▼`. Only a prerequisite that skips a layer or sits in
  *     another group is a `↳ after <title>` note under the node, so no line ever crosses a node. Ids are never drawn.
- *  5. A node is a fill-less 2-row rounded card whose borders carry the content: the top border `╭─ ◉ Title ───── ▾ ─╮` (status glyph, title, and for a parent its
- *     fold glyph) and the bottom border `╰─ owner ◦3 ───── 3m12s ─╯` (owner, workers, right-aligned meta: the live clock while running, what it waits for, the finished
- *     duration, `failed` or `interrupted`). The meta is dropped whole when it does not fit, then the workers; the owner is only clipped. The result lives in the
- *     tooltip and the detail page. The title cell carries `title` (the node id) so hover and selection can recolour it; border cells carry `frame`.
+ *  5. A node is a fill-less 3-row rounded card: the title sits inside (`│ ◉ Title │`), the owner is a tag set into the right of the top border
+ *     (`╭─ ▾ ───── owner ◦3 ─╮`, a parent's fold glyph at the left of it) and the meta a tag set into the right of the bottom border (`╰───── 3m12s ─╯`: the live clock
+ *     while running, what it waits for, the finished duration, `failed` or `interrupted`). The meta is dropped whole when it does not fit, the workers go before the
+ *     owner, the owner is only clipped. The result lives in the tooltip and the detail page. The title cell carries `title` (the node id) so hover and selection can
+ *     recolour it; border cells carry `frame`.
  */
 import stringWidth from 'string-width';
 import {PLAN_GLYPHS} from '../../commands/plan-page.js';
@@ -54,7 +55,7 @@ export interface FlowBox {
   readonly id: string;
   /** Rows `y0..y1` (inclusive, notes included) and columns `x0..x1` (exclusive) of the node; a phase spans the whole width. */
   readonly y0: number; readonly y1: number; readonly x0: number; readonly x1: number;
-  /** The owner's name (second row of a box, the header of a phase), a click target of its own; empty (`x0 === x1`) when none is shown. */
+  /** The owner's name (the tag in a card's top border, the header of a phase), a click target of its own; empty (`x0 === x1`) when none is shown. */
   readonly owner: {readonly y: number; readonly x0: number; readonly x1: number};
   /** The fold glyph of a parent (and a cell either side): the only click target that folds it; absent for a node without children. */
   readonly fold?: {readonly y: number; readonly x0: number; readonly x1: number};
@@ -153,7 +154,7 @@ export function resultText(node: DerivedNode): string {
   return isEnvelope(note) ? '' : note;
 }
 
-/** The right-aligned meta of a card's bottom border: the live clock (running), what it waits for, the finished duration, `failed` or `interrupted`; nothing otherwise. */
+/** The tag set into the right of a card's bottom border: the live clock (running), what it waits for, the finished duration, `failed` or `interrupted`; nothing otherwise. */
 function metaOf(node: DerivedNode, ctx: Context): FlowCell | undefined {
   if (node.status === 'running') return node.runningSince === undefined ? undefined : cell(' '.repeat(CLOCK_WIDTH), 'faint', {clock: node.runningSince});
   const wait = waitText(node, ctx);
@@ -179,38 +180,40 @@ function notesOf(undrawn: readonly string[], ctx: Context, width: number): FlowR
 const foldGlyph = (isOpen: boolean): string => isOpen ? '▾' : '▸';
 
 /**
- * A node as a fill-less two-row rounded card whose borders carry the content: `╭─ ◉ Title ───── ▾ ─╮` over `╰─ owner ◦3 ───── 3m12s ─╯`. The border is the owner's colour
- * at a faint level (`FlowCell.frame`; an interrupted card's border and title are faint); the meta is dropped whole when it does not fit, then the workers, never the owner.
+ * A node as a fill-less three-row rounded card: `╭─ ▾ ───── owner ◦3 ─╮` over `│ ◉ Title │` over `╰───── 3m12s ─╯`. The border is the owner's colour
+ * at a faint level (`FlowCell.frame`; an interrupted card's border and title are faint); the meta is dropped whole when it does not fit, then the workers, the owner is only clipped.
  */
 function boxBlock(node: DerivedNode, ctx: Context, width: number, isOpen: boolean, undrawn: readonly string[]): Block {
   const parent = (ctx.byParent.get(node.id)?.length ?? 0) > 0;
   const frame = (text: string): FlowCell => cell(text, 'line', {frame: node.status === 'interrupted' ? 'faint' : 'owner', owner: node.owner, node: node.id});
   const dashes = (count: number): FlowCell => frame('─'.repeat(Math.max(0, count)));
-  // Top border: `╭─ ` glyph space title space fill [` ▾ `] `─╮`.
-  const running = node.status === 'running';
-  const folds = parent ? 3 : 0;
-  const label = fit(node.title, Math.max(1, width - 9 - folds));
-  const titleTone: FlowTone = node.status === 'interrupted' ? 'faint' : running ? 'strong' : 'fg';
-  const lead = 3 + 1 + 1 + stringWidth(label) + 1;
-  const first: FlowRow = [frame('╭─ '), cell(PLAN_GLYPHS[node.status], STATUS_TONE[node.status]), frame(' '), cell(label, titleTone, {title: node.id, ...(running ? {bold: true} : {})}), frame(' '),
-    dashes(width - lead - folds - 2), ...(parent ? [frame(' '), cell(foldGlyph(isOpen), 'muted'), frame(' ')] : []), frame('─╮')];
-  // Bottom border: `╰─ ` owner [` ◦3`] space fill [` ` meta] ` ─╯`; the first variant that fits wins.
+  // Top border: `╭` [`─ ▾ `] fill ` owner [◦3] ` `─╮`. The owner is clipped before it is dropped; the workers go first when the owner would be cut hard.
+  const foldWidth = parent ? 4 : 0;
   const owner = ctx.options.owners(node.owner);
-  const ownerText = fit(owner.name + (node.forked ? ' ⑂' : ''), Math.max(1, width - 7));
+  const ownerFull = owner.name + (node.forked ? ' ⑂' : '');
   const workers = node.leaves ? 0 : node.links.filter(link => link.automaJob).length;
-  const workerText = workers ? ' ◦' + workers : '';
+  let workerText = workers ? ' ◦' + workers : '';
+  // Cells besides the owner and workers: `╭`, the fold part, one fill dash, two spaces around the owner and `─╮`.
+  const fixed = 1 + foldWidth + 1 + 2 + 2;
+  if (workerText && width - fixed - stringWidth(workerText) < Math.min(stringWidth(ownerFull), 5)) workerText = '';
+  const ownerText = fit(ownerFull, Math.max(1, width - fixed - stringWidth(workerText)));
+  const tag = stringWidth(ownerText) + stringWidth(workerText);
+  const fill = width - 1 - foldWidth - 1 - tag - 1 - 2;
+  const first: FlowRow = [frame('╭'), ...(parent ? [frame('─ '), cell(foldGlyph(isOpen), 'muted'), frame(' ')] : []), dashes(fill), frame(' '),
+    cell(ownerText, 'owner', {owner: node.owner}), ...(workerText ? [cell(workerText, 'faint')] : []), frame(' ─╮')];
+  const ownerX0 = width - 3 - stringWidth(workerText) - stringWidth(ownerText);
+  // Interior: `│ ` glyph space title pad ` │`.
+  const running = node.status === 'running';
+  const label = fit(node.title, Math.max(1, width - 6));
+  const titleTone: FlowTone = node.status === 'interrupted' ? 'faint' : running ? 'strong' : 'fg';
+  const middle: FlowRow = [frame('│ '), cell(PLAN_GLYPHS[node.status], STATUS_TONE[node.status]), frame(' '), cell(label, titleTone, {title: node.id, ...(running ? {bold: true} : {})}),
+    cell(' '.repeat(Math.max(0, width - 6 - stringWidth(label))), 'fg'), frame(' │')];
+  // Bottom border: `╰` fill [` ` meta ` `] `─╯`; the meta is dropped whole when it does not fit.
   const meta = metaOf(node, ctx);
-  const metaSize = meta ? stringWidth(meta.text) : 0;
-  const variants: {workers: boolean; meta: boolean}[] = [{workers: true, meta: true}, {workers: false, meta: true}, {workers: true, meta: false}, {workers: false, meta: false}];
-  const chosen = variants.find(variant => (variant.workers || !workerText) && (variant.meta || !meta) &&
-    3 + stringWidth(ownerText) + (variant.workers ? stringWidth(workerText) : 0) + 1 + 1 + (variant.meta ? metaSize + 4 : 2) <= width) ?? {workers: false, meta: false};
-  const showWorkers = chosen.workers && workerText !== '', showMeta = chosen.meta && meta !== undefined;
-  const left = 3 + stringWidth(ownerText) + (showWorkers ? stringWidth(workerText) : 0);
-  const tail = showMeta ? metaSize + 4 : 2;
-  const second: FlowRow = [frame('╰─ '), cell(ownerText, 'owner', {owner: node.owner}), ...(showWorkers ? [cell(workerText, 'faint')] : []), frame(' '), dashes(width - left - 1 - tail),
-    ...(showMeta ? [frame(' '), meta!, frame(' ─╯')] : [frame('─╯')])];
-  const foldX = lead + (width - lead - folds - 2) + 1;
-  return {rows: [first, second, ...notesOf(undrawn, ctx, width)], ownerX0: 3, ownerX1: 3 + stringWidth(ownerText), ...(parent ? {fold: {x0: foldX, x1: foldX + 1}} : {})};
+  const showMeta = meta !== undefined && stringWidth(meta.text) <= width - 6;
+  const last: FlowRow = showMeta ? [frame('╰'), dashes(width - 1 - stringWidth(meta!.text) - 4), frame(' '), meta!, frame(' ─╯')] : [frame('╰'), dashes(width - 2), frame('╯')];
+  const foldX = 3;
+  return {rows: [first, middle, last, ...notesOf(undrawn, ctx, width)], ownerX0, ownerX1: ownerX0 + stringWidth(ownerText), ...(parent ? {fold: {x0: foldX, x1: foldX + 1}} : {})};
 }
 
 /**
@@ -375,7 +378,7 @@ function layoutGroup(ctx: Context, nodes: readonly DerivedNode[], indent: number
       for (const slot of slots) {
         const kids = ctx.byParent.get(slot.node.id) ?? [];
         ctx.boxes.push({id: slot.node.id, y0, y1: y0 + slot.block.rows.length - 1, x0: slot.x, x1: slot.x + slot.width,
-          owner: {y: y0 + 1, x0: slot.x + slot.block.ownerX0, x1: slot.x + slot.block.ownerX1},
+          owner: {y: y0, x0: slot.x + slot.block.ownerX0, x1: slot.x + slot.block.ownerX1},
           ...(slot.block.fold ? {fold: {y: y0, x0: slot.x + slot.block.fold.x0 - 1, x1: slot.x + slot.block.fold.x1 + 1}} : {}),
           hasChildren: kids.length > 0, open: open(slot.node, ctx), ...(slot.node.parent ? {parent: slot.node.parent} : {})});
       }

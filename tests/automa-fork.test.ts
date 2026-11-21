@@ -418,7 +418,7 @@ test('Fork: forks are marked in the delegation record, /tasks, the plan and the 
   assert.deepEqual(derived.nodes.map(node => node.forked), [undefined, true, undefined]);
   const flow = buildFlow(derived, {width: 40, perRow: 1, expanded: new Map([['1', true]]), owners: owner => ({symbol: '◆', name: owner})});
   const flowText = JSON.stringify(flow.rows.map(row => row.map(cell => cell.text).join('')));
-  assert.match(flowText, /╰─ techne ⑂/, 'a fork shows its owner as the actor and ⑂ in the bottom border of its card');
+  assert.match(flowText, /╭─+ techne ⑂ ◦1 ─╮/, 'a fork shows its owner as the actor and ⑂ in the owner tag of the top border of its card');
   assert.equal((flowText.match(/⑂/g) ?? []).length, 1, 'only the forked node carries the mark');
 
   const rows = (folds: Record<string, boolean> = {}) => buildStageRows(snapshot, 's', 'techne', 100, folds, null);
