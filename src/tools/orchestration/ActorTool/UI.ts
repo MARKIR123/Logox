@@ -59,7 +59,7 @@ export function renderActivity(context: ActorActivityContext): void {
   const roleColor = ownerColor(activity.ownerId, roles);
 
   appendActorCard(builder, {id: activity.activityId, owner: activity.ownerId, roles,
-    task: context.title, ...(context.live ? {subtitle: context.live} : {}), status: context.status, active: context.active, open: context.open, railColor: color,
+    task: context.title, ...(context.live ? {subtitle: {narration: context.live.narration ?? context.live.derived, activity: context.live.activity, clockStart: context.live.clockStart}} : {}), status: context.status, active: context.active, open: context.open, railColor: color,
     ...(['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? {stop: context.stop} : {}),
     renderBody(frame, _color, _action, outer) {
       const actorTreeFrame = insetRailFrame(outer, roleColor);
@@ -120,7 +120,6 @@ export function renderActivity(context: ActorActivityContext): void {
           continue;
         }
         const message = item.message;
-        if (message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()) continue; // a status line only: it shows on the card, never as a row
         if (message.inputKind === 'collaboration_interrupt' || message.inputKind === 'collaboration') {
           const isInterrupt = message.inputKind === 'collaboration_interrupt';
           const {rawSender, senderLabel, summary, cleanBody, lines} = parseIncomingCollaboration(message, roles);

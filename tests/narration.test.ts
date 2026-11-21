@@ -187,3 +187,77 @@ test('request assembly never injects earlier status lines into the history', asy
     await rm(cwd, {recursive: true, force: true});
   }
 });
+
+test('extraction tolerates a wrapper: backticks, * or ** around the line, or leading whitespace; the wrapper never leaks into the reply text', () => {
+  const cases: [string, string, string][] = [
+    ['`⏵ Drafting the scene`\nBody line', 'Drafting the scene', 'Body line'],
+    ['**⏵ Drafting the scene**\nBody line', 'Drafting the scene', 'Body line'],
+    ['*⏵ Drafting the scene*', 'Drafting the scene', ''],
+    ['  \t`⏵ Drafting the scene.` Then the body\nMore', 'Drafting the scene', 'Then the body\nMore'],
+    ['**⏵ Drafting.** Next sentence', 'Drafting', 'Next sentence'],
+    ['` ⏵ Drafting `', 'Drafting', ''],
+    ['\n  ⏵ Drafting\nBody', 'Drafting', 'Body'],
+  ];
+  for (const [text, narration, cleanText] of cases) {
+    const extracted = extractNarration(text);
+    assert.equal(extracted?.narration, narration, JSON.stringify(text));
+    assert.equal(extracted?.cleanText, cleanText, JSON.stringify(text));
+    assert.equal(stripNarration(text), cleanText);
+  }
+  for (const text of ['`code` ⏵ not a line', '**bold** text', 'Intro `⏵ mid`', '`⏵`', '**⏵ **\nbody']) assert.equal(extractNarration(text), null, JSON.stringify(text));
+});
+
+test('a written ⏵ line survives a restart as a timeline heading from the ledger stage; a reply without one gets no heading and no stage anywhere', async () => {
+  const {readdir, readFile} = await import('node:fs/promises');
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-stage-restore-'));
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
+  let call = 0;
+  const provider: Provider = {
+    async respond(_request, onDelta) {
+      call++;
+      if (call === 1) {
+        const text = '`⏵ Looking at the config`\nChecking.';
+        onDelta({kind: 'text', text});
+        return {message: {role: 'assistant', text, toolCalls: [{id: 'c1', name: 'Glob', arguments: JSON.stringify({pattern: '*.json'})}]}, stop: 'tools'};
+      }
+      if (call === 2) return {message: {role: 'assistant', text: '', toolCalls: [{id: 'c2', name: 'Glob', arguments: JSON.stringify({pattern: '*.md'})}]}, stop: 'tools'};
+      onDelta({kind: 'text', text: 'Done.'});
+      return {message: {role: 'assistant', text: 'Done.'}, stop: 'complete'};
+    },
+  };
+  const options = {cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 's', config, provider};
+  const rowsOf = (app: Awaited<ReturnType<typeof createApplication>>) => buildStageRows(app.store.getSnapshot(), 's', 'logox', 100, {}, null).map(row => (row.displayText ?? row.text).replace(/[│]/g, ' ').trim());
+  try {
+    const first = await createApplication(options);
+    try {
+      const task = first.ensemble.dispatch('logox', 'look', 'direct');
+      await task.done;
+      const live = rowsOf(first);
+      assert.ok(live.includes('Looking at the config'), 'live heading:\n' + live.join('\n'));
+      assert.ok(!live.some(line => /⏵|`/.test(line)), 'neither the marker nor the wrapper is drawn');
+      assert.ok(!live.some(line => /^(?:Finding|Using|Searching)\b/.test(line)), 'the fallback label is never a timeline row');
+    } finally {await first.close();}
+    const ledgers: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(dir, {withFileTypes: true}).catch(() => [])) {
+        if (entry.isDirectory()) await walk(join(dir, entry.name));
+        else if (entry.name === 'director.jsonl') ledgers.push(await readFile(join(dir, entry.name), 'utf8'));
+      }
+    };
+    await walk(cwd);
+    const entries = ledgers.join('\n').split('\n').filter(Boolean).map(line => JSON.parse(line) as {message?: {role?: string; text?: string; stage?: string}});
+    const staged = entries.filter(entry => entry.message?.role === 'assistant' && entry.message.stage !== undefined);
+    assert.deepEqual(staged.map(entry => entry.message!.stage), ['Looking at the config'], 'only the written line is in the ledger stage field');
+    assert.ok(!ledgers.join('\n').includes('Finding *.md'), 'no derived label in the ledger');
+    const second = await createApplication({...options, resume: true});
+    try {
+      const restored = rowsOf(second);
+      assert.ok(restored.includes('Looking at the config'), 'restored heading:\n' + restored.join('\n'));
+      assert.ok(restored.some(line => line.includes('Checking.')), 'the reply text follows it');
+      assert.ok(!restored.some(line => /⏵|`/.test(line)));
+      assert.equal(restored.filter(line => line === 'Looking at the config').length, 1);
+    } finally {await second.close();}
+  } finally {
+    await rm(cwd, {recursive: true, force: true});
+  }
+});

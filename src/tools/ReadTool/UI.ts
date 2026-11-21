@@ -4,7 +4,7 @@ import type {ToolUI} from '../ui-types.js';
 import {messageToolCall, createToolUI} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
 import {codeLines, markdownLines} from '../../tui/timeline/tool-code.js';
-import {callArgs, formatByteSize, isImageFile} from '../ui-format.js';
+import {callArgs, formatByteSize, isImageFile, stageText} from '../ui-format.js';
 import {imageSize} from './image-size.js';
 
 const totals = new Map<string, {mtimeMs: number; size: number; total: number}>();
@@ -47,6 +47,7 @@ export function readView(path: string, offset: number, result: string): ToolView
 
 export const UI: ToolUI = {
   ...createToolUI(['file_path', 'path']),
+  stageLabel: call => stageText('Reading', callArgs(call).file_path ?? callArgs(call).path),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

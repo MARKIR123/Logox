@@ -109,7 +109,11 @@ export async function replaySession(deps: ReplayDeps) {
     if (entry.message?.role === 'assistant' && (entry.message.reasoning || step)) {
       store.message(session, entry.ownerId, 'assistant', entry.message.reasoning ?? '', {...origin, kind: 'thinking', ...(step ? {step} : {})});
     }
-    if (entry.text) store.message(session, entry.ownerId, entry.role === 'tool' ? 'notice' : entry.role, entry.message?.role === 'tool' ? entry.message.name + '\n' + entry.text : entry.source === 'steered' && entry.role === 'user' ? steeredText(entry.text) : entry.text,
+    // The ledger text carries no `⏵` line; its `stage` field does. The restored message wears the line again, exactly like the live one, so the timeline shows the heading
+    // (a reply that was only that line kept its words as text and needs none).
+    const stage = entry.message?.role === 'assistant' && !entry.message.textToolCall ? entry.message.stage?.trim() : undefined;
+    const shown = stage && entry.text.trim() !== stage ? '⏵ ' + stage + (entry.text.trim() ? '\n' + entry.text : '') : entry.text;
+    if (shown) store.message(session, entry.ownerId, entry.role === 'tool' ? 'notice' : entry.role, entry.message?.role === 'tool' ? entry.message.name + '\n' + entry.text : entry.source === 'steered' && entry.role === 'user' ? steeredText(entry.text) : shown,
       {...origin, ...(entry.role === 'tool' ? {kind: 'tool' as const, ...(step ? {step} : {})} : {})});
   }
   for (const task of checkpoints) {

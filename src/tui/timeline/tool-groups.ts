@@ -1,5 +1,4 @@
 import type {Message} from '../../runtime/contracts.js';
-import {stripNarration} from '../../runtime/narration.js';
 import {classifyShellCommand, shellExecutable} from '../../tools/ShellTool/classify.js';
 import {shellWords} from '../../permissions/shell.js';
 import type {ToolCall} from '../../runtime/messages.js';
@@ -149,11 +148,11 @@ function isFailed(message: Message): boolean {
   return Boolean(message.step?.disposition) || message.step?.state === 'failed' || message.step?.state === 'cancelled';
 }
 
-/** Invisible or empty entries that never break a run: thinking, silent tools, empty assistant text. */
+/** Invisible or empty entries that never break a run: thinking, silent tools, empty assistant text (not a `⏵` heading row). */
 function isNeutral(message: Message): boolean {
   if (message.kind === 'thinking') return true;
   if (message.kind === 'tool') return message.step?.terminalVisibility === 'silent' && !isFailed(message); // a failed one draws its own row
-  return message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim();
+  return message.role === 'assistant' && !message.kind && !message.text.trim(); // a reply that is only a `⏵` line draws a step heading, so it ends a run
 }
 
 function buildGroup(messages: readonly Message[], now: number, kind: ToolGroup['kind']): ToolGroup {

@@ -54,7 +54,7 @@ categories:
 1. Create `<tier>/<Name>Tool/` (`core` tools sit directly under `src/tools/`; tiers are `protocol/`, `coordination/`, `orchestration/`). Model it on `GlobTool/`:
    - `<Name>Tool.ts`: a `z.strictObject` schema, the `execute<Name>()` function, and `export const metadata: ToolMetadataInput` (`name`, `category`, `roles`, `terminalVisibility`; optional `loading`, `description`, `readOnly`: set it only for a tool that merely observes, since the kernel reads it through `catalog.ts:isReadOnlyTool()` to keep valid calls of a read-only batch and to count the Automa streak; Read, Glob and Grep carry it).
    - `prompt.ts`: the `<NAME>_DESCRIPTION` string (see `GlobTool/prompt.ts`).
-   - `UI.ts`: `export const UI = createToolUI([...])` naming the title parameters (see `GlobTool/UI.ts`).
+   - `UI.ts`: `export const UI = createToolUI([...])` naming the title parameters (see `GlobTool/UI.ts`); add `stageLabel` (`ui-types.ts:ToolUI`, built with `ui-format.ts:stageText`) for the fallback activity label such as `Reading src/a.ts`, which is display only.
    - Optional `diagnostic.ts`, registered in `diagnostics.ts:diagnosticHandlers`.
 2. Metadata defaults: `category: 'core'` implies `loading: 'eager'`; any other category defaults to `deferred`. Eager tools carry their full contract; deferred ones show one directory line (`description`) until `LoadTools`. To turn a tool off, give it empty `roles`, here or in `.logox/tools.json`. `roles` is `'all' | 'director' | 'actors' | string[]`; `terminalVisibility` is `'card' | 'notice' | 'silent'`.
 3. Register the schema and description in `index.ts`: import them, add to `schemas` and `descriptions` (typed `Record<ToolName, string>`, so a missing entry fails typecheck), and add to the re-export block.

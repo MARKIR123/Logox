@@ -109,7 +109,7 @@ test('tool-group titles are italic while their tool rows stay upright', () => {
 
 // --- Status lines ---
 
-test('status lines draw no rows: no heading between groups, nothing merged away, never inside a group title', () => {
+test('a model-written status line is a faint one-line heading above the tools of its reply: it ends the run before it, never sits inside a group title, and never shows the marker', () => {
   for (const owner of ['logox', 'techne'] as const) {
     const f = fixture(owner);
     f.stage('Mapping the current layout');
@@ -120,13 +120,22 @@ test('status lines draw no rows: no heading between groups, nothing merged away,
     f.stage('Checking that everything still passes');
     f.call('Shell', {command: 'npm test'}); f.call('Shell', {command: 'ls'});
     const rows = f.rows(100).filter(row => !row.railGlyph), lines = rows.map(plain); // the speaker header may still name the latest line
-    assert.ok(!lines.some(line => /^\s*(?:Mapping the current layout|Applying the fix to the stylesheet|Checking that everything still passes)\s*$|⏵/.test(line)), owner + ' no stage row:\n' + lines.join('\n'));
-    assert.equal(rows.filter(row => row.messageId.endsWith('-stage')).length, 0);
+    const headings = rows.filter(row => row.messageId.endsWith('-stage'));
+    assert.deepEqual(headings.map(plain), ['Mapping the current layout', 'Applying the fix to the stylesheet', 'Checking that everything still passes'], owner + ' one heading per written line:\n' + lines.join('\n'));
+    assert.ok(!lines.some(line => /⏵/.test(line)), 'the marker never reaches the screen');
+    for (const heading of headings) {
+      const cell = heading.segments!.find(s => s.italic)!;
+      assert.ok(cell && plain(heading).startsWith(cell.text.trim()), 'the heading text is the italic part');
+      assert.equal(cell.color, faintColor(), 'faint');
+      assert.equal(heading.noSelect, true, 'a heading is never copied with the reply text');
+    }
     const groups = lines.filter(line => /^▸ (?!Task from)/.test(line));
-    assert.equal(groups.length, 2, owner + ' reads across the first two lines fold into one group, the shell calls into another: ' + groups.join('|'));
-    assert.match(groups[0]!, /1 pattern · .*2 files/, 'the read group spans the status line: Read, Grep and Read together');
-    const order = [lines.findIndex(line => /^▸ .*(file|pattern)/.test(line)), lines.findIndex(line => /^▮ Edit/.test(line)), lines.findIndex((line, index) => index > 0 && /^▸ .*(command|directory)/.test(line))];
-    assert.ok(order.every(index => index >= 0) && order[0]! < order[1]! && order[1]! < order[2]!, owner + ' order\n' + lines.join('\n'));
+    assert.equal(groups.length, 2, owner + ' the heading ends the run before it: Read+Grep fold, the lone Read and Edit stay rows, the shell calls fold: ' + groups.join('|'));
+    assert.match(groups[0]!, /1 pattern · .*1 file/, 'the first group is Read and Grep only');
+    assert.ok(groups.every(line => !/Mapping|Applying|Checking/.test(line)), 'never inside a group title');
+    const at = (pattern: RegExp, from = 0) => lines.findIndex((line, index) => index >= from && pattern.test(line));
+    const order = [at(/^Mapping the current/), at(/^▸ .*(file|pattern)/), at(/^Applying the fix/), at(/^▮ Read\(b\.ts\)/), at(/^▮ Edit/), at(/^Checking that/), at(/^▸ .*(command|directory)/, 1)];
+    assert.ok(order.every(index => index >= 0) && order.every((index, n) => n === 0 || index > order[n - 1]!), owner + ' each heading sits above its own calls\n' + lines.join('\n'));
   }
 });
 
@@ -167,7 +176,7 @@ test('consecutive edits of one file fold into one summed row; expanded it shows 
   assert.match(cut[0]!.text, /^… \d+ more (lines|hunks)$/);
 });
 
-test('a merged edit row is red with the failed edit’s reason; other files and other rows break the merge, a status line does not', () => {
+test('a merged edit row is red with the failed edit’s reason; other files, other rows and a status line heading break the merge', () => {
   const f = fixture('techne');
   const a = f.call('Edit', {file_path: 'a.css', old_string: 'x', new_string: 'y'});
   f.call('Edit', {file_path: 'a.css', old_string: 'zzz', new_string: 'y'}, {fail: true, reason: 'Error: old_string not found in a.css'});
@@ -183,8 +192,9 @@ test('a merged edit row is red with the failed edit’s reason; other files and 
   const mark = merged.segments!.find(s => s.selectionKey === a + ':icon')!;
   assert.equal(mark.color, palette.error, 'red mark');
   const edits = rows.filter(row => /Edit\(/.test(text(row)));
-  assert.equal(edits.length, 3, 'a.css ×3, b.css, then b.css ×2 across the status line: ' + edits.map(text).join('|'));
-  assert.equal(edits.filter(row => /×\d/.test(text(row))).length, 2);
+  assert.equal(edits.length, 4, 'a.css ×3, b.css, b.css after the Read, b.css after the heading: ' + edits.map(text).join('|'));
+  assert.equal(edits.filter(row => /×\d/.test(text(row))).length, 1);
+  assert.ok(rows.some(row => plain(row) === 'Now the second file'), 'the heading is drawn between the edits');
 });
 
 test('a Write that overwrote a known file folds into the surrounding edits of that file', () => {
@@ -193,7 +203,7 @@ test('a Write that overwrote a known file folds into the surrounding edits of th
   recordWrite('merge-target.css', 'fresh\ncontent\n', Buffer.from('old\ncontent\n'));
   f.call('Write', {file_path: 'merge-target.css', content: 'fresh\ncontent\n'});
   const rows = f.rows(110);
-  const merged = rows.filter(row => /merge-target\.css/.test(text(row)));
+  const merged = rows.filter(row => /^▮ .*merge-target\.css/.test(plain(row))); // the card subtitle may name the file too
   assert.equal(merged.length, 1, merged.map(text).join('|'));
   assert.match(plain(merged[0]!), /Edit\(merge-target\.css\) ×2 · added 2 · removed 2/);
   assert.equal(merged[0]!.messageId, first);
@@ -242,6 +252,25 @@ test('long titles clip with … inside the row at every width, inside actor card
     for (const id of ids.slice(0, 3)) {
       const row = rows.find(r => r.messageId === id)!;
       if (width <= 60) assert.ok(text(row).includes('…'), `${width} clipped with an ellipsis: ${text(row)}`);
+    }
+  }
+});
+
+test('a heading clips with … on a narrow row, sits above the text of its own reply and, in a companion card, inside the card; the card subtitle is not a row', () => {
+  for (const owner of ['logox', 'techne'] as const) {
+    const f = fixture(owner);
+    f.store.message('s', owner, 'assistant', '⏵ Rebuilding the whole pedal linkage from the measured geometry\nThe linkage now follows the measured geometry.', {activityId: owner === 'logox' ? 'main' : 'b'});
+    f.call('Read', {file_path: 'a.ts'});
+    for (const width of [100, 40, 24]) {
+      const rows = f.rows(width).filter(row => !row.railGlyph);
+      const heading = rows.filter(row => row.messageId.endsWith('-stage'));
+      assert.equal(heading.length, 1, owner + ' ' + width + ' one row for the heading');
+      assert.ok(stringWidth(text(heading[0]!)) <= width, 'fits the width: ' + text(heading[0]!));
+      if (width < 70) assert.match(plain(heading[0]!), /…$/, 'clipped with an ellipsis');
+      else assert.equal(plain(heading[0]!), 'Rebuilding the whole pedal linkage from the measured geometry');
+      const lines = rows.map(plain);
+      const at = lines.findIndex(line => /^Rebuilding/.test(line)), body = lines.findIndex(line => /^The linkage|^The$|^The /.test(line));
+      assert.ok(at >= 0 && body > at, owner + ' the heading sits above the reply text: ' + lines.join('|'));
     }
   }
 });

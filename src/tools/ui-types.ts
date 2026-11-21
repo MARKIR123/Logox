@@ -56,6 +56,8 @@ export interface ToolInteractionAdapter {
 export interface ToolUI {
   readonly visibility: 'visible' | 'hidden';
   title(call: ToolCall): string;
+  /** The runtime's fallback stage label for the activity line when the model wrote no `⏵` line (`Reading src/a.ts`). Display only: never written to the timeline, the ledger or any model-facing text. */
+  stageLabel?(call: ToolCall): string | undefined;
   render?(context: ToolRenderContext): void;
   renderActivity?(context: ActorActivityContext): void;
   readonly interaction?: ToolInteractionAdapter;

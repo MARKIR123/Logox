@@ -170,6 +170,11 @@ function titled(context: ToolRenderContext): ToolRenderContext {
 export const UI: ToolUI = {
   visibility: 'visible',
   title: automaTitle,
+  stageLabel(call) {
+    const args = parseArgs(call.arguments), jobs = Array.isArray(args.jobs) ? args.jobs.length : 0;
+    if (jobs) return `Dispatching ${jobs} ${jobs === 1 ? 'worker' : 'workers'}`;
+    return Array.isArray(args.wait) && args.wait.length ? 'Waiting for workers' : undefined;
+  },
   render(context) {
     const swarm = context.message.step?.swarm;
     if (swarm && swarm.jobs.length > 0) return renderSwarm(context);

@@ -3,7 +3,7 @@ import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, renderToolCard, summaryPiece, type ToolLine, type ToolView} from '../../tui/timeline/tool-card.js';
 import {faintColor} from '../../tui/appearance/colors.js';
 import {palette} from '../../tui/appearance/theme.js';
-import {callArgs} from '../ui-format.js';
+import {callArgs, stageText} from '../ui-format.js';
 import {SHELL_CUT_SHORT_LINE} from './prompt.js';
 
 const failureLine = /(error|failed|failure|exception|fatal|denied)|^\s*[✗×]/i;
@@ -37,6 +37,10 @@ export function shellView(command: string, result: string): ToolView {
 
 export const UI: ToolUI = {
   ...createToolUI(['command']),
+  stageLabel: call => {
+    const args = callArgs(call), command = typeof args.command === 'string' ? args.command.split(/\r?\n/).find(line => line.trim() && !line.trim().startsWith('#')) : undefined;
+    return stageText('Running', command);
+  },
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

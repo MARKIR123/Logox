@@ -200,3 +200,46 @@ test('the card clock stays blank under a second, then ticks from the row animati
   assert.match(clock(Date.now()), /Rig the pedals · Thinking Running/, 'under a second: no time');
   assert.match(clock(Date.now() + 12_000), /Rig the pedals · Thinking · 12\.\ds Running/, 'the same row shows the live time later');
 });
+
+test('a reply with no ⏵ line gets a fallback stage label from its latest tool call, only on the card subtitle and only when nothing runs or thinks; the model\'s own line wins', async () => {
+  const {liveStatus, liveStatusLine} = await import('../src/tui/timeline/live-status.js');
+  const store = new RuntimeStore();
+  store.activities.create({sessionId: 's', activityId: 'main', ownerId: 'logox', kind: 'director', title: 'Main', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'user', 'user', 'Go.', {activityId: 'main', inputKind: 'human'});
+  store.activities.create({sessionId: 's', activityId: 'k', ownerId: 'kalon', kind: 'actor', title: 'Rig', taskTitle: 'Rig the pedals', status: 'running', stage: 'x', detail: ''});
+  store.message('s', 'kalon', 'user', 'Rig it.', {activityId: 'k', inputKind: 'director', source: 'logox'});
+  const steps = new Steps(store, {sessionId: 's', activityId: 'k', ownerId: 'kalon'});
+  const rows = () => buildStageRows(store.getSnapshot(), 's', 'logox', 130, {}, null);
+  const card = () => rows().find(row => row.messageId === 'k')!.text.replace(/\s+/g, ' ').trim();
+  const messages = () => store.getSnapshot().messages.filter(message => message.activityId === 'k');
+  const call = (name: string, args: Record<string, unknown>) => {const id = steps.tool({id: name + messages().length, name, arguments: JSON.stringify(args)}); steps.start(id); return id;};
+  // A running tool keeps its own card title (the label is only for the gap).
+  const read = call('Read', {file_path: 'src/foo.ts'});
+  assert.match(card(), /Rig the pedals · Read\(src\/foo\.ts\)/);
+  assert.equal(liveStatus(messages())?.derived, undefined, 'nothing derived while the tool itself is the activity');
+  // The tool ends and nothing else runs: the card keeps a meaningful stage instead of going blank.
+  steps.finish(read, 'completed', 'Read\nok');
+  assert.match(card(), /Kalon · Rig the pedals · Reading src\/foo\.ts/);
+  const labels: [string, Record<string, unknown>, string][] = [
+    ['Edit', {file_path: 'src/app.ts', old_string: 'a', new_string: 'b'}, 'Editing src/app.ts'],
+    ['Shell', {command: 'npm test'}, 'Running npm test'],
+    ['Grep', {pattern: 'foo'}, 'Searching "foo"'],
+    ['Automa', {jobs: [{title: 'a', prompt: 'p'}, {title: 'b', prompt: 'p'}, {title: 'c', prompt: 'p'}]}, 'Dispatching 3 workers'],
+  ];
+  for (const [name, args, label] of labels) {
+    steps.finish(call(name, args), 'completed', name + '\nok');
+    assert.ok(card().includes('Rig the pedals · ' + label), label + ' in ' + card());
+    assert.equal(liveStatusLine(liveStatus(messages())), label, 'the footer activity line reads the same');
+  }
+  // Display only: no timeline row other than the card header carries it, and no message (the ledger source) holds it.
+  assert.ok(!rows().some(row => row.messageId !== 'k' && /Dispatching 3 workers|Reading src|Running npm/.test(row.displayText ?? row.text)));
+  assert.ok(!messages().some(message => /Dispatching 3 workers|Running npm test|Reading src\/foo/.test(message.text)));
+  // The model's own line wins over the label; the next request's thinking state replaces it.
+  store.message('s', 'kalon', 'assistant', '⏵ Tracing the pedal phase', {activityId: 'k'});
+  assert.match(card(), /Rig the pedals · Tracing the pedal phase/);
+  assert.ok(!/Dispatching 3 workers/.test(card()));
+  const next = steps.thinking();
+  assert.match(card(), /Rig the pedals · Thinking/);
+  assert.ok(!/Dispatching|Tracing/.test(card()), 'a new reply starts clean');
+  steps.finish(next, 'completed');
+});

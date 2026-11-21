@@ -118,15 +118,15 @@ test('context messages are ignored and do not break a group', () => {
   assert.deepEqual(shape(groupToolMessages([read('a'), ctx as unknown as Message, read('b')])), ['G2']);
 });
 
-test('empty or narration-only assistant text does not break; real text does', () => {
+test('empty assistant text does not break; a written status line (a heading) and real text do', () => {
   assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '  '), read('b')])), ['G3']);
-  assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '⏵ Scanning\n'), read('b')])), ['G3']);
+  assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '⏵ Scanning\n'), read('b')])), ['M', 'M', 'M']);
   assert.deepEqual(shape(groupToolMessages([read('a'), msg('assistant', '⏵ Scanning\nReal words'), read('b')])), ['M', 'M', 'M']);
 });
 
-test('a narration-only message never splits a group: the status line lives on the card, not in the rows', () => {
+test('a narration-only message is a heading row that ends the group before it', () => {
   const stage = msg('assistant', '⏵ Mapping the repo');
-  assert.deepEqual(shape(groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')])), ['G5']);
+  assert.deepEqual(shape(groupToolMessages([read('a'), read('b'), stage, read('c'), read('d')])), ['G2', 'M', 'G2']);
   assert.ok(groupToolMessages([stage]).every(item => item.type !== ('stage' as string)), 'no stage items exist any more');
 });
 
@@ -150,7 +150,7 @@ test('group id is stable and derived from the first message', () => {
   assert.equal(g!.id, first.id + '-group');
 });
 
-test('a lone call after a narration-only message is never a group', () => {
+test('a lone call after a heading message is never a group', () => {
   assert.deepEqual(shape(groupToolMessages([msg('assistant', '⏵ Checking colors'), read('a')])), ['M', 'M']);
 });
 
@@ -163,6 +163,6 @@ test('consecutive edits of one file by one owner fold into one edits item; other
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('b.css'), edit('b.css')])), ['M', 'E2']);
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), edit('a.css', 'techne')])), ['M', 'M'], 'another owner never merges');
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), read('x'), edit('a.css')])), ['M', 'M', 'M']);
-  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next'), edit('a.css')])), ['E2', 'M'], 'a status line draws nothing and does not break the run (it trails the merged row)');
+  assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next'), edit('a.css')])), ['M', 'M', 'M'], 'a status line is a heading row: it breaks the run');
   assert.deepEqual(shape(groupToolMessages([edit('a.css'), msg('assistant', '⏵ Next\nReal words'), edit('a.css')])), ['M', 'M', 'M'], 'visible prose does');
 });

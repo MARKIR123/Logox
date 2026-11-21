@@ -4,6 +4,7 @@ import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
 import {faintColor} from '../../tui/appearance/colors.js';
 import {palette} from '../../tui/appearance/theme.js';
+import {callArgs, stageText} from '../ui-format.js';
 
 /** A path with its directory part faint and the file name in the path color. */
 export function pathSegments(path: string): SceneSegment[] {
@@ -26,6 +27,7 @@ export function globView(result: string): ToolView {
 
 export const UI: ToolUI = {
   ...createToolUI(['pattern', 'path']),
+  stageLabel: call => stageText('Finding', callArgs(call).pattern),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

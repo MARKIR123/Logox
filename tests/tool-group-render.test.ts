@@ -149,13 +149,15 @@ test('failed call is split out as a normal error card between two groups', () =>
   assert.ok(!/Error/.test(lines[failed]!), 'the failed row carries its reason once and no trailing Error label');
 });
 
-test('a status line draws no row and never enters a group title; the remaining prose still shows', () => {
+test('a status line is a heading above the group and never enters a group title; the remaining prose still shows', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ Reading the sources\nLooking now.', {activityId: 'a'});
   standard(f);
   const rows = f.rows(100), lines = rows.filter(row => !row.railGlyph).map(text); // the speaker header may still name the latest line
-  assert.ok(!lines.some(l => l.includes('⏵') || l.includes('Reading the sources')), 'the line is stripped and drawn nowhere: ' + lines.join(' | '));
+  assert.ok(!lines.some(l => l.includes('⏵')), 'the marker is never drawn: ' + lines.join(' | '));
   const title = rows.find(r => GROUP.test(text(r)))!;
+  assert.ok(lines.some(l => l.trim() === 'Reading the sources'), 'the written line is a heading: ' + lines.join(' | '));
+  assert.ok(!GROUP.test(text(title)) || !text(title).includes('Reading the sources'), 'never inside the group title');
   assert.ok(title, 'the group keeps its verb summary');
   assert.ok(lines.some(l => l.includes('Looking now.')), 'the remaining prose still shows');
   assert.equal(title.segments![0]!.italic, true, 'group titles are italic');
@@ -167,40 +169,42 @@ test('without a status line the group falls back to its verb list', () => {
   assert.ok(lines.some(l => /^\s*[▸▾] [A-Z][\w' -]* 1 pattern/.test(l)), lines.join(' | '));
 });
 
-test('a status line before a single call keeps that call a normal row and adds no row', () => {
+test('a status line before a single call keeps that call a normal row below the heading', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ Looking at the palette', {activityId: 'a'});
   f.call('Read', {file_path: 'G:/p/colors.css'});
   const lines = f.rows(100).filter(row => !row.railGlyph).map(text);
-  assert.ok(!lines.some(l => l.includes('Looking at the palette')), lines.join(' | '));
-  assert.ok(lines.some(l => /▮ Read/.test(l)));
+  const heading = lines.findIndex(l => l.trim() === 'Looking at the palette');
+  assert.ok(heading >= 0 && lines.findIndex(l => /▮ Read/.test(l)) > heading, lines.join(' | '));
   assert.ok(!lines.some(l => GROUP.test(l)));
 });
 
-test('status lines between calls do not split a group', () => {
+test('a status line between calls ends the group before it and heads the next one', () => {
   const f = fixture();
   f.store.message('s', 'logox', 'assistant', '⏵ First look', {activityId: 'a'});
   f.call('Read', {file_path: 'G:/p/a.ts'}); f.call('Read', {file_path: 'G:/p/b.ts'});
   f.store.message('s', 'logox', 'assistant', '⏵ Then another file', {activityId: 'a'});
   f.call('Read', {file_path: 'G:/p/c.ts'});
   const lines = f.rows(100).filter(row => !row.railGlyph).map(text);
-  assert.equal(lines.filter(l => GROUP.test(l)).length, 1, lines.join(' | '));
-  assert.ok(lines.some(l => /[▸▾] [A-Z][\w' -]* 3 files/.test(l)), lines.join(' | '));
-  assert.ok(!lines.some(l => /First look|Then another file/.test(l)));
+  assert.equal(lines.filter(l => GROUP.test(l)).length, 1, 'Read a+b fold, the lone Read c stays a row: ' + lines.join(' | '));
+  assert.ok(lines.some(l => /[▸▾] [A-Z][\w' -]* 2 files/.test(l)), lines.join(' | '));
+  const at = (p: string) => lines.findIndex(l => l.trim() === p);
+  assert.ok(at('First look') >= 0 && at('Then another file') > at('First look'), 'both headings drawn in order: ' + lines.join(' | '));
+  assert.ok(lines.findIndex(l => /▮ Read.*c\.ts/.test(l)) > at('Then another file'), 'the lone call sits under its heading');
 });
 
-test('an actor window and an open actor card draw no status row either and keep verb-titled groups', () => {
+test('an actor window and an open actor card draw the status line as a heading and keep verb-titled groups', () => {
   const f = fixture('kalon');
   f.store.message('s', 'kalon', 'assistant', '⏵ Checking the gradients', {activityId: 'a'});
   standard(f);
   const lines = buildStageRows(f.store.getSnapshot(), 's', 'kalon', 100, {}, null).filter(row => !row.railGlyph).map(text);
-  assert.ok(!lines.some(l => /^s*[│ ]*Checking the gradientss*$/.test(l)), 'no row of its own: ' + lines.join(' | '));
+  assert.ok(lines.some(l => l.includes('Checking the gradients')) && !lines.some(l => l.includes('⏵')), 'drawn as a heading without the glyph: ' + lines.join(' | '));
   assert.ok(lines.some(l => GROUP.test(l)));
   const g = fixture('kalon');
   g.store.message('s', 'kalon', 'assistant', '⏵ Reading the sources', {activityId: 'a'});
   standard(g);
   const card = g.rows(100, {a: true}).filter(row => !row.railGlyph).map(text);
-  assert.ok(!card.some(l => /^s*[│ ]*Reading the sourcess*$/.test(l) || l.includes('⏵')), 'no row of its own');
+  assert.ok(card.some(l => l.includes('Reading the sources')) && !card.some(l => l.includes('⏵')), 'drawn as a heading without the glyph: ' + card.join(' | '));
   assert.ok(card.some(l => GROUP.test(l)));
 });
 

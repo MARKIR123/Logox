@@ -398,6 +398,13 @@ export function baseCardTitle(call: ToolCall, fallbackTitle?: string): string {
 }
 
 /** Parsed JSON arguments of a call; `{}` when they are not an object. */
+/** `Reading src/a.ts`: a fallback stage label for the activity line, one clipped line, built from a call's argument (workspace-relative when it is a path). Never shown as the model's words. */
+export function stageText(verb: string, value: unknown, max = 70): string {
+  const detail = typeof value === 'string' ? relativeToCwd(value).replace(/\s+/g, ' ').trim() : '';
+  const text = detail ? `${verb} ${detail}` : verb;
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
 export function callArgs(call: ToolCall | undefined): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(call?.arguments ?? '{}');

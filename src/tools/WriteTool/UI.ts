@@ -3,7 +3,7 @@ import type {ToolUI} from '../ui-types.js';
 import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, diffSummary, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
 import {codeLines, diffLines} from '../../tui/timeline/tool-code.js';
-import {callArgs} from '../ui-format.js';
+import {callArgs, stageText} from '../ui-format.js';
 import {lookupWrite} from './record.js';
 
 /** The diff of a Write that replaced a file whose previous text is known; undefined for a new file or an unknown record. */
@@ -36,6 +36,7 @@ export function writeView(args: Record<string, unknown>, width?: number): ToolVi
 
 export const UI: ToolUI = {
   ...createToolUI(['file_path', 'path']),
+  stageLabel: call => stageText('Writing', callArgs(call).file_path ?? callArgs(call).path),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

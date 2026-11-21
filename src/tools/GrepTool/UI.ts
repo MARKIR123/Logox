@@ -4,7 +4,7 @@ import {createToolUI, messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, renderToolCard, summaryPiece, type ToolLine, type ToolView} from '../../tui/timeline/tool-card.js';
 import {faintColor} from '../../tui/appearance/colors.js';
 import {palette} from '../../tui/appearance/theme.js';
-import {callArgs} from '../ui-format.js';
+import {callArgs, stageText} from '../ui-format.js';
 import {pathSegments} from '../GlobTool/UI.js';
 
 interface Hit {readonly line: string; readonly text: string; readonly context: boolean}
@@ -80,6 +80,7 @@ export function grepView(args: Record<string, unknown>, result: string): ToolVie
 
 export const UI: ToolUI = {
   ...createToolUI(['pattern', 'path']),
+  stageLabel: call => stageText('Searching', typeof callArgs(call).pattern === 'string' ? JSON.stringify(callArgs(call).pattern) : undefined),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

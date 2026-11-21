@@ -130,6 +130,8 @@ export interface RowBuilder {
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
   /** `accent` colours inline code and other emphasis; it follows the OWNER of the text (default: the rail colour). */
   pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap, accent?: string): void;
+  /** The model's own `⏵` intent line as a faint italic one-line step heading, clipped with `…`; never selected or copied. */
+  pushStageLine(id: string, text: string, railColor: string, frame?: FrameWrap): void;
   pushFramedLine(
     id: string,
     railColor: string,
@@ -356,6 +358,14 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
   };
 
+  const pushStageLine: RowBuilder['pushStageLine'] = (id, text, railColor, frame) => {
+    const f = frame ?? topFrame();
+    const line = text.replace(/\s+/g, ' ').trim();
+    if (!line || f.innerWidth < 1) return;
+    const shown = stringWidth(line) <= f.innerWidth ? line : clipLine(line, Math.max(0, f.innerWidth - 1)).trimEnd() + '…';
+    pushFramedLine(id, railColor, [{text: shown, color: faintColor(), italic: true}], f);
+  };
+
   const pushCardCap: RowBuilder['pushCardCap'] = (id, edge, cardBg, railColor, parentFrame, action) => {
     const pf = parentFrame ?? topFrame();
     // Top ▄ (U+2584, upper half transparent + lower half card color) mirrors bottom ▀ (U+2580, upper half card color + lower half transparent): 0.5 row of padding each side, so the card is exactly 2 rows tall
@@ -530,7 +540,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
   };
 
-  return {rows, width, baseGutterCols, contentWidth, hoveredFoldId, pushBlank, pushTurnHeader, pushProse, pushMarkdown, pushFramedLine, pushCardCap, pushCardHeader, pushOrdinaryCard};
+  return {rows, width, baseGutterCols, contentWidth, hoveredFoldId, pushBlank, pushTurnHeader, pushProse, pushMarkdown, pushStageLine, pushFramedLine, pushCardCap, pushCardHeader, pushOrdinaryCard};
 }
 
 function markHover(rows: SceneRow[], start: number, foldId: string, startCol: number, endCol: number) {

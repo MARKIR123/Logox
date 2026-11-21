@@ -78,8 +78,8 @@ const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof p
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (isDirector(view) || message.ownerId === view) &&
     isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(isDirector(message.ownerId) && message.role === 'user' && inputKind(message) === 'actor'));
-  // Narration-only messages are never drawn.
-  const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !stripNarration(message.text).trim()));
+  // Empty assistant messages are never drawn; a message that is only the model's `⏵` line is (as a step heading).
+  const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !message.text.trim()));
   const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
   const grouped = new Map<string, Message[]>();
   for (const message of messages) if (message.activityId) {
@@ -206,7 +206,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         title: message.step?.title ?? 'Thinking', bodyLines: [compactParagraphs(message.text)],
         ...(message.step ? {step: message.step} : {}),
         open: open(message.id), railColor: rail, ...(frame ? {parentFrame: frame} : {})});
-      else if (message.role === 'assistant' || (message.role === 'user' && (inputKind(message) === 'director' || inputKind(message) === 'collaboration'))) chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame, accent);
+      else if (message.role === 'assistant' || (message.role === 'user' && (inputKind(message) === 'director' || inputKind(message) === 'collaboration'))) {
+        // The model's own intent line is a faint one-line heading above that reply's text and tools; the runtime's fallback label never reaches here.
+        const intent = message.role === 'assistant' ? extractNarration(message.text)?.narration : undefined;
+        if (intent) chunk.pushStageLine(message.id + '-stage', intent, rail, frame);
+        chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame, accent);
+      }
       else chunk.pushProse(message.id, stripNarration(message.text), rail, 'body', frame, undefined, isSystem ? palette.system : undefined);
       rows = chunk.rows;
       if (layouts.size >= 4) layouts.delete(layouts.keys().next().value!);

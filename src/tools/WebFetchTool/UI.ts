@@ -5,7 +5,7 @@ import {renderToolCard, type ToolLine, type ToolView} from '../../tui/timeline/t
 import {markdownLines} from '../../tui/timeline/tool-code.js';
 import {faintColor} from '../../tui/appearance/colors.js';
 import {palette} from '../../tui/appearance/theme.js';
-import {callArgs, formatByteSize} from '../ui-format.js';
+import {callArgs, formatByteSize, stageText} from '../ui-format.js';
 
 const EXCERPT_CHARS = 6000;
 
@@ -65,6 +65,7 @@ const domainOf = (url: string) => parseUrl(url)?.host ?? url;
 
 export const UI: ToolUI = {
   ...createToolUI(['url']),
+  stageLabel: call => stageText('Fetching', typeof callArgs(call).url === 'string' ? domainOf(String(callArgs(call).url)) : undefined),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;

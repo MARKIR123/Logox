@@ -6,7 +6,7 @@ import type {ToolRenderContext, ToolUI} from '../ui-types.js';
 import {messageToolCall} from '../../tui/timeline/tool-ui.js';
 import {cardTitle, diffSummary, failureView, renderToolCard, resultText, type ToolLine, type ToolView} from '../../tui/timeline/tool-card.js';
 import {diffLines, type DiffStats} from '../../tui/timeline/tool-code.js';
-import {callArgs, formatToolCardTitle} from '../ui-format.js';
+import {callArgs, formatToolCardTitle, stageText} from '../ui-format.js';
 import {writeDiff} from '../WriteTool/UI.js';
 import {palette} from '../../tui/appearance/theme.js';
 import {faintColor} from '../../tui/appearance/colors.js';
@@ -107,6 +107,7 @@ export const UI: ToolUI = {
   title(call) {
     return formatToolCardTitle(call);
   },
+  stageLabel: call => stageText('Editing', callArgs(call).file_path ?? callArgs(call).path),
   render(context) {
     const call = context.call ?? messageToolCall(context.message);
     if (!call) return;
