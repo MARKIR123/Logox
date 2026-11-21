@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import {applyPlanOp, derivePlan, type NewNode, type PlanWork} from '../src/runtime/plan.js';
+import {taskGraph} from '../src/runtime/task-graph.js';
+import type {Delegation} from '../src/runtime/delegations.js';
 import {buildFlow, fit, flowHit, flowStats, rowWidth, type FlowLayout} from '../src/tui/panels/plan-flow.js';
 import {DOCK_MIN_COLUMNS, flowOptionsFor, paintSidebar, planProgress, sidebarGeometry, sidebarWidth, stepKey, stepMouse, emptyView, followTarget} from '../src/tui/panels/plan-sidebar.js';
 import {formatClock} from '../src/tui/terminal/text.js';
@@ -24,6 +26,28 @@ const diamond: NewNode[] = [{title: 'Design', owner: 'logox', nodes: [
   {title: 'Contrast algorithm', owner: 'aletheia', after: ['1.1']},
   {title: 'Tokens', owner: 'techne', after: ['1.1']},
   {title: 'Preview', owner: 'techne', after: ['1.2', '1.3']}]}];
+
+const wide: NewNode[] = [{title: 'Design', owner: 'logox', nodes: Array.from({length: 6}, (_, index) => ({title: 'Step ' + (index + 1), owner: index % 2 ? 'techne' : 'kalon'}))}];
+
+test('perRow: as many boxes of at least 22 cells as fit, 1 below 48 columns, 2 at the sidebar widths, more on a wide panel; the same input gives the same layout', () => {
+  assert.deepEqual([36, 40, 47, 48, 56, 68, 71, 120].map(total => flowOptionsFor(total).perRow), [1, 1, 1, 2, 2, 2, 3, 5]);
+  const rowsOf = (total: number) => {
+    const flow = flowAt(plan(wide), total);
+    const lines = text(flow);
+    return {flow, lines, perLine: Math.max(...flow.boxes.filter(box => box.parent === '1').map(box => flow.boxes.filter(other => other.parent === '1' && other.y0 === box.y0).length))};
+  };
+  assert.equal(rowsOf(40).perLine, 1); assert.equal(rowsOf(56).perLine, 2); assert.equal(rowsOf(120).perLine, 5);
+  for (const total of [40, 56, 120]) {
+    const {flow, lines} = rowsOf(total);
+    assert.ok(lines.every(line => stringWidth(line) <= total - 3), 'inside the panel at ' + total);
+    const boxes = flow.boxes.filter(box => box.parent === '1');
+    assert.ok(boxes.every(box => box.x1 - box.x0 >= 22), 'no box is narrower than 22 cells at ' + total);
+    assert.deepEqual(text(flowAt(plan(wide), total)), lines, 'deterministic at ' + total);
+  }
+  // A group narrower than the cap holds fewer: 6 siblings across 120 columns sit 5 and 1.
+  const flow120 = rowsOf(120).flow;
+  assert.equal(new Set(flow120.boxes.filter(box => box.parent === '1').map(box => box.y0)).size, 2);
+});
 
 test('layers: a node sits one layer below its deepest sibling prerequisite, in id order', () => {
   const flow = flowAt(plan(diamond), 36);
@@ -151,7 +175,7 @@ test('paint: header, progress, fixed width lines, scrolling, hover and selection
   const lines = paint();
   assert.equal(lines.length, height);
   assert.ok(lines.every(line => line.reduce((sum, segment) => sum + stringWidth(segment.text), 0) === width), 'every line is exactly the sidebar width');
-  assert.match(lines[0]!.map(segment => segment.text).join(''), /Plan Theme preview/);
+  assert.match(lines[0]!.map(segment => segment.text).join(''), /Tasks Theme preview/);
   assert.match(lines[1]!.map(segment => segment.text).join(''), /active · 0\/4 /);
   assert.deepEqual(planProgress(derived), {accepted: 0, total: 4});
   const border = (view: Parameters<typeof paint>[0]) => paint(view)[3]!.find(segment => segment.text.includes('━'))!.color;
@@ -167,6 +191,40 @@ test('paint: header, progress, fixed width lines, scrolling, hover and selection
   const scrolled = paint({...emptyView, scroll: 4});
   assert.ok(scrolled[2]!.some(segment => segment.text === '▲'));
   assert.equal(followTarget(derived, flow), '1.2');
+});
+
+test('the task graph paints under its own header: work without a plan, an earlier plan, faint ids for synthesized nodes, a header click or p opens the switcher', () => {
+  const delegation = (id: string, extra: Partial<Delegation> = {}): Delegation => ({id, kind: 'actor', ownerId: 'techne', title: id, status: 'running', rootId: id, children: [], blockedBy: [], assignment: {title: extra.title ?? id, owns: [], acceptance: []}, ...extra});
+  const graph = taskGraph(undefined, [delegation('R', {kind: 'director', ownerId: 'logox', title: 'Fix it', status: 'completed'}), delegation('tech', {title: 'Build', parentId: 'R', rootId: 'R'}),
+    delegation('tech/T1', {kind: 'automa', jobId: 'T1', title: 'Look', status: 'done', parentId: 'tech', rootId: 'R'})], 's')!;
+  const width = 40, height = 24;
+  const flow = buildFlow(graph.plan, {...flowOptionsFor(width), expanded: new Map(), owners, synthetic: graph.synthetic});
+  const paint = (kind: 'plan' | 'work' | 'earlier', view = emptyView, focused = false) => paintSidebar({plan: graph.plan, flow, view, width, height, focused, kind, synthetic: graph.synthetic, ownerColor: id => id});
+  const row = (lines: ReturnType<typeof paint>, at: number) => lines[at]!.map(segment => segment.text).join('');
+  const work = paint('work');
+  assert.ok(work.every(line => line.reduce((sum, segment) => sum + stringWidth(segment.text), 0) === width));
+  assert.match(row(work, 0), /Tasks · no plan/);
+  assert.match(row(work, 1), /working · 1\/1 done/, 'a done synthesized leaf counts as finished');
+  assert.deepEqual(planProgress(graph.plan, graph.synthetic), {accepted: 1, total: 1});
+  assert.deepEqual(planProgress(graph.plan), {accepted: 0, total: 1}, 'without the synthesized set nothing is accepted');
+  assert.match(row(work, work.length - 1), /No plan · click selects/);
+  assert.match(row(paint('work', {...emptyView, hovered: '1.1.1'}), work.length - 1), /1\.1\.1 · done/);
+  assert.match(row(paint('earlier'), 0), /Earlier tasks Tasks/);
+  assert.match(row(paint('earlier'), 1), /read-only · active/);
+  assert.match(row(paint('earlier'), work.length - 1), /Read-only · re-activate: \/tasks plans/);
+  // The ids of synthesized nodes are drawn in the faint tone, the plan's own in the muted tone.
+  const idCell = (synthetic: ReadonlySet<string>) => buildFlow(graph.plan, {...flowOptionsFor(width), expanded: new Map(), owners, synthetic}).rows.flat().find(cell => cell.text === '1.1')?.tone;
+  assert.equal(idCell(graph.synthetic), 'faint'); assert.equal(idCell(new Set()), 'muted');
+  // Header: hover shows the hint, a click or p asks for the switcher.
+  const geometry = sidebarGeometry(height);
+  let step = stepMouse(flow, emptyView, geometry, {x: 5, y: 0, action: 'move'}, 0);
+  assert.equal(step.view.hoveredHeader, true);
+  assert.match(row(paint('work', step.view), work.length - 1), /switch plan or work view/);
+  assert.equal(stepMouse(flow, step.view, geometry, {x: 5, y: 0, action: 'move'}, 1).view, step.view, 'the same hover is no change');
+  assert.deepEqual(stepMouse(flow, step.view, geometry, {x: 5, y: 1, action: 'press'}, 2).effects, [{kind: 'focus'}, {kind: 'plans'}]);
+  step = stepMouse(flow, step.view, geometry, {x: 5, y: geometry.header + 1, action: 'move'}, 3);
+  assert.equal(step.view.hoveredHeader, false, 'leaving the header clears the hover');
+  assert.deepEqual(stepKey(flow, emptyView, geometry, {plans: true}, 0).effects, [{kind: 'plans'}]);
 });
 
 test('keyboard: arrows move in reading order, left and right fold, Enter opens, Esc gives the focus back', () => {

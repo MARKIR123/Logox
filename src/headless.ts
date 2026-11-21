@@ -292,7 +292,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
       ...(node.route ? {route: node.route} : {}), ...(node.model ? {model: node.model} : {}),
       ...(node.background ? {background: true, delivered: node.delivered === true} : {}),
       blockedBy: [...node.blockedBy], result: node.result ? {summary: node.result.summary, notVerified: [...node.result.notVerified ?? []]} : null}));
-  // The plans this run touched (changed during it, or holding work it started): derived, as the hub and `/plan` read them.
+  // The plans this run touched (changed during it, or holding work it started): derived, as the hub and the task sidebar read them.
   const plans = app.plans.plans().filter(plan => plan.updatedAt >= started || plan.nodes.some(node => node.links.some(link => ids.has((link.activityId ?? link.automaJob ?? '').split('/')[0]!))));
   const cwd = await realpath(io.cwd).catch(() => io.cwd);
   const changedFiles = (await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {

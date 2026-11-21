@@ -416,7 +416,7 @@ test('Fork: forks are marked in the delegation record, /tasks, the plan and the 
     {id: '1.2', title: 'Worker step', owner: 'techne', after: [], acceptance: [], links: [{automaJob: 'a/T2'}]}]};
   const derived = derivePlan(plan, records);
   assert.deepEqual(derived.nodes.map(node => node.forked), [undefined, true, undefined]);
-  const flow = buildFlow(derived, {width: 40, twoUp: false, expanded: new Map([['1', true]]), owners: owner => ({symbol: '◆', name: owner})});
+  const flow = buildFlow(derived, {width: 40, perRow: 1, expanded: new Map([['1', true]]), owners: owner => ({symbol: '◆', name: owner})});
   const flowText = JSON.stringify(flow.rows.map(row => row.map(cell => cell.text).join('')));
   assert.match(flowText, /◆ techne ⑂/);
   assert.equal((flowText.match(/⑂/g) ?? []).length, 1, 'only the forked node carries the mark');

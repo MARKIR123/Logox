@@ -9,14 +9,12 @@ import {join} from 'node:path';
 import {TerminalScreen} from './terminal-screen.js';
 import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import {App} from '../src/tui/app.js';
-import {commandCatalog, commandHelp} from '../src/commands.js';
-import {commandSuggestions} from '../src/tui/commands/completion.js';
-import {TASKS_EMPTY_TEXT, formatDuration, statusText, workerTranscript} from '../src/commands/tasks-page.js';
+import {formatDuration, statusText, workerTranscript} from '../src/commands/tasks-page.js';
 import {loadConfig} from '../src/config/config.js';
 import type {Provider} from '../src/runtime/messages.js';
 import type {CommandSurface} from '../src/runtime/command-surface.js';
 import type {AutomaSwarm} from '../src/runtime/contracts.js';
-import type {Delegation} from '../src/runtime/delegations.js';
+import {projectDelegations, type Delegation} from '../src/runtime/delegations.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {waitFor} from './wait-for.js';
 
@@ -41,8 +39,6 @@ async function fixture() {
     async close() {for (const app of apps) await app.close().catch(() => {}); await rm(root, {recursive: true, force: true});}};
 }
 const surface = (app: App) => app.surfaces.getSnapshot();
-type Picker = Extract<CommandSurface, {kind: 'picker'}>;
-const picker = (app: App): Picker => {const current = surface(app); assert.equal(current?.kind, 'picker', 'a picker is open: ' + current?.kind); return current as Picker;};
 
 /** One Director round that dispatched Techne (waiting for approval, with a job under it) and Kalon after it. */
 async function seed(app: App) {
@@ -59,68 +55,41 @@ async function seed(app: App) {
     usage: {input: 10, output: 5, cacheRead: 0, cacheWrite: 0, provider: 'p', model: 'm', cost: 0.0123, currency: 'USD'}});
 }
 
-test('the catalog, /help and completion know /tasks; arguments are a usage error', async () => {
-  const entry = commandCatalog.find(command => command.name === 'tasks')!;
-  assert.equal(entry.usage, '/tasks');
-  assert.ok(commandHelp().includes('/tasks: Delegated work'));
-  assert.ok(commandSuggestions({text: '/ta', cursor: 3}, {providers: [], loginProviders: [], models: []}).some(item => item.label === '/tasks'));
-  const f = await fixture();
-  try {
-    const app = await f.open();
-    await assert.rejects(app.submit('/tasks now'), /^Error: Usage: \/tasks$/);
-    assert.equal(surface(app), null);
-  } finally {await f.close();}
-});
-
-test('an empty session says nothing was delegated', async () => {
-  const f = await fixture();
-  try {
-    const app = await f.open();
-    await app.submit('/tasks');
-    assert.equal(picker(app).title, 'Tasks');
-    assert.deepEqual(picker(app).items, []);
-    assert.equal(picker(app).emptyText, TASKS_EMPTY_TEXT);
-  } finally {await f.close();}
-});
-
-test('the list shows one row per delegation: owner, title, status with what it waits on, duration and cost, jobs below their dispatcher', async () => {
+test('the work of a round reads as a graph: phases, steps, tasks, after edges and statuses come from the delegation record (the pure merge is in task-graph.test.ts)', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
     await seed(app);
     app.store.interactions.open({kind: 'permission', sessionId: app.sessionId, activityId: 'tech', ownerId: 'techne', title: 'Write', tool: 'Write', arguments: {}, reason: 'ask'});
     app.store.activities.update(app.sessionId, 'tech', {status: 'waiting_input', stage: 'Awaiting permission'});
-    await app.submit('/tasks');
-    const rows = picker(app).items.map(item => [item.id, item.label, item.description]);
-    assert.deepEqual(rows.map(row => [row[0], row[1]]), [['root', 'Logox · Fix the parser'], ['tech', '  Techne · Build the parser'], ['tech/T1', '    T1 · Find the callers'],
-      ['kal', '  Kalon · Polish the output']]);
-    const text = (id: string) => rows.find(row => row[0] === id)![2] as string;
-    assert.match(text('tech'), /^waiting_input · awaiting approval \(Write\) · \d+s · \$0\.0123$/);
+    const rows = projectDelegations({snapshot: app.store.getSnapshot(), sessionId: app.sessionId});
+    assert.deepEqual(rows.find(row => row.id === 'kal')?.after, ['tech'], 'the full after list is exposed, not only the unfinished part');
+    const text = (id: string) => statusText(rows.find(row => row.id === id)!, undefined);
+    assert.match(text('tech'), /^waiting_input · awaiting approval \(Write\) · \d+s$/);
     assert.match(text('kal'), /^queued · blocked by techne$/);
     assert.match(text('tech/T1'), /^done · 4s$/);
-    assert.match(text('root'), /^running/);
   } finally {await f.close();}
 });
 
-test('Enter opens a row: assignment, status, result; Esc returns to the list on the same row', async () => {
+test('a delegation opens its detail: assignment, status, result; Esc closes it', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
     await seed(app);
     app.store.activities.update(app.sessionId, 'tech', {status: 'completed', stage: 'Completed', stopReason: 'completed', title: 'Parser built', summary: {title: 'Parser built', report: 'Built the parser; tests pass.', source: 'model'}});
-    await app.submit('/tasks');
-    await app.surfaces.choose(picker(app).id, 'tech');
+    app.surfaces.openWorkNode('tech');
+    await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the detail'});
     let page = surface(app);
-    assert.equal(page?.kind, 'page');
     const lines = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!.lines.join('\n');
     assert.match(lines, /Owner: Techne/); assert.match(lines, /Title: Build the parser/); assert.match(lines, /Owns: src\/parser\/\*\*/); assert.match(lines, /all tests pass/);
     assert.match(lines, /Status: completed/); assert.match(lines, /Stop reason: completed/); assert.match(lines, /Cost: \$0\.0123/);
     assert.match(lines, /Summary: Built the parser; tests pass\./); assert.match(lines, /Full report: tech/);
     assert.deepEqual((page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!.actions?.map(action => action.label), ['Open conversation']);
     app.surfaces.cancel();
-    await waitFor(() => surface(app)?.kind === 'picker' && picker(app).focus, focus => focus === 'tech', {label: 'back on the list'});
-    // A worker row: its own detail, with the result fields and a transcript action.
-    await app.surfaces.choose(picker(app).id, 'tech/T1');
+    await waitFor(() => surface(app), current => current === null, {label: 'closed'});
+    // A worker: its own detail, with the result fields and a transcript action.
+    app.surfaces.openWorkNode('tech/T1');
+    await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the worker detail'});
     page = surface(app);
     const job = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!;
     assert.match(job.lines.join('\n'), /Worker: T1 · read route · mock\/reader/);
@@ -129,38 +98,36 @@ test('Enter opens a row: assignment, status, result; Esc returns to the list on 
   } finally {await f.close();}
 });
 
-test('the mouse selects and opens rows, a click on Open conversation switches to the actor, Esc comes back', {timeout: 30000}, async () => {
+test('with no plan the task graph is reachable through /tasks; a double click opens a work node, a click on Open conversation switches to the actor, Esc comes back', {timeout: 30000}, async () => {
   const f = await fixture();
   const input = new TerminalInput(), output = new TerminalScreen();
-  output.columns = 110; output.rows = 32;
+  output.columns = 120; output.rows = 32;
   let instance!: ReturnType<typeof render>;
   try {
     const app = await f.open();
     await seed(app);
-    await act(async () => {instance = render(<App stage sessionId={app.sessionId} store={app.store} surfaces={app.surfaces}
+    await act(async () => {instance = render(<App stage sessionId={app.sessionId} store={app.store} plans={app.plans} surfaces={app.surfaces}
       onSubmit={app.submit} onCancel={() => {}} onClose={async () => {}}/>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
     const send = async (value: string) => {await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();};
     const screen = () => output.lines.join('\n');
-    // The pane is docked at the bottom, below any timeline card that carries the same words.
-    const find = (needle: string) => {const y = output.lines.findLastIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle)};};
-    const click = async (needle: string) => {const {x, y} = find(needle); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
+    const sidebar = () => output.lines.map(line => line.slice(79)).join('\n');
+    const find = (needle: string, x0 = 0) => {const y = output.lines.findLastIndex(line => line.indexOf(needle, x0) >= 0); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle, x0)};};
+    const click = async (needle: string, x0 = 79) => {const {x, y} = find(needle, x0); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
+    await delay(100);
+    assert.ok(!/no plan/.test(screen()), 'a session without a plan does not open the sidebar by itself');
+    assert.match(screen(), /▸ Tasks \d+\/\d+/, 'the footer chip offers it');
     await act(async () => {await app.submit('/tasks');}); await instance.waitUntilRenderFlush();
-    await waitFor(() => screen(), text => /Build the parser/.test(text) && /Polish the output/.test(text), {label: 'the list'});
-    // The first click selects the row, the second opens it (as in every list); the wheel moves the highlight.
-    await click('Build the parser');
-    assert.match(screen(), /❯\s+Techne · Build the parser/);
-    const rowAt = find('Polish the output');
-    await send(`\x1b[<65;${rowAt.x + 1};${rowAt.y + 1}M`);
-    assert.match(screen(), /❯\s+T1 · Find the callers/, 'the wheel moved the highlight');
-    await click('Build the parser'); await click('Build the parser');
-    await waitFor(() => screen(), text => /Assignment/.test(text) && /src\/parser/.test(text), {label: 'the detail page'});
+    await waitFor(() => sidebar(), text => /Tasks · no plan/.test(text) && /1\.1 Build the parser/.test(text) && /1\.2 Polish the output/.test(text), {label: 'the task graph of the work'});
+    assert.match(sidebar(), /1\.1\.1 Find the callers/);
+    await click('1.1 Build the parser'); await click('1.1 Build the parser');
+    await waitFor(() => screen(), text => /Assignment/.test(text) && /src\/parser/.test(text), {label: 'the delegation detail'});
     assert.match(screen(), /o Open conversation/);
     await send('\x1b');
-    await waitFor(() => screen(), text => /Polish the output/.test(text) && !/Assignment/.test(text), {label: 'back on the list'});
-    await click('Build the parser'); await click('Build the parser');
+    await waitFor(() => screen(), text => !/Assignment/.test(text) && /1\.2 Polish the output/.test(sidebar()), {label: 'back on the sidebar'});
+    await click('1.1 Build the parser'); await click('1.1 Build the parser');
     await waitFor(() => screen(), text => /o Open conversation/.test(text), {label: 'the detail page again'});
-    await click('o Open conversation');
+    await click('o Open conversation', 0);
     await waitFor(() => surface(app), current => current === null, {label: 'the page closed'});
     await waitFor(() => screen(), text => /Techne · Own thread/.test(text), {label: 'the Techne window is shown'});
   } finally {

@@ -1,9 +1,10 @@
 /**
- * `/plan`: the plan of the current request as an indented tree, one row per node (status glyph, id, title, owner, progress of a parent), a node's detail
- * on Enter (acceptance, evidence, prerequisites and links; a link opens the `/tasks` detail of that work), and a switcher row when the project holds
- * more than one plan. A stack of the existing surfaces like `/tasks`, so keyboard, click, hover and wheel behave as on every list. Nothing here owns
- * state: rows come from the board (`src/store/plans.ts`) each time a level opens. The flowchart sidebar (`src/tui/panels/plan-sidebar.ts`) is the live view
- * of the same plan; it opens a node's detail through `CommandSurfaces.openPlanNode()` and `/plan sidebar` shows or hides it.
+ * The plan pages behind the flowchart sidebar (`/tasks` shows it; there is no `/plan` command): a node's detail (acceptance, evidence, prerequisites and
+ * links; a link opens the `/tasks` detail of that work) and the plan switcher (`/tasks plans`, the sidebar header's click and `p`) with one row per plan of
+ * the project, a row for the session's work graph, and a re-activate row for a plan of an earlier session (`PlanBoard.adopt()`). Choosing a row tells the
+ * sidebar what to draw (`CommandSurfaces.requestSidebarSource()`). Pages are a stack of the existing surfaces like `/tasks`, so keyboard, click, hover and
+ * wheel behave as on every list. Nothing here owns state: rows come from the board (`src/store/plans.ts`) each time a level opens. The flowchart sidebar
+ * (`src/tui/panels/plan-sidebar.ts`) opens a node's detail through `CommandSurfaces.openPlanNode()`.
  */
 import type {PickerItem, TabAction, TabRow} from '../runtime/command-surface.js';
 import {formatDuration} from './tasks-page.js';
@@ -11,46 +12,29 @@ import type {TasksCommand} from './tasks-page.js';
 import type {DerivedNode, DerivedPlan, NodeStatus} from '../runtime/plan.js';
 import type {PlanBoard} from '../store/plans.js';
 import {row, tabContent} from './tab-rows.js';
-import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
+import type {CommandSurfaces, PageActions} from './surfaces.js';
 
 export const PLAN_EMPTY_TEXT = 'There is no plan yet. The Director creates one with Plan when a request has more than one piece of work.';
-export const PLAN_USAGE = 'Usage: /plan';
 export const PLAN_GLYPHS: Readonly<Record<NodeStatus, string>> = {pending: '○', ready: '◌', running: '●', waiting: '◐', done: '◉', accepted: '✓', failed: '✗', abandoned: '–'};
-const SWITCH = '@plans', ADOPT = '@adopt';
+const AUTO = '@auto', WORK = '@work', ADOPT = '@adopt:';
 
 export interface PlanPageDeps {
   surfaces: CommandSurfaces;
-  board: Pick<PlanBoard, 'plans' | 'view' | 'projectPlans' | 'adopt' | 'active'>;
+  board: Pick<PlanBoard, 'peek' | 'view' | 'projectPlans' | 'adopt' | 'active'>;
   tasks: Pick<TasksCommand, 'openDelegation'>;
   actors: {find(id: string): {name: string} | undefined};
   /** The title of linked work (`/tasks` row id), when the session knows it. */
   workTitle(id: string): string | undefined;
+  /** Whether the session has delegated work to draw as the work graph. */
+  hasWork(): boolean;
 }
 
-/** `○ 1.2 Contrast algorithm`, indented by depth. */
-export function nodeLabel(node: DerivedNode): string {
-  return '  '.repeat(node.depth - 1) + PLAN_GLYPHS[node.status] + ' ' + node.id + ' ' + node.title;
-}
-/** `aletheia · 1/3 · ready`: owner, progress of a parent (accepted of live children), status, and what a pending node waits for. */
-export function nodeDescription(node: DerivedNode): string {
-  return [node.owner + (node.forked ? ' ⑂' : ''), node.progress ? `${node.progress.accepted}/${node.progress.total}` : undefined, node.status, node.blockedBy.length ? 'after ' + node.blockedBy.join(', ') : undefined].filter(Boolean).join(' · ');
-}
-
-export function createPlanCommand(deps: PlanPageDeps) {
+export function createPlanPages(deps: PlanPageDeps) {
   const {surfaces, board, tasks, workTitle} = deps;
   const name = (ownerId: string) => deps.actors.find(ownerId)?.name ?? ownerId;
   const open = async (...args: Parameters<CommandSurfaces['openPicker']>) => {
     if (surfaces.getSnapshot()) surfaces.close();
     await surfaces.openPicker(...args);
-  };
-  /** The plan being looked at: a plan id chosen in the switcher, else the active plan, else the latest of the session. */
-  let viewing: string | undefined;
-  const current = async (): Promise<{plan: DerivedPlan | undefined; mine: boolean}> => {
-    const mine = board.plans();
-    const chosen = viewing ? mine.find(plan => plan.id === viewing) : undefined;
-    if (chosen) return {plan: chosen, mine: true};
-    if (viewing) {const other = await board.view(viewing); if (other) return {plan: other, mine: false};}
-    return {plan: mine.findLast(plan => plan.status === 'active') ?? mine.at(-1), mine: true};
   };
 
   const openDetail = async (plan: DerivedPlan, node: DerivedNode, backTo: () => Promise<void>) => {
@@ -90,63 +74,45 @@ export function createPlanCommand(deps: PlanPageDeps) {
     surfaces.openPage('Plan node · ' + node.title, [{id: 'detail', title: node.id + ' · ' + name(node.owner), ...tabContent(body), ...(actions.length ? {actions} : {})}], 'detail', pageActions);
   };
 
-  const openSwitcher = async (): Promise<void> => {
-    const headers = await board.projectPlans();
-    const items: PickerItem[] = headers.map(header => ({id: header.id, label: header.id + ' · ' + header.title,
-      description: [header.status, header.nodes + ' nodes', header.current ? 'this session' : 'earlier session', formatAge(header.updatedAt)].join(' · ')}));
-    await open({title: 'Plans', description: 'Enter shows a plan · Esc goes back', current: viewing ?? '', items, emptyText: PLAN_EMPTY_TEXT},
-      async () => ({items}), async id => {viewing = id; await openList(); return {};}, undefined, async () => {await openList();});
-  };
-
-  const openList = async (focus?: string): Promise<void> => {
-    const {plan, mine} = await current();
-    const several = (await board.projectPlans()).length > 1;
-    const items: PickerItem[] = [];
-    if (plan && several) items.push({id: SWITCH, label: 'Plans · ' + plan.id + ' ' + plan.title, description: 'Enter switches plan'});
-    if (plan && !mine) items.push({id: ADOPT, label: 'Re-activate this plan in this session', description: board.active() ? 'Another plan is active: abandon it first' : 'Work then links to it again'});
-    if (plan) for (const node of plan.nodes) items.push({id: node.id, label: nodeLabel(node), description: nodeDescription(node)});
-    const description = plan ? `${plan.id} · ${plan.status} · ${plan.progress.accepted}/${plan.progress.total} accepted` + (mine ? '' : ' · earlier session, read-only') + ' · Enter opens a node · Esc closes' : '';
-    await open({title: plan ? 'Plan · ' + plan.title : 'Plan', description, current: '', ...(focus ? {focus} : {}), items, emptyText: PLAN_EMPTY_TEXT},
-      async () => ({items}), async id => {
-        if (id === SWITCH) {await openSwitcher(); return {};}
-        if (id === ADOPT) {
-          const adopted = await board.adopt(plan!.id);
-          if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
-          viewing = plan!.id;
-          await openList();
-          return {};
-        }
-        const node = plan?.nodes.find(item => item.id === id);
-        if (!plan || !node) throw new Error('That node no longer exists.');
-        await openDetail(plan, node, async () => {await openList(id);});
-        return {};
-      });
-  };
-
-  /** The detail page of one node of the session's plan (the sidebar's double-click and Enter); Esc closes it. */
-  const openNode = async (id: string): Promise<void> => {
-    viewing = undefined;
-    const {plan} = await current();
+  /** The detail page of one node of the session's plan (the sidebar's double-click and Enter), or of the earlier session's plan named by `planId` (read-only); Esc closes it. */
+  const openNode = async (id: string, planId?: string): Promise<void> => {
+    const plan = planId === undefined ? board.peek() : await board.view(planId);
     const node = plan?.nodes.find(item => item.id === id);
     if (!plan || !node) throw new Error('That node no longer exists.');
     await openDetail(plan, node, async () => {});
   };
   surfaces.planNodeOpener = openNode;
 
-  return {
-    /** `/plan` opens the page; `/plan sidebar [show|hide]` shows, hides or toggles the sidebar; other arguments are not accepted. */
-    async command(argument: string): Promise<void> {
-      const sidebar = /^sidebar(?:\s+(show|hide|toggle))?$/i.exec(argument.trim());
-      if (sidebar) {surfaces.requestPlanSidebar((sidebar[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode); return;}
-      if (argument.trim()) throw new Error(PLAN_USAGE);
-      viewing = undefined;
-      await openList();
-    },
-    openList,
-    openNode,
+  /** What the sidebar draws, chosen from a list of the project's plans (and the session's work). */
+  const openSwitcher = async (): Promise<void> => {
+    const headers = await board.projectPlans();
+    const items: PickerItem[] = [{id: AUTO, label: 'Follow the session', description: 'The plan, else the work done so far, else the latest earlier plan'}];
+    if (deps.hasWork()) items.push({id: WORK, label: 'Work so far', description: 'The delegated work of this session as a graph (no plan)'});
+    for (const header of headers) {
+      items.push({id: header.id, label: header.id + ' · ' + header.title,
+        description: [header.status, header.nodes + ' nodes', header.current ? 'this session' : 'earlier session, read-only', formatAge(header.updatedAt)].join(' · ')});
+      if (!header.current && header.status !== 'abandoned') items.push({id: ADOPT + header.id, label: '  Re-activate ' + header.id + ' in this session',
+        description: board.active() ? 'Another plan is active: abandon it first' : 'Work then links to it again'});
+    }
+    await open({title: 'Plans', description: 'Enter shows it in the sidebar · Esc closes', current: '', items, emptyText: PLAN_EMPTY_TEXT},
+      async () => ({items}), async id => {
+        if (id === AUTO) {surfaces.requestSidebarSource({kind: 'auto'}); surfaces.requestPlanSidebar('show'); return {};}
+        if (id === WORK) {surfaces.requestSidebarSource({kind: 'work'}); surfaces.requestPlanSidebar('show'); return {};}
+        if (id.startsWith(ADOPT)) {
+          const adopted = await board.adopt(id.slice(ADOPT.length));
+          if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
+          surfaces.requestSidebarSource({kind: 'plan', id: id.slice(ADOPT.length)}); surfaces.requestPlanSidebar('show');
+          return {message: 'Plan ' + id.slice(ADOPT.length) + ' is active in this session again.', presentation: 'status' as const};
+        }
+        surfaces.requestSidebarSource({kind: 'plan', id}); surfaces.requestPlanSidebar('show');
+        return {};
+      });
   };
+  surfaces.plansOpener = openSwitcher;
+
+  return {openNode, openSwitcher};
 }
-export type PlanCommand = ReturnType<typeof createPlanCommand>;
+export type PlanPages = ReturnType<typeof createPlanPages>;
 
 function formatAge(time: number): string {
   const ago = Date.now() - time;

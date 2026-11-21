@@ -62,6 +62,7 @@ import {useKeyboard} from './input/keyboard.js';
 import type {ShellContext} from './input/shell-context.js';
 import {QuestionDock} from './interactions/question-dock.js';
 import {CHIP_HINT, usePlanSidebar} from './panels/use-plan-sidebar.js';
+import {projectDelegations} from '../runtime/delegations.js';
 import type {PlanBoard} from '../store/plans.js';
 
 export interface AppProps {
@@ -241,7 +242,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   ) ? visibleMessages.findLast(message => message.role === 'system' && message.systemPresentation === 'welcome') : undefined;
   // The plan sidebar: docked beside the timeline (the timeline is then `timelineWidth` wide) or, in a narrow terminal, an overlay opened on request.
   const locateRef = useRef<(ownerId: string) => void>(() => {});
-  const planSidebar = usePlanSidebar({board: plans, surfaces, revision: deferredSnapshot.revision, columns, width, screenRows, roles, themeVersion, welcome: Boolean(welcome), focus,
+  const planSidebar = usePlanSidebar({board: plans, surfaces, revision: deferredSnapshot.revision, sessionId, delegations: () => projectDelegations({snapshot: deferredSnapshot, sessionId}), columns, width, screenRows, roles, themeVersion, welcome: Boolean(welcome), focus,
     setFocus, flash, locate: ownerId => locateRef.current(ownerId)});
   const timelineWidth = planSidebar.timelineWidth;
   const welcomeLines = useMemo(() => welcome

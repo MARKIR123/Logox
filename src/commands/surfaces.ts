@@ -45,7 +45,9 @@ export interface ThemeActions {
   /** Persists the choice through the preference store and applies it. */
   save(name: string): Promise<void>;
 }
-/** What `/plan sidebar` asks of the terminal. */
+/** What the sidebar draws when the person chose (`/tasks plans`): the work graph, or one plan of the project; `auto` follows the session again. */
+export type SidebarSource = {readonly kind: 'auto'} | {readonly kind: 'work'} | {readonly kind: 'plan'; readonly id: string};
+/** What `/tasks sidebar` asks of the terminal. */
 export type PlanSidebarMode = 'show' | 'hide' | 'toggle';
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
@@ -73,13 +75,26 @@ export class CommandSurfaces {
   /** Asks the terminal to show the conversation window of `ownerId`; a surface without a terminal listening ignores it. */
   requestWindow(ownerId: string): void {for (const listener of this.windowListeners) listener(ownerId);}
   private planListeners = new Set<(mode: PlanSidebarMode) => void>();
-  /** The terminal subscribes here to show, hide or toggle the plan sidebar (`/plan sidebar`). */
+  /** The terminal subscribes here to show, hide or toggle the task sidebar (`/tasks`). */
   subscribePlanSidebar = (listener: (mode: PlanSidebarMode) => void): (() => void) => {this.planListeners.add(listener); return () => this.planListeners.delete(listener);};
   /** Asks the terminal to show, hide or toggle the plan sidebar; true when a terminal is listening (a headless run has none). */
   requestPlanSidebar(mode: PlanSidebarMode): boolean {for (const listener of this.planListeners) listener(mode); return this.planListeners.size > 0;}
-  /** Opens the detail page of a plan node (set by the `/plan` command; the sidebar's double-click and Enter call `openPlanNode`). */
-  planNodeOpener: ((nodeId: string) => Promise<void>) | undefined;
-  openPlanNode(nodeId: string): void {void this.planNodeOpener?.(nodeId).catch(() => {});}
+  /**
+   * Opens the detail page of a plan node (set by the plan pages in `src/commands/plan-page.ts`; the sidebar's double-click and Enter call `openPlanNode`).
+   * `planId` names a plan of an earlier session, which is read-only.
+   */
+  planNodeOpener: ((nodeId: string, planId?: string) => Promise<void>) | undefined;
+  openPlanNode(nodeId: string, planId?: string): void {void this.planNodeOpener?.(nodeId, planId).catch(() => {});}
+  /** Opens the `/tasks` detail page of a delegation (set by `src/commands/tasks-page.ts`); the work graph's double-click and Enter call `openWorkNode`. */
+  workNodeOpener: ((delegationId: string) => Promise<boolean>) | undefined;
+  openWorkNode(delegationId: string): void {void this.workNodeOpener?.(delegationId).catch(() => {});}
+  /** Opens the plan switcher (`/tasks plans`, the sidebar header's click and `p`); set by the plan pages. */
+  plansOpener: (() => Promise<void>) | undefined;
+  openPlans(): void {void this.plansOpener?.().catch(() => {});}
+  private sourceListeners = new Set<(source: SidebarSource) => void>();
+  /** The terminal subscribes here to draw another plan (or the work graph) in the sidebar. */
+  subscribeSidebarSource = (listener: (source: SidebarSource) => void): (() => void) => {this.sourceListeners.add(listener); return () => this.sourceListeners.delete(listener);};
+  requestSidebarSource(source: SidebarSource): void {for (const listener of this.sourceListeners) listener(source);}
   constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
     private readonly origin?: () => CommandOrigin) {}
   private completion(state: CommandSurface, active: boolean): CommandCompletion {

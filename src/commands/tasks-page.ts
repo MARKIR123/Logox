@@ -1,18 +1,20 @@
 /**
- * `/tasks`: the delegation record as a read-only page. A list of every delegation of the session (the current root's tree first, earlier roots below it;
- * one row per Director round, companion activity or Automa job) opens a detail page for the selected row. It is a stack of the existing surfaces like
- * `/anamnesis`: a picker (so keyboard, click, hover and wheel behave as on every list), a page for the detail and the same Esc-back. Nothing here owns state:
- * rows are projected from the runtime snapshot (`src/runtime/delegations.ts`) each time a level opens.
+ * `/tasks`: shows or hides the task flowchart sidebar (`/tasks sidebar [show|hide|toggle]`, the same as Ctrl+B), `/tasks plans` opens the plan switcher
+ * (`src/commands/plan-page.ts`). The sidebar draws the session's task graph (the plan with the work nobody linked to it, or the work alone: `src/runtime/task-graph.ts`),
+ * else the latest plan of an earlier session; this file owns what a work-graph node opens: the read-only detail page of a delegation (Assignment, Status and
+ * Result, with the footer actions `o` and `t`), reached by `CommandSurfaces.openWorkNode()` and by the links of a plan node's page. Nothing here owns state:
+ * the detail is projected from the runtime snapshot (`src/runtime/delegations.ts`) each time it opens.
  */
-import type {PickerItem, TabRow} from '../runtime/command-surface.js';
+import type {TabRow} from '../runtime/command-surface.js';
 import type {RuntimeStore} from '../runtime/store.js';
-import {delegationRows, projectDelegations, type Delegation} from '../runtime/delegations.js';
+import {projectDelegations, type Delegation} from '../runtime/delegations.js';
+import {taskGraph} from '../runtime/task-graph.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
-import type {CommandSurfaces, PageActions} from './surfaces.js';
+import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
 
-export const TASKS_EMPTY_TEXT = 'Nothing has been delegated in this session yet. Companion tasks and Automa jobs appear here as the Director dispatches them.';
-export const TASKS_USAGE = 'Usage: /tasks';
+export const TASKS_USAGE = 'Usage: /tasks [plans | sidebar [show|hide|toggle]]';
+export const TASKS_NO_TERMINAL = 'The task sidebar needs the terminal UI.';
 
 export interface TasksPageDeps {
   surfaces: CommandSurfaces;
@@ -82,10 +84,6 @@ export function workerTranscript(raw: string, activityId: string, jobId: string)
 export function createTasksCommand(deps: TasksPageDeps) {
   const {surfaces, store, session, actors, deliveries, costs, journalPath} = deps;
   const name = (ownerId: string) => actors.find(ownerId)?.name ?? ownerId;
-  const open = async (...args: Parameters<CommandSurfaces['openPicker']>) => {
-    if (surfaces.getSnapshot()) surfaces.close();
-    await surfaces.openPicker(...args);
-  };
   const project = () => projectDelegations({snapshot: store.getSnapshot(), sessionId: session, deliveries: deliveries()});
 
   const openDetail = async (node: Delegation, cost: number | undefined, backTo: () => Promise<void>) => {
@@ -135,35 +133,30 @@ export function createTasksCommand(deps: TasksPageDeps) {
       ...(node.kind === 'actor' ? {actions: [{id: 'open', label: 'Open conversation', key: 'o'}]} : node.kind === 'automa' && node.jobId ? {actions: [{id: 'transcript', label: 'Worker transcript', key: 't'}]} : {})}], 'detail', actions);
   };
 
-  const openList = async (focus?: string): Promise<void> => {
-    const priced = await costs().catch(() => new Map<string, number>());
-    const rows = delegationRows(project());
-    const items: PickerItem[] = rows.map(({node, depth}) => ({id: node.id,
-      label: '  '.repeat(depth) + (node.kind === 'automa' ? node.jobId + (node.fork ? ' ⑂' : '') + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title,
-      description: statusText(node, priced.get(node.id))}));
-    await open({title: 'Tasks', description: items.length ? 'Enter opens a row · Esc closes' : '', current: '', ...(focus ? {focus} : {}), items, emptyText: TASKS_EMPTY_TEXT},
-      async () => ({items}), async id => {
-        const node = project().find(item => item.id === id);
-        if (!node) throw new Error('That task no longer exists.');
-        await openDetail(node, priced.get(id), async () => {await openList(id);});
-        return {};
-      });
+  const openDelegation = async (id: string, backTo: () => Promise<void>): Promise<boolean> => {
+    const node = project().find(item => item.id === id);
+    if (!node) return false;
+    await openDetail(node, (await costs().catch(() => new Map<string, number>())).get(id), backTo);
+    return true;
   };
+  surfaces.workNodeOpener = id => openDelegation(id, async () => {});
 
   return {
-    /** `/tasks` opens the page; arguments are not accepted. */
+    /** `/tasks` toggles the sidebar; `/tasks sidebar show|hide|toggle` sets it; `/tasks plans` opens the plan switcher; other arguments are not accepted. */
     async command(argument: string): Promise<void> {
-      if (argument.trim()) throw new Error(TASKS_USAGE);
-      await openList();
+      const text = argument.trim();
+      const sidebar = /^sidebar(?:\s+(show|hide|toggle))?$/i.exec(text);
+      if (text === '' || sidebar) {
+        if (!surfaces.requestPlanSidebar((sidebar?.[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode)) throw new Error(TASKS_NO_TERMINAL);
+        return;
+      }
+      if (/^plans$/i.test(text)) {await surfaces.plansOpener?.(); return;}
+      throw new Error(TASKS_USAGE);
     },
-    openList,
     /** Opens the detail page of one delegation (an activity id, or `<activityId>/<jobId>`), Esc returning through `backTo`; false when the session does not know it. */
-    async openDelegation(id: string, backTo: () => Promise<void>): Promise<boolean> {
-      const node = project().find(item => item.id === id);
-      if (!node) return false;
-      await openDetail(node, (await costs().catch(() => new Map<string, number>())).get(id), backTo);
-      return true;
-    },
+    openDelegation,
+    /** Whether the session has delegated work the sidebar can draw as the work graph. */
+    hasWork(): boolean {return taskGraph(undefined, project(), session) !== undefined;},
     /** The title of one delegation, for links from other pages. */
     titleOf(id: string): string | undefined {
       const node = project().find(item => item.id === id);

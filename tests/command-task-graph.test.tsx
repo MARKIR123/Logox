@@ -11,10 +11,11 @@ import {renderTerminal as render} from '../src/tui/terminal/terminal.js';
 import {App} from '../src/tui/app.js';
 import {commandCatalog, commandHelp} from '../src/commands.js';
 import {commandSuggestions} from '../src/tui/commands/completion.js';
-import {PLAN_EMPTY_TEXT} from '../src/commands/plan-page.js';
+import {TASKS_NO_TERMINAL, TASKS_USAGE} from '../src/commands/tasks-page.js';
 import {loadConfig} from '../src/config/config.js';
 import type {Provider} from '../src/runtime/messages.js';
 import type {CommandSurface} from '../src/runtime/command-surface.js';
+import type {SidebarSource} from '../src/commands/surfaces.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {waitFor} from './wait-for.js';
 
@@ -54,31 +55,31 @@ async function seed(app: App) {
   assert.ok((await app.plans.apply([{op: 'accept', id: '1.2', evidence: ['ratio 5.1']}], 'logox')).ok);
 }
 
-test('the catalog, /help and completion know /plan; arguments are a usage error; an empty session says there is no plan', async () => {
-  const entry = commandCatalog.find(command => command.name === 'plan')!;
-  assert.equal(entry.usage, '/plan');
-  assert.equal(entry.description, 'The plan for the current request: phases, owners, status and acceptance');
-  assert.ok(commandHelp().includes('/plan: The plan for the current request'));
-  assert.ok(commandSuggestions({text: '/pla', cursor: 4}, {providers: [], loginProviders: [], models: []}).some(item => item.label === '/plan'));
+test('the catalog, /help and completion know /tasks and no longer /plan; arguments are a usage error; without a terminal the sidebar cannot open', async () => {
+  const entry = commandCatalog.find(command => command.name === 'tasks')!;
+  assert.equal(entry.usage, '/tasks [plans|sidebar]');
+  assert.ok(!commandCatalog.some(command => command.name === 'plan'));
+  assert.ok(commandHelp().includes('/tasks [plans|sidebar]: Task flowchart sidebar'));
+  assert.ok(commandSuggestions({text: '/ta', cursor: 3}, {providers: [], loginProviders: [], models: []}).some(item => item.label === '/tasks'));
+  assert.ok(!commandSuggestions({text: '/pla', cursor: 4}, {providers: [], loginProviders: [], models: []}).some(item => item.label === '/plan'));
   const f = await fixture();
   try {
     const app = await f.open();
-    await assert.rejects(app.submit('/plan now'), /^Error: Usage: \/plan$/);
-    await app.submit('/plan');
-    assert.deepEqual(picker(app).items, []);
-    assert.equal(picker(app).emptyText, PLAN_EMPTY_TEXT);
+    await assert.rejects(app.submit('/tasks now'), (error: Error) => error.message === TASKS_USAGE);
+    await assert.rejects(app.submit('/tasks sidebar sideways'), (error: Error) => error.message === TASKS_USAGE);
+    await assert.rejects(app.submit('/tasks'), (error: Error) => error.message === TASKS_NO_TERMINAL);
+    assert.equal(surface(app), null);
   } finally {await f.close();}
 });
 
-test('/plan sidebar [show|hide|toggle] asks the terminal; the board can be peeked without reading files; a node opens by id', async () => {
+test('/tasks toggles the sidebar and /tasks sidebar [show|hide|toggle] sets it; the board can be peeked without reading files; a node opens by id', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
     const modes: string[] = [];
     const stop = app.surfaces.subscribePlanSidebar(mode => modes.push(mode));
-    await app.submit('/plan sidebar'); await app.submit('/plan sidebar show'); await app.submit('/plan sidebar HIDE');
-    assert.deepEqual(modes, ['toggle', 'show', 'hide']);
-    await assert.rejects(app.submit('/plan sidebar sideways'), /^Error: Usage: \/plan$/);
+    await app.submit('/tasks'); await app.submit('/tasks sidebar'); await app.submit('/tasks sidebar show'); await app.submit('/tasks sidebar HIDE');
+    assert.deepEqual(modes, ['toggle', 'toggle', 'show', 'hide']);
     stop();
     assert.equal(app.surfaces.requestPlanSidebar('show'), false, 'no terminal listening');
     assert.equal(app.plans.peek(), undefined);
@@ -91,86 +92,109 @@ test('/plan sidebar [show|hide|toggle] asks the terminal; the board can be peeke
   } finally {await f.close();}
 });
 
-test('rows show glyph, id, title, owner, status and progress; Enter opens the detail; a link opens the /tasks detail and Esc comes back', async () => {
+test('a plan node\'s detail shows its fields; a link opens the delegation detail and Esc comes back; an accepted node shows its evidence', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
     await seed(app);
-    await app.submit('/plan');
-    const rows = picker(app).items.map(item => [item.id, item.label, item.description]);
-    assert.deepEqual(rows, [
-      ['1', '● 1 Design', 'logox · 1/2 · running'],
-      ['1.1', '  ● 1.1 Palette', 'techne · running'],
-      ['1.2', '  ✓ 1.2 Contrast', 'kalon · accepted'],
-      ['2', '○ 2 Ship', 'techne · pending · after 1']]);
-    assert.match(picker(app).description, /^p1 · active · 0\/2 accepted/);
-    await app.surfaces.choose(picker(app).id, '1.1');
+    app.surfaces.openPlanNode('1.1');
+    await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Palette', {label: 'the node detail'});
     const page = surface(app) as Page;
-    assert.equal(page.kind, 'page');
     const lines = page.tabs[0]!.lines.join('\n');
     assert.match(lines, /Title: Palette/); assert.match(lines, /Owner: Techne/); assert.match(lines, /Status: ● running/); assert.match(lines, /Parent: 1 Design/);
     assert.match(lines, /all colours named/); assert.match(lines, /Not accepted yet\./); assert.match(lines, /1  Techne · Build the palette · running/);
     assert.deepEqual(page.tabs[0]!.actions?.map(action => [action.id, action.key]), [['link:tech', '1']]);
-    // The accepted node shows its evidence.
-    app.surfaces.cancel();
-    await waitFor(() => surface(app)?.kind === 'picker' && picker(app).focus, focus => focus === '1.1', {label: 'back on the list'});
-    await app.surfaces.choose(picker(app).id, '1.2');
-    assert.match((surface(app) as Page).tabs[0]!.lines.join('\n'), /Accepted by: Logox[^\n]*\n[^\n]*ratio 5\.1/s);
-    app.surfaces.cancel();
-    await waitFor(() => surface(app)?.kind === 'picker', kind => kind, {label: 'list'});
-    await app.surfaces.choose(picker(app).id, '1.1');
-    await app.surfaces.triggerTabAction((surface(app) as Page).id, 'detail', 'link:tech');
-    await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Delegation · Build the palette', {label: 'the /tasks detail'});
+    await app.surfaces.triggerTabAction(page.id, 'detail', 'link:tech');
+    await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Delegation · Build the palette', {label: 'the delegation detail'});
     app.surfaces.cancel();
     await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Palette', {label: 'back on the node'});
+    app.surfaces.cancel();
+    await waitFor(() => surface(app), current => current === null, {label: 'closed'});
+    app.surfaces.openPlanNode('1.2');
+    await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Contrast', {label: 'the accepted node'});
+    assert.match((surface(app) as Page).tabs[0]!.lines.join('\n'), /Accepted by: Logox[^\n]*\n[^\n]*ratio 5\.1/s);
   } finally {await f.close();}
 });
 
-test('the switcher row appears with several plans; an earlier session\'s plan is read-only until re-activated', async () => {
+test('/tasks plans lists the plans of the project; choosing one tells the sidebar what to draw; an earlier session\'s plan is read-only until re-activated', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
     await seed(app);
     await app.plans.apply([{op: 'abandon'}], 'logox');
     await app.plans.apply([{op: 'create', title: 'Second plan', nodes: [{title: 'Only', owner: 'logox'}]}], 'logox');
-    await app.submit('/plan');
-    assert.deepEqual(picker(app).items.map(item => item.id), ['@plans', '1']);
-    assert.match(picker(app).title, /Plan · Second plan/);
-    await app.surfaces.choose(picker(app).id, '@plans');
-    assert.deepEqual(picker(app).items.map(item => item.id), ['p2', 'p1']);
+    const sources: SidebarSource[] = [], modes: string[] = [];
+    app.surfaces.subscribeSidebarSource(source => sources.push(source));
+    app.surfaces.subscribePlanSidebar(mode => modes.push(mode));
+    await app.submit('/tasks plans');
+    assert.deepEqual(picker(app).items.map(item => item.id), ['@auto', '@work', 'p2', 'p1'], 'the seeded task has no round on record: it stands as a phase, so there is work to show');
+    assert.equal(picker(app).title, 'Plans');
     await app.surfaces.choose(picker(app).id, 'p1');
-    await waitFor(() => surface(app)?.kind === 'picker' && picker(app).title, title => title === 'Plan · Theme preview', {label: 'the first plan'});
-    assert.match(picker(app).description, /abandoned/);
+    assert.deepEqual(sources, [{kind: 'plan', id: 'p1'}]);
+    assert.deepEqual(modes, ['show']);
+    await waitFor(() => surface(app), current => current === null, {label: 'the picker closed'});
+    await app.submit('/tasks plans');
+    await app.surfaces.choose(picker(app).id, '@auto');
+    assert.deepEqual(sources.at(-1), {kind: 'auto'});
   } finally {await f.close();}
 });
 
-test('the mouse selects and opens rows and a click on a link action opens the work', {timeout: 30000}, async () => {
+test('the switcher offers the work done so far when there is any, and a re-activate row for a plan of an earlier session', async () => {
+  const f = await fixture();
+  try {
+    const first = await f.open();
+    await seed(first);
+    await first.plans.flush();
+    await first.close();
+    // A new session of the same project: the first session's plan is earlier, read-only.
+    const config = await loadConfig(f.cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, join(f.root, 'home'), f.root);
+    const provider: Provider = {async respond() {return {message: {role: 'assistant', text: 'Understood.'}, stop: 'complete'};}};
+    const app = await createApplication({cwd: f.cwd, config, provider, sessionId: 'plan-cmd-two', resourceOptions: {home: join(f.root, 'home'), boundary: f.root}, env: {}, authPath: join(f.root, 'auth.json')});
+    try {
+      assert.equal(app.plans.peek(), undefined, 'this session has no plan');
+      const earlier = await app.plans.earlier();
+      assert.equal(earlier?.title, 'Theme preview', 'the earlier session\'s plan is found, read-only');
+      const base = {sessionId: app.sessionId, stage: '', detail: ''};
+      app.store.activities.create({...base, activityId: 'solo', ownerId: 'logox', kind: 'director', title: 'A round', status: 'completed', rootActivityId: 'solo'});
+      app.store.activities.create({...base, activityId: 'child', ownerId: 'techne', kind: 'actor', title: 'Techne · Builder', taskTitle: 'Standalone', status: 'completed', rootActivityId: 'solo', parentActivityId: 'solo'});
+      await app.submit('/tasks plans');
+      assert.deepEqual(picker(app).items.map(item => item.id), ['@auto', '@work', 'p1', '@adopt:p1']);
+      app.surfaces.cancel();
+      app.surfaces.openPlanNode('1.1', 'p1');
+      await waitFor(() => (surface(app) as Page | null)?.title, title => title === 'Plan node · Palette', {label: 'the earlier plan\'s node'});
+      app.surfaces.cancel();
+      await app.submit('/tasks plans');
+      await app.surfaces.choose(picker(app).id, '@adopt:p1');
+      assert.equal(app.plans.peek()?.id, 'p1', 're-activated in this session');
+    } finally {await app.close().catch(() => {});}
+  } finally {await f.close();}
+});
+
+test('the mouse opens a plan node\'s detail from the sidebar and a click on a link action opens the work', {timeout: 30000}, async () => {
   const f = await fixture();
   const input = new TerminalInput(), output = new TerminalScreen();
-  output.columns = 110; output.rows = 32;
+  output.columns = 120; output.rows = 32;
   let instance!: ReturnType<typeof render>;
   try {
     const app = await f.open();
     await seed(app);
-    await act(async () => {instance = render(<App stage sessionId={app.sessionId} store={app.store} surfaces={app.surfaces}
+    app.store.message(app.sessionId, 'logox', 'assistant', 'Ready when you are.');
+    await act(async () => {instance = render(<App stage sessionId={app.sessionId} store={app.store} plans={app.plans} surfaces={app.surfaces}
       onSubmit={app.submit} onCancel={() => {}} onClose={async () => {}}/>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, patchConsole: false, exitOnCtrlC: false, maxFps: 100});});
     const send = async (value: string) => {await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush();};
     const screen = () => output.lines.join('\n');
     const find = (needle: string) => {const y = output.lines.findLastIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle)};};
     const click = async (needle: string) => {const {x, y} = find(needle); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
-    await act(async () => {await app.submit('/plan');}); await instance.waitUntilRenderFlush();
-    await waitFor(() => screen(), text => /1\.1 Palette/.test(text) && /2 Ship/.test(text), {label: 'the list'});
-    await click('1.1 Palette');
-    assert.match(screen(), /❯\s+●? ?1\.1 Palette/);
-    await click('1.1 Palette');
+    await waitFor(() => screen(), text => /1\.1 Palette/.test(text) && /2 Ship/.test(text), {label: 'the sidebar'});
+    await click('1.1 Palette'); await click('1.1 Palette');
     await waitFor(() => screen(), text => /Acceptance/.test(text) && /all colours named/.test(text), {label: 'the detail page'});
     await click('Open Techne');
-    await waitFor(() => screen(), text => /Assignment/.test(text) && /Build the palette/.test(text), {label: 'the /tasks detail'});
+    await waitFor(() => screen(), text => /Assignment/.test(text) && /Build the palette/.test(text), {label: 'the delegation detail'});
     await send('\x1b');
     await waitFor(() => screen(), text => /Acceptance/.test(text), {label: 'back on the node'});
     await send('\x1b');
-    await waitFor(() => screen(), text => /2 Ship/.test(text) && !/Acceptance/.test(text), {label: 'back on the list'});
+    await waitFor(() => screen(), text => /2 Ship/.test(text) && !/Acceptance/.test(text), {label: 'back on the sidebar'});
   } finally {
     try {await act(async () => instance?.unmount());} catch {}
     input.destroy(); output.destroy();

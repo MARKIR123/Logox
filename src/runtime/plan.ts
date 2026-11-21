@@ -6,7 +6,7 @@
  * or the Director, and acceptance carries evidence.
  *
  * `applyPlanOp()` is the one place that decides who may change what and refuses with the exact fix. Persistence (`src/runtime/plan-file.ts`,
- * `src/store/plans.ts`), the `Plan` tool, `/plan` and the session hub all sit on these types.
+ * `src/store/plans.ts`), the `Plan` tool, the `/tasks` pages and the session hub all sit on these types.
  */
 import {isDirector} from './director-id.js';
 import * as text from '../prompts/runtime/plan.js';
@@ -14,7 +14,7 @@ import * as text from '../prompts/runtime/plan.js';
 export const PLAN_MAX_DEPTH = 3;
 /** The owner of work that runs as Automa jobs. */
 export const AUTOMA_OWNER = 'automa';
-/** The actor name of the person's own edits (the GUI, `/plan`): the same rights as the Director. */
+/** The actor name of the person's own edits (the GUI): the same rights as the Director. */
 export const PLAN_USER = 'user';
 
 export type PlanStatus = 'active' | 'done' | 'abandoned';

@@ -1,6 +1,6 @@
 /**
  * The plan board of one session: the plan files of the project (`<project>/.logox/plans/<id>.md`, for people to read and edit), the plans of this
- * session held in memory, and what each reader has been told. Everything that changes a plan goes through `apply()` (the `Plan` tool, `/plan`, the hub)
+ * session held in memory, and what each reader has been told. Everything that changes a plan goes through `apply()` (the `Plan` tool, the `/tasks` pages, the hub)
  * or `link()` (a dispatch carrying a node); both write the file atomically. The file is read again before each use, so a person's edit is honoured, and
  * when a runtime change meets a change made on disk the two are merged field by field (`mergePlans()`), never one over the other.
  *
@@ -176,7 +176,7 @@ export class PlanBoard {
   /**
    * The plan the sidebar draws: the active plan, else the session's latest one that was not abandoned (a finished plan stays readable). Unlike `active()` it never
    * reads the plan files, so a view may call it on every store change; derived statuses are memoised on the store revision. Edits made on disk reach it with the
-   * next `refresh()` (any `Plan` call, `/plan`, or the sidebar being opened).
+   * next `refresh()` (any `Plan` call, `/tasks`, or the sidebar being opened).
    */
   peek(): DerivedPlan | undefined {
     const entry = this.activeEntry() ?? this.latestEntry();
@@ -207,7 +207,17 @@ export class PlanBoard {
     }
     return headers.sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id));
   }
-  /** One plan of the project for reading: this session's with live statuses, another session's as the file holds it (explicit marks only). */
+  /** A plan of this session by id with live statuses, or undefined (it never reads files or the disk). */
+  mine(id: string): DerivedPlan | undefined {
+    const entry = this.entries.get(id);
+    return entry ? this.derive(entry.plan) : undefined;
+  }
+  /** The most recently updated plan of an earlier session that was not abandoned, read-only (no live work: explicit marks only), for the sidebar's fallback. */
+  async earlier(): Promise<DerivedPlan | undefined> {
+    const header = (await this.projectPlans()).find(item => !item.current && item.status !== 'abandoned');
+    return header ? this.view(header.id) : undefined;
+  }
+  /** One plan of the project for reading:this session's with live statuses, another session's as the file holds it (explicit marks only). */
   async view(id: string): Promise<DerivedPlan | undefined> {
     this.refresh();
     const mine = this.entries.get(id);

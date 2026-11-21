@@ -31,8 +31,8 @@ async function fixture() {
   const provider: Provider = {async respond() {return {message: {role: 'assistant', text: 'Understood.'}, stop: 'complete'};}};
   const apps: Application[] = [];
   return {root,
-    async open(): Promise<Application> {
-      const app = await createApplication({cwd, config, provider, sessionId: 'plan-ui', resourceOptions: {home, boundary: root}, env: {}, authPath: join(root, 'auth.json')});
+    async open(sessionId = 'plan-ui'): Promise<Application> {
+      const app = await createApplication({cwd, config, provider, sessionId, resourceOptions: {home, boundary: root}, env: {}, authPath: join(root, 'auth.json')});
       apps.push(app); return app;
     },
     async close() {for (const app of apps) await app.close().catch(() => {}); await rm(root, {recursive: true, force: true, maxRetries: 50, retryDelay: 50});}};
@@ -87,7 +87,7 @@ test('the sidebar appears beside the timeline when a plan is created, with the t
     assert.ok(rig.find('TIMELINELEFT').x < rig.sidebarX);
     assert.ok(sidebarLines(rig).some(line => line.startsWith('│')), 'the border column');
     assert.match(sidebarLines(rig)[1]!, /active · 0\/3/);
-    assert.ok(!rig.output.lines.at(-1)!.includes('▸ Plan'), 'no chip while the sidebar is shown');
+    assert.ok(!rig.output.lines.at(-1)!.includes('▸ Tasks'), 'no chip while the sidebar is shown');
     await act(async () => {app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINESECOND');});
     await waitFor(() => rig.screen(), text => text.includes('TIMELINESECOND'), {label: 'the timeline keeps working'});
     assert.ok(rig.screen().includes('1.1 Palette'));
@@ -111,9 +111,9 @@ test('linked work moves a node through running to done; the clock ticks beside i
     await act(async () => {
       for (const id of ['1.1', '1.2', '2']) assert.ok((await app.plans.apply([{op: 'accept', id, evidence: ['checked']}], 'logox')).ok);
     });
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('Plan 3/3'), {label: 'hidden, with the chip'});
-    assert.match(rig.screen(), /Plan p1 is done · \/plan sidebar or Ctrl\+B shows it again|▸ Plan 3\/3/);
-    assert.ok(rig.output.lines.at(-1)!.includes('▸ Plan 3/3'), 'the chip is on the footer row');
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('Tasks 3/3'), {label: 'hidden, with the chip'});
+    assert.match(rig.screen(), /Plan p1 is done · \/tasks or Ctrl\+B shows the task graph again|▸ Tasks 3\/3/);
+    assert.ok(rig.output.lines.at(-1)!.includes('▸ Tasks 3/3'), 'the chip is on the footer row');
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -179,7 +179,7 @@ test('keyboard: Ctrl+B shows and focuses, arrows move, Enter opens, Esc returns 
     await rig.send('hi');
     assert.ok(rig.screen().includes('hi'), 'typing reaches the composer while the sidebar is unfocused');
     await rig.send('\x02'); // Ctrl+B focuses
-    assert.match(rig.screen(), /↑↓←→ move · Enter open · Esc back/);
+    assert.match(rig.screen(), /↑↓←→ · Enter open · p plans · Esc/);
     await rig.send('\x1b[B'); await rig.send('\x1b[B'); // the phase, then its first step
     await rig.send('\r');
     await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'Enter opens the detail of the selected node'});
@@ -187,23 +187,23 @@ test('keyboard: Ctrl+B shows and focuses, arrows move, Enter opens, Esc returns 
     await rig.send('\x1b');
     await waitFor(() => surface(app), current => current === null, {label: 'Esc closes the detail'});
     await rig.send('\x1b'); // back to the composer
-    assert.ok(!/↑↓←→ move/.test(rig.screen()), 'the keyboard is back in the composer');
+    assert.ok(!/↑↓←→ · Enter/.test(rig.screen()), 'the keyboard is back in the composer');
     await rig.send('\x02'); // focus again: a typing key returns it to the composer and is typed there
     await rig.send('x');
     assert.ok(/❯ hix/.test(rig.screen()), 'the key was typed into the composer:\n' + rig.screen());
     await rig.send('\x02'); await rig.send('\x02'); // focus, then hide
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ Plan 0/3'), {label: 'hidden by the shortcut; the chip shows'});
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden by the shortcut; the chip shows'});
     // The chip is a button: hover shows its hint, a click shows the sidebar again.
-    const chip = rig.find('▸ Plan 0/3');
+    const chip = rig.find('▸ Tasks 0/3');
     await rig.mouse('move', chip.x + 2, chip.y);
     await waitFor(() => rig.screen(), text => text.includes('click or Ctrl+B shows it'), {label: 'the chip hint on the notification row'});
     await rig.click(chip.x + 2, chip.y);
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && !text.includes('▸ Plan 0/3'), {label: 'shown again'});
-    // /plan sidebar hides it too.
-    await act(async () => {await app.submit('/plan sidebar hide');});
-    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: '/plan sidebar hide'});
-    await act(async () => {await app.submit('/plan sidebar');});
-    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: '/plan sidebar toggles'});
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && !text.includes('▸ Tasks 0/3'), {label: 'shown again'});
+    // /tasks sidebar hides it too.
+    await act(async () => {await app.submit('/tasks sidebar hide');});
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: '/tasks sidebar hide'});
+    await act(async () => {await app.submit('/tasks');});
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: '/tasks toggles'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -214,7 +214,7 @@ test('a hidden sidebar stays hidden when the next plan starts; below 110 columns
     app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINEWORD');
     rig = await mount(app, 90, 28);
     await act(async () => {await create(app);});
-    await waitFor(() => rig.screen(), text => text.includes('▸ Plan 0/3'), {label: 'only the chip at 90 columns'});
+    await waitFor(() => rig.screen(), text => text.includes('▸ Tasks 0/3'), {label: 'only the chip at 90 columns'});
     assert.ok(!rig.screen().includes('1.1 Palette'), 'never squeezes the timeline');
     assert.ok(rig.find('TIMELINEWORD').x < 5);
     await rig.send('\x02');
@@ -249,5 +249,96 @@ test('unrelated store changes neither rebuild the flow nor repaint the sidebar',
     await act(async () => {assert.ok((await app.plans.apply([{op: 'update', id: '1.1', title: 'Palette v2'}], 'logox')).ok);});
     await waitFor(() => rig.screen(), text => text.includes('Palette v2'), {label: 'the plan change'});
     assert.ok(flowStats.builds > builds);
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+const swarmJob = (app: Application, activityId: string, id: string, title: string) => app.store.message(app.sessionId, 'techne', 'assistant', '', {activityId, kind: 'tool',
+  step: {title: 'Automa', state: 'completed', elapsedMs: 0, swarm: {name: 'crew', jobs: [{id, title, state: 'done', elapsedMs: 100, calls: [], route: 'read', model: 'mock/reader', stopReason: 'completed', summary: 'found them'}]}}} as never);
+
+test('with no plan the work of the session is a task graph one /tasks away: nothing opens by itself, the chip offers it, the header says no plan, a click on it opens the plan switcher', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    runningTechne(app);
+    swarmJob(app, 'tech', 'T1', 'Find the callers');
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => /▸ Tasks \d\/\d/.test(text), {label: 'the chip offers the task graph'});
+    assert.ok(!rig.screen().includes('Tasks · no plan'), 'a session without a plan never opens the sidebar by itself');
+    await act(async () => {await app.submit('/tasks');});
+    await waitFor(() => rig.screen(), text => text.includes('Tasks · no plan') && text.includes('Build the palette') && text.includes('Find the callers'), {label: 'the graph of the work'});
+    assert.ok(!rig.output.lines.at(-1)!.includes('▸ Tasks'), 'no chip while it is shown');
+    assert.match(sidebarLines(rig)[1]!, /working · \d\/\d done/);
+    // Hover on the header names what a click does; the click opens the switcher over the screen.
+    const head = rig.find('Tasks · no plan');
+    await rig.mouse('move', head.x + 2, head.y);
+    await waitFor(() => rig.screen(), text => text.includes('switch plan or work view'), {label: 'the header hint'});
+    await rig.click(head.x + 2, head.y);
+    await waitFor(() => surface(app)?.kind, kind => kind === 'picker', {label: 'the plan switcher'});
+    assert.equal((surface(app) as Extract<CommandSurface, {kind: 'picker'}>).title, 'Plans');
+    app.surfaces.cancel();
+    await waitFor(() => surface(app), current => current === null, {label: 'closed'});
+    // p opens it from the keyboard when the sidebar has focus (the click on the header gave it the keyboard; Ctrl+B would hide it then).
+    await rig.mouse('move', 5, 5);
+    if (!/p plans/.test(rig.screen())) await rig.send('\x02');
+    await waitFor(() => rig.screen(), text => /p plans/.test(text), {label: 'the sidebar has the keyboard'});
+    await rig.send('p');
+    await waitFor(() => surface(app)?.kind, kind => kind === 'picker', {label: 'p opens the switcher'});
+    app.surfaces.cancel();
+    await act(async () => {await app.submit('/tasks sidebar hide');});
+    await waitFor(() => rig.screen(), text => !text.includes('Tasks · no plan') && /▸ Tasks/.test(text), {label: 'hidden again'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('/tasks with nothing planned or delegated says so instead of opening an empty sidebar', {timeout: 30000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('Ready when you are.'), {label: 'mounted'});
+    await act(async () => {await app.submit('/tasks');});
+    await waitFor(() => rig.screen(), text => /Nothing has been planned or delegated/.test(text), {label: 'the empty notice'});
+    assert.ok(!rig.screen().includes('Tasks · no plan'));
+    await rig.send('\x02');
+    await waitFor(() => rig.screen(), text => /Nothing has been planned or delegated/.test(text), {label: 'Ctrl+B says the same'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('a plan and work nobody linked to it are one graph: a worker of a planned step becomes its child', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    await create(app);
+    runningTechne(app); app.plans.link('1.1', {activityId: 'tech'});
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    assert.ok(!rig.screen().includes('Find the callers'));
+    await act(async () => {swarmJob(app, 'tech', 'T1', 'Find the callers');});
+    await waitFor(() => rig.screen(), text => text.includes('1.1.1 Find the callers') && text.includes('Tasks Theme preview'), {label: 'the worker joins its step'});
+    assert.equal(app.plans.peek()?.nodes.length, 4, 'the plan itself is unchanged');
+    // Double click on the synthesized node opens the delegation detail, not a plan node.
+    const node = rig.find('1.1.1 Find the callers');
+    await rig.click(node.x + 2, node.y); await rig.click(node.x + 2, node.y);
+    await waitFor(() => (surface(app) as Extract<CommandSurface, {kind: 'page'}> | null)?.title, title => title === 'Delegation · Find the callers', {label: 'the delegation detail'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('a session with neither plan nor work shows the latest plan of an earlier session, read-only; its nodes open from the project file and nothing is adopted', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const first = await f.open('earlier-session');
+    await create(first);
+    await first.plans.flush();
+    await first.close();
+    const app = await f.open('this-session');
+    assert.equal(app.plans.peek(), undefined);
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('▸ Earlier tasks'), {label: 'the chip offers the earlier plan'});
+    assert.ok(!rig.screen().includes('1.1 Palette'), 'it does not open by itself');
+    await act(async () => {await app.submit('/tasks');});
+    await waitFor(() => rig.screen(), text => text.includes('Earlier tasks Theme preview') && text.includes('1.1 Palette') && text.includes('re-activate: /tasks plans'), {label: 'the earlier plan, read-only'});
+    const node = rig.find('1.1 Palette');
+    await rig.click(node.x + 2, node.y); await rig.click(node.x + 2, node.y);
+    await waitFor(() => (surface(app) as Extract<CommandSurface, {kind: 'page'}> | null)?.title, title => title === 'Plan node · Palette', {label: 'the node of the earlier plan'});
+    assert.equal(app.plans.peek(), undefined, 'nothing was adopted');
   } finally {if (rig) await unmount(rig); await f.close();}
 });

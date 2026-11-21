@@ -7,7 +7,8 @@
  *     An open phase lays its children out as a group; an accepted or abandoned phase starts collapsed (`expanded` overrides either way).
  *  2. A group is a set of siblings. A node's layer is 0 without prerequisites among its siblings, else 1 + the largest layer of those prerequisites.
  *     Layers are drawn top to bottom, nodes of a layer in id order.
- *  3. Nodes of one layer sit side by side (two per row when the sidebar is at least 48 columns wide and the group has 44 cells, else stacked). A node that is
+ *  3. Nodes of one layer sit side by side: as many per row as fit `MIN_BOX` (22) cells each with a cell between (`perFit()`: 1 below 45 cells of room, 2 from
+ *     45, 3 from 68, ...), at most `FlowOptions.perRow`, else stacked. A node that is
  *     open and has children stands alone in its row and its children follow as a group indented by two cells. Chunks of one layer are separated by a
  *     `∥ parallel` row.
  *  4. Between the last chunk of layer k-1 and the first chunk of layer k, prerequisites that sit in the previous chunk are drawn as a two-row connector
@@ -56,12 +57,14 @@ export interface FlowLayout {
 export interface FlowOptions {
   /** The inner width of the sidebar in cells. */
   readonly width: number;
-  /** Whether the sidebar is wide enough for two nodes per row (its total width is at least 48). */
-  readonly twoUp: boolean;
+  /** The most nodes a row may hold (`plan-sidebar.ts:flowOptionsFor` derives it from the panel width); a group narrower than that many boxes holds fewer. */
+  readonly perRow: number;
   /** Explicit open (true) or closed (false) states of parents; the rest follow the default. */
   readonly expanded: ReadonlyMap<string, boolean>;
   /** The symbol and name an owner is shown with. */
   readonly owners: (id: string) => {readonly symbol: string; readonly name: string};
+  /** Nodes synthesized from delegations (`src/runtime/task-graph.ts`): their id is drawn faint, nothing else differs. */
+  readonly synthetic?: ReadonlySet<string>;
 }
 /** Counts layouts built; tests assert an unrelated store change builds none. */
 export const flowStats = {builds: 0};
@@ -79,6 +82,10 @@ export function fit(text: string, width: number): string {
   }
   return out + '…';
 }
+/** The narrowest box the layout draws. */
+export const MIN_BOX = 22;
+/** How many boxes of at least `MIN_BOX` cells fit side by side in `room` cells (a cell between them). */
+export const perFit = (room: number): number => Math.max(1, Math.floor((room + 1) / (MIN_BOX + 1)));
 export const rowWidth = (row: FlowRow): number => row.reduce((sum, cell) => sum + stringWidth(cell.text), 0);
 
 export const STATUS_TONE: Readonly<Record<NodeStatus, FlowTone>> = {pending: 'muted', ready: 'fg', running: 'accent', waiting: 'warning', done: 'success', accepted: 'success', failed: 'error', abandoned: 'muted'};
@@ -144,7 +151,7 @@ function boxBlock(node: DerivedNode, ctx: Context, width: number, open: boolean,
   const label = fit(node.id + ' ' + node.title, width - 5);
   const fill = Math.max(1, width - 4 - stringWidth(label));
   const border = (text: string) => cell(text, 'line', {node: node.id});
-  const top: FlowRow = [border('╭ '), cell(node.id, 'muted'), cell(label.slice(node.id.length), node.status === 'running' ? 'strong' : 'fg', {bold: node.status === 'running'}),
+  const top: FlowRow = [border('╭ '), cell(node.id, ctx.options.synthetic?.has(node.id) ? 'faint' : 'muted'), cell(label.slice(node.id.length), node.status === 'running' ? 'strong' : 'fg', {bold: node.status === 'running'}),
     border(' ' + '─'.repeat(fill) + '╮')];
   const line = statusLine(node, ctx.options, inner);
   const used = rowWidth(line.cells);
@@ -163,7 +170,7 @@ function phaseBlock(node: DerivedNode, ctx: Context, width: number, open: boolea
   const idText = node.id + ' ';
   const title = fit(node.title, Math.max(1, width - head - stringWidth(idText) - 2));
   const used = head + stringWidth(idText) + stringWidth(title) + 1;
-  const first: FlowRow = [...lead, spaces(1), cell(idText, 'muted'), cell(title, 'strong', {bold: true}), spaces(1), rule('━'.repeat(Math.max(1, width - used)))];
+  const first: FlowRow = [...lead, spaces(1), cell(idText, ctx.options.synthetic?.has(node.id) ? 'faint' : 'muted'), cell(title, 'strong', {bold: true}), spaces(1), rule('━'.repeat(Math.max(1, width - used)))];
   const line = statusLine(node, ctx.options, width - 2);
   return {rows: [first, [spaces(2), ...line.cells], ...notesOf(node, ctx, open, undrawn, width)], ownerX0: 2 + line.ownerX0, ownerX1: 2 + line.ownerX1};
 }
@@ -237,8 +244,8 @@ function connect(ctx: Context, from: Chunk, to: Chunk, width: number): Set<strin
 function layoutGroup(ctx: Context, nodes: readonly DerivedNode[], indent: number, available: number): void {
   const layers = layersOf(nodes);
   const last = Math.max(0, ...layers.values());
-  const perRow = ctx.options.twoUp && available >= 44 ? 2 : 1;
-  const slotWidth = perRow === 2 ? Math.floor((available - 1) / 2) : available;
+  const perRow = Math.max(1, Math.min(ctx.options.perRow, perFit(available)));
+  const slotWidth = Math.floor((available - (perRow - 1)) / perRow);
   let previous: Chunk | undefined;
   for (let level = 0; level <= last; level++) {
     const members = nodes.filter(node => layers.get(node.id) === level);

@@ -34,6 +34,8 @@ export interface Delegation {
   readonly children: readonly string[];
   /** Unfinished activities named by `after`; empty once they have all ended. */
   readonly blockedBy: readonly string[];
+  /** Every delegation id this one was told to follow (`after`), finished or not; `blockedBy` is the unfinished part. Absent without prerequisites. */
+  readonly after?: readonly string[];
   readonly batchId?: string;
   readonly waiting?: {readonly kind: WaitingKind; readonly text: string};
   readonly startedAt?: number;
@@ -100,6 +102,7 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
     if (parentId === activity.activityId) parentId = undefined;
     parents.set(activity.activityId, parentId);
     const blockedBy = (activity.after ?? []).filter(id => id !== activity.activityId && LIVE.has(byId.get(id)?.status ?? ''));
+    const follows = (activity.after ?? []).filter(id => id !== activity.activityId && byId.has(id));
     const ask = activity.status === 'waiting_input' ? interactions.find(item => item.activityId === activity.activityId) : undefined;
     const waiting = ask ? ask.kind === 'permission' ? {kind: 'approval' as const, text: 'awaiting approval (' + ask.tool + ')'} : {kind: 'question' as const, text: 'awaiting your answer'}
       : activity.status === 'paused' ? {kind: 'paused' as const, text: 'paused'}
@@ -114,7 +117,7 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
     const summary = activity.summary ? oneLine(activity.summary.report || activity.summary.title) : activity.diagnostic ?? '';
     nodes.push({
       id: activity.activityId, kind: isDirector(activity.ownerId) ? 'director' : 'actor', ownerId: activity.ownerId, title: activity.taskTitle ?? activity.title, status: activity.status,
-      ...(parentId ? {parentId} : {}), rootId, children: [], blockedBy, ...(activity.batchId ? {batchId: activity.batchId} : {}), ...(waiting ? {waiting} : {}),
+      ...(parentId ? {parentId} : {}), rootId, children: [], blockedBy, ...(follows.length ? {after: follows} : {}), ...(activity.batchId ? {batchId: activity.batchId} : {}), ...(waiting ? {waiting} : {}),
       ...(startedAt !== undefined ? {startedAt} : {}), ...(finishedAt !== undefined ? {finishedAt} : {}), ...(durationMs !== undefined ? {durationMs} : {}),
       ...(finalStop ? {stopReason: finalStop} : {}), ...(activity.diagnostic ? {diagnostic: activity.diagnostic} : {}),
       assignment: {title: activity.taskTitle ?? activity.title, owns: [...activity.ownedFiles ?? []], acceptance: [...activity.acceptance ?? []]},
@@ -138,6 +141,7 @@ export function projectDelegations(input: ProjectionInput): Delegation[] {
       jobs.set(id, {
         id, kind: 'automa', ownerId: dispatcher.ownerId, title: job.title, status: job.state, parentId: dispatcher.activityId, rootId, children: [],
         blockedBy: unfinished.map(afterId => dispatcher.activityId + '/' + afterId),
+        ...(job.after?.length ? {after: job.after.map(afterId => dispatcher.activityId + '/' + afterId)} : {}),
         ...(job.state === 'queued' ? {waiting: {kind: 'queued' as const, text: 'queued for a worker slot'}} : {}),
         ...(job.state === 'waiting' ? {waiting: {kind: 'blocked' as const, text: 'waiting on ' + (unfinished.length ? unfinished : job.after ?? []).join(', ')}} : {}),
         ...(swarm.background ? {background: true, ...(job.delivered !== undefined ? {delivered: job.delivered} : {})} : {}),

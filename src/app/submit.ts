@@ -43,7 +43,7 @@ import type {Tools} from '../tools/tools.js';
 import {palette} from '../tui/appearance/theme.js';
 import {createAnamnesisCommand} from '../commands/anamnesis-page.js';
 import {createTasksCommand} from '../commands/tasks-page.js';
-import {createPlanCommand} from '../commands/plan-page.js';
+import {createPlanPages} from '../commands/plan-page.js';
 import type {PlanBoard} from '../store/plans.js';
 import {activityCosts} from '../runtime/delegations.js';
 import type {AnamnesisApi} from './anamnesis.js';
@@ -54,7 +54,7 @@ export interface SubmitDeps {
   session: string; cwd: string; homeDir: string; state: SessionState; env: NodeJS.ProcessEnv; resourceOptions: ResourceOptions | undefined;
   store: RuntimeStore; journal: Journal; surfaces: CommandSurfaces; authentication: LoginFlow; ensemble: DynamicEnsemble;
   permissions: PermissionEngine; tools: Tools; toolRegistry: ToolRegistry; actors: ActorCatalog; actorServices: ActorServices;
-  /** The session's plan board behind `/plan`. */
+  /** The session's plan board behind the task sidebar (`/tasks`). */
   plans: PlanBoard;
   resources: Resources; contexts: ContextManager; registry: ProviderRegistry; modelPool: ModelPool;
   /** Every owner the session has a ledger for; `/undo` walks them. */
@@ -84,7 +84,7 @@ export function createSubmit(deps: SubmitDeps) {
   const anamnesisCommand = createAnamnesisCommand({surfaces, anamnesis, registry, modelPool, receipt});
   const tasksCommand = createTasksCommand({surfaces, store, session, actors, deliveries: () => actorServices.deliveries.snapshot(), journalPath: () => tools.automa?.journalPath?.(session),
     costs: async () => activityCosts((await Promise.all(owners.map(owner => journal.load(session, owner).catch(() => [])))).flat())});
-  const planCommand = createPlanCommand({surfaces, board: plans, tasks: tasksCommand, actors, workTitle: id => tasksCommand.titleOf(id)});
+  createPlanPages({surfaces, board: plans, tasks: tasksCommand, actors, workTitle: id => tasksCommand.titleOf(id), hasWork: () => tasksCommand.hasWork()});
   /** `/providers check` and `/check-provider`: one request against the session provider, reported in a result panel. */
   const checkProvider = async (source: string) => {
     if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before checking provider.');
@@ -199,8 +199,6 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/theme') {pages.openTheme(); return;}
     const tasksArgs = /^\/tasks(?:\s+([\s\S]*))?$/i.exec(text);
     if (tasksArgs) {await tasksCommand.command(tasksArgs[1] ?? ''); return;}
-    const planArgs = /^\/plan(?:\s+([\s\S]*))?$/i.exec(text);
-    if (planArgs) {await planCommand.command(planArgs[1] ?? ''); return;}
     const anamnesisArgs = /^\/anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
     if (anamnesisArgs) {await anamnesisCommand.command(anamnesisArgs[1] ?? '', source); return;}
     const pageSpec = createCommandTabsFor(text, buildContext());
