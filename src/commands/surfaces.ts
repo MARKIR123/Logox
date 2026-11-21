@@ -91,6 +91,8 @@ export class CommandSurfaces {
   /** Opens the plan switcher (`/tasks plans`, the sidebar header's click and `p`); set by the plan pages. */
   plansOpener: (() => Promise<void>) | undefined;
   openPlans(): void {void this.plansOpener?.().catch(() => {});}
+  /** The remembered width of the task sidebar (`ui-preferences.json`, set by the application); the terminal reads it at start and writes it when a drag ends or resets. */
+  sidebarWidthStore: {get(): number | undefined; set(width: number | undefined): void} | undefined;
   private sourceListeners = new Set<(source: SidebarSource) => void>();
   /** The terminal subscribes here to draw another plan (or the work graph) in the sidebar. */
   subscribeSidebarSource = (listener: (source: SidebarSource) => void): (() => void) => {this.sourceListeners.add(listener); return () => this.sourceListeners.delete(listener);};

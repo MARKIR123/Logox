@@ -359,6 +359,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const recovered = await recoverCheckpoints({session, journal, actors, actorServices, taskModels, taskModelLedger, configureMeter: sessionStatus.configureMeter});
   const {checkpoints, owners} = recovered;
   const ui = options.uiPreferences ?? loadUiPreferences(homeDir, config);
+  surfaces.sidebarWidthStore = {get: () => ui.get().sidebarWidth, set: width => {void ui.save({sidebarWidth: width}).catch(() => {});}};
   const providersPage = createProvidersPage({registry, modelPool, management: providers, signal: commands.signal, selection: modelSelection.current,
     isEnsembleBusy: () => ensemble.isBusy(), commandOwner: () => state.commandOwner, refreshPage: () => pages.refreshCurrentPage()});
   const buildContext = createCommandContext({session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels,

@@ -17,14 +17,25 @@ import {fit, flowHit, perFit, type FlowCell, type FlowLayout, type FlowOptions, 
 /** The sidebar docks beside the timeline only at this many columns or more; narrower terminals open it as an overlay. */
 export const DOCK_MIN_COLUMNS = 110;
 export const SIDEBAR_MIN = 36, SIDEBAR_MAX = 56;
+/** Dragging the border never leaves the timeline fewer columns than this, and never gives the sidebar more than this share of the usable width. */
+export const TIMELINE_MIN = 60;
+export const SIDEBAR_SHARE_MAX = 0.6;
 /** The first column of the flow inside the sidebar (border and one space). */
 export const CONTENT_X = 2;
 /** Seconds after a wheel or page scroll during which the sidebar does not follow the running node. */
 export const FOLLOW_PAUSE_MS = 10_000;
 export const DOUBLE_CLICK_MS = 350;
 
-/** 34% of the usable width, clamped to 36..56 columns. */
-export const sidebarWidth = (width: number): number => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.floor(width * 0.34)));
+/** The default sidebar width: 34% of the usable width, clamped to 36..56 columns. */
+export const defaultSidebarWidth = (width: number): number => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.floor(width * 0.34)));
+/** The widest a dragged sidebar may be: 60% of the usable width, and never so wide that the timeline (and its one-column gap) drops under `TIMELINE_MIN`; never below `SIDEBAR_MIN`. */
+export const maxSidebarWidth = (width: number): number => Math.max(SIDEBAR_MIN, Math.min(Math.floor(width * SIDEBAR_SHARE_MAX), width - 1 - TIMELINE_MIN));
+/** A requested width clamped into `SIDEBAR_MIN..maxSidebarWidth(width)`. */
+export const clampSidebarWidth = (requested: number, width: number): number => Math.max(SIDEBAR_MIN, Math.min(maxSidebarWidth(width), Math.round(requested)));
+/** The docked width: the person's remembered width re-clamped into the current range, else the default. */
+export const sidebarWidth = (width: number, preferred?: number): number => preferred === undefined ? defaultSidebarWidth(width) : clampSidebarWidth(preferred, width);
+/** The sidebar width while its border is dragged to terminal column `x` (the sidebar spans the right-hand `width - x` columns). */
+export const dragWidth = (width: number, x: number): number => clampSidebarWidth(width - x, width);
 /** The flow width of a panel `width` cells wide and how many nodes a row may hold there: 1 below 48 columns, 2 at 48..67 (the sidebar), more in a full-screen view. */
 export const flowOptionsFor = (width: number): Pick<FlowOptions, 'width' | 'perRow'> => ({width: width - CONTENT_X - 1, perRow: perFit(width - CONTENT_X - 1)});
 
@@ -50,6 +61,8 @@ export interface SidebarView {
   readonly lastClick?: {readonly id: string; readonly time: number} | undefined;
   /** The pointer is over the header (a click there opens the plan switcher). */
   readonly hoveredHeader?: boolean | undefined;
+  /** The pointer is over the border column: the `›` collapse button on the first row, else the resize handle (docked only). */
+  readonly hoveredEdge?: 'collapse' | 'handle' | undefined;
 }
 export const emptyView: SidebarView = {expanded: new Map(), scroll: 0, scrolledAt: -Infinity};
 
@@ -85,6 +98,9 @@ export function followTarget(plan: DerivedPlan, flow: FlowLayout): string | unde
   return flow.order.find(id => status.get(id) === 'running' && !(plan.nodes.find(node => node.id === id)?.children ?? []).some(child => drawn.has(child) && status.get(child) === 'running'));
 }
 
+/** The collapse button in the border column of the header row (one cell wide). */
+export const COLLAPSE = '›';
+const EDGE_CLICK = '\0edge';
 const rule = (width: number, tone: FlowTone = 'line'): FlowRow => [{text: '─'.repeat(Math.max(0, width)), tone}];
 
 export interface PaintInput {
@@ -100,6 +116,8 @@ export interface PaintInput {
   readonly kind?: GraphKind;
   /** The nodes synthesized from delegations. */
   readonly synthetic?: ReadonlySet<string>;
+  /** The border is being dragged: it keeps the accent colour. */
+  readonly dragging?: boolean;
 }
 function toneColor(tone: FlowTone): string {
   switch (tone) {
@@ -135,7 +153,7 @@ function merge(segments: readonly SideSegment[]): SideSegment[] {
   return result;
 }
 /** `lead` segments, then the cells of `row` clipped to the content width, padded to `width` cells. */
-function line(input: PaintInput, row: readonly SideSegment[]): SideSegment[] {
+function line(input: PaintInput, row: readonly SideSegment[], first = false): SideSegment[] {
   const room = input.width - CONTENT_X;
   const out: SideSegment[] = [];
   let used = 0;
@@ -145,13 +163,18 @@ function line(input: PaintInput, row: readonly SideSegment[]): SideSegment[] {
     if (used + size <= room) {out.push(segment); used += size; continue;}
     out.push({...segment, text: fit(segment.text, room - used).replace(/…$/, ' ')}); used = room; break;
   }
-  const border: SideSegment = {text: '│ ', color: input.focused ? palette.accent : palette.line};
-  return merge([border, ...out, {text: ' '.repeat(Math.max(0, room - used)), color: palette.fg}]);
+  const {hoveredEdge} = input.view;
+  // The border is the resize handle: accent while the sidebar has the keyboard, while the pointer is over it and while it is dragged. On the first row it is the collapse button.
+  const edgeColor = input.dragging || hoveredEdge === 'handle' || input.focused ? palette.accent : palette.line;
+  const border: SideSegment[] = first ? [{text: COLLAPSE, color: hoveredEdge === 'collapse' ? palette.accent : palette.muted, bold: true}, {text: ' ', color: palette.fg}] : [{text: '│ ', color: edgeColor}];
+  return merge([...border, ...out, {text: ' '.repeat(Math.max(0, room - used)), color: palette.fg}]);
 }
 const plain = (cells: readonly FlowCell[], input: PaintInput) => cells.map(cell => segmentOf(cell, input));
 
 /** The tooltip under the body: the hovered (else selected) node's first acceptance check or latest note, else a hint. */
 export function tooltipFor(plan: DerivedPlan, view: SidebarView, focused: boolean, kind: GraphKind = 'plan'): string {
+  if (view.hoveredEdge === 'collapse') return 'Collapse';
+  if (view.hoveredEdge === 'handle') return 'Drag to resize · › to collapse';
   if (view.hoveredHeader) return 'Click or p: switch plan or work view';
   const id = view.hovered ?? view.selected;
   const node = id === undefined ? undefined : plan.nodes.find(item => item.id === id);
@@ -178,7 +201,7 @@ export function paintSidebar(input: PaintInput): SideSegment[][] {
     const title: FlowCell[] = kind === 'work'
       ? [{text: 'Tasks', tone: 'strong', bold: true}, {text: ' · no plan', tone: 'muted'}]
       : [{text: kind === 'earlier' ? 'Earlier tasks ' : 'Tasks ', tone: 'muted'}, {text: fit(plan.title, Math.max(1, content - (kind === 'earlier' ? 14 : 6))), tone: 'strong', bold: true}];
-    lines.push(line(input, plain(title, input)));
+    lines.push(line(input, plain(title, input), true));
   }
   if (geometry.header >= 2) {
     const tone: FlowTone = plan.status === 'active' ? 'accent' : plan.status === 'done' ? 'success' : 'muted';
@@ -211,7 +234,11 @@ export type SidebarEffect =
   | {readonly kind: 'focus'}
   | {readonly kind: 'blur'}
   | {readonly kind: 'plans'}
-  | {readonly kind: 'close'};
+  | {readonly kind: 'close'}
+  /** A press on the resize handle: the host tracks the drag. */
+  | {readonly kind: 'drag'}
+  /** A double click on the resize handle: back to the default width. */
+  | {readonly kind: 'reset-width'};
 export interface SidebarStep {readonly view: SidebarView; readonly effects: readonly SidebarEffect[]; readonly consumed: boolean}
 const toggled = (view: SidebarView, id: string, open: boolean): SidebarView => ({...view, expanded: new Map(view.expanded).set(id, open)});
 const withScroll = (view: SidebarView, flow: FlowLayout, geometry: SidebarGeometry, scroll: number, now: number): SidebarView => {
@@ -260,10 +287,21 @@ export interface SidebarPointer {
   /** Coordinates inside the sidebar (0,0 is its top-left cell). */
   readonly x: number; readonly y: number;
   readonly action: 'press' | 'move' | 'wheel_up' | 'wheel_down';
+  /** The border below the header is a resize handle (docked only; the overlay has none). */
+  readonly draggable?: boolean;
 }
 /** Mouse over the sidebar: hover, wheel, click (select; the fold glyph folds), double click (details) and the owner name (jump to its card). */
 export function stepMouse(flow: FlowLayout, view: SidebarView, geometry: SidebarGeometry, pointer: SidebarPointer, now: number): SidebarStep {
   const onHeader = pointer.y < geometry.header;
+  // Column 0 is the border: the collapse button on the first row, below it the resize handle. Everything else keeps the old behaviour from column 1 on.
+  if (pointer.x === 0 && (pointer.action === 'move' || pointer.action === 'press') && (pointer.y === 0 || pointer.draggable)) {
+    const part = pointer.y === 0 ? 'collapse' : 'handle';
+    if (pointer.action === 'move') return {view: view.hoveredEdge === part && view.hovered === undefined && !view.hoveredHeader ? view : {...view, hoveredEdge: part, hovered: undefined, hoveredHeader: false}, effects: [], consumed: true};
+    if (part === 'collapse') return {view, effects: [{kind: 'close'}], consumed: true};
+    const double = view.lastClick?.id === EDGE_CLICK && now - view.lastClick.time <= DOUBLE_CLICK_MS;
+    return {view: {...view, lastClick: double ? undefined : {id: EDGE_CLICK, time: now}}, effects: [double ? {kind: 'reset-width'} : {kind: 'drag'}], consumed: true};
+  }
+  if (pointer.action === 'move' && view.hoveredEdge) view = {...view, hoveredEdge: undefined};
   if (onHeader && (pointer.action === 'move' || pointer.action === 'press')) {
     return pointer.action === 'press' ? {view, effects: [{kind: 'focus'}, {kind: 'plans'}], consumed: true}
       : {view: view.hoveredHeader && view.hovered === undefined ? view : {...view, hoveredHeader: true, hovered: undefined}, effects: [], consumed: true};

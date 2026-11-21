@@ -345,3 +345,124 @@ test('a session with neither plan nor work shows the latest plan of an earlier s
     assert.equal(app.plans.peek(), undefined, 'nothing was adopted');
   } finally {if (rig) await unmount(rig); await f.close();}
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------- resize and collapse
+const press = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`, dragTo = (x: number, y: number) => `\x1b[<32;${x + 1};${y + 1}M`, release = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}m`;
+/** The column of the sidebar's border: the first `│` on a body row below the header. */
+const borderX = (rig: Rig, y = 6) => rig.output.lines[y]!.indexOf('│');
+
+test('dragging the border resizes the docked sidebar live within its range, release ends the drag, and the width is remembered', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    await create(app);
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    const width = 119; // usable width: one column less than the terminal
+    assert.equal(borderX(rig), rig.sidebarX);
+    assert.equal(rig.sidebarX, width - 40, 'the default is 34%');
+    await rig.send(press(rig.sidebarX, 10));
+    await rig.send(dragTo(rig.sidebarX - 8, 10));
+    await waitFor(() => borderX(rig), x => x === rig.sidebarX - 8, {label: 'the sidebar grew by eight columns'});
+    assert.ok(rig.screen().includes('1.1 Palette'), 'the flow was laid out again at the new width');
+    // Far to the left: the timeline keeps its 60 columns (and the gap), so the sidebar stops at 58.
+    await rig.send(dragTo(5, 10));
+    await waitFor(() => borderX(rig), x => x === width - 58, {label: 'clamped at the wide end'});
+    await rig.send(release(5, 10));
+    await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === 58, {label: 'remembered'});
+    // Released: more motion does not resize.
+    await rig.send(dragTo(width - 45, 10));
+    await delay(60);
+    assert.equal(borderX(rig), width - 58, 'no drag without a press on the border');
+    // Far to the right: never narrower than the minimum.
+    await rig.send(press(width - 58, 10));
+    await rig.send(dragTo(118, 10));
+    await waitFor(() => borderX(rig), x => x === width - 36, {label: 'clamped at the narrow end'});
+    await rig.send(release(118, 10));
+    await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === 36, {label: 'remembered again'});
+    // Hovering the border takes the accent colour and the tooltip names the gesture.
+    const before = rig.output.text.length;
+    await rig.mouse('move', width - 36, 12);
+    await waitFor(() => rig.screen(), text => text.includes('Drag to resize · › to collapse'), {label: 'the tooltip'});
+    const hex = (at: number) => parseInt(palette.accent.slice(at, at + 2), 16);
+    assert.ok(rig.output.text.slice(before).includes(`\x1b[38;2;${hex(1)};${hex(3)};${hex(5)}m│`), 'the border is accent while hovered');
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('a remembered sidebar width is used at start, re-clamped when the terminal resizes (and restored when it grows back), and a double click on the border resets it', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    await create(app);
+    app.surfaces.sidebarWidthStore!.set(56);
+    await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === 56, {label: 'saved'});
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    assert.equal(borderX(rig), 119 - 56);
+    await act(async () => {rig.output.resize(112, 32);});
+    await waitFor(() => borderX(rig), x => x === 111 - 50, {label: 'clamped to 50 at 112 columns'});
+    await act(async () => {rig.output.resize(120, 32);});
+    await waitFor(() => borderX(rig), x => x === 119 - 56, {label: 'back to the remembered width'});
+    assert.equal(app.surfaces.sidebarWidthStore!.get(), 56, 'clamping at another size never overwrites the choice');
+    const x = borderX(rig);
+    await rig.send(press(x, 10) + release(x, 10)); await rig.send(press(x, 10) + release(x, 10));
+    await waitFor(() => borderX(rig), at => at === 119 - 40, {label: 'the default width'});
+    await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === undefined, {label: 'the choice is forgotten'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('the header row carries a collapse button in the border: hover says Collapse, a click hides the sidebar and the chip brings it back', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    await create(app);
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the sidebar'});
+    const x = rig.sidebarX;
+    assert.equal(rig.output.lines[0]![x], '›', 'the glyph is on the header row');
+    assert.equal(rig.output.lines[6]![x], '│', 'the border continues below');
+    await rig.mouse('move', x, 0);
+    await waitFor(() => rig.screen(), text => /Collapse/.test(text), {label: 'the tooltip'});
+    await rig.click(x, 0);
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette') && text.includes('▸ Tasks 0/3'), {label: 'hidden, with the chip'});
+    await rig.clickText('▸ Tasks');
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'shown again by the chip'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('the overlay of a narrow terminal has the collapse button but no resize handle', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    await create(app);
+    rig = await mount(app, 100, 30);
+    await act(async () => {await app.submit('/tasks');});
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette'), {label: 'the overlay'});
+    const x = rig.output.lines[0]!.indexOf('›');
+    assert.ok(x > 0, 'the glyph is drawn');
+    const before = borderX(rig, 6);
+    await rig.send(press(before, 10)); await rig.send(dragTo(before - 10, 10)); await rig.send(release(before - 10, 10));
+    assert.equal(borderX(rig, 6), before, 'the overlay is not resizable');
+    await rig.click(x, 0);
+    await waitFor(() => rig.screen(), text => !text.includes('1.1 Palette'), {label: 'closed'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('timeline text selection still works next to the docked sidebar, also when the drag ends over it', {timeout: 40000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINELEFT hello');
+    await create(app);
+    rig = await mount(app, 120, 32);
+    await waitFor(() => rig.screen(), text => text.includes('1.1 Palette') && text.includes('TIMELINELEFT'), {label: 'both'});
+    const at = rig.find('TIMELINELEFT');
+    await rig.send(press(at.x, at.y) + dragTo(rig.sidebarX + 10, at.y) + release(rig.sidebarX + 10, at.y));
+    const copied = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(rig.output.text);
+    assert.ok(copied, 'the selection was copied');
+    const text = Buffer.from(copied![1]!, 'base64').toString('utf8');
+    assert.ok(text.includes('TIMELINELEFT hello'), text);
+    assert.ok(!text.includes('Palette'), 'nothing of the sidebar is copied');
+    assert.equal(borderX(rig), rig.sidebarX, 'the sidebar did not resize');
+  } finally {if (rig) await unmount(rig); await f.close();}
+});

@@ -5,7 +5,7 @@ import {applyPlanOp, derivePlan, type NewNode, type PlanWork} from '../src/runti
 import {taskGraph} from '../src/runtime/task-graph.js';
 import type {Delegation} from '../src/runtime/delegations.js';
 import {buildFlow, fit, flowHit, flowStats, rowWidth, type FlowLayout} from '../src/tui/panels/plan-flow.js';
-import {DOCK_MIN_COLUMNS, flowOptionsFor, paintSidebar, planProgress, sidebarGeometry, sidebarWidth, stepKey, stepMouse, emptyView, followTarget} from '../src/tui/panels/plan-sidebar.js';
+import {DOCK_MIN_COLUMNS, flowOptionsFor, paintSidebar, planProgress, sidebarGeometry, sidebarWidth, stepKey, stepMouse, emptyView, followTarget, clampSidebarWidth, dragWidth, maxSidebarWidth, SIDEBAR_MIN, TIMELINE_MIN} from '../src/tui/panels/plan-sidebar.js';
 import {formatClock} from '../src/tui/terminal/text.js';
 
 const names: Record<string, {symbol: string; name: string}> = {logox: {symbol: '◈', name: 'logox'}, techne: {symbol: '◎', name: 'techne'}, aletheia: {symbol: '✦', name: 'aletheia'},
@@ -304,4 +304,40 @@ test('mouse: hover, click selects and folds, double click opens the detail, the 
   assert.equal(wheel.view.scroll, 3); assert.equal(wheel.view.scrolledAt, 5);
   assert.equal(stepMouse(flow, emptyView, geometry, {x: 3, y: 0, action: 'wheel_up'}, 0).view.scroll, 0);
   void rowWidth;
+});
+
+test('the sidebar width: default 34%, a remembered width re-clamped into 36..min(60% of the width, width - 61), a drag follows the pointer', () => {
+  assert.equal(sidebarWidth(119), 40);
+  assert.equal(maxSidebarWidth(119), 58, 'the timeline keeps 60 columns and the gap');
+  assert.equal(maxSidebarWidth(200), 120, '60% of a wide terminal');
+  assert.equal(maxSidebarWidth(110), 49);
+  for (const width of [109, 110, 119, 200, 300]) assert.ok(maxSidebarWidth(width) >= SIDEBAR_MIN && width - 1 - maxSidebarWidth(width) >= Math.min(TIMELINE_MIN, width - 1 - SIDEBAR_MIN));
+  assert.equal(sidebarWidth(119, 50), 50); assert.equal(sidebarWidth(119, 5), 36); assert.equal(sidebarWidth(119, 90), 58); assert.equal(sidebarWidth(111, 56), 50);
+  assert.equal(clampSidebarWidth(40.4, 119), 40);
+  assert.equal(dragWidth(119, 79), 40); assert.equal(dragWidth(119, 70), 49); assert.equal(dragWidth(119, 0), 58); assert.equal(dragWidth(119, 118), 36);
+});
+
+test('the border column: the first row is the collapse button, below it the resize handle (docked only); double click resets, other columns keep their behaviour', () => {
+  const graph = taskGraph(plan([{title: 'A', owner: 'techne'}]), [], 's')!;
+  const flow = buildFlow(graph.plan, {...flowOptionsFor(40), expanded: new Map(), owners, synthetic: graph.synthetic});
+  const geometry = sidebarGeometry(30);
+  const hover = stepMouse(flow, emptyView, geometry, {x: 0, y: 0, action: 'move', draggable: true}, 0);
+  assert.equal(hover.view.hoveredEdge, 'collapse');
+  const paint = (view = hover.view, dragging = false, focused = false) => paintSidebar({plan: graph.plan, flow, view, width: 40, height: 30, focused, ownerColor: () => '#fff', dragging});
+  const text = (lines: ReturnType<typeof paint>) => lines.map(line => line.map(segment => segment.text).join(''));
+  assert.ok(text(paint())[0]!.startsWith('› '), 'the glyph sits in the border of the header row');
+  assert.ok(text(paint())[5]!.startsWith('│'), 'the border continues below');
+  assert.match(text(paint())[29]!, /^│ Collapse/);
+  assert.deepEqual(stepMouse(flow, emptyView, geometry, {x: 0, y: 0, action: 'press'}, 1).effects, [{kind: 'close'}], 'one click collapses, in the overlay too');
+  const handle = stepMouse(flow, emptyView, geometry, {x: 0, y: 8, action: 'move', draggable: true}, 2);
+  assert.equal(handle.view.hoveredEdge, 'handle');
+  assert.match(text(paint(handle.view))[29]!, /Drag to resize · › to collapse/);
+  assert.equal(stepMouse(flow, handle.view, geometry, {x: 5, y: 8, action: 'move', draggable: true}, 3).view.hoveredEdge, undefined, 'leaving the border clears the hover');
+  const first = stepMouse(flow, emptyView, geometry, {x: 0, y: 8, action: 'press', draggable: true}, 10);
+  assert.deepEqual(first.effects, [{kind: 'drag'}]);
+  assert.deepEqual(stepMouse(flow, first.view, geometry, {x: 0, y: 8, action: 'press', draggable: true}, 200).effects, [{kind: 'reset-width'}], 'a second press within 350 ms resets');
+  assert.deepEqual(stepMouse(flow, first.view, geometry, {x: 0, y: 8, action: 'press', draggable: true}, 900).effects, [{kind: 'drag'}], 'a slow second press drags again');
+  assert.equal(stepMouse(flow, emptyView, geometry, {x: 0, y: 8, action: 'press'}, 0).effects.some(effect => effect.kind === 'drag'), false, 'no handle without draggable');
+  assert.equal(paint(emptyView, true)[8]![0]!.color, paint(emptyView, false, true)[8]![0]!.color, 'the handle keeps the accent colour while dragged');
+  assert.equal(stringWidth('›'), 1);
 });

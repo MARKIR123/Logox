@@ -24,6 +24,8 @@ export const uiPreferencesSchema = z.object({
   diffLayout: z.enum(diffLayoutChoices).default('auto'),
   notify: z.enum(notifyChoices).default('off'),
   enterKey: z.enum(enterKeyChoices).default('send'),
+  /** The task sidebar's dragged width in columns; absent means the default (34% of the width). Re-clamped into the current range at use. */
+  sidebarWidth: z.number().int().min(1).max(500).optional(),
 });
 export type UiPreferencesData = z.infer<typeof uiPreferencesSchema>;
 /** The render-relevant part; theme and cursor are applied by the application. */

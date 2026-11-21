@@ -22,7 +22,7 @@ import {palette} from '../appearance/theme.js';
 import type {SgrMouseEvent} from '../terminal/mouse.js';
 import type {PlaneSide, SideSegment} from '../terminal/terminal-plane.js';
 import {buildFlow, type FlowLayout} from './plan-flow.js';
-import {DOCK_MIN_COLUMNS, SIDEBAR_MAX, SIDEBAR_MIN, clampScroll, type GraphKind, emptyView, flowOptionsFor, followTarget, FOLLOW_PAUSE_MS, paintSidebar, planProgress, revealNode,
+import {DOCK_MIN_COLUMNS, SIDEBAR_MAX, SIDEBAR_MIN, clampScroll, dragWidth, type GraphKind, emptyView, flowOptionsFor, followTarget, FOLLOW_PAUSE_MS, paintSidebar, planProgress, revealNode,
   sidebarGeometry, sidebarWidth, stepKey, stepMouse, type SidebarEffect, type SidebarKey, type SidebarStep, type SidebarView} from './plan-sidebar.js';
 
 export interface PlanSidebarInput {
@@ -119,7 +119,12 @@ export function usePlanSidebar(input: PlanSidebarInput) {
 
   const docked = Boolean(graph) && shown && wide && !welcome && !overlay;
   const panelVisible = docked || (overlay && Boolean(graph));
-  const dockWidth = sidebarWidth(width);
+  // The width the person dragged the border to (undefined: the default). It is kept as chosen and re-clamped into the current range, so a narrow terminal never loses it.
+  const [preferred, setPreferred] = useState<number | undefined>(() => surfaces?.sidebarWidthStore?.get());
+  const preferredRef = useRef(preferred); preferredRef.current = preferred;
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef(false);
+  const dockWidth = sidebarWidth(width, preferred);
   const overlayWidth = Math.max(Math.min(columns, SIDEBAR_MIN), Math.min(width, SIDEBAR_MAX));
   const panelWidth = overlay ? overlayWidth : dockWidth;
   const dockX = width - dockWidth, overlayX = Math.max(0, width - overlayWidth);
@@ -144,6 +149,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   };
   const flow = flowFor(view.expanded);
   const heightRef = useRef(0);
+  useEffect(() => {if (!docked) {dragRef.current = false; setDragging(false);}}, [docked]);
 
   // ------------------------------------------------------------------------------------------------------------------------------ visibility
   const hide = () => {
@@ -200,7 +206,9 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     switch (effect.kind) {
       case 'focus': if (!overlay) setFocus('plan'); break;
       case 'blur': if (overlay) closeOverlay(); else setFocus('input'); break;
-      case 'close': hide(); break;
+      case 'close': if (overlay) closeOverlay(); else hide(); break;
+      case 'drag': if (!overlay) {dragRef.current = true; setDragging(true);} break;
+      case 'reset-width': setPreferred(undefined); preferredRef.current = undefined; surfaces?.sidebarWidthStore?.set(undefined); break;
       case 'open': {
         if (overlay) setOverlay(false);
         const delegation = graphRef.current?.delegationOf.get(effect.id);
@@ -256,16 +264,27 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     const current = flowFor(viewRef.current.expanded);
     if (!panelVisible || !current || !plan) return false;
     const x0 = overlay ? overlayX : dockX;
+    if (dragRef.current) {
+      // The border is held: the sidebar follows the pointer wherever it goes (and the timeline starts no selection); anything but a drag ends it.
+      if (event.action === 'drag') {
+        const next = dragWidth(width, event.x);
+        if (next !== preferredRef.current) {preferredRef.current = next; setPreferred(next);}
+      } else {
+        dragRef.current = false; setDragging(false);
+        if (preferredRef.current !== undefined) surfaces?.sidebarWidthStore?.set(preferredRef.current);
+      }
+      return true;
+    }
     const inside = event.x >= x0 && event.x < x0 + panelWidth && event.y < heightRef.current;
     if (!inside) {
       if (overlay) {if (event.action === 'press' && event.button === 0) closeOverlay(); return true;}
-      if (event.action === 'move' && (viewRef.current.hovered !== undefined || viewRef.current.hoveredHeader)) apply({view: {...viewRef.current, hovered: undefined, hoveredHeader: false}, effects: [], consumed: false});
+      if (event.action === 'move' && (viewRef.current.hovered !== undefined || viewRef.current.hoveredHeader || viewRef.current.hoveredEdge)) apply({view: {...viewRef.current, hovered: undefined, hoveredHeader: false, hoveredEdge: undefined}, effects: [], consumed: false});
       return false;
     }
     if (busy && !overlay && (event.action === 'drag' || event.action === 'release')) return false;
     if (event.action === 'drag' || event.action === 'release') return true;
     if (event.action === 'press' && event.button !== 0) return true;
-    apply(stepMouse(current, viewRef.current, sidebarGeometry(heightRef.current), {x: event.x - x0, y: event.y, action: event.action}, Date.now()));
+    apply(stepMouse(current, viewRef.current, sidebarGeometry(heightRef.current), {x: event.x - x0, y: event.y, action: event.action, draggable: !overlay}, Date.now()));
     return true;
   };
 
@@ -277,10 +296,10 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     const current = flowFor(view.expanded);
     if (!plan || !current || !panelVisible) return undefined;
     const focused = overlay || focus === 'plan';
-    const deps = [plan, current, view, panelWidth, height, focused, themeVersion, graph!.kind];
+    const deps = [plan, current, view, panelWidth, height, focused, themeVersion, graph!.kind, dragging];
     if (!paintCache.current || !shallow(paintCache.current.deps, deps)) {
       const clamped = clampScroll(view, current, sidebarGeometry(height));
-      paintCache.current = {deps, lines: paintSidebar({plan, flow: current, view: clamped, width: panelWidth, height, focused, kind: graph!.kind, synthetic: graph!.synthetic,
+      paintCache.current = {deps, lines: paintSidebar({plan, flow: current, view: clamped, width: panelWidth, height, focused, dragging, kind: graph!.kind, synthetic: graph!.synthetic,
         ownerColor: id => id === AUTOMA_OWNER ? palette.automa : ownerColor(id, rolesRef.current)})};
     }
     const lines = paintCache.current.lines;
