@@ -24,6 +24,10 @@ const modelsSchema = z.object({data: z.array(z.object({id: z.string().min(1),
   context_window: z.number().int().min(256).optional(), context_length: z.number().int().min(256).optional(),
   max_output_tokens: z.number().int().positive().optional(),
 })).max(10000)});
+/** The ChatGPT account backend lists models as `{models: [{slug, visibility, context_window}]}` instead of `{data: [{id}]}`. */
+const accountModelsSchema = z.object({models: z.array(z.object({slug: z.string().min(1), visibility: z.string().optional(),
+  context_window: z.number().int().min(256).optional(),
+})).max(10000)});
 
 async function storedKey(file: string, provider: string, env: NodeJS.ProcessEnv): Promise<string> {
   const path = file.startsWith('~/') || file.startsWith('~\\') ? join(homedir(), file.slice(2)) : file;
@@ -332,7 +336,7 @@ export class ProviderRegistry {
     if (enabled?.length) return [...enabled];
     return this.availableModels(name, signal);
   }
-  /** Everything the provider offers, ignoring the enabled subset: the live `/models` list, or the stored and built-in lists when the endpoint does not answer (a subscription login cannot list models). With `requireAuth` false a provider that is not signed in is still listed from those fallbacks. */
+  /** Everything the provider offers, ignoring the enabled subset: the live `/models` list, or the union of the stored and built-in lists when the endpoint does not answer (a subscription login cannot list models). With `requireAuth` false a provider that is not signed in is still listed from those fallbacks. */
   async availableModels(name: string, signal: AbortSignal, requireAuth = true): Promise<string[]> {
     signal.throwIfAborted();
     const settings = await this.settingsFor(name, requireAuth);
@@ -347,18 +351,22 @@ export class ProviderRegistry {
     catch {signal.throwIfAborted(); throw new ProviderError('Model list connection failed', true);}
     if (!response.ok) {
       await response.body?.cancel();
-      const stored = readStoredModelsForProvider(name);
-      if (stored.length > 0) return [...new Set(stored)].sort();
-      const known = this.knownModels(name);
-      if (known.length > 0) return [...new Set(known)].sort();
+      const offline = this.offlineModels(name);
+      if (offline.length > 0) return offline;
       throw new ProviderError('Model list query failed (HTTP ' + response.status + ')');
     }
-    const payload = modelsSchema.safeParse(await response.json().catch(() => undefined));
+    const body: unknown = await response.json().catch(() => undefined);
+    const payload = modelsSchema.safeParse(body);
     if (!payload.success) {
-      const stored = readStoredModelsForProvider(name);
-      if (stored.length > 0) return [...new Set(stored)].sort();
-      const known = this.knownModels(name);
-      if (known.length > 0) return [...new Set(known)].sort();
+      const account = accountModelsSchema.safeParse(body);
+      if (account.success) {
+        // Models the backend marks hidden (`hide` / `none`) are not offered.
+        const listed = account.data.models.filter(model => model.visibility !== 'hide' && model.visibility !== 'none');
+        for (const model of listed) if (model.context_window) this.capabilities.set(JSON.stringify([name, model.slug]), {window: model.context_window});
+        if (listed.length > 0) return [...new Set(listed.map(model => model.slug))].sort();
+      }
+      const offline = this.offlineModels(name);
+      if (offline.length > 0) return offline;
       throw new ProviderError('Model list format is invalid');
     }
     for (const model of payload.data.data) {
@@ -367,12 +375,18 @@ export class ProviderRegistry {
     }
     return [...new Set(payload.data.data.map(model => model.id))].sort();
   }
+  /** What to offer when the live list is unavailable: the union of the stored list and the built-in catalog. The pool stores only the enabled subset, so stored-first would shrink the editor to what is already enabled; the stored list stays as a member because it may hold models the catalog lacks. */
+  private offlineModels(name: string): string[] {
+    return [...new Set([...readStoredModelsForProvider(name), ...this.knownModels(name)])].sort();
+  }
   /** Offline model list: base capacities plus the built-in table for the catalogs this provider maps to. */
   private knownModels(name: string): string[] {
     const fromBase = Object.keys(modelCapacities).filter(k => k.startsWith(name + '/')).map(k => k.slice(name.length + 1));
     const settings = modelSettings(this.configFor(name), this.env);
-    const catalog = modelTable.catalogsFor(name, {catalogs: this.config.catalogs, baseUrl: settings.baseUrl})[0];
-    return [...fromBase, ...(catalog && (name === catalog || this.config.catalogs[name]?.mirror !== undefined) ? modelTable.modelIds(catalog) : [])];
+    const account = Boolean(presets[name]?.account);
+    // An account template (ChatGPT subscription) lists its subscription catalog, which is not the catalog named after it.
+    const catalog = modelTable.catalogsFor(name, {catalogs: this.config.catalogs, baseUrl: settings.baseUrl, oauth: account})[0];
+    return [...fromBase, ...(catalog && (account || name === catalog || this.config.catalogs[name]?.mirror !== undefined) ? modelTable.modelIds(catalog) : [])];
   }
   /** Queries authenticated cloud and configured local endpoints; does not change the current session selection. */
   async modelCatalog(signal: AbortSignal): Promise<{models: {provider: string; id: string}[]; issues: string[]}> {

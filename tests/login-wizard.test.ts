@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -12,6 +12,7 @@ import {AuthStorage, type OAuthToken} from '../src/providers/auth.js';
 import {CustomProviderStorage} from '../src/providers/custom-storage.js';
 import {createProvider} from '../src/providers/http.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
+import {modelTable} from '../src/providers/model-table.js';
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: Error) => void;
   const promise = new Promise<T>((yes, no) => {resolve = yes; reject = no;});
@@ -448,6 +449,39 @@ test('availableModels ignores the enabled subset, and falls back to known models
     const refused = new ProviderRegistry(config, {}, async () => new Response('', {status: 401}), new AuthStorage(join(cwd, 'auth2.json')), storage);
     assert.ok((await refused.availableModels('openai', signal, false)).length > 0);
     await assert.rejects(refused.modelsFor('openai', signal), /not logged in/);
+  } finally {await rm(cwd, {recursive: true, force: true});}
+});
+
+test('availableModels offers the whole catalog plus the stored subset when a subscription login cannot list models', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-models-'));
+  const saved = {home: process.env.HOME, profile: process.env.USERPROFILE};
+  try {
+    // readStoredModelsForProvider() reads the models store under the user's home: point it at a temp home.
+    process.env.HOME = cwd; process.env.USERPROFILE = cwd;
+    await mkdir(join(cwd, '.logox'), {recursive: true});
+    const stored = [{id: 'gpt-6-astra', provider: 'openai-auth'}, {id: 'gpt-6.1-sol', provider: 'openai-auth'}, {id: 'stored-only', provider: 'openai-auth'}];
+    await writeFile(join(cwd, '.logox', 'models-store.json'), JSON.stringify({models: stored}));
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+    const registry = new ProviderRegistry(config, {}, async () => new Response('', {status: 403}), new AuthStorage(join(cwd, 'auth.json')), new CustomProviderStorage(join(cwd, 'custom.json')));
+    const listed = await registry.availableModels('openai-auth', new AbortController().signal, false);
+    const catalog = modelTable.modelIds('openai-codex');
+    assert.ok(catalog.length > 2);
+    for (const id of [...catalog, 'gpt-6-astra', 'gpt-6.1-sol', 'stored-only']) assert.ok(listed.includes(id), id + ' is offered');
+    assert.deepEqual(listed, [...new Set(listed)].sort());
+  } finally {
+    if (saved.home === undefined) delete process.env.HOME; else process.env.HOME = saved.home;
+    if (saved.profile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved.profile;
+    await rm(cwd, {recursive: true, force: true});
+  }
+});
+
+test('availableModels reads the ChatGPT account listing shape and skips hidden models', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'logox-login-models-'));
+  try {
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'deepseek', model: 'fixture'}}, {}, cwd, cwd);
+    const payload = {models: [{slug: 'gpt-b', visibility: 'list', context_window: 272000}, {slug: 'gpt-a'}, {slug: 'gpt-hidden', visibility: 'hide'}]};
+    const registry = new ProviderRegistry(config, {}, async () => Response.json(payload), new AuthStorage(join(cwd, 'auth.json')), new CustomProviderStorage(join(cwd, 'custom.json')));
+    assert.deepEqual(await registry.availableModels('openai-auth', new AbortController().signal, false), ['gpt-a', 'gpt-b']);
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
