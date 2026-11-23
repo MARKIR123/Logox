@@ -17,3 +17,5 @@ evals/results/
 /docs/development/
 /docs/superpowers/
 /docs/PROJECT-REPORT.md
+/.superpowers/
+/.playwright-mcp/
