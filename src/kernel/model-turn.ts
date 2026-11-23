@@ -1,6 +1,6 @@
 import {setTimeout as delay} from 'node:timers/promises';
 import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
-import {ProviderError, isProviderInterruption} from '../providers/http.js';
+import {ProviderError, isProviderInterruption, retryDiagnostic} from '../providers/http.js';
 import type {Delta, ModelRequest, ModelTurn, Provider} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
 import {FINGERPRINT_VERSION, appendFingerprint} from '../providers/fingerprint.js';
@@ -137,30 +137,30 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
         return {kind: 'rebuild'};
       }
       const interruption = isProviderInterruption(error);
-      const retry = !run.context.signal.aborted && error instanceof ProviderError && error.retryable && attempt < options.retries &&
-        (interruption ? await (options.retryProvider?.(run.context, error) ?? Promise.resolve(attempt < 2)) : !emitted);
-      if (retry && interruption) {
+      const retryable = !run.context.signal.aborted && error instanceof ProviderError && error.retryable && attempt < options.retries;
+      // The failed attempt ends before anything announces a retry: no snapshot holds a live request clock next to a retry notice.
+      let attemptStep: ReturnType<typeof steps.interrupted> | undefined;
+      let failedOutput: {text: string; reasoning: string | undefined} | undefined;
+      if (retryable && (interruption || !emitted)) {
         const snapshot = options.store.getSnapshot();
-        const text = snapshot.messages.find(message => message.id === textId)?.text ?? '';
-        const reasoning = snapshot.messages.find(message => message.id === thinkingId)?.text;
-        const step = steps.finish(thinkingId, 'failed'); steps.endGroup('failed');
-        // A failed attempt is kept for history reading only. Retries reuse the original request and never splice partial replies or run half-received tool arguments.
-        if (emitted) await run.context.record({role: 'assistant', text, ...(reasoning ? {reasoning} : {}), contextExcluded: true}, step);
-        thinkingId = steps.thinking(); textId = undefined; emitted = false;
-        const wait = retryDelay(error, attempt);
-        run.context.report('Network retry', 'Connection interrupted. Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
-        const resume = steps.wait(thinkingId, 'Waiting for retry');
-        try {await delay(wait.ms, undefined, {signal: run.context.signal});} finally {resume();}
-        // Aligned with Claude Code: after a long streaming connection is reset by a proxy or intermediate gateway, retries downgrade to non-streaming requests to avoid long-stream timeouts entirely
-        request = {...request, stream: false};
-        continue;
+        failedOutput = {text: snapshot.messages.find(message => message.id === textId)?.text ?? '', reasoning: snapshot.messages.find(message => message.id === thinkingId)?.text};
+        attemptStep = steps.interrupted(thinkingId); steps.endGroup('failed');
       }
-      if (retry) {
+      const retry = retryable && (interruption
+        ? await (options.retryProvider?.(run.context, error as ProviderError, retryDiagnostic(error as ProviderError, {...taskModel?.selection(), attempt: attempt + 1, retries: options.retries, streamed: emitted})) ?? Promise.resolve(attempt < 2))
+        : !emitted);
+      if (retry && attemptStep && failedOutput) {
+        // A failed attempt is kept for history reading only. Retries reuse the original request and never splice partial replies or run half-received tool arguments.
+        if (interruption && emitted) await run.context.record({role: 'assistant', text: failedOutput.text, ...(failedOutput.reasoning ? {reasoning: failedOutput.reasoning} : {}), contextExcluded: true}, attemptStep);
+        textId = undefined; emitted = false;
         const wait = retryDelay(error, attempt);
-        run.context.report('Network retry', '[Network] Service unavailable' + (error instanceof ProviderError && error.diagnostic?.status ? ' (HTTP ' + error.diagnostic.status + ')' : '') +
-          '. Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
-        const resume = steps.wait(thinkingId, 'Waiting for retry');
+        run.context.report('Network retry', (interruption ? 'Connection interrupted.' : '[Network] Service unavailable' + ((error as ProviderError).diagnostic?.status ? ' (HTTP ' + (error as ProviderError).diagnostic!.status + ')' : '') + '.') +
+          ' Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
+        const resume = steps.reconnecting();
         try {await delay(wait.ms, undefined, {signal: run.context.signal});} finally {resume();}
+        thinkingId = steps.thinking();
+        // Aligned with Claude Code: after a long streaming connection is reset by a proxy or intermediate gateway, retries downgrade to non-streaming requests to avoid long-stream timeouts entirely
+        if (interruption) request = {...request, stream: false};
         continue;
       }
       // Already displayed increments are saved too, so the next round can see output from before the interruption.

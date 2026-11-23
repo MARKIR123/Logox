@@ -307,15 +307,16 @@ export async function createSessionApplication(options: SessionApplicationOption
     ...(dumpRequests ? {requestDumpDir: (context: {sessionId: string; ownerId: string}) => join(stateDir, 'sessions', context.sessionId, 'requests', context.ownerId)} : {}),
     iterations: config.kernel.max_iterations, retries: config.kernel.max_retries, readonlyConcurrency: config.permissions.readonly_concurrency,
     supportsVision: () => true,
-    retryProvider: async (context, error) => {
+    retryProvider: async (context, error, diagnostic) => {
+      const facts = diagnostic ? {diagnostic} : {};
       // A Director wake that meets an outage waits on the outage backoff and never spends the root's recovery budget.
-      if (context.coordinationWake) {notice('[Network] Connection interrupted. Retrying...', 'task_notice', context.ownerId, context.activityId); return true;}
+      if (context.coordinationWake) {notice('[Network] Connection interrupted. Retrying...', 'task_notice', context.ownerId, context.activityId, facts); return true;}
       const recovery = await actorServices.recovery.next(context.rootActivityId ?? context.activityId, error, context.recovery);
       context.signal.throwIfAborted();
       if (recovery.exhausted) return false;
       const attemptText = `(${recovery.attempt}/${config.kernel.max_retries})`;
       notice(`[Network] Connection interrupted. Retrying ${attemptText}...`,
-        'task_notice', context.ownerId, context.activityId);
+        'task_notice', context.ownerId, context.activityId, facts);
       return true;
     },
     recoverExecution: (context, kind) => actorServices.recovery.execution(context.rootActivityId ?? context.activityId, kind, context.ownerId),

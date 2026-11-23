@@ -12,11 +12,12 @@ export class SystemHistory {
     private readonly journal: Journal, private readonly isPersistent: () => boolean) {}
   async restore(): Promise<void> {for (const event of await this.journal.systemEvents(this.sessionId)) this.store.system(event, true);}
   emit(text: string, kind: SystemEvent['kind'] = 'command_result', ownerId = DIRECTOR_ID, activityId?: string, persist = true,
-    options?: {presentation?: SystemPresentation; title?: string}): void {
+    options?: {presentation?: SystemPresentation; title?: string; diagnostic?: string}): void {
     const event: SystemEvent = {version: 1, id: randomUUID(), sessionId: this.sessionId, ownerId, kind, text,
       time: Date.now(), ...(activityId ? {activityId} : {}),
       ...(options?.presentation !== undefined ? {presentation: options.presentation} : {}),
-      ...(options?.title !== undefined ? {title: options.title} : {})};
+      ...(options?.title !== undefined ? {title: options.title} : {}),
+      ...(options?.diagnostic ? {diagnostic: options.diagnostic} : {})};
     this.store.system(event);
     if (!persist) return;
     this.pending.push(event);

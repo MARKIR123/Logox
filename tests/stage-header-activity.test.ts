@@ -76,7 +76,7 @@ test('temporary wait states follow the name while they hold and disappear afterw
 
   // Provider retry: the agent loop's `Network retry` report carries the counter; the retry phase holds while it waits.
   f.store.activities.update('s', 'main', {phase: 'retry', stage: 'Network retry', detail: 'Connection interrupted. Retrying (2/5)...'});
-  assert.match(f.header(), spun('Logox', ' Retrying \\(2/5\\)'));
+  assert.match(f.header(), spun('Logox', ' Reconnecting \\(2/5\\)'));
   f.store.activities.update('s', 'main', {phase: 'model'});
   assert.match(f.header(), base);
 
@@ -129,7 +129,7 @@ test('an actor window header is the name alone, with only wait states after it',
   assert.match(header(), /^Kalon · Awaiting your answer\s*$/);
   store.interactions.cancel(question.requestId);
   store.activities.update('s', 'k', {phase: 'retry', detail: 'Connection interrupted. Retrying (1/5)...'});
-  assert.match(header(), spun('Kalon', ' Retrying \\(1/5\\)'));
+  assert.match(header(), spun('Kalon', ' Reconnecting \\(1/5\\)'));
   store.activities.update('s', 'k', {phase: 'tool'});
   assert.match(header(), spun('Kalon'));
   steps.finish(id, 'completed', 'Shell\nok'); store.activities.update('s', 'k', {status: 'completed'});
@@ -167,7 +167,7 @@ test('actor card subtitle: layer 1 from events, the reply\'s own ⏵ line on top
   assert.match(card(), /Rig the pedals · Awaiting approval/);
   store.interactions.cancel(permission.requestId);
   store.activities.update('s', 'k', {phase: 'retry', detail: 'Connection interrupted. Retrying (3/5)...'});
-  assert.match(card(), /Rig the pedals · Retrying \(3\/5\)/);
+  assert.match(card(), /Rig the pedals · Reconnecting \(3\/5\)/);
   store.activities.update('s', 'k', {phase: 'compacting'});
   assert.match(card(), /Rig the pedals · Compacting context/);
   store.activities.update('s', 'k', {phase: 'tool'});

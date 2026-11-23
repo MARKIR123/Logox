@@ -144,6 +144,23 @@ function idleDeadline(signal: AbortSignal, milliseconds: number) {
         ...(lastDataAt !== undefined ? {transportIdleMs: Math.floor(now - lastDataAt)} : {})};
     }, close: () => clearTimeout(timer)};
 }
+/**
+ * One public-safe line about a failed attempt that is being retried, kept in the session's system history (never shown, never sent to a model) so a
+ * dropped long request can be diagnosed afterwards: where it ran, how long it lasted, how long nothing arrived, how many bytes did, and the transport code.
+ */
+export function retryDiagnostic(error: ProviderError, facts: {provider?: string | undefined; model?: string | undefined; attempt: number; retries: number; streamed: boolean}): string {
+  const d = error.diagnostic, seconds = (ms: number) => (ms / 1000).toFixed(1) + 's';
+  const parts = ['Retry ' + facts.attempt + '/' + facts.retries,
+    ...(facts.provider || facts.model ? [[facts.provider, facts.model].filter(Boolean).join('/')] : []),
+    ...(d?.phase ? ['phase ' + d.phase] : []), ...(d?.status !== undefined ? ['HTTP ' + d.status] : []), ...(d?.code ? ['code ' + d.code] : []),
+    ...(d?.elapsedMs !== undefined ? ['elapsed ' + seconds(d.elapsedMs)] : []),
+    ...(d?.progressIdleMs !== undefined ? ['idle since progress ' + seconds(d.progressIdleMs)] : []),
+    ...(d?.elapsedMs !== undefined ? [d.transportIdleMs === undefined ? 'no data received' : 'idle since data ' + seconds(d.transportIdleMs)] : []),
+    ...(d?.receivedBytes !== undefined ? [d.receivedBytes + ' bytes received'] : []),
+    'output ' + (facts.streamed ? 'streamed before the failure' : 'none before the failure'),
+    ...(d?.requestId ? ['request ' + d.requestId] : []), error.message.split('\n')[0]!.slice(0, 160)];
+  return parts.join('; ').slice(0, 600);
+}
 /** Known public errors keep API wording; unknown echoes use structured diagnostics and never carry the whole response body. */
 export function providerFailure(status: number, payload?: unknown, retryAfterMs?: number, response?: {requestId?: string; body?: string}): ProviderError {
   const parsed = z.object({error: z.object({code: z.string().optional(), type: z.string().optional(),

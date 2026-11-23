@@ -115,7 +115,7 @@ test('retry boundaries consume new steering instead of resampling a stale reques
   }, 1);
   try {
     await f.app.submit('retry original goal');
-    await waitForSnapshot(f.app.store, snapshot => snapshot.messages.some(message => message.step?.waiting === 'Waiting for retry'));
+    await waitForSnapshot(f.app.store, snapshot => snapshot.activities.some(activity => activity.phase === 'retry'));
     const target = f.app.store.activities.list()[0]!;
     await steer(f.app, 'correction before retry', target.activityId);
     await idle(f.app);

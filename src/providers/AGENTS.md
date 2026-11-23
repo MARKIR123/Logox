@@ -43,9 +43,9 @@ A template (`presets`) is a name plus a fixed official endpoint and protocol; it
 
 ### Change a network error or retry notice
 1. User-visible transport text comes from `http.ts:transportFailure()` (`[Network] ...` titles, code table `transportReasons`) and `error-format.ts:formatNetworkError()`; keep it one short English line.
-2. The retry notice is emitted in `src/application.ts` (`retryProvider`) and `src/kernel/model-turn.ts` (`context.report('Network retry', '[Network] Service unavailable (HTTP <status>). Retrying (n/m)...')`, one updating stage line); the budget is `kernel.max_retries` in `src/config/config.ts`.
+2. The retry notice is emitted in `src/application.ts` (`retryProvider`) and `src/kernel/model-turn.ts` (`context.report('Network retry', '[Network] Service unavailable (HTTP <status>). Retrying (n/m)...')`, one updating stage line); the budget is `kernel.max_retries` in `src/config/config.ts`. The failed attempt's step is finished (`src/runtime/steps.ts:Steps.interrupted`) before `retryProvider` announces the retry, and the wait is `src/runtime/steps.ts:Steps.reconnecting` (`Reconnecting (n/m)` with its own clock); `retryProvider` receives `http.ts:retryDiagnostic()`, a one-line public-safe diagnostic (elapsed, idle since progress and data, bytes received, code, provider/model) that `src/application.ts` stores on the notice's system event (`diagnostic`, in `events.json`, never drawn or sent to a model).
 3. Whether an error is retried is decided by `http.ts:isProviderInterruption()` (temporary errors in `connection` or `stream` phase) and `ProviderError.category`; quota, auth and protocol errors must not be retried blindly.
-- Tests: `tests/error-format.test.ts`, `tests/provider-recovery.test.ts`, `tests/network-recovery.test.ts`, `tests/providers.test.ts`.
+- Tests: `tests/error-format.test.ts`, `tests/provider-recovery.test.ts`, `tests/network-recovery.test.ts`, `tests/providers.test.ts`, `tests/retry-transition.test.ts`.
 
 ### Allow native tool disclosure for a model
 1. Add the exact model id to `capabilities.ts:anthropicModels` (official `https://api.anthropic.com/v1` only), or adjust the Responses condition for OpenAI OAuth. Users on other endpoints opt in with `tool_discovery`.

@@ -8,7 +8,7 @@ import {demoRoles, type DemoSceneState} from '../../demo/scene.js';
 import type {StatusbarId, StatusbarSnapshot} from '../../config/statusbar-preferences.js';
 import {uiSettings} from '../../config/ui-settings.js';
 import {ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
-import {liveStatus, liveStatusLine} from '../timeline/live-status.js';
+import {liveStatus, liveStatusLine, reconnectLabel} from '../timeline/live-status.js';
 import {statusbarText, usedPercent} from './statusbar.js';
 import type {ActivePillItem} from './actor-pills.js';
 import {footerHints, notificationSegments, pillDetail, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './notification-line.js';
@@ -66,6 +66,7 @@ export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatu
     const stage = pill.state === 'question' ? 'Awaiting your answer' : pill.state === 'approval' ? 'Awaiting approval' + (asked?.kind === 'permission' ? ' · ' + asked.tool : '') : pill.state === 'paused' ? 'Paused'
       : pill.state === 'queued' ? (activity?.stage.startsWith('Waiting on ') ? activity.stage : 'Queued')
       : pill.state === 'failed' ? (activity?.detail.split('\n')[0]?.replace(/^Failure reason: /, '').trim() || 'Failed')
+      : activity?.phase === 'retry' ? reconnectLabel(activity.detail)
       : liveStatusLine(liveStatus(own)) ?? activity?.stage ?? 'Working';
     const first = own.find(message => message.time !== undefined)?.time;
     const reading = getStatus?.(pill.ownerId), percent = reading ? usedPercent(reading) : undefined;

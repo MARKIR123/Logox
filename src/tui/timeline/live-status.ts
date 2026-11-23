@@ -30,6 +30,12 @@ export function draftingLabel(drafting: NonNullable<Step['drafting']>): string {
   return `Writing ${drafting.tool}${file ? '(' + file + ')' : ''} · ${chars} chars`;
 }
 
+/** `Reconnecting (1/5)`: the live state between a dropped request and the next attempt, from the counter of the agent loop's `Connection interrupted. Retrying (1/5)...` report. */
+export function reconnectLabel(detail: string): string {
+  const counter = /Retrying(?: in \d+s)? \((\d+)\/(\d+)\)/i.exec(detail) ?? /retrying \((\d+)\)/i.exec(detail);
+  return counter ? `Reconnecting (${counter[1]}${counter[2] ? '/' + counter[2] : ''})` : 'Reconnecting';
+}
+
 const running = (step: Step | undefined): step is Step => step?.state === 'running';
 const startOf = (step: Step): number | undefined => step.runningSince === undefined ? undefined : step.runningSince - step.elapsedMs;
 /** A request's own thinking step: the boundary that opens a reply (a draft step has no group). */

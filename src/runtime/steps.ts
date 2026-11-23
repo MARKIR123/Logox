@@ -20,7 +20,28 @@ export class Steps {
     private readonly now: () => number = Date.now, private readonly currentStage: () => Step['stage'] = () => undefined) {}
   phase(phase: NonNullable<Activity['phase']>): void {
     const activity = this.store.activities.get(this.identity.sessionId, this.identity.activityId);
-    if (activity && !['completed', 'failed', 'cancelled'].includes(activity.status)) this.store.activities.update(this.identity.sessionId, this.identity.activityId, {phase});
+    if (activity && !['completed', 'failed', 'cancelled'].includes(activity.status)) {
+      this.store.activities.update(this.identity.sessionId, this.identity.activityId, {phase, ...(activity.retrySince !== undefined ? {retrySince: undefined} : {})});
+    }
+  }
+  /**
+   * The wait between a failed request attempt and the next one: the activity's live state is `Reconnecting (n/m)` with its own clock
+   * (`Activity.retrySince`) and no step is running. The returned function ends the wait; the next `thinking()` starts a fresh row.
+   */
+  reconnecting(): () => void {
+    const {sessionId, activityId} = this.identity;
+    const activity = this.store.activities.get(sessionId, activityId);
+    if (activity && !['completed', 'failed', 'cancelled'].includes(activity.status)) this.store.activities.update(sessionId, activityId, {phase: 'retry', retrySince: this.now()});
+    let ended = false;
+    return () => {if (!ended) {ended = true; this.phase('model');}};
+  }
+  /** Ends a request attempt the connection dropped on: `failed`, flagged so its row reads `interrupted after <time>` and never looks live. */
+  interrupted(id: string): Step {
+    const previous = this.get(id), {runningSince: _, waiting: __, drafting: ___, ...rest} = previous;
+    const step: Step = {...rest, state: 'failed', elapsedMs: stepElapsed(previous, this.now()), interrupted: true};
+    this.stepsCache.set(id, step);
+    try {this.store.updateMessage(id, {step});} catch {}
+    return step;
   }
   thinking(): string {
     this.phase('model');
@@ -105,7 +126,7 @@ export class Steps {
     this.store.updateMessage(id, {step: updated});
   }
   finish(id: string, state: 'completed' | 'failed' | 'cancelled', text?: string, disposition?: Step['disposition']): Step {
-    const previous = this.get(id), {runningSince: _, waiting: __, drafting: ___, ...rest} = previous;
+    const previous = this.get(id), {runningSince: _, waiting: __, drafting: ___, interrupted: ____, ...rest} = previous;
     const step: Step = {...rest, state, elapsedMs: stepElapsed(previous, this.now()), ...(disposition ? {disposition} : {})};
     this.stepsCache.set(id, step);
     try {

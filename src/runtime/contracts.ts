@@ -77,6 +77,8 @@ export const activitySchema = z.strictObject({
   title: z.string().min(1), status: activityStatusSchema,
   stage: z.string(), detail: z.string(), version: z.number().int().nonnegative(),
   phase: z.enum(['model', 'text', 'tool', 'approval', 'question', 'retry', 'compacting', 'finalizing']).optional(),
+  /** Wall-clock start (ms) of the reconnect wait while `phase` is `retry`; the card clock of `Reconnecting (n/m)`. Cleared with the phase. */
+  retrySince: z.number().optional(),
   summary: roundSummarySchema.optional(),
   progress: taskProgressSchema.optional(),
   taskModel: taskModelSchema.optional(),
@@ -207,6 +209,8 @@ export const stepSchema = z.strictObject({title: z.string(), callId: z.string().
   /** Live only: the tool call this request is still streaming arguments for. Never kept on a finished step. */
   drafting: z.strictObject({tool: z.string(), target: z.string().optional(), chars: z.number().nonnegative()}).optional(),
   terminalVisibility: z.enum(['card', 'notice', 'silent']).optional(),
+  /** A request attempt the connection dropped on and the loop is retrying: it ended `failed`, its row reads `interrupted after <time>`. */
+  interrupted: z.boolean().optional(),
   stage: stepStageSchema.optional(), disposition: z.enum(['denied', 'error']).optional(), note: z.string().max(1000).optional(),
   groupId: z.string().optional(), groupState: z.enum(['completed', 'failed', 'cancelled']).optional(),
   state: z.enum(['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled']),

@@ -7,7 +7,9 @@ export const systemEventSchema = z.strictObject({version: z.literal(1), id: z.st
   sessionId: z.string().min(1), ownerId: z.string().min(1), time: z.number().finite(),
   kind: z.enum(['command_result', 'command_error', 'model_error', 'environment_change', 'task_notice']),
   text: z.string(), activityId: z.string().optional(),
-  presentation: systemPresentationSchema.optional(), title: z.string().optional()});
+  presentation: systemPresentationSchema.optional(), title: z.string().optional(),
+  /** Machine facts for later diagnosis (a retried network failure's timings and byte counts). Kept in `events.json`, never drawn, never sent to a model. */
+  diagnostic: z.string().max(600).optional()});
 export type SystemEvent = z.infer<typeof systemEventSchema>;
 
 /** Legacy messages remain visible; only explicitly routed system events leave the timeline. */

@@ -24,7 +24,7 @@ import {uiSettings} from '../../config/ui-settings.js';
 import {userLabelRevision} from '../../config/user-profile.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
 import {groupToolMessages, type EditRun, type ToolGroup} from './tool-groups.js';
-import {draftingLabel, liveStatus, type LiveStatus} from './live-status.js';
+import {draftingLabel, liveStatus, reconnectLabel, type LiveStatus} from './live-status.js';
 import {renderEditRun} from '../../tools/EditTool/UI.js';
 import {pushToolGroupCard} from './group-row.js';
 
@@ -58,11 +58,6 @@ function activityTitle(activity: RuntimeSnapshot['activities'][number], override
 /** The live subtitle of a running card with no temporary state; undefined otherwise. Only a folded card carries it: an open card shows its tool rows, and an actor's own window never summarizes itself. */
 function activityLive(activity: RuntimeSnapshot['activities'][number], activityMessages: readonly Message[] | undefined, override: string | undefined, folded: boolean): LiveStatus | undefined {
   return folded && activity.status === 'running' && !override ? liveStatus(activityMessages ?? []) : undefined;
-}
-/** The retry counter the agent loop reports as `Connection interrupted. Retrying (1/5)...`. */
-function retryLabel(detail: string): string {
-  const counter = /Retrying(?: in \d+s)? \((\d+)\/(\d+)\)/i.exec(detail) ?? /retrying \((\d+)\)/i.exec(detail);
-  return counter ? `Retrying (${counter[1]}${counter[2] ? '/' + counter[2] : ''})` : 'Retrying';
 }
 function activityStatus(activity: RuntimeSnapshot['activities'][number]): string {
   if (activity.status === 'queued' && activity.stage.startsWith('Waiting on ')) return activity.stage;
@@ -135,7 +130,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     !['approval', 'question', 'retry'].includes(activity.phase ?? '') && !requests.has(activity.activityId) &&
     !(grouped.get(activity.activityId) ?? []).some(message => message.step?.state === 'waiting');
   /** A temporary state that replaces the stage text while it holds: pending answer/approval, provider retry, compaction. */
-  const temporaryState = (ownerId: string, activityId?: string): {label: string} | undefined => {
+  const temporaryState = (ownerId: string, activityId?: string): {label: string; clockStart?: number} | undefined => {
     const asked = pending.find(request => activityId ? request.activityId === activityId : request.ownerId === ownerId);
     if (asked) return {label: asked.kind === 'permission' ? 'Awaiting approval' : 'Awaiting your answer'};
     const mine = snapshot.activities.filter(item => item.sessionId === sessionId && ['running', 'waiting_input'].includes(item.status) &&
@@ -143,8 +138,14 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const compacting = mine.find(item => item.phase === 'compacting' || item.stage === 'Compacting context');
     if (compacting) return {label: 'Compacting context'};
     const retrying = mine.find(item => item.phase === 'retry');
-    if (retrying) return {label: retryLabel(retrying.detail)};
+    if (retrying) return {label: reconnectLabel(retrying.detail), ...(retrying.retrySince !== undefined ? {clockStart: retrying.retrySince} : {})};
     return undefined;
+  };
+  /** A card's temporary state and live subtitle. `Reconnecting (n/m)` is drawn as the live part of a folded card so its clock runs; any other card names it as text. */
+  const cardState = (activity: RuntimeSnapshot['activities'][number], folded: boolean): {override: string | undefined; live: LiveStatus | undefined} => {
+    const temporary = temporaryState(activity.ownerId, activity.activityId);
+    if (temporary?.clockStart !== undefined && folded && activity.status === 'running') return {override: undefined, live: {activity: temporary.label, clockStart: temporary.clockStart}};
+    return {override: temporary?.label, live: activityLive(activity, staged.get(activity.activityId), temporary?.label, folded)};
   };
   const seen = new Set<string>();
   type Frame = Parameters<typeof insetFrame>[0];
@@ -339,7 +340,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       const request = thinking.get(item.id);
       if (!request) return [];
       const live = request.step.state === 'running';
-      return live || item.text.trim() || request.tokens > 0 || request.step.note ? [{item, request}] : [];
+      return live || item.text.trim() || request.tokens > 0 || request.step.note || request.step.interrupted ? [{item, request}] : [];
     });
     if (!requests.length) return;
     const id = requests[0]!.item.id; // the fold id is the first thought's message id, so the row maps back to its activity
@@ -354,7 +355,10 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const duration = (ms: number) => { const total = Math.round(ms / 1000); return total < 60 ? total + 's' : Math.floor(total / 60) + 'm ' + String(total % 60).padStart(2, '0') + 's'; };
     const tokenText = tokens > 0 ? tokens.toLocaleString('en-US') + ' tokens' : '';
     const count = requests.length;
-    const label = live ? 'Thinking' : count === 1 ? 'Thought for ' + duration(totalMs) : `Thought ${count} times · ${duration(totalMs)}`;
+    // An attempt the connection dropped on never reads as a live or completed thought: it says it was interrupted, and after how long.
+    const last = requests.at(-1)!.request.step, interruptedCount = requests.filter(entry => entry.request.step.interrupted).length;
+    const label = live ? 'Thinking' : last.interrupted ? 'Thinking · interrupted after ' + duration(stepElapsed(last, now))
+      : count === 1 ? 'Thought for ' + duration(totalMs) : `Thought ${count} times · ${duration(totalMs)}` + (interruptedCount ? ` · ${interruptedCount} interrupted` : '');
     const text = lead + label + (!live && tokenText ? ' · ' + tokenText : '');
     const runningStep = live ? (() => {
       const running = requests.filter(entry => entry.request.step.state === 'running').map(entry => entry.request.step);
@@ -482,8 +486,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (seen.has(activity.activityId)) continue;
       seen.add(activity.activityId);
       if (gapBefore(true)) builder.pushBlank(viewColor);
-      const override = temporaryState(activity.ownerId, activity.activityId)?.label;
-      const live = activityLive(activity, staged.get(activity.activityId), override, !open(activity.activityId));
+      const {override, live} = cardState(activity, !open(activity.activityId));
       getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
         active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
         messages: staged.get(activity.activityId) ?? [], pending: requests.get(activity.activityId) ?? [], renderThinking,
@@ -495,8 +498,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       if (!isDirector(view) && activity.status === 'completed') {
         // In an actor's own thread, completed tasks skip the self-referencing outer Actor card and show the conversation body directly.
       } else {
-        const override = temporaryState(activity.ownerId, activity.activityId)?.label;
-        const live = activityLive(activity, staged.get(activity.activityId), override, false);
+        const {override, live} = cardState(activity, false);
         getToolUI('Actor').renderActivity?.({builder, activity, roles, railColor: viewColor, title: activityTitle(activity, override), ...(live ? {live} : {}), status: activityStatus(activity),
           active: animated(activity), open: open(activity.activityId), isOpen: open, stop: activeStop(activity.activityId),
           messages: staged.get(activity.activityId) ?? [], pending: [], renderThinking, thinking, originalPrompt: actorGoal(activity),

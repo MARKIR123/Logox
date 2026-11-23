@@ -59,7 +59,7 @@ export interface AgentOptions {
   requestBase?(context: Parameters<ActorExecutor<string>>[1], assembly: AgentAssembly): Promise<Omit<AgentRequestBase, 'pool'> & {pool?: readonly ResolvedTool[]}>;
   iterations: number;
   retries: number;
-  retryProvider?(context: Parameters<ActorExecutor<string>>[1], error: ProviderError): Promise<boolean>;
+  retryProvider?(context: Parameters<ActorExecutor<string>>[1], error: ProviderError, diagnostic?: string): Promise<boolean>;
   recoverExecution?(context: Parameters<ActorExecutor<string>>[1], kind: ExecutionRecoveryKind): Promise<'retry' | 'handoff' | 'stop'>;
   executionProgress?(context: Parameters<ActorExecutor<string>>[1], fingerprint: string): Promise<boolean>;
   contextUpdated?(context: Parameters<ActorExecutor<string>>[1], update: RuntimeContextMessage): void;

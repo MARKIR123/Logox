@@ -42,7 +42,7 @@ export class Activities {
     this.onChange();
     return true;
   }
-  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'diagnostic' | 'fingerprint' | 'phase' | 'progress' | 'createdAt' | 'startedAt' | 'finishedAt'>>): Activity {
+  update(sessionId: string, activityId: string, patch: Partial<Pick<Activity, 'status' | 'stage' | 'detail' | 'title' | 'summary' | 'taskModel' | 'stopReason' | 'diagnostic' | 'fingerprint' | 'phase' | 'retrySince' | 'progress' | 'createdAt' | 'startedAt' | 'finishedAt'>>): Activity {
     const key = activityKey(sessionId, activityId);
     const current = this.records.get(key);
     if (!current) throw new Error('Activity not found');
