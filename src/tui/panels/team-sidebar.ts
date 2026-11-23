@@ -19,11 +19,14 @@
  */
 import stringWidth from 'string-width';
 import {involves, teamMembers, type TeamEvent, type TeamStatus} from '../../runtime/team-events.js';
-import {faintColor} from '../appearance/colors.js';
+import {stageAt, type StageSnapshot} from '../../runtime/team-stage.js';
+import {faintColor, frameColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
 import {fit, formatTook, type FlowTone} from './plan-flow.js';
 import {CONTENT_X, DOUBLE_CLICK_MS, TASKS_LABEL, TEAM_LABEL, sideLine, toneColor} from './plan-sidebar.js';
+import {FEED_MIN, STAGE_FULL_MIN, STRIP_MIN, buildStage, controlsRow, nextSpeed, pulseAt, scrubPosition, stageHeight, stripRow, type ControlsRow, type StageBox, type StageCell, type StageLabeler,
+  type StagePlan, type StageRow} from './team-stage.js';
 
 // ---------------------------------------------------------------------------------------------------------------------------------- layout
 export interface TeamCell {
@@ -72,8 +75,8 @@ const clock = (at: number): string => {const date = new Date(at); return String(
 const cellWidth = (row: TeamRow): number => row.reduce((sum, cell) => sum + stringWidth(cell.text), 0);
 const STATUS_TONE: Readonly<Record<TeamStatus, FlowTone>> = {done: 'success', blocked: 'warning', failed: 'error', interrupted: 'muted'};
 
-/** The header of one post fitted to `width` cells: progressively fewer recipients and words until it fits, the sender alone clipped as the last resort. */
-function header(event: TeamEvent, width: number, label: Labeler): {readonly row: TeamRow; readonly names: readonly TeamHit[]} {
+/** The left part of a post header (sender, recipients, word) fitted to `budget` cells: progressively fewer recipients and words until it fits, the sender alone clipped as the last resort. */
+function leftCells(event: TeamEvent, budget: number, label: Labeler): TeamCell[] {
   const sender = label(event.from);
   const senderMember = event.from === 'automa' ? event.dispatcher : event.from;
   const lead: TeamCell[] = [{text: ' ', tone: 'fg'},
@@ -92,21 +95,23 @@ function header(event: TeamEvent, width: number, label: Labeler): {readonly row:
     : event.kind === 'waiting' ? [[...lead, ...arrow('┄'), {text: event.text, tone: 'warning'}]]
     : [[...lead, ...arrow('→', false), ...recipients(event.to.length), ...tail()], [...lead, ...arrow('→', false), ...recipients(event.to.length)],
       [...lead, ...arrow('→', false), ...recipients(1), ...tail()], [...lead, ...arrow('→', false), ...recipients(1)], [...lead, ...arrow('→', false)]];
-  const budget = width - TIME_WIDTH - 1;
-  let left = candidates.find(row => cellWidth(row) <= budget);
-  if (!left) {
-    // Nothing fits whole: the shortest candidate cut at the budget, its last visible cell clipped with `…`.
-    const out: TeamCell[] = [];
-    let used = 0;
-    for (const cell of candidates[candidates.length - 1]!) {
-      const size = stringWidth(cell.text);
-      if (used + size <= budget) {out.push(cell); used += size; continue;}
-      const room = budget - used;
-      if (room > 0) out.push({...cell, text: fit(cell.text, room)});
-      break;
-    }
-    left = out;
+  const whole = candidates.find(row => cellWidth(row) <= budget);
+  if (whole) return whole;
+  // Nothing fits whole: the shortest candidate cut at the budget, its last visible cell clipped with `…`.
+  const out: TeamCell[] = [];
+  let used = 0;
+  for (const cell of candidates[candidates.length - 1]!) {
+    const size = stringWidth(cell.text);
+    if (used + size <= budget) {out.push(cell); used += size; continue;}
+    const room = budget - used;
+    if (room > 0) out.push({...cell, text: fit(cell.text, room)});
+    break;
   }
+  return out;
+}
+/** The header of one post fitted to `width` cells, the time right-aligned. */
+function header(event: TeamEvent, width: number, label: Labeler): {readonly row: TeamRow; readonly names: readonly TeamHit[]} {
+  const left = leftCells(event, width - TIME_WIDTH - 1, label);
   const names: TeamHit[] = [];
   let x = 0;
   for (const cell of left) {
@@ -170,15 +175,53 @@ export interface TeamView {
   readonly hoveredControl?: TeamControl | undefined;
   readonly hoveredEdge?: 'collapse' | 'handle' | undefined;
   readonly lastClick?: {readonly id: string; readonly time: number} | undefined;
+  /** Playback runs: one event per `PLAY_STEP_MS / speed`, then Live at the end. */
+  readonly playing?: boolean;
+  /** 1, 2 or 4 (default 1). */
+  readonly speed?: number;
+  /** The pulse of the current event: it started `at` (epoch ms) on the stage; set only by playback and by a new event while Live, never by manual stepping. */
+  readonly pulse?: {readonly id: string; readonly at: number} | undefined;
+  /** The scrubber bar is held: a drag moves the selection. */
+  readonly scrubbing?: boolean;
+  /** The stage card chosen by a click (an actor id): Enter opens its detail page. */
+  readonly card?: string | undefined;
+  /** What the pointer is over on the stage: `card:<id>`, `prev`, `next`, `play`, `scrub`, `speed` or `event`. */
+  readonly hoveredStage?: string | undefined;
 }
 export const emptyTeamView: TeamView = {live: true, scroll: 0};
+/** Playback shows one event per this many milliseconds at 1x. */
+export const PLAY_STEP_MS = 900;
 
-export interface TeamGeometry {readonly height: number; readonly header: number; readonly footer: number; readonly body: number}
-export function teamGeometry(height: number): TeamGeometry {
-  if (height >= 6) return {height, header: 2, footer: 2, body: height - 4};
-  if (height >= 3) return {height, header: 1, footer: 1, body: height - 2};
-  return {height, header: Math.min(1, height), footer: 0, body: Math.max(0, height - 1)};
+export type StageMode = 'off' | 'strip' | 'full';
+export interface TeamGeometry {
+  readonly height: number; readonly header: number; readonly footer: number; readonly body: number;
+  /** The rows of the stage between the header and the feed (0 when off) and what it shows. */
+  readonly stage: number;
+  readonly stageMode: StageMode;
 }
+/** The panel's rows: header, `stage` rows (none by default), the feed body and the footer. */
+export function teamGeometry(height: number, stage: {readonly rows: number; readonly mode: StageMode} = {rows: 0, mode: 'off'}): TeamGeometry {
+  const [header, footer] = height >= 6 ? [2, 2] : height >= 3 ? [1, 1] : [Math.min(1, height), 0];
+  const rows = header + footer + stage.rows <= height ? stage.rows : 0;
+  return {height, header, footer, stage: rows, stageMode: rows ? stage.mode : 'off', body: Math.max(0, height - header - footer - rows)};
+}
+const stubLabel: StageLabeler = id => ({symbol: '◇', name: id});
+const finals = new WeakMap<readonly TeamEvent[], StageSnapshot>();
+/** The stage at the end of the stream (memoised per array: it reserves the stage's height). */
+function finalOf(all: readonly TeamEvent[]): StageSnapshot {
+  let known = finals.get(all);
+  if (!known) {known = stageAt(all, all.length - 1); finals.set(all, known);}
+  return known;
+}
+/** How many rows the stage takes in a panel `height` rows tall: the full stage (controls, graph, current post) on a tall sidebar, the controls and a one-line status on a short one, nothing under `STRIP_MIN`. */
+export function stageRowsFor(layout: TeamLayout, height: number): {readonly rows: number; readonly mode: StageMode} {
+  if (!layout.all.length || height < STRIP_MIN) return {rows: 0, mode: 'off'};
+  const graph = stageHeight(finalOf(layout.all), layout.width, stubLabel), full = 1 + graph + 3;
+  if (graph > 0 && height >= STAGE_FULL_MIN && height - 4 - full >= FEED_MIN) return {rows: full, mode: 'full'};
+  return {rows: 2, mode: 'strip'};
+}
+/** The geometry with the stage this layout and height call for. */
+export const teamGeometryFor = (layout: TeamLayout, height: number): TeamGeometry => teamGeometry(height, stageRowsFor(layout, height));
 const maxScroll = (layout: TeamLayout, geometry: TeamGeometry) => Math.max(0, layout.rows.length - geometry.body);
 /** The selected post: the newest visible one while live (or when the chosen one is hidden), else the chosen one. */
 export function selectedId(layout: TeamLayout, view: TeamView): string | undefined {
@@ -200,15 +243,45 @@ export function effectiveScroll(layout: TeamLayout, view: TeamView, geometry: Te
   }
   return Math.max(0, Math.min(max, scroll));
 }
+/** A manual move: playback stops, there is no pulse and no card is chosen any more (stepping jumps, it never animates). */
+const manual = (view: TeamView): TeamView => view.playing || view.pulse || view.card !== undefined ?{...view, playing: false, pulse: undefined, card: undefined} : view;
 /** Selects the post at `index` (clamped) and leaves Live; the view follows it. */
 function selectAt(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, index: number): TeamView {
   if (!layout.ids.length) return view;
   const id = layout.ids[Math.max(0, Math.min(layout.ids.length - 1, index))]!;
-  const base: TeamView = {...view, live: false, selected: id, scroll: effectiveScroll(layout, view, geometry)};
+  const base: TeamView = {...manual(view), live: false, selected: id, scroll: effectiveScroll(layout, view, geometry)};
   return {...base, scroll: effectiveScroll(layout, base, geometry)};
 }
 const goLive = (layout: TeamLayout, view: TeamView, geometry: TeamGeometry): TeamView =>
-  ({...view, live: true, selected: layout.ids[layout.ids.length - 1], scroll: maxScroll(layout, geometry)});
+  ({...manual(view), live: true, selected: layout.ids[layout.ids.length - 1], scroll: maxScroll(layout, geometry)});
+const speedOf = (view: TeamView): number => view.speed ?? 1;
+/** Play or pause. Playing from the newest post starts over from the first one (with its pulse); otherwise it carries on from the selection. */
+export function togglePlay(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, now: number): TeamView {
+  if (!layout.ids.length) return view;
+  if (view.playing) return {...view, playing: false};
+  if (positionOf(layout, view) >= layout.ids.length) {
+    const first = selectAt(layout, view, geometry, 0);
+    return {...first, playing: true, pulse: {id: layout.ids[0]!, at: now}};
+  }
+  return {...view, playing: true};
+}
+/**
+ * One playback tick: the next post is selected and pulses; the last post switches to Live and stops. Not a manual move: the pulse starts here.
+ * The host calls it every `PLAY_STEP_MS / speed` while `view.playing`.
+ */
+export function stepPlay(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, now: number): TeamView {
+  if (!view.playing || !layout.ids.length) return view;
+  const position = positionOf(layout, view);
+  if (position >= layout.ids.length) return goLive(layout, view, geometry);
+  const next = layout.ids[position]!;
+  const moved = selectAt(layout, view, geometry, position);
+  if (position + 1 >= layout.ids.length) return {...goLive(layout, moved, geometry), pulse: {id: next, at: now}};
+  return {...moved, playing: true, pulse: {id: next, at: now}};
+}
+/** A new post arrived while Live: it pulses (a view that is not Live is left alone). */
+export function arrived(view: TeamView, id: string, now: number): TeamView {
+  return view.live && view.pulse?.id !== id ? {...view, pulse: {id, at: now}} : view;
+}
 const filtered = (view: TeamView, member: string | undefined): TeamView => ({...view, filter: member, picker: undefined, hovered: undefined, hoveredName: undefined});
 
 // ---------------------------------------------------------------------------------------------------------------------------------- chrome
@@ -258,6 +331,109 @@ function pickerPlan(layout: TeamLayout, view: TeamView, geometry: TeamGeometry):
   return {items, shown, start, top: geometry.body - shown - 1};
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------- stage
+interface StripBox {readonly id: string; readonly x0: number; readonly x1: number}
+/** What the stage shows for the selected post: the controls row, then the graph and the current post (full) or the one-line status (strip). */
+interface StageModel {
+  readonly mode: 'strip' | 'full';
+  readonly controls: ControlsRow;
+  readonly plan?: StagePlan;
+  readonly card?: readonly TeamRow[];
+  readonly strip?: StageRow;
+  readonly stripBoxes: readonly StripBox[];
+  readonly snapshot: StageSnapshot;
+}
+const indexes = new WeakMap<readonly TeamEvent[], Map<string, number>>();
+function indexInAll(all: readonly TeamEvent[], id: string): number {
+  let map = indexes.get(all);
+  if (!map) {map = new Map(all.map((event, at) => [event.id, at] as const)); indexes.set(all, map);}
+  return map.get(id) ?? -1;
+}
+let snapshotCache: {all: readonly TeamEvent[]; index: number; snapshot: StageSnapshot} | undefined;
+const snapshotAt = (all: readonly TeamEvent[], index: number): StageSnapshot => {
+  if (snapshotCache?.all === all && snapshotCache.index === index) return snapshotCache.snapshot;
+  const snapshot = stageAt(all, index);
+  snapshotCache = {all, index, snapshot};
+  return snapshot;
+};
+let planCache: {all: readonly TeamEvent[]; index: number; width: number; label: Labeler; plan: StagePlan} | undefined;
+const planAt = (all: readonly TeamEvent[], index: number, width: number, label: Labeler): StagePlan => {
+  if (planCache?.all === all && planCache.index === index && planCache.width === width && planCache.label === label) return planCache.plan;
+  const plan = buildStage(snapshotAt(all, index), finalOf(all), width, label);
+  planCache = {all, index, width, label, plan};
+  return plan;
+};
+/** `── #13  ⊞ techne → @logox · done ─────────── 08:32`, one body line and a closing rule: the current post under the stage. */
+function eventCard(event: TeamEvent, ordinal: number, width: number, label: Labeler): readonly TeamRow[] {
+  const lead: TeamCell[] = [{text: '── ', tone: 'line'}, {text: '#' + ordinal, tone: 'muted'}];
+  const left = leftCells(event, width - TIME_WIDTH - cellWidth(lead) - 3, label);
+  const fill = Math.max(2, width - cellWidth(lead) - cellWidth(left) - TIME_WIDTH);
+  const first: TeamRow = [...lead, ...left, {text: ' ' + '─'.repeat(fill - 2) + ' ', tone: 'line'}, {text: clock(event.at), tone: 'muted'}];
+  const second: TeamRow = body(event, width) ?? [{text: '   ', tone: 'fg'}, {text: clip(event.text, Math.max(1, width - 3)), tone: 'faint'}];
+  return [first, second, [{text: '─'.repeat(Math.max(0, width)), tone: 'line'}]];
+}
+function stageModel(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, label: Labeler): StageModel | undefined {
+  if (geometry.stageMode === 'off') return undefined;
+  const selected = selectedId(layout, view);
+  if (selected === undefined) return undefined;
+  const event = layout.events[layout.byId.get(selected)!]!, index = indexInAll(layout.all, selected);
+  const snapshot = snapshotAt(layout.all, index);
+  const controls = controlsRow({width: layout.width, playing: view.playing ?? false, speed: speedOf(view), position: positionOf(layout, view), total: layout.ids.length,
+    elapsed: event.at - layout.firstAt, hovered: view.hoveredStage});
+  if (geometry.stageMode === 'full') return {mode: 'full', controls, plan: planAt(layout.all, index, layout.width, label), card: eventCard(event, index + 1, layout.width, label), stripBoxes: [], snapshot};
+  const strip = stripRow(snapshot.actors, layout.width, label), boxes: StripBox[] = [];
+  let x = 0;
+  for (const cell of strip) {const size = stringWidth(cell.text); if (cell.actor !== undefined) boxes.push({id: cell.actor, x0: x, x1: x + size}); x += size;}
+  return {mode: 'strip', controls, strip, stripBoxes: boxes, snapshot};
+}
+type StageHit = {readonly kind: 'control'; readonly control: string} | {readonly kind: 'card'; readonly id: string} | {readonly kind: 'event'};
+/** What is at (`x`, `y`) of the stage (content coordinates, row 0 the controls). */
+function stageHit(model: StageModel, x: number, y: number): StageHit | undefined {
+  if (y === 0) {const region = model.controls.regions.find(item => x >= item.x0 && x < item.x1); return region ? {kind: 'control', control: region.control} : undefined;}
+  if (model.plan) {
+    const gy = y - 1;
+    if (gy < model.plan.height) {const box = model.plan.boxes.find((item: StageBox) => x >= item.x0 && x < item.x1 && gy >= item.y0 && gy <= item.y1); return box ? {kind: 'card', id: box.id} : undefined;}
+    return {kind: 'event'};
+  }
+  const box = y === 1 ? model.stripBoxes.find(item => x >= item.x0 && x < item.x1) : undefined;
+  return box ? {kind: 'card', id: box.id} : undefined;
+}
+/** `row` with the cell at column `x` replaced by the pulse. */
+function withPulse(row: StageRow, x: number): StageRow {
+  const out: StageCell[] = [];
+  let at = 0;
+  for (const cell of row) {
+    const size = stringWidth(cell.text);
+    if (x < at || x >= at + size) {out.push(cell); at += size; continue;}
+    let pre = '', post = '', used = at, hit = false;
+    for (const {segment} of graphemes.segment(cell.text)) {
+      const width = stringWidth(segment);
+      if (!hit && x >= used && x < used + width) {hit = true; used += width; continue;}
+      if (hit) post += segment; else pre += segment;
+      used += width;
+    }
+    if (pre) out.push({...cell, text: pre});
+    out.push({text: '●', tone: 'accent', bold: true});
+    if (post) out.push({...cell, text: post});
+    at += size;
+  }
+  return out;
+}
+const BORDER = /^[─-╿]+$/;
+function stageSegment(cell: StageCell, view: TeamView, ownerColor: (id: string) => string): SideSegment {
+  let color: string, bold = cell.bold ?? false;
+  if (cell.tone === 'owner') {
+    const base = ownerColor(cell.owner ?? '');
+    color = cell.frame ? frameColor(base) : base;
+    // A card's border: bright under the pointer, accent while it is the chosen member.
+    if (cell.actor !== undefined && cell.actor === cell.owner && BORDER.test(cell.text)) {
+      if (view.hoveredStage === 'card:' + cell.actor) {color = base; bold = true;}
+      if (view.card === cell.actor || view.filter === cell.actor) color = palette.accent;
+    }
+  } else color = toneColor(cell.tone);
+  return {text: cell.text, color, ...(bold ? {bold: true} : {})};
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------- painting
 export interface TeamPaint {
   readonly layout: TeamLayout;
@@ -269,6 +445,10 @@ export interface TeamPaint {
   /** The colour of an actor's name (`user` and `automa` included). */
   readonly ownerColor: (id: string) => string;
   readonly label: Labeler;
+  /** Draws the stage (timeline controls, the team graph, the current post) above the feed. Off by default: the feed alone. */
+  readonly stage?: boolean;
+  /** Milliseconds since the pulse of the current post began (the host's clock); absent: no pulse is drawn. */
+  readonly pulseMs?: number;
 }
 function segmentOf(cell: TeamCell, input: TeamPaint, selected: string | undefined): SideSegment {
   const {view} = input;
@@ -285,7 +465,7 @@ function segmentOf(cell: TeamCell, input: TeamPaint, selected: string | undefine
 /** The panel as `height` lines of segments, each exactly `width` cells wide. */
 export function paintTeam(input: TeamPaint): SideSegment[][] {
   const {layout, view, width, height, label} = input;
-  const geometry = teamGeometry(height), content = width - CONTENT_X;
+  const geometry = input.stage ? teamGeometryFor(layout, height) : teamGeometry(height), content = width - CONTENT_X;
   const frame = {width, hoveredEdge: view.hoveredEdge, accent: Boolean(input.dragging || input.focused)};
   const selected = selectedId(layout, view);
   const paintRow = (row: TeamRow) => row.map(cell => segmentOf(cell, input, selected));
@@ -293,6 +473,22 @@ export function paintTeam(input: TeamPaint): SideSegment[][] {
   const rule = (): SideSegment[] => sideLine(frame, [{text: '─'.repeat(Math.max(0, content)), color: palette.line}]);
   if (geometry.header >= 1) lines.push(sideLine(frame, paintRow(headerChrome(content, view).cells), true));
   if (geometry.header >= 2) lines.push(rule());
+  if (geometry.stage > 0) {
+    const model = stageModel(layout, view, geometry, label);
+    const paintStage = (row: StageRow) => sideLine(frame, row.map(cell => stageSegment(cell, view, input.ownerColor)));
+    if (model) {
+      lines.push(paintStage(model.controls.cells));
+      if (model.plan) {
+        let rows = model.plan.rows;
+        if (input.pulseMs !== undefined) for (const path of model.plan.paths) {
+          const point = pulseAt(path, input.pulseMs);
+          if (point) rows = rows.map((row, y) => y === point.y ? withPulse(row, point.x) : row);
+        }
+        lines.push(...rows.map(paintStage), ...(model.card ?? []).map(row => sideLine(frame, paintRow(row))));
+      } else if (model.strip) lines.push(paintStage(model.strip));
+    }
+    while (lines.length < geometry.header + geometry.stage) lines.push(sideLine(frame, []));
+  }
   const scroll = effectiveScroll(layout, view, geometry), picker = pickerPlan(layout, view, geometry);
   for (let i = 0; i < geometry.body; i++) {
     if (picker && i >= picker.top) {lines.push(sideLine(frame, paintPicker(layout, view, picker, i - picker.top, content, input, label)));continue;}
@@ -328,17 +524,27 @@ export type TeamEffect =
   | {readonly kind: 'close'}
   | {readonly kind: 'drag'}
   | {readonly kind: 'reset-width'}
-  | {readonly kind: 'tab'; readonly tab: 'tasks' | 'team'};
+  | {readonly kind: 'tab'; readonly tab: 'tasks' | 'team'}
+  /** Open the detail page of a stage card's actor. */
+  | {readonly kind: 'actor'; readonly id: string};
 export interface TeamStep {readonly view: TeamView; readonly effects: readonly TeamEffect[]; readonly consumed: boolean}
 export interface TeamKey {readonly up?: boolean; readonly down?: boolean; readonly left?: boolean; readonly right?: boolean; readonly enter?: boolean; readonly escape?: boolean;
   readonly pageUp?: boolean; readonly pageDown?: boolean; readonly home?: boolean; readonly end?: boolean;
   /** `t`: back to the Tasks tab. */
   readonly tab?: boolean;
   /** `f`: the member filter. */
-  readonly filter?: boolean}
+  readonly filter?: boolean;
+  /** Space: play or pause the replay. */
+  readonly space?: boolean;
+  /** `+` and `-`: the replay speed. */
+  readonly faster?: boolean;
+  readonly slower?: boolean}
 
-/** Keyboard while the sidebar has focus on the Team tab: arrows step through the posts, Enter opens one, End returns to Live, `f` opens the member filter, `t` the Tasks tab. */
-export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, key: TeamKey): TeamStep {
+/**
+ * Keyboard while the sidebar has focus on the Team tab: arrows step through the posts, Enter opens one (or the chosen stage card's actor), End returns to Live, Space plays or pauses the
+ * replay, `+` and `-` change its speed, `f` opens the member filter, `t` the Tasks tab. `now` is the host's clock (a replay started by Space pulses from it).
+ */
+export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, key: TeamKey, now = 0): TeamStep {
   const done = (next: TeamView, effects: readonly TeamEffect[] = []): TeamStep => ({view: next, effects, consumed: true});
   const index = positionOf(layout, view) - 1;
   if (view.picker !== undefined) {
@@ -351,28 +557,67 @@ export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGe
   }
   if (key.escape) return done(view, [{kind: 'blur'}]);
   if (key.tab) return done(view, [{kind: 'tab', tab: 'tasks'}]);
+  if (key.space) return done(togglePlay(layout, view, geometry, now));
+  if (key.faster || key.slower) return done({...view, speed: nextSpeed(speedOf(view), key.faster ? 1 : -1, false)});
   if (key.filter) return done({...view, picker: layout.filter === undefined ? 0 : layout.members.indexOf(layout.filter) + 1});
   if (key.up || key.left) return done(selectAt(layout, view, geometry, index - 1));
   if (key.down || key.right) return done(selectAt(layout, view, geometry, index + 1));
   if (key.pageUp || key.pageDown) return done(selectAt(layout, view, geometry, index + (key.pageUp ? -1 : 1) * Math.max(1, Math.floor(geometry.body / 2))));
   if (key.home) return done(selectAt(layout, view, geometry, 0));
   if (key.end) return done(goLive(layout, view, geometry));
-  if (key.enter) {const id = selectedId(layout, view); return done(view, id === undefined ? [] : [{kind: 'open', id}]);}
+  if (key.enter) {
+    if (view.card !== undefined) return done(view, [{kind: 'actor', id: view.card}]);
+    const id = selectedId(layout, view);
+    return done(view, id === undefined ? [] : [{kind: 'open', id}]);
+  }
   return {view, effects: [], consumed: false};
 }
 
 export interface TeamPointer {
   /** Coordinates inside the sidebar (0,0 is its top-left cell). */
   readonly x: number; readonly y: number;
-  readonly action: 'press' | 'move' | 'wheel_up' | 'wheel_down';
+  readonly action: 'press' | 'move' | 'wheel_up' | 'wheel_down' | 'drag' | 'release';
   readonly draggable?: boolean;
 }
 const EDGE_CLICK = '\0edge';
+/** A press on the stage: the timeline controls, a card (select and filter; a second click opens the actor) or the current post (opens it). */
+function stagePress(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, model: StageModel | undefined, hit: StageHit | undefined, x: number, now: number): [TeamView, readonly TeamEffect[]] {
+  const focus: TeamEffect = {kind: 'focus'};
+  if (!model || !hit) return [view, [focus]];
+  const index = positionOf(layout, view) - 1;
+  if (hit.kind === 'event') {
+    // The current post under the stage opens like the same post in the feed: a second click within the double-click time.
+    const id = selectedId(layout, view), key = 'event:' + id, double = id !== undefined && view.lastClick?.id === key && now - view.lastClick.time <= DOUBLE_CLICK_MS;
+    return [{...view, lastClick: double ? undefined : {id: key, time: now}}, double && id !== undefined ? [focus, {kind: 'open', id}] : [focus]];
+  }
+  if (hit.kind === 'card') {
+    const key = 'card:' + hit.id, double = view.lastClick?.id === key && now - view.lastClick.time <= DOUBLE_CLICK_MS;
+    // A second click on the same card opens its actor (the filter the first click set stays); a card is a member, the person's marker only filters.
+    if (double && hit.id !== 'user') return [{...view, card: hit.id, lastClick: undefined}, [focus, {kind: 'actor', id: hit.id}]];
+    const clear = view.filter === hit.id;
+    return [{...filtered(view, clear ? undefined : hit.id), card: clear || hit.id === 'user' ? undefined : hit.id, lastClick: {id: key, time: now}}, [focus]];
+  }
+  switch (hit.control) {
+    case 'prev': return [selectAt(layout, view, geometry, index - 1), [focus]];
+    case 'next': return [selectAt(layout, view, geometry, index + 1), [focus]];
+    case 'play': return [togglePlay(layout, view, geometry, now), [focus]];
+    case 'speed': return [{...view, speed: nextSpeed(speedOf(view), 1, true)}, [focus]];
+    case 'scrub': return [{...selectAt(layout, view, geometry, scrubPosition(model.controls.bar, x, layout.ids.length) - 1), scrubbing: true}, [focus]];
+    default: return [view, [focus]];
+  }
+}
 const regionAt = (chrome: Chrome, x: number): TeamControl | undefined => chrome.regions.find(region => x >= region.x0 && x < region.x1)?.control;
 /** Mouse over the Team tab: hover, the wheel and the stepping buttons (selection), click (select), double click (details), names (filter), the Live switch, the tabs and the member picker. */
 export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, pointer: TeamPointer, now: number, width: number, label: Labeler): TeamStep {
   const done = (next: TeamView, effects: readonly TeamEffect[] = []): TeamStep => ({view: next, effects, consumed: true});
   const content = width - CONTENT_X, cx = pointer.x - CONTENT_X;
+  // A held scrubber follows the pointer wherever it is (the host feeds drags and the release even outside the panel).
+  if (pointer.action === 'drag' || pointer.action === 'release') {
+    if (!view.scrubbing) return done(view);
+    if (pointer.action === 'release') return done({...view, scrubbing: false});
+    const model = stageModel(layout, view, geometry, label);
+    return done(model ? selectAt(layout, view, geometry, scrubPosition(model.controls.bar, cx, layout.ids.length) - 1) : {...view, scrubbing: false});
+  }
   // Column 0 is the border: the collapse button on the first row, below it the resize handle.
   if (pointer.x === 0 && (pointer.action === 'move' || pointer.action === 'press') && (pointer.y === 0 || pointer.draggable)) {
     const part = pointer.y === 0 ? 'collapse' : 'handle';
@@ -383,8 +628,8 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
   }
   let current = pointer.action === 'move' && view.hoveredEdge ? {...view, hoveredEdge: undefined} : view;
   const move = (next: TeamView) => next === view ? done(view) : done(next);
-  const rest = (patch: Partial<TeamView>): TeamView => ({...current, hoveredControl: undefined, hovered: undefined, hoveredName: undefined, ...patch});
-  const row = pointer.y - geometry.header;
+  const rest = (patch: Partial<TeamView>): TeamView => ({...current, hoveredControl: undefined, hovered: undefined, hoveredName: undefined, hoveredStage: undefined, ...patch});
+  const row = pointer.y - geometry.header - geometry.stage;
   const inBody = row >= 0 && row < geometry.body;
   const footerRow = geometry.footer >= 1 && pointer.y === geometry.height - 1;
   const picker = pickerPlan(layout, current, geometry);
@@ -397,6 +642,15 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     if (at !== undefined) return done(filtered(current, picker.items[at]), [{kind: 'focus'}]);
     if (footerRow && regionAt(footerChrome(layout, current, content, label), cx) === 'filter') return done({...current, picker: undefined}, [{kind: 'focus'}]);
     current = {...current, picker: undefined};
+  }
+  const stageRow = pointer.y - geometry.header;
+  if (geometry.stage > 0 && stageRow >= 0 && stageRow < geometry.stage && !wheel) {
+    const model = stageModel(layout, current, geometry, label), hit = model ? stageHit(model, cx, stageRow) : undefined;
+    if (pointer.action === 'move') {
+      const value = hit?.kind === 'control' ? hit.control : hit?.kind === 'card' ? 'card:' + hit.id : hit?.kind === 'event' ? 'event' : undefined;
+      return move(value === current.hoveredStage && current.hovered === undefined && current.hoveredControl === undefined && current.hoveredName === undefined ? current : rest({hoveredStage: value}));
+    }
+    return done(...stagePress(layout, current, geometry, model, hit, cx, now));
   }
   if (pointer.y < geometry.header && pointer.y === 0) {
     const control = regionAt(headerChrome(content, current), cx);
@@ -425,7 +679,7 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
   const name = box && scroll + row === box.y0 ? box.names.find(hit => cx >= hit.x0 && cx < hit.x1) : undefined;
   if (pointer.action === 'move') {
     const hoveredName = name ? box!.id + '\0' + name.member : undefined;
-    return move(box?.id === current.hovered && hoveredName === current.hoveredName && current.hoveredControl === undefined ? current : rest({hovered: box?.id, hoveredName}));
+    return move(box?.id === current.hovered && hoveredName === current.hoveredName && current.hoveredControl === undefined && current.hoveredStage === undefined ? current : rest({hovered: box?.id, hoveredName}));
   }
   if (!box) return done(current, [{kind: 'focus'}]);
   if (name) return done({...filtered(current, current.filter === name.member ? undefined : name.member), lastClick: undefined}, [{kind: 'focus'}]);

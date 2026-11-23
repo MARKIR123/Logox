@@ -39,7 +39,7 @@ async function fixture() {
 }
 
 interface Rig {app: Application; input: TerminalInput; output: TerminalScreen; instance: ReturnType<typeof render>;
-  send(value: string): Promise<void>; screen(): string; side(): string[]; find(needle: string, from?: number): {x: number; y: number}; mouse(kind: 'press' | 'move' | 'wheel_down' | 'wheel_up', x: number, y: number): Promise<void>;
+  send(value: string): Promise<void>; screen(): string; side(): string[]; find(needle: string, from?: number, after?: number): {x: number; y: number}; mouse(kind: 'press' | 'move' | 'wheel_down' | 'wheel_up', x: number, y: number): Promise<void>;
   click(x: number, y: number): Promise<void>; clickText(needle: string, offset?: number): Promise<void>; sidebarX: number}
 async function mount(app: Application, columns: number, rows: number): Promise<Rig> {
   const input = new TerminalInput(), output = new TerminalScreen();
@@ -52,8 +52,8 @@ async function mount(app: Application, columns: number, rows: number): Promise<R
   const send = async (value: string) => {await act(async () => {input.write(value); await delay(value === '\x1b' ? 40 : 10);}); await instance.waitUntilRenderFlush(); await delay(25);};
   const screen = () => output.lines.join('\n');
   const usable = columns - 1, sidebarX = usable - Math.max(36, Math.min(56, Math.floor(usable * 0.34)));
-  const find = (needle: string, from = sidebarX) => {
-    for (let y = 0; y < output.lines.length; y++) {const x = output.lines[y]!.indexOf(needle, from); if (x >= 0) return {x, y};}
+  const find = (needle: string, from = sidebarX, after = -1) => {
+    for (let y = after + 1; y < output.lines.length; y++) {const x = output.lines[y]!.indexOf(needle, from); if (x >= 0) return {x, y};}
     assert.fail(needle + ' is not on screen:\n' + screen());
   };
   const mouse = async (kind: 'press' | 'move' | 'wheel_down' | 'wheel_up', x: number, y: number) =>
@@ -76,6 +76,8 @@ function seed(app: Application) {
 const NODES = [{title: 'Design', owner: 'logox', nodes: [{title: 'Palette', owner: 'techne'}]}, {title: 'Ship', owner: 'techne', after: ['1']}];
 const hasCard = (text: string) => /│ \S Palette/.test(text);
 const posts = (rig: Rig) => rig.side().join('\n');
+/** The first match in the feed, under the stage's current-post card (which repeats the selected post). */
+const feed = (rig: Rig, needle: string) => rig.find(needle, rig.sidebarX, rig.find('── #').y + 2);
 /** A click on the rule under the tabs gives the sidebar the keyboard and changes nothing else. */
 const focusSidebar = async (rig: Rig) => {const head = rig.find('Tasks'); await rig.click(rig.sidebarX + 10, head.y + 1);};
 
@@ -154,7 +156,7 @@ test('a click selects a post, a double click or Enter opens it (the message as M
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('Renamed to buildStreetProps()'), {label: 'the feed'});
     // Double click on the message post: its full text as Markdown.
-    const body = rig.find('Renamed to');
+    const body = feed(rig, 'Renamed to');
     await rig.click(body.x + 2, body.y);
     assert.equal(surface(app), null, 'one click only selects');
     assert.match(posts(rig), /○ Live/);
@@ -168,7 +170,7 @@ test('a click selects a post, a double click or Enter opens it (the message as M
     app.surfaces.cancel();
     await waitFor(() => surface(app), current => current === null, {label: 'closed'});
     // The assignment post opens the delegation detail of the work.
-    const assign = rig.find('Draw the SVG');
+    const assign = feed(rig, 'Draw the SVG');
     await rig.click(assign.x + 2, assign.y); await rig.click(assign.x + 2, assign.y);
     await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the delegation detail'});
     assert.match((surface(app) as Extract<CommandSurface, {kind: 'page'}>).title, /^Delegation · Draw the SVG/);
@@ -183,7 +185,7 @@ test('a click selects a post, a double click or Enter opens it (the message as M
     app.surfaces.cancel();
     await waitFor(() => surface(app), current => current === null, {label: 'closed'});
     // A click on a name filters to that member; the footer shows it and says how many posts.
-    const name = rig.find('@kalon');
+    const name = feed(rig, '@kalon');
     await rig.click(name.x + 1, name.y);
     await waitFor(() => posts(rig), text => /kalon ▾/.test(text) && !text.includes('✓ you → @logox'), {label: 'filtered to kalon'});
     // The footer opens the picker; choosing All members clears the filter.
@@ -231,6 +233,49 @@ test('◀ ▶ and the wheel leave Live, ● Live returns and follows the newest 
     await focusSidebar(rig);
     await rig.send('\x1b[F');
     await waitFor(() => posts(rig), text => /● Live/.test(text), {label: 'End returns to Live'});
+  } finally {if (rig) await unmount(rig); await f.close();}
+});
+
+test('the stage above the feed: its cards filter by click and open the actor page by double click, Play replays the posts one by one and ends on Live', {timeout: 60000}, async () => {
+  const f = await fixture(); let rig!: Rig;
+  try {
+    const app = await f.open();
+    seed(app);
+    rig = await mount(app, 120, 40);
+    await act(async () => {await app.submit('/team');});
+    await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('Kalon') && text.includes('Techne') && text.includes('▶ Play'), {label: 'the stage'});
+    // A click on the Kalon card filters the feed to Kalon; a second click on it (same card, slowly) clears the filter.
+    const kalon = rig.find('Kalon');
+    await rig.click(kalon.x + 1, kalon.y);
+    await waitFor(() => posts(rig), text => /kalon ▾/.test(text) && !text.includes('✓ you → @logox'), {label: 'filtered to kalon by the card'});
+    await delay(450);
+    await rig.click(kalon.x + 1, kalon.y);
+    await waitFor(() => posts(rig), text => /all members ▾/.test(text), {label: 'the card clears the filter again'});
+    // A double click opens the actor page: state, workers, messages and the jump to its window.
+    await rig.click(kalon.x + 1, kalon.y); await rig.click(kalon.x + 1, kalon.y);
+    await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the actor page'});
+    const page = surface(app) as Extract<CommandSurface, {kind: 'page'}>;
+    assert.match(page.title, /^Team · /);
+    assert.deepEqual(page.tabs[0]!.actions?.map(action => action.key), ['o']);
+    assert.match(JSON.stringify(page.tabs[0]), /Workers/);
+    assert.match(JSON.stringify(page.tabs[0]), /techne/);
+    app.surfaces.cancel();
+    await waitFor(() => surface(app), current => current === null, {label: 'closed'});
+    // Play restarts from the first post and ends on Live; the button says Pause meanwhile.
+    const play = rig.find('▶ Play');
+    await rig.click(play.x + 2, play.y);
+    await waitFor(() => posts(rig), text => text.includes('❚❚ Pause') && /1\/3/.test(text) && /○ Live/.test(text), {label: 'playing from the first post'});
+    await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('▶ Play') && /3\/3/.test(text), {label: 'the end switches to Live', timeoutMs: 8000});
+    // The speed control cycles.
+    const speed = rig.find('1×');
+    await rig.click(speed.x, speed.y);
+    await waitFor(() => posts(rig), text => text.includes('2×'), {label: 'speed 2x'});
+    // Space plays and pauses from the keyboard.
+    await focusSidebar(rig);
+    await rig.send(' ');
+    await waitFor(() => posts(rig), text => text.includes('❚❚ Pause'), {label: 'space plays'});
+    await rig.send(' ');
+    await waitFor(() => posts(rig), text => text.includes('▶ Play'), {label: 'space pauses'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 

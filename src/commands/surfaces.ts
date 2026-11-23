@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
 import {immutable} from '../runtime/contracts.js';
 import type {TeamEvent} from '../runtime/team-events.js';
+import type {ActorDetail} from '../runtime/team-stage.js';
 import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, ItemMarks, MarkChange, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   /** Shown instead of the search box when the list loads empty; say what to do next. */
@@ -94,6 +95,9 @@ export class CommandSurfaces {
   /** Opens the detail page of a team post (set by `src/commands/tasks-page.ts`): the delegation detail for a post that refers to work, else the full text of the message as Markdown. */
   teamPostOpener: ((event: TeamEvent) => Promise<boolean>) | undefined;
   openTeamPost(event: TeamEvent): void {void this.teamPostOpener?.(event).catch(() => {});}
+  /** Opens the detail page of a team actor (state, current task, workers, recent messages, peers; set by `src/commands/tasks-page.ts`); a double click on a stage card and Enter on a selected one call `openTeamActor`. */
+  teamActorOpener: ((detail: ActorDetail) => Promise<boolean>) | undefined;
+  openTeamActor(detail: ActorDetail): void {void this.teamActorOpener?.(detail).catch(() => {});}
   /** Opens the plan switcher (`/tasks plans`, the sidebar header's click and `p`); set by the plan pages. */
   plansOpener: (() => Promise<void>) | undefined;
   openPlans(): void {void this.plansOpener?.().catch(() => {});}

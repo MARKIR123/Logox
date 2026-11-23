@@ -13,6 +13,7 @@ import type {RuntimeStore} from '../runtime/store.js';
 import {projectDelegations, type Delegation} from '../runtime/delegations.js';
 import {foldAttempts, taskGraph} from '../runtime/task-graph.js';
 import type {TeamEvent} from '../runtime/team-events.js';
+import type {ActorDetail} from '../runtime/team-stage.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
@@ -167,6 +168,38 @@ export function createTasksCommand(deps: TasksPageDeps) {
     return true;
   };
   surfaces.teamPostOpener = openTeamPost;
+
+  /**
+   * The detail page of a team actor (a double click on its stage card, Enter on a selected one): its state, the task it was last given, the workers it dispatched
+   * (name, title, status, duration), its recent messages in and out with the count per peer, and the footer action `o` that jumps to its own window. A snapshot of the
+   * replay point the stage was showing.
+   */
+  const openTeamActor = async (detail: ActorDetail): Promise<boolean> => {
+    const who = (id: string) => id === 'user' ? 'you' : id === 'automa' ? 'worker' : name(id).toLowerCase();
+    const body: TabRow[] = [
+      row.heading('State'),
+      row.field('State', detail.state),
+      ...(detail.task ? [row.field('Task', detail.task)] : []),
+      row.blank(), row.heading('Workers'),
+      ...(detail.jobs.length ? detail.jobs.map(job => row.bullet((job.fork ? '⑂ ' : '◦ ') + job.name + (job.name !== job.title ? ' · ' + job.title : '') + ' · ' + job.status +
+        (job.ms !== undefined ? ' · ' + formatDuration(job.ms) : ''))) : [row.text('No workers dispatched.')]),
+      row.blank(), row.heading('Messages'),
+      ...(detail.peers.length ? detail.peers.map(peer => row.bullet(who(peer.peer) + ' · sent ' + peer.sent + ' · received ' + peer.received)) : [row.text('No messages yet.')]),
+      ...(detail.messages.length ? [row.blank(), row.heading('Recent'), ...detail.messages.map(item => row.bullet(new Date(item.at).toLocaleTimeString() + ' · ' + (item.direction === 'in' ? 'from ' : 'to ') +
+        who(item.peer) + ' · ' + item.kind + ' · ' + item.text.slice(0, 160)))] : []),
+    ];
+    const actions: PageActions = {
+      onSaveToggles: () => ({}),
+      onTabAction: async (_tab, action) => {
+        if (action === 'open') {surfaces.requestWindow(detail.id); return {close: true};}
+        return {};
+      },
+    };
+    if (surfaces.getSnapshot()) surfaces.close();
+    surfaces.openPage('Team · ' + name(detail.id), [{id: 'detail', title: name(detail.id), ...tabContent(body), actions: [{id: 'open', label: 'Open conversation', key: 'o'}]}], 'detail', actions);
+    return true;
+  };
+  surfaces.teamActorOpener = openTeamActor;
 
   return {
     /** `/tasks` toggles the sidebar; `/tasks sidebar show|hide|toggle` sets it; `/tasks plans` opens the plan switcher; other arguments are not accepted. */

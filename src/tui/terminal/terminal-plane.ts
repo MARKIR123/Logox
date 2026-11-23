@@ -10,7 +10,11 @@ import {formatClock} from './text.js';
 /** A segment of a side line; `clock` marks a fixed-width placeholder the plane fills with the time elapsed since that epoch time (ms) each second. */
 export interface SideSegment extends SceneSegment {readonly clock?: number}
 /** A column drawn beside the history: `lines` (one per row, each exactly `width` cells) at column `x`. The plane repaints only the lines that changed. */
-export interface PlaneSide {readonly x: number; readonly width: number; readonly lines: readonly (readonly SideSegment[])[]}
+export interface PlaneSide {
+  readonly x: number; readonly width: number; readonly lines: readonly (readonly SideSegment[])[];
+  /** A short animation (the team stage's pulse): the lines for the plane's clock `now`, and whether it still runs; the plane asks again on its animation frame until `busy` is false. `motion` is the reduced-motion setting. */
+  readonly animate?: (now: number, motion: boolean) => {readonly lines: readonly (readonly SideSegment[])[]; readonly busy: boolean};
+}
 export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null; readonly side?: PlaneSide | undefined}
 export interface PlaneMetrics {readonly renderTime: number; readonly scrolled: number; readonly paintedRows: number}
 const reset = '\x1b[0m';
@@ -79,6 +83,7 @@ export class TerminalPlane {
   private active = false;
   private closed = false;
   private outputHeld = false;
+  private sideBusy = false;
   constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {}
 
   get rows(): readonly Row[] {return this.displayedRows;}
@@ -130,6 +135,12 @@ export class TerminalPlane {
       return a?.step?.state === 'running' || a?.active;
     });
     if (!hasRunning) {
+      // A side animation (the team pulse) asks for the animation frame rhythm until it is done.
+      if (this.sideBusy) {
+        this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame?.motion === false ? 100 : 80);
+        this.animationTimer.unref?.();
+        return;
+      }
       // A side column with an elapsed clock only needs the next whole second.
       if (this.frame?.side?.lines.some(line => line.some(segment => segment.clock !== undefined))) {
         this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, 1010 - (Date.now() % 1000));
@@ -160,7 +171,10 @@ export class TerminalPlane {
       return encodeRow(row, index, frame.selection, frame.width, isHovered);
     });
     const side = frame.side;
-    const sideLines = side ? Array.from({length: frame.height}, (_, index) => encodeSide(side.lines[index], this.clock)) : [];
+    const live = side?.animate?.(this.clock, frame.motion !== false);
+    this.sideBusy = Boolean(live?.busy);
+    const sideSource = live?.lines ?? side?.lines ?? [];
+    const sideLines = side ? Array.from({length: frame.height}, (_, index) => encodeSide(sideSource[index], this.clock)) : [];
     const previous = this.previous;
     const same = Boolean(previous && previous.width === frame.width && previous.height === frame.height && previous.side?.x === side?.x && previous.side?.width === side?.width);
     let shifted = [...this.previousLines], scrolled = 0;

@@ -25,7 +25,10 @@ import type {PlaneSide, SideSegment} from '../terminal/terminal-plane.js';
 import {buildFlow, type FlowLayout} from './plan-flow.js';
 import {DOCK_MIN_COLUMNS, SIDEBAR_MAX, SIDEBAR_MIN, clampScroll, dragWidth, type GraphKind, emptyView, flowOptionsFor, followTarget, FOLLOW_PAUSE_MS, paintSidebar, planProgress, revealNode,
   sidebarGeometry, sidebarWidth, stepKey, stepMouse, type SidebarEffect, type SidebarKey, type SidebarStep, type SidebarView} from './plan-sidebar.js';
-import {buildTeamLayout, emptyTeamView, paintTeam, stepTeamKey, stepTeamMouse, teamGeometry, teamLabeler, teamWidth, type TeamEffect, type TeamLayout, type TeamStep, type TeamView} from './team-sidebar.js';
+import {actorDetail} from '../../runtime/team-stage.js';
+import {PLAY_STEP_MS, arrived, buildTeamLayout, emptyTeamView, paintTeam, selectedId, stepPlay, stepTeamKey, stepTeamMouse, teamGeometryFor, teamLabeler, teamWidth, type TeamEffect, type TeamLayout, type TeamStep,
+  type TeamView} from './team-sidebar.js';
+import {PULSE_MS} from './team-stage.js';
 
 export interface PlanSidebarInput {
   board: Pick<PlanBoard, 'peek' | 'mine' | 'view' | 'earlier' | 'subscribe' | 'refresh'> & {readonly revision: number} | undefined;
@@ -178,6 +181,28 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     return layout;
   };
   useEffect(() => {if (!docked) {dragRef.current = false; setDragging(false);}}, [docked]);
+  // Playback: one post per `PLAY_STEP_MS / speed`, started by the stage's Play control or Space; the end switches to Live. One timer, re-armed after each step.
+  const playing = teamView.playing === true, speed = teamView.speed ?? 1;
+  useEffect(() => {
+    if (!playing || !panelVisible || activeTab !== 'team') return;
+    const timer = setTimeout(() => {
+      const layout = teamLayoutFor();
+      if (!layout) return;
+      applyTeam({view: stepPlay(layout, teamViewRef.current, teamGeometryFor(layout, heightRef.current), Date.now()), effects: [], consumed: true});
+    }, PLAY_STEP_MS / speed);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  }, [playing, speed, teamView.selected, teamView.live, panelVisible, activeTab]);
+  // A post that arrives while Live pulses on the stage (a view that left Live is not disturbed).
+  const newest = events.at(-1)?.id, seenNewest = useRef(newest);
+  useEffect(() => {
+    if (seenNewest.current === newest) return;
+    seenNewest.current = newest;
+    const layout = teamLayoutFor();
+    if (!layout || newest === undefined || selectedId(layout, teamViewRef.current) !== newest) return;
+    const next = arrived(teamViewRef.current, newest, Date.now());
+    if (next !== teamViewRef.current) {teamViewRef.current = next; setTeamView(next);}
+  }, [newest]);
 
   // ------------------------------------------------------------------------------------------------------------------------------ visibility
   const hide = () => {
@@ -242,6 +267,14 @@ export function usePlanSidebar(input: PlanSidebarInput) {
       case 'drag': if (!overlay) {dragRef.current = true; setDragging(true);} break;
       case 'reset-width': setPreferred(undefined); preferredRef.current = undefined; surfaces?.sidebarWidthStore?.set(undefined); break;
       case 'tab': chooseTab(effect.tab); break;
+      case 'actor': {
+        // The detail page of the card's actor at the replay point the stage shows.
+        const layout = teamLayoutFor(), shown = layout ? selectedId(layout, teamViewRef.current) : undefined;
+        const index = shown === undefined ? eventsRef.current.length - 1 : eventsRef.current.findIndex(item => item.id === shown);
+        if (overlay) setOverlay(false);
+        surfaces?.openTeamActor(actorDetail(eventsRef.current, index, effect.id));
+        break;
+      }
       case 'open': {
         const event = eventsRef.current.find(item => item.id === effect.id);
         if (!event) break;
@@ -312,8 +345,9 @@ export function usePlanSidebar(input: PlanSidebarInput) {
       if (key.tab) return false;
       if (key.ctrl || key.meta) return overlay;
       const mapped = {up: key.upArrow, down: key.downArrow, left: key.leftArrow, right: key.rightArrow, enter: key.return, escape: key.escape,
-        pageUp: key.pageUp, pageDown: key.pageDown, home: key.home, end: key.end, tab: typed === 't', filter: typed === 'f'};
-      const step = stepTeamKey(layout, teamViewRef.current, teamGeometry(heightRef.current), mapped);
+        pageUp: key.pageUp, pageDown: key.pageDown, home: key.home, end: key.end, tab: typed === 't', filter: typed === 'f',
+        space: typed === ' ', faster: typed === '+' || typed === '=', slower: typed === '-' || typed === '_'};
+      const step = stepTeamKey(layout, teamViewRef.current, teamGeometryFor(layout, heightRef.current), mapped, Date.now());
       if (step.consumed) {applyTeam(step); return true;}
       if (overlay) return true;
       if (typed) setFocus('input');
@@ -350,6 +384,11 @@ export function usePlanSidebar(input: PlanSidebarInput) {
       }
       return true;
     }
+    // The timeline scrubber is held: it follows the pointer wherever it goes until the release.
+    if (onTeam && teamViewRef.current.scrubbing && (event.action === 'drag' || event.action === 'release')) {
+      applyTeam(stepTeamMouse(layout!, teamViewRef.current, teamGeometryFor(layout!, heightRef.current), {x: event.x - x0, y: event.y, action: event.action}, Date.now(), panelWidth, label));
+      return true;
+    }
     const inside = event.x >= x0 && event.x < x0 + panelWidth && event.y < heightRef.current;
     if (!inside) {
       if (overlay) {if (event.action === 'press' && event.button === 0) closeOverlay(); return true;}
@@ -367,7 +406,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     if (event.action === 'drag' || event.action === 'release') return true;
     if (event.action === 'press' && event.button !== 0) return true;
     const pointer = {x: event.x - x0, y: event.y, action: event.action, draggable: !overlay};
-    if (onTeam) applyTeam(stepTeamMouse(layout!, teamViewRef.current, teamGeometry(heightRef.current), pointer, Date.now(), panelWidth, label));
+    if (onTeam) applyTeam(stepTeamMouse(layout!, teamViewRef.current, teamGeometryFor(layout!, heightRef.current), pointer, Date.now(), panelWidth, label));
     else apply(stepMouse(current!, viewRef.current, sidebarGeometry(heightRef.current), pointer, Date.now()));
     return true;
   };
@@ -382,12 +421,17 @@ export function usePlanSidebar(input: PlanSidebarInput) {
       if (!layout || !panelVisible) return undefined;
       const focused = overlay || focus === 'plan';
       const deps = ['team', layout, teamView, panelWidth, height, focused, themeVersion, dragging];
-      if (!paintCache.current || !shallow(paintCache.current.deps, deps)) {
-        paintCache.current = {deps, lines: paintTeam({layout, view: teamView, width: panelWidth, height, focused, dragging, label,
-          ownerColor: id => id === AUTOMA_OWNER ? palette.automa : ownerColor(id, rolesRef.current)})};
-      }
+      const paint = (pulseMs?: number) => paintTeam({layout, view: teamView, width: panelWidth, height, focused, dragging, label, stage: true,
+        ownerColor: id => id === AUTOMA_OWNER ? palette.automa : ownerColor(id, rolesRef.current), ...(pulseMs !== undefined ? {pulseMs} : {})});
+      if (!paintCache.current || !shallow(paintCache.current.deps, deps)) paintCache.current = {deps, lines: paint()};
       const lines = paintCache.current.lines;
-      return docked ? {lines, side: {x: dockX, width: dockWidth, lines}} : {lines};
+      if (!docked) return {lines};
+      // The pulse of a post that just began: the terminal plane asks for the lines again every animation frame until it has travelled (docked only; the overlay shows the stage at rest).
+      const pulse = teamView.pulse;
+      const animate = pulse && Date.now() - pulse.at < PULSE_MS && selectedId(layout, teamView) === pulse.id
+        ? (now: number, motion: boolean) => {const ms = now - pulse.at; return motion && ms >= 0 && ms < PULSE_MS ? {lines: paint(ms), busy: true} : {lines: paintCache.current?.lines ?? lines, busy: false};}
+        : undefined;
+      return {lines, side: {x: dockX, width: dockWidth, lines, ...(animate ? {animate} : {})}};
     }
     const current = flowFor(view.expanded);
     if (!plan || !current || !panelVisible) return undefined;
