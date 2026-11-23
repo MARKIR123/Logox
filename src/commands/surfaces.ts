@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
 import {immutable} from '../runtime/contracts.js';
+import type {TeamEvent} from '../runtime/team-events.js';
 import type {ResultLine, CommandOrigin, CommandSurface, CommandTab, CommandToggle, CommandResult, ItemMarks, MarkChange, PickerItem, SettingsItem, SettingsPageLink, SettingsSubPage, ThemePageData} from '../runtime/command-surface.js';
 export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title' | 'description' | 'current'> & {
   /** Shown instead of the search box when the list loads empty; say what to do next. */
@@ -49,6 +50,8 @@ export interface ThemeActions {
 export type SidebarSource = {readonly kind: 'auto'} | {readonly kind: 'work'} | {readonly kind: 'plan'; readonly id: string};
 /** What `/tasks sidebar` asks of the terminal. */
 export type PlanSidebarMode = 'show' | 'hide' | 'toggle';
+/** The tab of the sidebar: the task graph or the team feed (`/team`). */
+export type SidebarTab = 'tasks' | 'team';
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
 /** Owns the command surface lifecycle; callbacks and query cancellation signals stay in the business layer. */
@@ -74,11 +77,11 @@ export class CommandSurfaces {
   subscribeWindow = (listener: (ownerId: string) => void): (() => void) => {this.windowListeners.add(listener); return () => this.windowListeners.delete(listener);};
   /** Asks the terminal to show the conversation window of `ownerId`; a surface without a terminal listening ignores it. */
   requestWindow(ownerId: string): void {for (const listener of this.windowListeners) listener(ownerId);}
-  private planListeners = new Set<(mode: PlanSidebarMode) => void>();
-  /** The terminal subscribes here to show, hide or toggle the task sidebar (`/tasks`). */
-  subscribePlanSidebar = (listener: (mode: PlanSidebarMode) => void): (() => void) => {this.planListeners.add(listener); return () => this.planListeners.delete(listener);};
-  /** Asks the terminal to show, hide or toggle the plan sidebar; true when a terminal is listening (a headless run has none). */
-  requestPlanSidebar(mode: PlanSidebarMode): boolean {for (const listener of this.planListeners) listener(mode); return this.planListeners.size > 0;}
+  private planListeners = new Set<(mode: PlanSidebarMode, tab?: SidebarTab) => void>();
+  /** The terminal subscribes here to show, hide or toggle the task sidebar (`/tasks`, `/team`); `tab` is the tab the request is about (none: the one in use). */
+  subscribePlanSidebar = (listener: (mode: PlanSidebarMode, tab?: SidebarTab) => void): (() => void) => {this.planListeners.add(listener); return () => this.planListeners.delete(listener);};
+  /** Asks the terminal to show, hide or toggle the plan sidebar (on `tab` when given); true when a terminal is listening (a headless run has none). */
+  requestPlanSidebar(mode: PlanSidebarMode, tab?: SidebarTab): boolean {for (const listener of this.planListeners) listener(mode, tab); return this.planListeners.size > 0;}
   /**
    * Opens the detail page of a plan node (set by the plan pages in `src/commands/plan-page.ts`; the sidebar's double-click and Enter call `openPlanNode`).
    * `planId` names a plan of an earlier session, which is read-only.
@@ -88,6 +91,9 @@ export class CommandSurfaces {
   /** Opens the `/tasks` detail page of a delegation (set by `src/commands/tasks-page.ts`); the work graph's double-click and Enter call `openWorkNode`. */
   workNodeOpener: ((delegationId: string) => Promise<boolean>) | undefined;
   openWorkNode(delegationId: string): void {void this.workNodeOpener?.(delegationId).catch(() => {});}
+  /** Opens the detail page of a team post (set by `src/commands/tasks-page.ts`): the delegation detail for a post that refers to work, else the full text of the message as Markdown. */
+  teamPostOpener: ((event: TeamEvent) => Promise<boolean>) | undefined;
+  openTeamPost(event: TeamEvent): void {void this.teamPostOpener?.(event).catch(() => {});}
   /** Opens the plan switcher (`/tasks plans`, the sidebar header's click and `p`); set by the plan pages. */
   plansOpener: (() => Promise<void>) | undefined;
   openPlans(): void {void this.plansOpener?.().catch(() => {});}
@@ -112,10 +118,10 @@ export class CommandSurfaces {
     this.publish({id: randomUUID(), kind: 'page', title, tabs, initialTab, ...this.origin?.()});
   }
   /** Read-only output has no save callback or model execution semantics. */
-  openResult(title: string, text: string, origin = this.origin?.(), lines?: readonly ResultLine[]): string {
+  openResult(title: string, text: string, origin = this.origin?.(), lines?: readonly ResultLine[], markdown = false): string {
     this.assertIdle();
     const id = randomUUID();
-    this.publish({id, kind: 'result', title, text, ...(lines ? {lines} : {}), ...origin});
+    this.publish({id, kind: 'result', title, text, ...(lines ? {lines} : {}), ...(markdown ? {markdown: true as const} : {}), ...origin});
     return id;
   }
   updateResult(surfaceId: string, text: string, lines?: readonly ResultLine[]): void {

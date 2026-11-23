@@ -17,6 +17,7 @@ import {createSessionApplication} from './application.js';
 import type {SessionLease} from './store/sessions.js';
 import {PLAN_USER, type DerivedPlan, type PlanOp} from './runtime/plan.js';
 import type {PlanApply} from './store/plans.js';
+import {TeamStream, type TeamEvent} from './runtime/team-events.js';
 
 export type SessionHubErrorCode = 'SESSION_NOT_FOUND' | 'SESSION_CLOSING' | 'SESSION_IN_USE' | 'SESSION_FAILED' | 'HUB_CLOSED';
 export class SessionHubError extends Error {
@@ -55,6 +56,8 @@ export interface SessionHubSnapshot {
    * An adapter that shows plans re-reads `plans(id)` when this moves; it never moves for anything else.
    */
   readonly plansRevision: number;
+  /** Changes whenever the team event stream of any open session changes (`teamEvents(id)`); it never moves for anything else. */
+  readonly teamRevision: number;
 }
 
 /** The only mutable-state-free view of a session given to the GUI. */
@@ -87,6 +90,8 @@ export interface SessionHub {
   plans(id: string): readonly DerivedPlan[];
   /** One plan edit made by the person (actor `user`, who may do anything the Director may); refused ops answer with the fix, nothing throws for them. */
   planOp(id: string, op: PlanOp): Promise<PlanApply>;
+  /** The team event stream of an open session (every dispatch and reply of the team, ordered by time; JSON-serializable, a pure projection). */
+  teamEvents(id: string): readonly TeamEvent[];
   noteDraft(id: string): void;
   close(id: string): Promise<void>;
   shutdown(): Promise<void>;
@@ -109,6 +114,7 @@ interface Live {
   stopData: (() => void) | undefined;
   stopStatus: (() => void) | undefined;
   stopPlans: (() => void) | undefined;
+  readonly team: TeamStream;
 }
 
 const EMPTY_SNAPSHOT: RuntimeSnapshot = Object.freeze({revision: 0, pending: [], activities: [], interactions: [], messages: []});
@@ -128,7 +134,8 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
   const catalog = new Map<string, CatalogEntry>();
   const listeners = new Set<() => void>();
   let issues: readonly string[] = [];
-  let closed = false, signature = '', revision = 0, plansSignature = '', plansRevision = 0;
+  let closed = false, signature = '', revision = 0, plansSignature = '', plansRevision = 0, teamSignature = '', teamRevision = 0;
+  const teamOf = (entry: Live): readonly TeamEvent[] => entry.team.get({snapshot: entry.app!.store.getSnapshot(), sessionId: entry.id, deliveries: entry.app!.ensemble.deliveries.snapshot()});
   let snapshot: SessionHubSnapshot | undefined;
   let closeAll: Promise<void> | undefined;
 
@@ -177,11 +184,17 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
       try {const plans = entry.app.plans.signature(); return plans === '[]' ? [] : [[entry.id, plans]];} catch {return [];}
     }));
     if (plansNow !== plansSignature) {plansSignature = plansNow; plansRevision += 1;}
-    const next = JSON.stringify([issues, sessions, plansRevision]);
+    // The team stream is memoised per session on its store revision, so this is a lookup unless something changed.
+    const teamNow = [...live.values()].flatMap(entry => {
+      if (!entry.app) return [];
+      try {teamOf(entry); return entry.team.changes ? [entry.id + ':' + entry.team.changes] : [];} catch {return [];}
+    }).join('|');
+    if (teamNow !== teamSignature) {teamSignature = teamNow; teamRevision += 1;}
+    const next = JSON.stringify([issues, sessions, plansRevision, teamRevision]);
     if (next === signature) return;
     signature = next;
     revision += 1;
-    snapshot = Object.freeze({revision, sessions: Object.freeze(sessions), issues, plansRevision});
+    snapshot = Object.freeze({revision, sessions: Object.freeze(sessions), issues, plansRevision, teamRevision});
     for (const listener of listeners) listener();
   };
 
@@ -269,7 +282,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
     if (existing) return existing;
     const now = Date.now();
     const entry: Live = {id, state: 'opening', persistence: {saved: false, async save() {}}, created: now, updated: now,
-      app: undefined, lease: undefined, title: undefined, error: undefined, opening: undefined, closing: undefined, stopData: undefined, stopStatus: undefined, stopPlans: undefined};
+      app: undefined, lease: undefined, title: undefined, error: undefined, opening: undefined, closing: undefined, stopData: undefined, stopStatus: undefined, stopPlans: undefined, team: new TeamStream()};
     live.set(id, entry);
     return entry;
   };
@@ -381,7 +394,7 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
     },
     getSnapshot() {
       if (!snapshot) publish();
-      return snapshot ?? Object.freeze({revision, sessions: Object.freeze([]), issues, plansRevision});
+      return snapshot ?? Object.freeze({revision, sessions: Object.freeze([]), issues, plansRevision, teamRevision});
     },
     async refresh() {
       if (closed) throw new SessionHubError('HUB_CLOSED', 'The session hub is closed');
@@ -469,6 +482,11 @@ export async function createSessionHub(options: ApplicationOptions): Promise<Ses
       const entry = live.get(id);
       if (!entry?.app || entry.state !== 'open') throw new SessionHubError('SESSION_NOT_FOUND', 'Unknown open session: ' + id);
       return entry.app.plans.plans();
+    },
+    teamEvents(id) {
+      const entry = live.get(id);
+      if (!entry?.app || entry.state !== 'open') throw new SessionHubError('SESSION_NOT_FOUND', 'Unknown open session: ' + id);
+      return teamOf(entry);
     },
     async planOp(id, op) {
       const entry = await ready(id);

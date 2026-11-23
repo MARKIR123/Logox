@@ -54,7 +54,9 @@ export type CommandSurface = Partial<CommandOrigin> & (
       /** The row highlighted when the list opens, without the `current` mark (a page that reopens on the row it just changed). */
       readonly focus?: string;
       readonly effort?: string; readonly effortLevels?: readonly string[]}
-  | {readonly id: string; readonly kind: 'result'; readonly title: string; readonly text: string; readonly lines?: readonly ResultLine[]}
+  | {readonly id: string; readonly kind: 'result'; readonly title: string; readonly text: string; readonly lines?: readonly ResultLine[];
+      /** The text is Markdown and is laid out as such (`/team` post detail); copy keeps the source text. */
+      readonly markdown?: true}
   | {readonly id: string; readonly kind: 'settings'; readonly title: string; readonly items: readonly SettingsItem[]; readonly pages: readonly SettingsPageLink[];
       readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage;
       /** The /theme page opened from the Theme row; it draws over the settings and Esc returns to them. */

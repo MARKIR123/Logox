@@ -25,6 +25,7 @@ import {stripNarration} from './runtime/narration.js';
 import {answerEnvelope} from './runtime/interactions.js';
 import {DIRECTOR_ID} from './runtime/director-id.js';
 import {activityCosts, projectDelegations} from './runtime/delegations.js';
+import {teamEvents} from './runtime/team-events.js';
 import type {Provider} from './runtime/messages.js';
 import type {Activity, Message} from './runtime/contracts.js';
 
@@ -305,6 +306,8 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     report: {version: 1 as const, sessionId: session, status, durationMs: Date.now() - started, final, actors: actorStats,
       delegations,
       plans,
+      // The team stream (`src/runtime/team-events.ts`) of this run: every dispatch and reply from its start on.
+      team: teamEvents({snapshot, sessionId: session, deliveries: app.ensemble.deliveries.snapshot()}).filter(event => event.at >= started),
       automa: {jobs: jobs.length, done: jobs.filter(job => job.state === 'done').length, blocked: jobs.filter(job => job.state === 'blocked').length, failed: jobs.filter(job => job.state === 'failed').length,
         ...(jobs.some(job => job.state === 'skipped') ? {skipped: jobs.filter(job => job.state === 'skipped').length} : {})},
       usage: {...totalsOf(used.map(item => item.record), config), byActor: group(item => item.owner), byCategory: group(item => item.record.category)},

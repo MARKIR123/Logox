@@ -28,7 +28,7 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
       onScroll={scrollOffset => setComposerMode(previous => previous && previous.scrollOffset !== scrollOffset ? {...previous, scrollOffset} : previous)}/>
   </MouseHost>;
   if (surface?.kind === 'result' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
-    <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} width={width} height={screenRows}
+    <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} markdown={surface.markdown === true} width={width} height={screenRows}
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
   </MouseHost>;
   if (surface?.kind === 'settings' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><SettingsPage key={surface.id} items={surface.items} pages={surface.pages}

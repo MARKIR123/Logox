@@ -12,7 +12,7 @@ import type {DerivedPlan, LeafProgress} from '../../runtime/plan.js';
 import {faintColor, frameColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
-import {fit, flowHit, formatTook, perFit, resultText, type FlowCell, type FlowLayout, type FlowOptions, type FlowRow, type FlowTone} from './plan-flow.js';
+import {fit, flowHit, formatTook, perFit, resultText, rowWidth, type FlowCell, type FlowLayout, type FlowOptions, type FlowRow, type FlowTone} from './plan-flow.js';
 
 /** The sidebar docks beside the timeline only at this many columns or more; narrower terminals open it as an overlay. */
 export const DOCK_MIN_COLUMNS = 110;
@@ -63,6 +63,8 @@ export interface SidebarView {
   readonly hoveredHeader?: boolean | undefined;
   /** The pointer is over the border column: the `›` collapse button on the first row, else the resize handle (docked only). */
   readonly hoveredEdge?: 'collapse' | 'handle' | undefined;
+  /** The pointer is over the `Team` tab at the right end of the header's first row. */
+  readonly hoveredTeam?: boolean | undefined;
 }
 export const emptyView: SidebarView = {expanded: new Map(), scroll: 0, scrolledAt: -Infinity};
 
@@ -100,6 +102,10 @@ export function followTarget(plan: DerivedPlan, flow: FlowLayout): string | unde
 
 /** The collapse button in the border column of the header row (one cell wide). */
 export const COLLAPSE = '›';
+/** The tab labels of the header: `Tasks` (the title of this tab starts with it) and `Team`, which the Tasks tab sets at the right end of its first row when `content` cells are wide enough. */
+export const TASKS_LABEL = 'Tasks', TEAM_LABEL = 'Team';
+const TEAM_TAB_MIN = 24;
+export const teamTab = (content: number): boolean => content >= TEAM_TAB_MIN;
 const EDGE_CLICK = '\0edge';
 const rule = (width: number, tone: FlowTone = 'line'): FlowRow => [{text: '─'.repeat(Math.max(0, width)), tone}];
 
@@ -119,7 +125,7 @@ export interface PaintInput {
   /** The border is being dragged: it keeps the accent colour. */
   readonly dragging?: boolean;
 }
-function toneColor(tone: FlowTone): string {
+export function toneColor(tone: FlowTone): string {
   switch (tone) {
     case 'strong': return palette.strong;
     case 'muted': return palette.muted;
@@ -152,14 +158,16 @@ function merge(segments: readonly SideSegment[]): SideSegment[] {
   for (const segment of segments) {
     if (!segment.text) continue;
     const last = result.at(-1);
-    if (last && last.clock === undefined && segment.clock === undefined && last.color === segment.color && last.bg === segment.bg && last.bold === segment.bold && last.italic === segment.italic) result[result.length - 1] = {...last, text: last.text + segment.text};
+    if (last && last.clock === undefined && segment.clock === undefined && last.color === segment.color && last.bg === segment.bg && last.bold === segment.bold && last.italic === segment.italic && last.underline === segment.underline) result[result.length - 1] = {...last, text: last.text + segment.text};
     else result.push(segment);
   }
   return result;
 }
-/** `lead` segments, then the cells of `row` clipped to the content width, padded to `width` cells. */
-function line(input: PaintInput, row: readonly SideSegment[], first = false): SideSegment[] {
-  const room = input.width - CONTENT_X;
+/** What a sidebar line needs of its frame: the panel width, the pointer over its border and whether the border wears the accent (keyboard focus or a drag). */
+export interface SideFrame {readonly width: number; readonly hoveredEdge?: 'collapse' | 'handle' | undefined; readonly accent: boolean}
+/** The border (the `›` collapse button on the first row, else the resize handle), then the cells of `row` clipped to the content width and padded: one line exactly `width` cells wide. */
+export function sideLine(frame: SideFrame, row: readonly SideSegment[], first = false): SideSegment[] {
+  const room = frame.width - CONTENT_X;
   const out: SideSegment[] = [];
   let used = 0;
   for (const segment of row) {
@@ -168,11 +176,14 @@ function line(input: PaintInput, row: readonly SideSegment[], first = false): Si
     if (used + size <= room) {out.push(segment); used += size; continue;}
     out.push({...segment, text: fit(segment.text, room - used).replace(/…$/, ' ')}); used = room; break;
   }
-  const {hoveredEdge} = input.view;
-  // The border is the resize handle: accent while the sidebar has the keyboard, while the pointer is over it and while it is dragged. On the first row it is the collapse button.
-  const edgeColor = input.dragging || hoveredEdge === 'handle' || input.focused ? palette.accent : palette.line;
+  const {hoveredEdge} = frame;
+  const edgeColor = frame.accent || hoveredEdge === 'handle' ? palette.accent : palette.line;
   const border: SideSegment[] = first ? [{text: COLLAPSE, color: hoveredEdge === 'collapse' ? palette.accent : palette.muted, bold: true}, {text: ' ', color: palette.fg}] : [{text: '│ ', color: edgeColor}];
   return merge([...border, ...out, {text: ' '.repeat(Math.max(0, room - used)), color: palette.fg}]);
+}
+/** `lead` segments, then the cells of `row` clipped to the content width, padded to `width` cells. */
+function line(input: PaintInput, row: readonly SideSegment[], first = false): SideSegment[] {
+  return sideLine({width: input.width, hoveredEdge: input.view.hoveredEdge, accent: Boolean(input.dragging || input.focused)}, row, first);
 }
 const plain = (cells: readonly FlowCell[], input: PaintInput) => cells.map(cell => segmentOf(cell, input));
 
@@ -181,6 +192,7 @@ export function tooltipFor(plan: DerivedPlan, view: SidebarView, focused: boolea
   if (view.hoveredEdge === 'collapse') return 'Collapse';
   if (view.hoveredEdge === 'handle') return 'Drag to resize · › to collapse';
   if (view.hoveredHeader) return 'Click or p: switch plan or work view';
+  if (view.hoveredTeam) return 'Team feed: every dispatch and reply · t';
   const id = view.hovered ?? view.selected;
   const node = id === undefined ? undefined : plan.nodes.find(item => item.id === id);
   if (!node) {
@@ -204,9 +216,12 @@ export function paintSidebar(input: PaintInput): SideSegment[][] {
   const kind = input.kind ?? 'plan';
   const progress = planProgress(plan);
   if (geometry.header >= 1) {
+    const teamRoom = teamTab(content) ? TEAM_LABEL.length + 1 : 0;
     const title: FlowCell[] = kind === 'work'
       ? [{text: 'Tasks', tone: 'strong', bold: true}, {text: ' · no plan', tone: 'muted'}]
-      : [{text: kind === 'earlier' ? 'Earlier tasks ' : 'Tasks ', tone: 'muted'}, {text: fit(plan.title, Math.max(1, content - (kind === 'earlier' ? 14 : 6))), tone: 'strong', bold: true}];
+      : [{text: kind === 'earlier' ? 'Earlier tasks ' : 'Tasks ', tone: 'muted'}, {text: fit(plan.title, Math.max(1, content - (kind === 'earlier' ? 14 : 6) - teamRoom)), tone: 'strong', bold: true}];
+    // The other tab sits at the right end of the row (`Team`); the active one is the title.
+    if (teamRoom) title.push({text: ' '.repeat(Math.max(1, content - rowWidth(title) - TEAM_LABEL.length)), tone: 'fg'}, {text: TEAM_LABEL, tone: view.hoveredTeam ? 'accent' : 'muted'});
     lines.push(line(input, plain(title, input), true));
   }
   if (geometry.header >= 2) {
@@ -244,7 +259,9 @@ export type SidebarEffect =
   /** A press on the resize handle: the host tracks the drag. */
   | {readonly kind: 'drag'}
   /** A double click on the resize handle: back to the default width. */
-  | {readonly kind: 'reset-width'};
+  | {readonly kind: 'reset-width'}
+  /** The other tab was chosen (click on its label, or `t`). */
+  | {readonly kind: 'tab'; readonly tab: 'tasks' | 'team'};
 export interface SidebarStep {readonly view: SidebarView; readonly effects: readonly SidebarEffect[]; readonly consumed: boolean}
 const toggled = (view: SidebarView, id: string, open: boolean): SidebarView => ({...view, expanded: new Map(view.expanded).set(id, open)});
 const withScroll = (view: SidebarView, flow: FlowLayout, geometry: SidebarGeometry, scroll: number, now: number): SidebarView => {
@@ -255,7 +272,9 @@ const withScroll = (view: SidebarView, flow: FlowLayout, geometry: SidebarGeomet
 export interface SidebarKey {readonly up?: boolean; readonly down?: boolean; readonly left?: boolean; readonly right?: boolean; readonly enter?: boolean; readonly escape?: boolean;
   readonly pageUp?: boolean; readonly pageDown?: boolean; readonly home?: boolean; readonly end?: boolean;
   /** `p`: open the plan switcher. */
-  readonly plans?: boolean}
+  readonly plans?: boolean;
+  /** `t`: switch to the Team tab. */
+  readonly tab?: boolean}
 /** Keyboard while the sidebar has focus: arrows move between nodes and fold, Enter opens, Esc gives focus back. */
 export function stepKey(flow: FlowLayout, view: SidebarView, geometry: SidebarGeometry, key: SidebarKey, now: number): SidebarStep {
   const order = flow.order;
@@ -263,6 +282,7 @@ export function stepKey(flow: FlowLayout, view: SidebarView, geometry: SidebarGe
   const select = (id: string): SidebarStep => ({view: revealNode({...view, selected: id}, flow, geometry, id), effects: [], consumed: true});
   if (key.escape) return {view, effects: [{kind: 'blur'}], consumed: true};
   if (key.plans) return {view, effects: [{kind: 'plans'}], consumed: true};
+  if (key.tab) return {view, effects: [{kind: 'tab', tab: 'team'}], consumed: true};
   if (key.up || key.down) {
     if (!order.length) return {view, effects: [], consumed: true};
     const next = at < 0 ? (key.down ? 0 : order.length - 1) : Math.max(0, Math.min(order.length - 1, at + (key.down ? 1 : -1)));
@@ -309,10 +329,13 @@ export function stepMouse(flow: FlowLayout, view: SidebarView, geometry: Sidebar
   }
   if (pointer.action === 'move' && view.hoveredEdge) view = {...view, hoveredEdge: undefined};
   if (onHeader && (pointer.action === 'move' || pointer.action === 'press')) {
-    return pointer.action === 'press' ? {view, effects: [{kind: 'focus'}, {kind: 'plans'}], consumed: true}
-      : {view: view.hoveredHeader && view.hovered === undefined ? view : {...view, hoveredHeader: true, hovered: undefined}, effects: [], consumed: true};
+    // The `Team` tab at the right end of the first row switches tabs; the rest of the header opens the plan switcher.
+    const onTeam = pointer.y === 0 && teamTab(flow.width + 1) && pointer.x - CONTENT_X >= flow.width + 1 - TEAM_LABEL.length;
+    if (pointer.action === 'press') return {view, effects: onTeam ? [{kind: 'focus'}, {kind: 'tab', tab: 'team'}] : [{kind: 'focus'}, {kind: 'plans'}], consumed: true};
+    if (onTeam) return {view: view.hoveredTeam && view.hovered === undefined && !view.hoveredHeader ? view : {...view, hoveredTeam: true, hoveredHeader: false, hovered: undefined}, effects: [], consumed: true};
+    return {view: view.hoveredHeader && view.hovered === undefined && !view.hoveredTeam ? view : {...view, hoveredHeader: true, hoveredTeam: false, hovered: undefined}, effects: [], consumed: true};
   }
-  if (pointer.action === 'move' && view.hoveredHeader) view = {...view, hoveredHeader: false};
+  if (pointer.action === 'move' && (view.hoveredHeader || view.hoveredTeam)) view = {...view, hoveredHeader: false, hoveredTeam: false};
   if (pointer.action === 'wheel_up' || pointer.action === 'wheel_down') return {view: withScroll(view, flow, geometry, view.scroll + (pointer.action === 'wheel_up' ? -3 : 3), now), effects: [], consumed: true};
   const inBody = pointer.y >= geometry.header && pointer.y < geometry.header + geometry.body;
   const hit = inBody ? flowHit(flow, pointer.x - CONTENT_X, pointer.y - geometry.header + view.scroll) : undefined;

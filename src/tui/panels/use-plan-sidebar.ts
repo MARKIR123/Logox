@@ -16,7 +16,8 @@ import type {Delegation} from '../../runtime/delegations.js';
 import {AUTOMA_OWNER, type DerivedPlan} from '../../runtime/plan.js';
 import {taskGraph} from '../../runtime/task-graph.js';
 import type {PlanBoard} from '../../store/plans.js';
-import type {CommandSurfaces, PlanSidebarMode, SidebarSource} from '../../commands/surfaces.js';
+import {teamMembers, type TeamEvent} from '../../runtime/team-events.js';
+import type {CommandSurfaces, PlanSidebarMode, SidebarSource, SidebarTab} from '../../commands/surfaces.js';
 import {ownerColor, type ActorStyles} from '../appearance/actor-style.js';
 import {palette} from '../appearance/theme.js';
 import type {SgrMouseEvent} from '../terminal/mouse.js';
@@ -24,6 +25,7 @@ import type {PlaneSide, SideSegment} from '../terminal/terminal-plane.js';
 import {buildFlow, type FlowLayout} from './plan-flow.js';
 import {DOCK_MIN_COLUMNS, SIDEBAR_MAX, SIDEBAR_MIN, clampScroll, dragWidth, type GraphKind, emptyView, flowOptionsFor, followTarget, FOLLOW_PAUSE_MS, paintSidebar, planProgress, revealNode,
   sidebarGeometry, sidebarWidth, stepKey, stepMouse, type SidebarEffect, type SidebarKey, type SidebarStep, type SidebarView} from './plan-sidebar.js';
+import {buildTeamLayout, emptyTeamView, paintTeam, stepTeamKey, stepTeamMouse, teamGeometry, teamLabeler, teamWidth, type TeamEffect, type TeamLayout, type TeamStep, type TeamView} from './team-sidebar.js';
 
 export interface PlanSidebarInput {
   board: Pick<PlanBoard, 'peek' | 'mine' | 'view' | 'earlier' | 'subscribe' | 'refresh'> & {readonly revision: number} | undefined;
@@ -33,6 +35,8 @@ export interface PlanSidebarInput {
   sessionId: string;
   /** The delegation record of the session (`projectDelegations()` of the store snapshot the sidebar follows), in creation order. */
   delegations: () => readonly Delegation[];
+  /** The team event stream of the session (`src/runtime/team-events.ts`, memoised by the caller): the Team tab draws it; the same array while nothing in it changed. */
+  team: () => readonly TeamEvent[];
   /** Terminal columns and rows, and the usable width `App` lays out with. */
   columns: number;
   width: number;
@@ -58,7 +62,7 @@ const shallow = (a: readonly unknown[], b: readonly unknown[]) => a.length === b
 const signature = (graph: Graph) => JSON.stringify([graph.kind, graph.plan.id, graph.plan.title, graph.plan.status, graph.plan.nodes, [...graph.delegationOf], [...graph.synthetic]]);
 
 export function usePlanSidebar(input: PlanSidebarInput) {
-  const {board, surfaces, revision, sessionId, delegations, columns, width, screenRows, roles, themeVersion, welcome, focus, setFocus, flash, locate} = input;
+  const {board, surfaces, revision, sessionId, delegations, team, columns, width, screenRows, roles, themeVersion, welcome, focus, setFocus, flash, locate} = input;
   const subscribe = useMemo(() => board ? (listener: () => void) => board.subscribe(listener) : noSubscription, [board]);
   const boardRevision = useSyncExternalStore(subscribe, () => board?.revision ?? 0);
   const wide = columns >= DOCK_MIN_COLUMNS;
@@ -104,6 +108,18 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   }, [board, boardRevision, settled]);
   useEffect(() => surfaces?.subscribeSidebarSource(source => setPinned(source.kind === 'auto' ? undefined : source)), [surfaces]);
 
+  // The Team tab: the event stream, which tab is showing (remembered for the session; with no task graph there is only Team) and its view state.
+  const events = useMemo(() => team(), [revision, sessionId]);
+  const eventsRef = useRef(events); eventsRef.current = events;
+  const [tab, setTab] = useState<SidebarTab>('tasks');
+  // `/team` asked for it: the feed shows (empty, with a hint) even before anything happened.
+  const [teamAsked, setTeamAsked] = useState(false);
+  const [teamView, setTeamView] = useState<TeamView>(emptyTeamView);
+  const teamViewRef = useRef(teamView); teamViewRef.current = teamView;
+  const activeTab: SidebarTab = graph ? tab : 'team';
+  const hasContent = Boolean(graph) || events.length > 0 || teamAsked;
+  useEffect(() => {setTeamView(emptyTeamView); teamViewRef.current = emptyTeamView;}, [sessionId]);
+
   const choice = useRef<'shown' | 'hidden' | undefined>(undefined);
   const autoFor = useRef<string | undefined>(undefined);
   const [shown, setShown] = useState(() => {
@@ -117,8 +133,8 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   const viewRef = useRef(view); viewRef.current = view;
   const rolesRef = useRef(roles); rolesRef.current = roles;
 
-  const docked = Boolean(graph) && shown && wide && !welcome && !overlay;
-  const panelVisible = docked || (overlay && Boolean(graph));
+  const docked = hasContent && shown && wide && !welcome && !overlay;
+  const panelVisible = docked || (overlay && hasContent);
   // The width the person dragged the border to (undefined: the default). It is kept as chosen and re-clamped into the current range, so a narrow terminal never loses it.
   const [preferred, setPreferred] = useState<number | undefined>(() => surfaces?.sidebarWidthStore?.get());
   const preferredRef = useRef(preferred); preferredRef.current = preferred;
@@ -140,7 +156,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   const flowCache = useRef<{plan: DerivedPlan; width: number; ownersKey: string; expanded: SidebarView['expanded']; flow: FlowLayout} | undefined>(undefined);
   /** The flow for the current plan, panel width and fold state; built once per change of those. */
   const flowFor = (expanded: SidebarView['expanded']): FlowLayout | undefined => {
-    if (!plan || !panelVisible) return undefined;
+    if (!plan || !panelVisible || activeTab !== 'tasks') return undefined;
     const cached = flowCache.current;
     if (cached && cached.plan === plan && cached.width === panelWidth && cached.ownersKey === ownersKey && cached.expanded === expanded) return cached.flow;
     const flow = buildFlow(plan, {...flowOptionsFor(panelWidth), expanded, owners: ownerLabel});
@@ -149,6 +165,18 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   };
   const flow = flowFor(view.expanded);
   const heightRef = useRef(0);
+  // The Team layout: built once per change of the events, the width, the member filter and who is who.
+  const label = useMemo(() => teamLabeler(ownerLabel), [roles]);
+  const teamOwnersKey = useMemo(() => [...teamMembers(events), 'automa'].map(id => id + label(id).symbol + label(id).name).join('|'), [events, label]);
+  const teamCache = useRef<{events: readonly TeamEvent[]; width: number; filter: string | undefined; ownersKey: string; layout: TeamLayout} | undefined>(undefined);
+  const teamLayoutFor = (): TeamLayout | undefined => {
+    if (!panelVisible || activeTab !== 'team') return undefined;
+    const filter = teamViewRef.current.filter, width = teamWidth(panelWidth), cached = teamCache.current;
+    if (cached && cached.events === events && cached.width === width && cached.filter === filter && cached.ownersKey === teamOwnersKey) return cached.layout;
+    const layout = buildTeamLayout(events, {width, filter, label});
+    teamCache.current = {events, width, filter, ownersKey: teamOwnersKey, layout};
+    return layout;
+  };
   useEffect(() => {if (!docked) {dragRef.current = false; setDragging(false);}}, [docked]);
 
   // ------------------------------------------------------------------------------------------------------------------------------ visibility
@@ -197,6 +225,32 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   }, [flow, plan]);
 
   // ------------------------------------------------------------------------------------------------------------------------------ interaction
+  /** Switches tab (a click on the other tab, `t`); the Tasks tab needs a task graph. */
+  const chooseTab = (next: SidebarTab) => {
+    if (next === 'tasks' && !graph) {flash(NO_TASKS, 3500, 'info'); return;}
+    setTab(next);
+  };
+  const applyTeam = (step: TeamStep) => {
+    if (step.view !== teamViewRef.current) {teamViewRef.current = step.view; setTeamView(step.view);}
+    for (const effect of step.effects) runTeam(effect);
+  };
+  const runTeam = (effect: TeamEffect) => {
+    switch (effect.kind) {
+      case 'focus': if (!overlay) setFocus('plan'); break;
+      case 'blur': if (overlay) closeOverlay(); else setFocus('input'); break;
+      case 'close': if (overlay) closeOverlay(); else hide(); break;
+      case 'drag': if (!overlay) {dragRef.current = true; setDragging(true);} break;
+      case 'reset-width': setPreferred(undefined); preferredRef.current = undefined; surfaces?.sidebarWidthStore?.set(undefined); break;
+      case 'tab': chooseTab(effect.tab); break;
+      case 'open': {
+        const event = eventsRef.current.find(item => item.id === effect.id);
+        if (!event) break;
+        if (overlay) setOverlay(false);
+        surfaces?.openTeamPost(event);
+        break;
+      }
+    }
+  };
   const apply = (step: SidebarStep) => {
     const before = viewRef.current;
     if (step.view !== before) {viewRef.current = step.view; setView(step.view);}
@@ -217,6 +271,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
         break;
       }
       case 'plans': if (overlay) setOverlay(false); surfaces?.openPlans(); break;
+      case 'tab': chooseTab(effect.tab); break;
       case 'owner': {
         const owner = plan?.nodes.find(node => node.id === effect.id)?.owner;
         if (!owner) break;
@@ -229,29 +284,47 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   };
   /** The shortcut: shown or hidden, with the keyboard in it when it opens (once: show and focus, Esc: back to the composer, again: hide). */
   const shortcut = () => {
-    if (!plan) {flash(NO_TASKS, 3500, 'info'); return;}
+    if (!hasContent) {flash(NO_TASKS, 3500, 'info'); return;}
     if (!wide) {if (overlay) closeOverlay(); else openOverlay(); return;}
     if (!docked) {show(); setFocus('plan'); return;}
     if (focus === 'plan') hide(); else setFocus('plan');
   };
   /** `/tasks [sidebar] show|hide|toggle` and the footer chip: visibility only, the keyboard stays where it is. */
-  const request = (mode: PlanSidebarMode) => {
-    if (!plan) {flash(NO_TASKS, 3500, 'info'); return;}
-    const want = mode === 'toggle' ? !panelVisible : mode === 'show';
+  const request = (mode: PlanSidebarMode, wanted?: SidebarTab) => {
+    // `/team` shows the feed even when nothing has happened yet; `/tasks` needs a task graph.
+    if (wanted === 'team') setTeamAsked(true);
+    else if (!hasContent || wanted === 'tasks' && !graph) {flash(NO_TASKS, 3500, 'info'); return;}
+    // A request for the other tab switches to it and keeps the sidebar open; a toggle on the tab already showing hides it.
+    const showing = panelVisible && (wanted === undefined || wanted === activeTab);
+    const want = mode === 'toggle' ? !showing : mode === 'show';
+    if (want && wanted) setTab(wanted);
     if (!wide) {if (want) openOverlay(); else closeOverlay(); return;}
     if (want) show(); else hide();
   };
   const requestRef = useRef(request); requestRef.current = request;
-  useEffect(() => surfaces?.subscribePlanSidebar(mode => requestRef.current(mode)), [surfaces]);
+  useEffect(() => surfaces?.subscribePlanSidebar((mode, wanted) => requestRef.current(mode, wanted)), [surfaces]);
 
   const keyboardOwner = overlay || docked && focus === 'plan';
   const handleKey = (typed: string, key: Key): boolean => {
+    if (activeTab === 'team') {
+      const layout = teamLayoutFor();
+      if (!layout) return false;
+      if (key.tab) return false;
+      if (key.ctrl || key.meta) return overlay;
+      const mapped = {up: key.upArrow, down: key.downArrow, left: key.leftArrow, right: key.rightArrow, enter: key.return, escape: key.escape,
+        pageUp: key.pageUp, pageDown: key.pageDown, home: key.home, end: key.end, tab: typed === 't', filter: typed === 'f'};
+      const step = stepTeamKey(layout, teamViewRef.current, teamGeometry(heightRef.current), mapped);
+      if (step.consumed) {applyTeam(step); return true;}
+      if (overlay) return true;
+      if (typed) setFocus('input');
+      return false;
+    }
     const current = flowFor(viewRef.current.expanded);
     if (!current || !plan) return false;
     if (key.tab) return false;
     if (key.ctrl || key.meta) return overlay;
     const mapped: SidebarKey = {up: key.upArrow, down: key.downArrow, left: key.leftArrow, right: key.rightArrow, enter: key.return, escape: key.escape,
-      pageUp: key.pageUp, pageDown: key.pageDown, home: key.home, end: key.end, plans: typed === 'p'};
+      pageUp: key.pageUp, pageDown: key.pageDown, home: key.home, end: key.end, plans: typed === 'p', tab: typed === 't'};
     const step = stepKey(current, viewRef.current, sidebarGeometry(heightRef.current), mapped, Date.now());
     if (step.consumed) {apply(step); return true;}
     if (overlay) return true;
@@ -261,8 +334,10 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   };
   /** Routes one mouse event; true when the sidebar took it. `busy` is a timeline or composer gesture in progress. */
   const handleMouse = (event: SgrMouseEvent, busy: boolean): boolean => {
-    const current = flowFor(viewRef.current.expanded);
-    if (!panelVisible || !current || !plan) return false;
+    const onTeam = activeTab === 'team';
+    const current = onTeam ? undefined : flowFor(viewRef.current.expanded);
+    const layout = onTeam ? teamLayoutFor() : undefined;
+    if (!panelVisible || (onTeam ? !layout : !current || !plan)) return false;
     const x0 = overlay ? overlayX : dockX;
     if (dragRef.current) {
       // The border is held: the sidebar follows the pointer wherever it goes (and the timeline starts no selection); anything but a drag ends it.
@@ -278,13 +353,22 @@ export function usePlanSidebar(input: PlanSidebarInput) {
     const inside = event.x >= x0 && event.x < x0 + panelWidth && event.y < heightRef.current;
     if (!inside) {
       if (overlay) {if (event.action === 'press' && event.button === 0) closeOverlay(); return true;}
-      if (event.action === 'move' && (viewRef.current.hovered !== undefined || viewRef.current.hoveredHeader || viewRef.current.hoveredEdge)) apply({view: {...viewRef.current, hovered: undefined, hoveredHeader: false, hoveredEdge: undefined}, effects: [], consumed: false});
+      if (onTeam) {
+        const now = teamViewRef.current;
+        if (event.action === 'move' && (now.hovered !== undefined || now.hoveredName !== undefined || now.hoveredControl !== undefined || now.hoveredEdge)) {
+          applyTeam({view: {...now, hovered: undefined, hoveredName: undefined, hoveredControl: undefined, hoveredEdge: undefined}, effects: [], consumed: false});
+        }
+        return false;
+      }
+      if (event.action === 'move' && (viewRef.current.hovered !== undefined || viewRef.current.hoveredHeader || viewRef.current.hoveredTeam || viewRef.current.hoveredEdge)) apply({view: {...viewRef.current, hovered: undefined, hoveredHeader: false, hoveredTeam: false, hoveredEdge: undefined}, effects: [], consumed: false});
       return false;
     }
     if (busy && !overlay && (event.action === 'drag' || event.action === 'release')) return false;
     if (event.action === 'drag' || event.action === 'release') return true;
     if (event.action === 'press' && event.button !== 0) return true;
-    apply(stepMouse(current, viewRef.current, sidebarGeometry(heightRef.current), {x: event.x - x0, y: event.y, action: event.action, draggable: !overlay}, Date.now()));
+    const pointer = {x: event.x - x0, y: event.y, action: event.action, draggable: !overlay};
+    if (onTeam) applyTeam(stepTeamMouse(layout!, teamViewRef.current, teamGeometry(heightRef.current), pointer, Date.now(), panelWidth, label));
+    else apply(stepMouse(current!, viewRef.current, sidebarGeometry(heightRef.current), pointer, Date.now()));
     return true;
   };
 
@@ -293,6 +377,18 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   /** The lines of the panel for `height` rows (the timeline's when docked, the screen's as an overlay). */
   const render = (height: number): {readonly lines: readonly (readonly SideSegment[])[]; readonly side?: PlaneSide} | undefined => {
     heightRef.current = height;
+    if (activeTab === 'team') {
+      const layout = teamLayoutFor();
+      if (!layout || !panelVisible) return undefined;
+      const focused = overlay || focus === 'plan';
+      const deps = ['team', layout, teamView, panelWidth, height, focused, themeVersion, dragging];
+      if (!paintCache.current || !shallow(paintCache.current.deps, deps)) {
+        paintCache.current = {deps, lines: paintTeam({layout, view: teamView, width: panelWidth, height, focused, dragging, label,
+          ownerColor: id => id === AUTOMA_OWNER ? palette.automa : ownerColor(id, rolesRef.current)})};
+      }
+      const lines = paintCache.current.lines;
+      return docked ? {lines, side: {x: dockX, width: dockWidth, lines}} : {lines};
+    }
     const current = flowFor(view.expanded);
     if (!plan || !current || !panelVisible) return undefined;
     const focused = overlay || focus === 'plan';
@@ -309,7 +405,7 @@ export function usePlanSidebar(input: PlanSidebarInput) {
   const progress = plan ? planProgress(plan) : undefined;
   const chipLabel = !progress ? '' : graph!.kind === 'earlier' ? ' ▸ Earlier tasks ' : ` ▸ Tasks ${progress.done}/${progress.total} `;
   const chip = plan && !panelVisible && progress ? {label: chipLabel, width: stringWidth(chipLabel)} : undefined;
-  return {plan, docked, overlay, wide, focused: docked && focus === 'plan', keyboardOwner, panelVisible, timelineWidth, dockX, overlayX, overlayWidth, dockWidth,
+  return {plan, tab: activeTab, docked, overlay, wide, focused: docked && focus === 'plan', keyboardOwner, panelVisible, timelineWidth, dockX, overlayX, overlayWidth, dockWidth,
     chip, chipHover, setChipHover, shortcut, request, show, hide, openOverlay, handleKey, handleMouse, render};
 }
 export type PlanSidebar = ReturnType<typeof usePlanSidebar>;

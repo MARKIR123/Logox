@@ -11,7 +11,7 @@ const layout: Record<string, string[]> = {
   input: ['composer-actions.ts', 'composer-lines.tsx', 'editor.ts', 'fullscreen-editor.tsx', 'input-delivery.ts', 'keyboard.ts', 'mouse-router.ts', 'pending-rows.tsx', 'screen-heights.ts', 'shell-context.ts', 'use-input-history.ts'],
   interactions: ['answer-actions.ts', 'approval-view.ts', 'choice-style.ts', 'choice-summary.ts', 'interaction-card.tsx', 'production-question.tsx', 'question-dock.tsx', 'question-panel.tsx', 'response-draft.ts'],
   login: ['login.tsx', 'login-wizard.tsx'],
-  panels: ['command-result.tsx', 'ensemble-layout.ts', 'ensemble-page.tsx', 'overlay-page.tsx', 'permissions-editor.ts', 'picker.tsx', 'plan-flow.ts', 'plan-sidebar-view.tsx', 'plan-sidebar.ts', 'settings-layout.ts', 'settings-page.tsx', 'tabbed-page.tsx', 'theme-layout.ts', 'theme-page.tsx', 'theme-sample-data.ts', 'theme-sample.ts', 'toggle-list.tsx',
+  panels: ['command-result.tsx', 'ensemble-layout.ts', 'ensemble-page.tsx', 'overlay-page.tsx', 'permissions-editor.ts', 'picker.tsx', 'plan-flow.ts', 'plan-sidebar-view.tsx', 'plan-sidebar.ts', 'settings-layout.ts', 'settings-page.tsx', 'tabbed-page.tsx', 'team-sidebar.ts', 'theme-layout.ts', 'theme-page.tsx', 'theme-sample-data.ts', 'theme-sample.ts', 'toggle-list.tsx',
     'use-plan-sidebar.ts'],
   previews: ['provider-wizard-preview.ts', 'question-preview.tsx', 'slash-preview.tsx'],
   status: ['actor-pills.tsx', 'footer-bar.tsx', 'footer-model.ts', 'notification-line.ts', 'statusbar-editor.tsx', 'statusbar.ts', 'use-active-pills.ts', 'use-notices.ts'],

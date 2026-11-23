@@ -6,20 +6,25 @@ import {layoutInput} from '../input/editor.js';
 import {clipLine, safeText} from '../terminal/text.js';
 import {useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
 import type {ResultLine, ResultTone} from '../../runtime/command-surface.js';
+import {layoutMarkdown, type MarkdownLine} from '../timeline/markdown.js';
+
+type MarkdownPiece = MarkdownLine['pieces'][number];
 
 const toneColor = (tone: ResultTone | undefined): string => tone === 'title' ? palette.accent : tone === 'strong' ? palette.strong : tone === 'pass' ? palette.success
   : tone === 'warn' ? palette.warning : tone === 'fail' ? palette.error : tone === 'muted' ? palette.muted : palette.fg;
 
 /** Read-only command output. Copy retains the original text, not its display wraps. */
-export function CommandResultPanel({title, text, styled, width, height, onClose, onCopy}: {
-  title: string; text: string; styled?: readonly ResultLine[] | undefined; width: number; height: number;
+export function CommandResultPanel({title, text, styled, markdown = false, width, height, onClose, onCopy}: {
+  title: string; text: string; styled?: readonly ResultLine[] | undefined; markdown?: boolean; width: number; height: number;
   onClose(): void; onCopy(text: string): void;
 }) {
   const columns = Math.max(1, width - 2 * panePadding(width));
   const contentHeight = Math.max(0, height - (height >= 4 ? 4 : 3));
-  const lines = useMemo((): readonly {text: string; tone?: ResultTone | undefined}[] => styled
+  const lines = useMemo((): readonly {text: string; tone?: ResultTone | undefined; pieces?: readonly MarkdownPiece[]}[] => markdown
+    ? layoutMarkdown(text.trim(), columns).map(line => ({text: line.text, pieces: line.pieces}))
+    : styled
     ? styled.flatMap(line => layoutInput({text: safeText(line.text).replace(/\t/g, '  '), cursor: 0}, columns).lines.map(wrapped => ({text: wrapped.text, tone: line.tone})))
-    : layoutInput({text: safeText(text).replace(/\t/g, '  '), cursor: 0}, columns).lines, [text, styled, columns]);
+    : layoutInput({text: safeText(text).replace(/\t/g, '  '), cursor: 0}, columns).lines, [text, styled, markdown, columns]);
   const [position, setPosition] = useState(0);
   const max = Math.max(0, lines.length - contentHeight), offset = Math.min(max, position);
   const [copied, setCopied] = useState(false);
@@ -57,7 +62,9 @@ export function CommandResultPanel({title, text, styled, width, height, onClose,
   </Box>;
   return <PanelFrame title={title} width={width} height={height} footer={footer} parts={footerView} hovered={hitFooter(footerView, pointer)} hoverColor={hoverColor}>
     {lines.slice(offset, offset + contentHeight).map((line, index) => <Box key={offset + index} height={1} flexShrink={0} overflow="hidden">
-      <Text color={toneColor('tone' in line ? line.tone : undefined)} bold={'tone' in line && (line.tone === 'title' || line.tone === 'strong')} wrap="truncate">{clipLine(line.text, columns) || ' '}</Text>
+      {'pieces' in line && line.pieces
+        ? <Text wrap="truncate">{line.pieces.length ? line.pieces.map((piece, at) => <Text key={at} color={piece.muted ? palette.muted : piece.code ? palette.accent : palette.fg} bold={Boolean(piece.bold)} italic={Boolean(piece.italic)}>{piece.text}</Text>) : ' '}</Text>
+        : <Text color={toneColor('tone' in line ? line.tone : undefined)} bold={'tone' in line && (line.tone === 'title' || line.tone === 'strong')} wrap="truncate">{clipLine(line.text, columns) || ' '}</Text>}
     </Box>)}
   </PanelFrame>;
 }

@@ -1,4 +1,7 @@
 /**
+ * `/team` shows the sidebar on its Team tab (the team event stream, `src/runtime/team-events.ts`) and registers `CommandSurfaces.teamPostOpener`, what a team post opens
+ * (the delegation detail for work, the full text as Markdown for a message).
+ *
  * `/tasks`: shows or hides the task flowchart sidebar (`/tasks sidebar [show|hide|toggle]`, the same as Ctrl+B), `/tasks plans` opens the plan switcher
  * (`src/commands/plan-page.ts`). The sidebar draws the session's task graph (the plan with the work nobody linked to it, or the work alone: `src/runtime/task-graph.ts`),
  * else the latest plan of an earlier session; this file owns what a work-graph node opens: the read-only detail page of a delegation (Assignment, Status and
@@ -9,12 +12,15 @@ import type {TabRow} from '../runtime/command-surface.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import {projectDelegations, type Delegation} from '../runtime/delegations.js';
 import {foldAttempts, taskGraph} from '../runtime/task-graph.js';
+import type {TeamEvent} from '../runtime/team-events.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
 
 export const TASKS_USAGE = 'Usage: /tasks [plans | sidebar [show|hide|toggle]]';
 export const TASKS_NO_TERMINAL = 'The task sidebar needs the terminal UI.';
+export const TEAM_USAGE = 'Usage: /team [sidebar] [show|hide|toggle]';
+export const TEAM_NO_TERMINAL = 'The team sidebar needs the terminal UI.';
 
 export interface TasksPageDeps {
   surfaces: CommandSurfaces;
@@ -145,17 +151,40 @@ export function createTasksCommand(deps: TasksPageDeps) {
   };
   surfaces.workNodeOpener = id => openDelegation(id, async () => {});
 
+  /**
+   * The detail page of a team post: work (an assignment, report, wait, workers, a worker's result) opens the delegation detail; a message or the person's own text opens
+   * its full text as Markdown under a one-line header. Esc closes either.
+   */
+  const openTeamPost = async (event: TeamEvent): Promise<boolean> => {
+    const who = (id: string) => id === 'user' ? 'you' : id === 'automa' ? 'worker ' + (event.worker ?? '') : name(id).toLowerCase();
+    if (event.kind !== 'message' && event.kind !== 'user' || !event.detail) {
+      if (await openDelegation(event.ref, async () => {})) return true;
+    }
+    const head = `**${who(event.from)}** → ${event.to.length ? event.to.map(id => '**' + who(id) + '**').join(', ') : 'the team'} · ${new Date(event.at).toLocaleTimeString()}`;
+    const body = event.detail ?? event.text;
+    if (surfaces.getSnapshot()) surfaces.close();
+    surfaces.openResult('Team · ' + (event.title ?? event.kind), [head, event.title ? '*' + event.title + '*' : '', body].filter(Boolean).join('\n\n'), undefined, undefined, true);
+    return true;
+  };
+  surfaces.teamPostOpener = openTeamPost;
+
   return {
     /** `/tasks` toggles the sidebar; `/tasks sidebar show|hide|toggle` sets it; `/tasks plans` opens the plan switcher; other arguments are not accepted. */
     async command(argument: string): Promise<void> {
       const text = argument.trim();
       const sidebar = /^sidebar(?:\s+(show|hide|toggle))?$/i.exec(text);
       if (text === '' || sidebar) {
-        if (!surfaces.requestPlanSidebar((sidebar?.[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode)) throw new Error(TASKS_NO_TERMINAL);
+        if (!surfaces.requestPlanSidebar((sidebar?.[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode, 'tasks')) throw new Error(TASKS_NO_TERMINAL);
         return;
       }
       if (/^plans$/i.test(text)) {await surfaces.plansOpener?.(); return;}
       throw new Error(TASKS_USAGE);
+    },
+    /** `/team` shows the sidebar on the Team tab (a second `/team` on it hides the sidebar); `/team [sidebar] show|hide|toggle` sets it. */
+    async team(argument: string): Promise<void> {
+      const match = /^(?:sidebar\s*)?(show|hide|toggle)?$/i.exec(argument.trim());
+      if (!match) throw new Error(TEAM_USAGE);
+      if (!surfaces.requestPlanSidebar((match[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode, 'team')) throw new Error(TEAM_NO_TERMINAL);
     },
     /** Opens the detail page of one delegation (an activity id, or `<activityId>/<jobId>`), Esc returning through `backTo`; false when the session does not know it. */
     openDelegation,
