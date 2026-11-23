@@ -7,6 +7,8 @@ import {Client, Pool, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher} 
 import {ProviderError} from './http.js';
 import {formatNetworkError} from './error-format.js';
 
+/** TCP keep-alive probes after 10 s of silence, so a connection that is idle but alive (a provider thinking without streaming) is not dropped by a NAT or proxy. */
+export const KEEP_ALIVE = {keepAlive: true, keepAliveInitialDelay: 10_000} as const;
 const ignoreDispatcherError = () => {};
 function guarded<T extends Dispatcher>(dispatcher: T): T {
   // Stream reads still throw the original failure; swallow Undici's unsubscribed internal error so the process does not exit.
@@ -66,11 +68,10 @@ export function createHttpTransport(env: NodeJS.ProcessEnv = process.env) {
       proxyTunnel: true,
       headersTimeout: 0,
       bodyTimeout: 0,
-      connect: {
-        autoSelectFamilyAttemptTimeout: 2000,
-        keepAlive: true,
-        keepAliveInitialDelay: 10_000,
-      },
+      connect: {autoSelectFamilyAttemptTimeout: 2000, ...KEEP_ALIVE},
+      // The socket to a proxy is built from `proxyTls`, not from `connect`; without this the 60 s Undici default would apply to every tunnel.
+      // `requestTls` stays unset on purpose: setting it makes Undici drop the SNI name of tunneled HTTPS requests.
+      proxyTls: KEEP_ALIVE,
       clientFactory: client,
       factory: (origin, options) => Reflect.get(options, 'connections') === 1
         ? client(origin, options)

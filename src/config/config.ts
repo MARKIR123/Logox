@@ -20,6 +20,7 @@ export const toolDiscoverySchema = z.enum(['auto', 'none', 'anthropic', 'openai-
 const capacitySchema = z.object({
   tool_discovery: toolDiscoverySchema.optional(),
   prompt_cache_key: z.boolean().optional(),
+  stream_thoughts: z.boolean().optional(),
   cache_retention: cacheRetentionSchema.optional(),
   /** Seconds the gateway keeps a prompt cache entry. Anthropic lifetimes follow `cache_retention`; for other protocols unset means unknown, which is never treated as expired. */
   cache_ttl_seconds: cacheTtlSchema.optional(),
@@ -87,6 +88,7 @@ const schema = z.object({
     auth_file: z.string().min(1).optional(), auth_provider: z.string().min(1).optional(),
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
+    stream_thoughts: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
     cache_ttl_seconds: cacheTtlSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).optional(),
@@ -115,6 +117,7 @@ const schema = z.object({
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
+    stream_thoughts: z.boolean().optional(),
     cache_retention: cacheRetentionSchema.optional(),
     cache_ttl_seconds: cacheTtlSchema.optional(),
     kind: z.enum(['openai_compat', 'anthropic']).default('openai_compat'),
@@ -145,6 +148,8 @@ export interface ModelSettings {
   toolDiscovery?: z.infer<typeof toolDiscoverySchema>;
   /** Explicit opt in or out of `prompt_cache_key`; unset means on for the official OpenAI endpoint only. */
   promptCacheKey?: boolean | undefined;
+  /** Explicit `stream_thoughts`: ask an OpenAI-compatible Chat endpoint to stream thought summaries (`google.thinking_config.include_thoughts`). Unset or false sends nothing. */
+  streamThoughts?: boolean | undefined;
   /** Explicit `cache_retention` of the model or provider. Unset leaves the per-actor and role default (Anthropic TTL) and sends nothing to OpenAI. */
   cacheRetention?: z.infer<typeof cacheRetentionSchema> | undefined;
   /** Explicit `cache_ttl_seconds` of the model or provider, in milliseconds; unset means the gateway's cache lifetime is unknown. */
@@ -305,9 +310,10 @@ export function modelSettings(config: Config, env: NodeJS.ProcessEnv = process.e
     : undefined);
   if ((protocol?.startsWith('anthropic-') && kind !== 'anthropic') || ((protocol === 'deepseek' || protocol === 'reasoning-effort') && kind !== 'openai_compat')) throw new Error('thinking_protocol does not match the provider kind');
   const promptCacheKey = declared?.prompt_cache_key ?? provider.prompt_cache_key ?? config.providers[provider.name]?.prompt_cache_key;
+  const streamThoughts = declared?.stream_thoughts ?? provider.stream_thoughts ?? config.providers[provider.name]?.stream_thoughts;
   const cacheRetention = declared?.cache_retention ?? provider.cache_retention ?? config.providers[provider.name]?.cache_retention;
   const cacheTtl = declared?.cache_ttl_seconds ?? provider.cache_ttl_seconds ?? config.providers[provider.name]?.cache_ttl_seconds;
-  return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, cacheRetention, ...(cacheTtl !== undefined ? {cacheTtlMs: Math.round(cacheTtl * 1000)} : {}), api: provider.api ?? config.providers[provider.name]?.api,
+  return {kind, providerKind, baseUrl, toolDiscovery, promptCacheKey, ...(streamThoughts !== undefined ? {streamThoughts} : {}), cacheRetention, ...(cacheTtl !== undefined ? {cacheTtlMs: Math.round(cacheTtl * 1000)} : {}), api: provider.api ?? config.providers[provider.name]?.api,
     model, thinkingEffort: effortInName(model) ?? provider.thinking_effort,
     ...(protocol ? {
       thinkingProtocol: protocol,

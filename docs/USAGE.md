@@ -142,6 +142,10 @@ name = "local"
 
 生成请求与模型目录共用网络层。可在启动终端前设置 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 等代理变量；未设置环境代理时，还可能读取 settings 里的 `httpProxy`。
 
+所有连接都开启 TCP keep-alive（静默 10 秒后开始探测，经代理时同样适用），避免 NAT 或代理把“空闲但仍然存活”的连接当作死连接切断；这不改变任何超时设置。重试沿用流式请求，不会降级成静默的非流式请求；只有服务明确返回“不支持流式”（例如 HTTP 400 “streaming is not supported”）时，才用同一请求去掉 `stream` 重发一次。
+
+部分提供商不输出思维链，长时间思考期间流上没有任何增量；无进展期限仍是 `provider.timeout`，没有新增超时。Gemini 的 OpenAI 兼容端点可以流式返回思考摘要：在 `[provider]`、`[providers.<name>]` 或 `[models."provider/model"]` 下设置 `stream_thoughts = true`（范围越具体优先级越高，默认关闭，不设置时不会发送任何额外字段），请求体会带上 `google.thinking_config.include_thoughts = true`，返回内容里 `<thought>...</thought>` 之间的文字显示为思考，并像其他思考增量一样刷新无进展期限。只在确认端点接受该字段后开启：严格校验字段的网关可能返回 400。思考档位为 `off` 时不发送。
+
 连接中断和无进展超时会有限次重试。模型只返回思考或空回复时，运行时先用一条固定提醒（“Your previous reply was empty. Continue the task: call a tool or give your answer.”）自动重试一次，之后才进入原有的恢复与失败流程。已完成的工具不会因恢复而重放，写到一半的工具参数不会执行。重试耗尽后历史和失败状态都会保留，由你处理原因或明确继续；认证、额度、协议类错误不会一律自动换模型。
 
 ### 工具发现

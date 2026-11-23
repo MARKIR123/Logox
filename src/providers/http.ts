@@ -24,7 +24,7 @@ function portableMessages(messages: readonly ModelMessage[]): WireMessage[] {
 }
 
 export type ProviderErrorCategory = 'model_missing' | 'authentication' | 'quota' | 'temporary' | 'capacity' | 'protocol';
-type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field' | 'too_many_images';
+type ProtocolIssue = 'empty_assistant' | 'tool_pairing' | 'reasoning' | 'invalid_field' | 'too_many_images' | 'stream_unsupported';
 export interface ProviderDiagnostic {
   status?: number; code?: string; phase?: 'connection' | 'stream'; parameter?: string; issue?: ProtocolIssue;
   retryAfterMs?: number; elapsedMs?: number; progressIdleMs?: number; transportIdleMs?: number; receivedBytes?: number;
@@ -189,7 +189,10 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   }
   if ([408, 500, 502, 503, 504].includes(status)) return new ProviderError('Model service temporarily unavailable', true, 'temporary', {status, ...wait, ...evidence});
   const error = parsed.success ? parsed.data.error : undefined, text = error?.message ?? '';
-  const issue: ProtocolIssue | undefined = /reasoning_content/i.test(text) ? 'reasoning'
+  // A 4xx that says the endpoint cannot stream: the only case where `model-turn.ts` resends the same request without `stream`.
+  const streamRejected = [400, 404, 405, 415, 422, 501].includes(status) &&
+    /(?:\bstream(?:ing)?\b[^.\n]{0,60}(?:not\s+(?:supported|allowed|available|implemented)|unsupported|disabled)|(?:does\s*n[o']t|do\s*n[o']t|cannot|can't|not)\s+support(?:s|ed)?\s+(?:stream|sse|server-sent))/i.test(text);
+  const issue: ProtocolIssue | undefined = streamRejected ? 'stream_unsupported' : /reasoning_content/i.test(text) ? 'reasoning'
     : /too many (?:images|media)|(?:images?|media).{0,60}(?:exceed|too many|maximum|at most|limit)|(?:exceed|maximum|more than|at most).{0,60}images?/i.test(text) ? 'too_many_images'
     : /tool_call_id|tool_use_id|tool_calls.*(?:follow|response|match)|tool.*(?:preceding|correspond)/i.test(text) ? 'tool_pairing'
     : /assistant.*(?:content|empty)|content.*tool_calls/i.test(text) ? 'empty_assistant'
@@ -197,7 +200,7 @@ export function providerFailure(status: number, payload?: unknown, retryAfterMs?
   const descriptions: Record<ProtocolIssue, string> = {
     reasoning: 'Thinking field does not meet API requirements', tool_pairing: 'Tool calls and results are not paired correctly',
     empty_assistant: 'Assistant message is empty or malformed', invalid_field: 'Request field or message format is invalid',
-    too_many_images: 'Request carries more images than the model accepts',
+    too_many_images: 'Request carries more images than the model accepts', stream_unsupported: 'Endpoint does not support streaming',
   };
   const parameter = error?.param && /^(?:messages|tools)(?:\[\d{1,6}\]|\.\d{1,6})?(?:\.(?:content|role|reasoning_content|tool_calls|tool_call_id|function|arguments|parameters|name))*$/.test(error.param) ? error.param : undefined;
   const safeCode = ['invalid_request_error', 'invalid_parameter', 'invalid_json', 'invalid_message'].includes(code ?? '') ? code : undefined;
@@ -495,6 +498,40 @@ async function* events(response: Response, received: (length: number) => void): 
     throw transportFailure(error, 'stream', response.status);
   } finally {await reader.cancel().catch(() => {}); reader.releaseLock();}
 }
+/**
+ * Splits `<thought>...</thought>` spans into reasoning and text. Gemini's OpenAI-compatible endpoint writes the thought summaries it was asked for
+ * (`stream_thoughts`) into `content` between these tags; a tag may arrive split across chunks, so a possible tag start is held back until it resolves.
+ */
+export class ThoughtSplitter {
+  #inside = false;
+  #held = '';
+  push(chunk: string): Array<{kind: 'text' | 'reasoning'; text: string}> {
+    const out: Array<{kind: 'text' | 'reasoning'; text: string}> = [];
+    let rest = this.#held + chunk;
+    this.#held = '';
+    for (;;) {
+      const tag = this.#inside ? '</thought>' : '<thought>', kind = this.#inside ? 'reasoning' : 'text';
+      const at = rest.indexOf(tag);
+      if (at >= 0) {
+        if (at) out.push({kind, text: rest.slice(0, at)});
+        rest = rest.slice(at + tag.length);
+        this.#inside = !this.#inside;
+        continue;
+      }
+      let keep = 0;
+      for (let length = Math.min(tag.length - 1, rest.length); length > 0; length--) if (tag.startsWith(rest.slice(-length))) {keep = length; break;}
+      if (rest.length > keep) out.push({kind, text: rest.slice(0, rest.length - keep)});
+      this.#held = rest.slice(rest.length - keep);
+      return out;
+    }
+  }
+  /** What is still held back when the stream ends (an unfinished tag start is plain text). */
+  flush(): Array<{kind: 'text' | 'reasoning'; text: string}> {
+    const held = this.#held;
+    this.#held = '';
+    return held ? [{kind: this.#inside ? 'reasoning' : 'text', text: held}] : [];
+  }
+}
 export function createProvider(settings: ModelSettings, fetcher: typeof fetch = fetch): Provider {
   const capabilities = resolveProviderCapabilities(settings);
   return {capabilities, async cacheProfile(request) {
@@ -581,6 +618,8 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
               ...(officialOpenAI ? {summary: 'auto'} : {})}} : {}),
           }
         : {model: chosenModel, max_tokens: maxTokens, temperature: settings.temperature, ...cacheKey, ...openAiRetentionFields(settings, false),
+          // Gemini's OpenAI-compatible endpoint takes this top-level (the SDK's `extra_body`); sent only when the user opted in with `stream_thoughts`.
+          ...(settings.streamThoughts && effort !== 'off' ? {google: {thinking_config: {include_thoughts: true}}} : {}),
           ...(isStream ? {stream: true, stream_options: {include_usage: true}} : {}),
           messages: [{role: 'system', content: request.system}, ...openaiMessages(request.messages, settings.thinkingControl, supportsVision, settings.thinkingProtocol !== 'reasoning-effort')], tools,
           ...thinking};
@@ -644,6 +683,11 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
         if (typeof value !== 'string' || !value) return;
         if (kind === 'text') text += value; else reasoning += value;
         onDelta({kind, text: value});
+      };
+      const splitter = settings.streamThoughts && !native && !isResponsesApi ? new ThoughtSplitter() : undefined;
+      const appendContent = (value: unknown) => {
+        if (!splitter || typeof value !== 'string') return append('text', value);
+        for (const part of splitter.push(value)) append(part.kind, part.text);
       };
       /** Tool-argument streaming is invisible in text/reasoning; report the call's accumulated size and file target so the UI can show progress. */
       const drafting = (call: ToolCall) => {
@@ -717,7 +761,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
           const first = choices[0];
           const msg = first?.message && typeof first.message === 'object' ? first.message as Record<string, unknown> : undefined;
           if (msg) {
-            if (typeof msg.content === 'string') append('text', msg.content);
+            if (typeof msg.content === 'string') {appendContent(msg.content); for (const part of splitter?.flush() ?? []) append(part.kind, part.text);}
             const r = [msg.reasoning_content, msg.reasoning, msg.thinking].find(value => typeof value === 'string' && value);
             if (typeof r === 'string') append('reasoning', r);
             else if (Array.isArray(msg.reasoning_details)) append('reasoning', chatReasoningDetails(msg.reasoning_details));
@@ -845,7 +889,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             if (event.error) throw providerFailure(200, {error: event.error});
             const choice = event.choices?.[0];
             const delta = choice?.delta;
-            append('text', delta?.content);
+            appendContent(delta?.content);
             append('reasoning', delta?.reasoning_content || delta?.reasoning || delta?.thinking || chatReasoningDetails(delta?.reasoning_details));
             for (const item of delta?.tool_calls ?? []) {
               const call = calls.get(item.index) ?? {id: '', name: '', arguments: ''};
@@ -867,6 +911,7 @@ export function createProvider(settings: ModelSettings, fetcher: typeof fetch = 
             }
           }
         }
+        for (const part of splitter?.flush() ?? []) append(part.kind, part.text);
       } catch (error) {
         if (signal.aborted) signal.throwIfAborted();
         if (timed.aborted) throw providerTimeout();

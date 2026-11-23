@@ -136,6 +136,14 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
         steps.finish(thinkingId, 'failed'); steps.endGroup('failed');
         return {kind: 'rebuild'};
       }
+      // The endpoint itself said it cannot stream: the one case that resends the same request without `stream`.
+      if (error instanceof ProviderError && error.diagnostic?.issue === 'stream_unsupported' && request.stream !== false && !run.context.signal.aborted) {
+        steps.finish(thinkingId, 'failed'); steps.endGroup('failed');
+        thinkingId = steps.thinking();
+        request = {...request, stream: false};
+        textId = undefined; emitted = false;
+        continue;
+      }
       const interruption = isProviderInterruption(error);
       const retryable = !run.context.signal.aborted && error instanceof ProviderError && error.retryable && attempt < options.retries;
       // The failed attempt ends before anything announces a retry: no snapshot holds a live request clock next to a retry notice.
@@ -158,9 +166,8 @@ export async function requestTurn(run: AgentRun, ready: ReadyRequest): Promise<M
           ' Retrying' + retryIn(wait.hintedMs) + ' (' + (attempt + 1) + '/' + options.retries + ')...');
         const resume = steps.reconnecting();
         try {await delay(wait.ms, undefined, {signal: run.context.signal});} finally {resume();}
+        // A retry resends the same request and keeps streaming: a silent non-streaming request is the first thing an idle-cutting intermediary drops.
         thinkingId = steps.thinking();
-        // Aligned with Claude Code: after a long streaming connection is reset by a proxy or intermediate gateway, retries downgrade to non-streaming requests to avoid long-stream timeouts entirely
-        if (interruption) request = {...request, stream: false};
         continue;
       }
       // Already displayed increments are saved too, so the next round can see output from before the interruption.
