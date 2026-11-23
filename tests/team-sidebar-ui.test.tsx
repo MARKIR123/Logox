@@ -94,7 +94,8 @@ test('the sidebar header has two tabs: a click switches, `t` toggles from the ke
     await waitFor(() => posts(rig), text => /Tasks {2}Team +● Live/.test(text) && text.includes('◈ logox → @kalon · assign'), {label: 'the Team tab'});
     assert.ok(!hasCard(rig.screen()));
     for (const expected of ['✓ you → @logox', '◈ logox → @kalon · assign', '⊞ techne → @kalon', 'Draw the SVG', 'Renamed to buildStreetProps()']) assert.ok(posts(rig).includes(expected), expected + '\n' + posts(rig));
-    assert.match(posts(rig), /◀ ▶ {3}3 \/ 3 · \+\d+s +all members ▾/);
+    assert.match(posts(rig), /◀ ▶ ▶ \S+ .*3\/3 · \+\d+s/, 'the stage controls carry the stepping and the counter');
+    assert.match(posts(rig).split('\n').find(line => line.includes('all members ▾'))!, /^ *│? *all members ▾ *$/, 'the footer keeps only the member filter');
     await rig.clickText('Tasks');
     await waitFor(() => rig.screen(), text => hasCard(text), {label: 'back to Tasks'});
     // The click gave the sidebar the keyboard: t switches both ways.
@@ -208,25 +209,25 @@ test('◀ ▶ and the wheel leave Live, ● Live returns and follows the newest 
     await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('earlier note 23'), {label: 'the tail is visible while Live'});
     assert.ok(!posts(rig).includes('earlier note 0'), 'the early posts are scrolled away');
     await act(async () => {say('fresh note 1');});
-    await waitFor(() => posts(rig), text => text.includes('fresh note 1') && /● Live/.test(text) && /28 \/ 28/.test(text), {label: 'a new post follows the tail'});
+    await waitFor(() => posts(rig), text => text.includes('fresh note 1') && /● Live/.test(text) && /28\/28/.test(text), {label: 'a new post follows the tail'});
     // The wheel moves the selection by one post and leaves Live.
     const at = rig.find('fresh note 1');
     await rig.mouse('wheel_up', at.x + 3, at.y);
-    await waitFor(() => posts(rig), text => /○ Live/.test(text) && /27 \/ 28/.test(text), {label: 'the wheel leaves Live'});
+    await waitFor(() => posts(rig), text => /○ Live/.test(text) && /27\/28/.test(text), {label: 'the wheel leaves Live'});
     for (let n = 0; n < 6; n++) await rig.mouse('wheel_up', at.x + 3, at.y);
-    await waitFor(() => posts(rig), text => /21 \/ 28/.test(text), {label: 'it keeps stepping'});
+    await waitFor(() => posts(rig), text => /21\/28/.test(text), {label: 'it keeps stepping'});
     await act(async () => {say('fresh note 2');});
-    await waitFor(() => posts(rig), text => /21 \/ 29/.test(text), {label: 'the total grows, the selection stays'});
+    await waitFor(() => posts(rig), text => /21\/29/.test(text), {label: 'the total grows, the selection stays'});
     assert.ok(!posts(rig).includes('fresh note 2') && /○ Live/.test(posts(rig)), 'a view that left Live is not moved');
     // ◀ and ▶ are buttons.
     const arrows = rig.find('◀ ▶');
     await rig.click(arrows.x, arrows.y);
-    await waitFor(() => posts(rig), text => /20 \/ 29/.test(text), {label: '◀ steps back'});
+    await waitFor(() => posts(rig), text => /20\/29/.test(text), {label: '◀ steps back'});
     await rig.click(arrows.x + 2, arrows.y);
-    await waitFor(() => posts(rig), text => /21 \/ 29/.test(text), {label: '▶ steps forward'});
+    await waitFor(() => posts(rig), text => /21\/29/.test(text), {label: '▶ steps forward'});
     // Live returns to the newest post.
     await rig.clickText('○ Live', 2);
-    await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('fresh note 2') && /29 \/ 29/.test(text), {label: 'Live follows the tail again'});
+    await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('fresh note 2') && /29\/29/.test(text), {label: 'Live follows the tail again'});
     // End from the keyboard does the same.
     await rig.mouse('wheel_up', at.x + 3, at.y);
     await waitFor(() => posts(rig), text => /○ Live/.test(text), {label: 'left again'});

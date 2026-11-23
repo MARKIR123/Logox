@@ -296,8 +296,15 @@ function headerChrome(content: number, view: TeamView): Chrome {
     {text: live, tone: view.hoveredControl === 'live' ? 'accent' : view.live ? 'success' : 'muted', bold: view.live}];
   return {cells, regions: [{x0: 0, x1: TASKS_LABEL.length, control: 'tasks'}, {x0: liveX, x1: liveX + live.length, control: 'live'}]};
 }
-/** `◀ ▶   13 / 26 · +9m47s            all members ▾`: the stepping buttons, where the selection is and the member filter; the elapsed time and then words go first when narrow. */
-function footerChrome(layout: TeamLayout, view: TeamView, content: number, label: Labeler): Chrome {
+/** `◀ ▶   13 / 26 · +9m47s            all members ▾`: the stepping buttons, where the selection is and the member filter; the elapsed time and then words go first when narrow. With a stage (`staged`) only the member filter remains, right-aligned. */
+function footerChrome(layout: TeamLayout, view: TeamView, content: number, label: Labeler, staged = false): Chrome {
+  if (staged) {
+    // The stage's controls row already carries the stepping buttons, the counter and the elapsed time: the footer keeps the member filter only, right-aligned.
+    const name = (view.filter === undefined ? 'all members' : label(view.filter).name) + ' ▾', text = stringWidth(name) <= content ? name : view.filter === undefined ? 'all ▾' : '▾';
+    const x = Math.max(0, content - stringWidth(text));
+    return {cells: [{text: ' '.repeat(x), tone: 'fg'}, {text, tone: view.hoveredControl === 'filter' || view.picker !== undefined ? 'accent' : view.filter === undefined ? 'muted' : 'fg', bold: view.filter !== undefined}],
+      regions: [{x0: x, x1: content, control: 'filter'}]};
+  }
   const position = positionOf(layout, view), selected = selectedId(layout, view);
   const at = selected === undefined ? undefined : layout.events[layout.byId.get(selected)!]!.at;
   const counter = `${position} / ${layout.ids.length}`;
@@ -502,7 +509,7 @@ export function paintTeam(input: TeamPaint): SideSegment[][] {
     lines.push(sideLine(frame, []));
   }
   if (geometry.footer >= 2) lines.push(rule());
-  if (geometry.footer >= 1) lines.push(sideLine(frame, paintRow(footerChrome(layout, view, content, label).cells)));
+  if (geometry.footer >= 1) lines.push(sideLine(frame, paintRow(footerChrome(layout, view, content, label, geometry.stage > 0).cells)));
   return lines.slice(0, height);
 }
 function paintPicker(layout: TeamLayout, view: TeamView, plan: PickerPlan, row: number, content: number, input: TeamPaint, label: Labeler): SideSegment[] {
@@ -640,7 +647,7 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     const at = inBody && row > picker.top ? picker.start + row - picker.top - 1 : undefined;
     if (pointer.action === 'move') return move(at === undefined ? {...current, hoveredControl: undefined} : {...current, picker: at, hoveredControl: undefined});
     if (at !== undefined) return done(filtered(current, picker.items[at]), [{kind: 'focus'}]);
-    if (footerRow && regionAt(footerChrome(layout, current, content, label), cx) === 'filter') return done({...current, picker: undefined}, [{kind: 'focus'}]);
+    if (footerRow && regionAt(footerChrome(layout, current, content, label, geometry.stage > 0), cx) === 'filter') return done({...current, picker: undefined}, [{kind: 'focus'}]);
     current = {...current, picker: undefined};
   }
   const stageRow = pointer.y - geometry.header;
@@ -663,7 +670,7 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     return done(current);
   }
   if (footerRow) {
-    const control = regionAt(footerChrome(layout, current, content, label), cx);
+    const control = regionAt(footerChrome(layout, current, content, label, geometry.stage > 0), cx);
     if (pointer.action === 'move') return move(control === current.hoveredControl && current.hovered === undefined ? current : rest({hoveredControl: control}));
     if (wheel) return done(selectAt(layout, current, geometry, positionOf(layout, current) - 1 + (pointer.action === 'wheel_down' ? 1 : -1)));
     if (pointer.action !== 'press') return done(current);

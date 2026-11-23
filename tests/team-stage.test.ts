@@ -307,6 +307,10 @@ test('a short sidebar collapses the stage to the controls and a one-line status;
   const wide = paintTeam({layout: roomy, view: {...emptyTeamView, live: false, selected: roomy.ids[5]!}, width: 64, height: 24, focused: false, ownerColor: () => '#fff', label, stage: true}).map(line => line.map(segment => segment.text).join(''));
   assert.match(wide[3]!, /^│ Working ✧ kalon ⊞ techne · Waiting ◎ aletheia · Done —/);
   assert.match(lines[2]!, /^│ ◀ ▶ ▶ Play /);
+  assert.match(lines.at(-1)!, /^│ +all members ▾ *$/, 'with a stage the footer keeps only the member filter');
+  assert.equal(lines.filter(line => line.includes('◀ ▶')).length, 1, 'the stepping buttons appear once');
+  const plain = paintTeam({layout, view: {...emptyTeamView, live: false, selected: layout.ids[5]!}, width: 56, height: 24, focused: false, ownerColor: () => '#fff', label}).map(line => line.map(segment => segment.text).join(''));
+  assert.match(plain.at(-1)!, /^│ ◀ ▶ {3}6 \/ 8 /, 'without a stage the footer keeps the full form');
 });
 
 test('the stage draws with palette colours only and no cell carries a background, in every mode', () => {
