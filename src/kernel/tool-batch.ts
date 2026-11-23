@@ -9,6 +9,7 @@ import {loadToolsSchema} from '../tools/protocol/LoadToolsTool/LoadToolsTool.js'
 import {diagnoseToolError} from '../tools/diagnostics.js';
 import {toolProgressFingerprint} from './execution-recovery.js';
 import {isReadOnlyTool} from '../tools/catalog.js';
+import {normalizeToolInput} from '../tools/normalize.js';
 import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {settleToolResults} from './scratchpad.js';
@@ -84,7 +85,7 @@ async function validateBatch(run: AgentRun, ready: ReadyRequest, calls: readonly
       (canonical && canonicalToolName(tool.name) === canonical)
     );
     try {
-      const args = JSON.parse(call.arguments);
+      const args = normalizeToolInput(canonical ?? call.name, JSON.parse(call.arguments));
       if (extra) {
         const check = z.fromJSONSchema(extra.parameters).safeParse(args);
         if (!check.success) {
@@ -188,7 +189,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
           try {
             const rawResult = await execute(call);
             const result = diagnoseToolError(call, rawResult);
-            const sent = (canonicalToolName(call.name) ?? call.name) === 'SendMessage' && !result.isError ? sendMessageSchema.safeParse(JSON.parse(call.arguments)) : undefined;
+            const sent = (canonicalToolName(call.name) ?? call.name) === 'SendMessage' && !result.isError ? sendMessageSchema.safeParse(normalizeToolInput('SendMessage', JSON.parse(call.arguments))) : undefined;
             if (sent?.success && sent.data.type === 'reply') run.asks.answer(context.sessionId, context.ownerId, sent.data.to);
             if (sent?.success && sent.data.type === 'ask') {
               run.asks.open({sessionId: context.sessionId, from: context.ownerId, fromActivityId: context.activityId, to: sent.data.to,

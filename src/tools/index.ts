@@ -50,6 +50,7 @@ import {LIST_ACTORS_DESCRIPTION, LIST_ACTORS_TOOL_NAME} from './coordination/Lis
 import {cancelActorSchema, executeCancelActor, type CancelActorArgs} from './orchestration/CancelActorTool/CancelActorTool.js';
 import {CANCEL_ACTOR_DESCRIPTION, CANCEL_ACTOR_TOOL_NAME} from './orchestration/CancelActorTool/prompt.js';
 import {planSchema, executePlan, type PlanArgs} from './coordination/PlanTool/PlanTool.js';
+import {normalizeToolInput} from './normalize.js';
 import {PLAN_DESCRIPTION, PLAN_TOOL_NAME} from './coordination/PlanTool/prompt.js';
 import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
@@ -203,7 +204,7 @@ export function validateToolCall(call: ToolCall): {valid: true; data: unknown} |
     }
   }
   const toolName = canonical as ToolName;
-  const result = schemas[toolName].safeParse(toolName === 'Automa' ? normalizeAutomaInput(args) : args);
+  const result = schemas[toolName].safeParse(toolName === 'Automa' ? normalizeAutomaInput(args) : normalizeToolInput(toolName, args));
   if (result.success) return {valid: true, data: result.data};
 
   const missingParams = result.error.issues
@@ -741,7 +742,7 @@ export class Tools {
       const name = canonical as ToolName;
       const raw: unknown = JSON.parse(call.arguments);
       const automaNotes: string[] = [];
-      const parsed = schemas[name].parse(name === 'Automa' ? normalizeAutomaInput(raw, automaNotes) : raw);
+      const parsed = schemas[name].parse(name === 'Automa' ? normalizeAutomaInput(raw, automaNotes) : normalizeToolInput(name, raw));
 
       if (context.via) {
         const denial = await this.workerDenial(name, parsed, context);

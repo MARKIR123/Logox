@@ -4,7 +4,7 @@
 import {useInput} from 'ink';
 import {DIRECTOR_ID, isDirector} from '../../runtime/director-id.js';
 import {inputKind} from '../../runtime/provenance.js';
-import {ESC_STOP_WINDOW_MS, actorsStoppedNotice, actorsWorkingNotice, logoxStoppedNotice, roundScope, workingNames} from '../../runtime/round-scope.js';
+import {ESC_STOP_WINDOW_MS, actorsStoppedNotice, canRecallInput, actorsWorkingNotice, logoxStoppedNotice, roundScope, workingNames} from '../../runtime/round-scope.js';
 import {defaultSceneFoldOpen, isFoldOpen} from '../../demo/scene.js';
 import type {ActorId} from '../../actors/ensemble.js';
 import {uiSettings} from '../../config/ui-settings.js';
@@ -216,11 +216,12 @@ export function useKeyboard(ctx: ShellContext): void {
           message.role === 'user' && inputKind(message) === 'human' && message.source !== 'steered');
         // Check the updater's draft, not the render's: typing and Esc can be batched.
         // Bumping the revision also protects it from a pending submission acknowledgment.
-        setDraft(current => original && !current.text ? insert(emptyDraft, original.text) : current);
+        const recall = original !== undefined && canRecallInput(snapshot.messages, original, Date.now());
+        setDraft(current => recall && !current.text ? insert(emptyDraft, original!.text) : current);
         if (others.length) flash(logoxStoppedNotice(names), ESC_STOP_WINDOW_MS, 'warning');
-        else if (original && draft.text) flash('■ Logox stopped · your current draft was kept; use Up for earlier input', 3500, 'warning');
+        else if (recall && draft.text) flash('■ Logox stopped · your current draft was kept; use Up for earlier input', 3500, 'warning');
         else flash(logoxStoppedNotice([]), 2000, 'warning');
-        if (original) setCompletion({query: '', selected: 0, dismissed: true});
+        if (recall) setCompletion({query: '', selected: 0, dismissed: true});
       } else if (others.length && armed) {
         // Second Esc inside the window: everything Logox's work still has running or queued, with the user reason.
         for (const item of others) {cancelledInputs.current.add(item.activityId); onCancel(item.activityId);}

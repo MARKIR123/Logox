@@ -20,6 +20,7 @@ import type {ModelPool} from '../providers/model-pool.js';
 import type {ToolCall, ToolDefinition} from '../runtime/messages.js';
 import {defaultToolRegistry, type ToolRegistry} from '../tools/registry.js';
 import {builtinToolRegistrations} from '../tools/catalog.js';
+import {normalizeToolInput} from '../tools/normalize.js';
 import type {ToolResult} from '../tools/tools.js';
 import {contextPolicySchema, type Config} from '../config/config.js';
 import type {RoundStatus} from '../context/contracts.js';
@@ -259,7 +260,7 @@ export class ActorServices {
         canonicalToolName(tool.name) === canonical
       );
       if (!matchedTool) throw new Error('Actor is not allowed to run this tool');
-      const input: unknown = JSON.parse(call.arguments);
+      const input: unknown = normalizeToolInput(canonical, JSON.parse(call.arguments));
       z.fromJSONSchema(matchedTool.parameters).parse(input);
       if (canonical !== 'CraftActor' && this.options.authorize && !await this.options.authorize(call, context)) return {text: 'Actor action was not permitted; find another approach.', isError: true, disposition: 'denied'};
       if (canonical !== 'CraftActor') context.startTool?.();

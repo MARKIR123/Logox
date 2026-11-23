@@ -1,6 +1,7 @@
 import {isDirector} from '../runtime/director-id.js';
 import {randomUUID} from 'node:crypto';
 import {sendMessageSchema, sendMessageTool} from '../tools/coordination/SendMessageTool/SendMessageTool.js';
+import {normalizeToolInput} from '../tools/normalize.js';
 import type {ActorContext, TaskHandle, TaskOrigin} from './ensemble.js';
 import type {ToolCall, ToolDefinition, ModelMessage} from '../runtime/messages.js';
 import type {CollaborationRecord, Journal} from '../store/journal.js';
@@ -35,7 +36,7 @@ export class Collaboration {
         if (context.sessionId !== this.options.sessionId || !this.options.member(context.ownerId)) throw new Error('Invalid collaboration identity');
         if (!this.tools(context.ownerId).some(tool => tool.name === call.name)) throw new Error('Actor is not authorized to use this collaboration tool');
         const records = await this.options.journal.collaborations(context.sessionId);
-        const sendInput = sendMessageSchema.parse(JSON.parse(call.arguments));
+        const sendInput = sendMessageSchema.parse(normalizeToolInput('SendMessage', JSON.parse(call.arguments)));
         const to = sendInput.to;
         const isBroadcast = to.toLowerCase() === 'all';
         const asking = sendInput.type === 'ask';

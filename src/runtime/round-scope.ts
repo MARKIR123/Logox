@@ -1,5 +1,5 @@
 import {DIRECTOR_ID, isDirector} from './director-id.js';
-import type {Activity} from './contracts.js';
+import type {Activity, Message} from './contracts.js';
 import {inputKind, type InputKind} from './provenance.js';
 
 const OPEN = new Set(['queued', 'running', 'waiting_input', 'paused']);
@@ -69,3 +69,15 @@ export const actorsWorkingNotice = (names: readonly string[]): string =>
   `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} working · press Esc again to stop ${names.length === 1 ? 'it' : 'them'}`;
 /** Notice after the second Esc. */
 export const actorsStoppedNotice = (names: readonly string[]): string => `■ Stopped ${list(names)}`;
+
+/** Esc restores a stopped request into the empty composer only this soon after it was submitted (and before the round showed any output). */
+export const RECALL_WINDOW_MS = 5000;
+
+/**
+ * Whether Esc may hand a human request back to the composer: it was submitted at most `RECALL_WINDOW_MS` ago and its round has not yet produced
+ * visible assistant output (a text reply or a tool card; thinking does not count). A message without a time is never recalled.
+ */
+export function canRecallInput(messages: readonly Pick<Message, 'activityId' | 'role' | 'kind' | 'text'>[], original: Pick<Message, 'activityId' | 'time'>, now: number): boolean {
+  if (original.time === undefined || now - original.time > RECALL_WINDOW_MS) return false;
+  return !messages.some(message => message.activityId === original.activityId && message.role === 'assistant' && message.kind !== 'thinking' && (message.kind === 'tool' || message.text.trim() !== ''));
+}

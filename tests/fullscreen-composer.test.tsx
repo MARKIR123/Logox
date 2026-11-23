@@ -10,6 +10,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import type {SubmitDelivery} from '../src/application.js';
 import {RuntimeStore} from '../src/runtime/store.js';
+import {RECALL_WINDOW_MS} from '../src/runtime/round-scope.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import {CustomProviderStorage} from '../src/providers/custom-storage.js';
 import {LoginFlow} from '../src/providers/login.js';
@@ -253,6 +254,55 @@ test('typing batched with Esc is retained instead of being replaced by the stopp
     await f.flush(); await f.key('\r');
     assert.deepEqual(f.cancelled, ['batched']);
     assert.equal(f.submissions[0]?.text, 'new batched draft');
+  } finally {await f.close();}
+});
+
+function addRecallTask(store: RuntimeStore, id: string, ageMs: number) {
+  store.activities.create({sessionId: 's', activityId: id, ownerId: 'logox', kind: 'director', title: id, status: 'running', stage: 'Working', detail: ''});
+  store.message('s', 'logox', 'user', id + ' goal', {activityId: id, inputKind: 'human', time: Date.now() - ageMs});
+}
+
+test('Esc restores the request into an empty draft within the recall window', async () => {
+  assert.equal(RECALL_WINDOW_MS, 5000);
+  const store = new RuntimeStore(); addRecallTask(store, 'fresh', RECALL_WINDOW_MS - 3000);
+  const f = await appFixture({store});
+  try {
+    await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['fresh']);
+    assert.ok(f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.startsWith('❯ fresh goal'));
+  } finally {await f.close();}
+});
+
+test('Esc stops the task but restores nothing after the recall window', async () => {
+  const store = new RuntimeStore(); addRecallTask(store, 'old', RECALL_WINDOW_MS + 60_000);
+  const f = await appFixture({store});
+  try {
+    await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['old']);
+    assert.ok(!f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.includes('old goal'));
+    await f.key('\r');
+    assert.deepEqual(f.submissions, []);
+  } finally {await f.close();}
+});
+
+test('Esc restores nothing once the round has shown assistant output', async () => {
+  const store = new RuntimeStore(); addRecallTask(store, 'answered', 1000);
+  store.message('s', 'logox', 'assistant', 'Here is the first part of the answer', {activityId: 'answered'});
+  const f = await appFixture({store});
+  try {
+    await f.key('\x1b');
+    assert.deepEqual(f.cancelled, ['answered']);
+    assert.ok(!f.output.lines[f.label(COMPOSER_EXPAND_LABEL).y]!.includes('answered goal'));
+  } finally {await f.close();}
+});
+
+test('Esc within the window leaves a non-empty draft untouched', async () => {
+  const store = new RuntimeStore(); addRecallTask(store, 'fresh', 500);
+  const f = await appFixture({store});
+  try {
+    await f.key('my own draft'); await f.key('\x1b'); await f.key('\r');
+    assert.deepEqual(f.cancelled, ['fresh']);
+    assert.equal(f.submissions[0]?.text, 'my own draft');
   } finally {await f.close();}
 });
 

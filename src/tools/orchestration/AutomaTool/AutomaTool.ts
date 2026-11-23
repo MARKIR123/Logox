@@ -94,6 +94,7 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
   if (raw.jobs === undefined && raw.tasks !== undefined) raw.jobs = raw.tasks;
   delete raw.tasks;
   if (typeof raw.jobs === 'string') raw.jobs = [raw.jobs];
+  if (Array.isArray(raw.jobs) && !raw.jobs.length) delete raw.jobs;
   const dropped = new Set<string>();
   const drop = (key: string, value: unknown) => {
     const empty = (item: unknown) => typeof item === 'string' && PLACEHOLDER.test(item.trim());
