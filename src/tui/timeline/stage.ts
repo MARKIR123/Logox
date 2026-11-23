@@ -17,7 +17,7 @@ import {messageToolCall, renderDefaultTool} from './tool-ui.js';
 import {clipLine} from '../terminal/text.js';
 import stringWidth from 'string-width';
 import {inputKind} from '../../runtime/provenance.js';
-import {thinkingRequests} from './thinking-groups.js';
+import {thinkingRequests, type ThinkingRequest} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {uiSettings} from '../../config/ui-settings.js';
@@ -30,6 +30,7 @@ import {pushToolGroupCard} from './group-row.js';
 
 /** Opens each thought in a thinking body (Claude Code's thinking marker); continuation rows hang under the text. */
 const THOUGHT_MARK = '∴ ';
+interface ThinkingEntry {readonly item: Message; readonly request: ThinkingRequest}
 
 export interface StageControls {readonly stopping?: ReadonlySet<string>; readonly focusedStop?: string; readonly hoveredStop?: string; readonly focusedQuestionId?: string}
 
@@ -70,12 +71,45 @@ const messageLayouts = new WeakMap<Message, Map<string, readonly SceneRow[]>>();
 // Like Claude Code's Messages grouping useMemo, semantic projection depends on
 // immutable messages/activity state, never on viewport, hover or fold state.
 const projections = new WeakMap<RuntimeSnapshot, Map<string, ReturnType<typeof projectMessages>>>();
+const RETRY_NOTICE = /^\[Network\] Connection interrupted\. Retrying/;
+/**
+ * A retry notice belongs to the attempt it announced: the k-th notice of an activity pairs with its k-th interrupted request attempt, and the pair is drawn as one row
+ * (`Thinking · interrupted after 2m 35s · reconnecting (1/3)`, then `· reconnected` once a later attempt exists, `· gave up` when the activity ended without one).
+ * Returns the notices that pair (hidden as separate lines) and the suffix of each interrupted row. The events stay in system history untouched.
+ */
+function retryAttachments(messages: readonly Message[], activities: ReadonlyMap<string, RuntimeSnapshot['activities'][number]>) {
+  const attempts = new Map<string, Message[]>(), notices = new Map<string, Message[]>();
+  for (const message of messages) {
+    if (!message.activityId) continue;
+    const target = message.kind === 'thinking' && message.step?.groupId !== undefined ? attempts : message.role === 'system' && RETRY_NOTICE.test(message.text) ? notices : undefined;
+    if (!target) continue;
+    const list = target.get(message.activityId) ?? [];
+    list.push(message); target.set(message.activityId, list);
+  }
+  const attached = new Set<string>(), labels = new Map<string, string>();
+  for (const [activityId, list] of attempts) {
+    const status = activities.get(activityId)?.status, ended = status === 'completed' || status === 'failed' || status === 'cancelled';
+    let dropped = 0;
+    for (const [index, attempt] of list.entries()) {
+      if (!attempt.step?.interrupted) continue;
+      const notice = notices.get(activityId)?.[dropped++];
+      if (notice) attached.add(notice.id);
+      const counter = notice ? /\((\d+\/\d+)\)/.exec(notice.text)?.[1] : undefined;
+      const label = index < list.length - 1 ? 'reconnected' : ended ? (status === 'cancelled' ? 'stopped' : 'gave up') : notice ? 'reconnecting' + (counter ? ` (${counter})` : '') : '';
+      if (label) labels.set(attempt.id, label);
+    }
+  }
+  return {attached, labels};
+}
 function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
-  const candidates = snapshot.messages.filter(message => message.sessionId === sessionId && (isDirector(view) || message.ownerId === view) &&
+  const visible = snapshot.messages.filter(message => message.sessionId === sessionId && (isDirector(view) || message.ownerId === view) &&
     isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(isDirector(message.ownerId) && message.role === 'user' && inputKind(message) === 'actor'));
+  const sessionActivities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
+  const {attached, labels: attempts} = retryAttachments(visible, sessionActivities);
+  const candidates = attached.size ? visible.filter(message => !attached.has(message.id)) : visible;
   // Empty assistant messages are never drawn; a message that is only the model's `⏵` line is (as a step heading).
   const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !message.text.trim()));
-  const activities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
+  const activities = sessionActivities;
   const grouped = new Map<string, Message[]>();
   for (const message of messages) if (message.activityId) {
     const group = grouped.get(message.activityId) ?? [];
@@ -90,7 +124,7 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
   }
   // Asks and their replies are matched over the whole session: a reply in one actor's window needs the question from another's.
   const pairs = pairSendMessages(snapshot.messages.filter(message => message.sessionId === sessionId), snapshot.activities.filter(item => item.sessionId === sessionId));
-  return {messages, candidates, staged, activities, grouped, thinking, pairs};
+  return {messages, candidates, staged, activities, grouped, thinking, pairs, attempts};
 }
 function messageProjection(snapshot: RuntimeSnapshot, sessionId: string, view: string) {
   let views = projections.get(snapshot);
@@ -119,7 +153,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   responses: Readonly<Record<string, QuestionDraft>> = {}, roles: ActorStyles = cast, controls: StageControls = {}): readonly SceneRow[] {
   const viewColor = windowAccent(view, ownerColor(view, roles));
   const builder = createBuilder(width, hovered, roles, viewColor);
-  const {messages, candidates, staged, activities, grouped, thinking, pairs} = messageProjection(snapshot, sessionId, view);
+  const {messages, candidates, staged, activities, grouped, thinking, pairs, attempts} = messageProjection(snapshot, sessionId, view);
   const pending = snapshot.interactions.filter(request => request.sessionId === sessionId && request.status === 'pending' && (isDirector(view) || request.ownerId === view));
   const requests = new Map<string, Interaction[]>();
   for (const request of pending) {
@@ -336,13 +370,18 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   };
   /** One expandable row for all the thinking of a round or card: `Thought 6 times · 1m 18s · 1,032 tokens`. */
   const pushThinking = (target: RowBuilder, items: readonly Message[], frame?: FrameWrap, ownerId?: string) => {
-    const requests = items.flatMap(item => {
+    const requests = items.flatMap((item): ThinkingEntry[] => {
       const request = thinking.get(item.id);
       if (!request) return [];
       const live = request.step.state === 'running';
       return live || item.text.trim() || request.tokens > 0 || request.step.note || request.step.interrupted ? [{item, request}] : [];
     });
-    if (!requests.length) return;
+    // An attempt the connection dropped on keeps its own finished row, in place and before the rest; the live (or finished) request row comes last.
+    for (const entry of requests) if (entry.request.step.interrupted) thinkingRow(target, [entry], frame, ownerId);
+    const rest = requests.filter(entry => !entry.request.step.interrupted);
+    if (rest.length) thinkingRow(target, rest, frame, ownerId);
+  };
+  const thinkingRow = (target: RowBuilder, requests: readonly ThinkingEntry[], frame?: FrameWrap, ownerId?: string) => {
     const id = requests[0]!.item.id; // the fold id is the first thought's message id, so the row maps back to its activity
     const now = Date.now();
     const live = requests.some(entry => entry.request.step.state === 'running');
@@ -355,11 +394,12 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const duration = (ms: number) => { const total = Math.round(ms / 1000); return total < 60 ? total + 's' : Math.floor(total / 60) + 'm ' + String(total % 60).padStart(2, '0') + 's'; };
     const tokenText = tokens > 0 ? tokens.toLocaleString('en-US') + ' tokens' : '';
     const count = requests.length;
-    // An attempt the connection dropped on never reads as a live or completed thought: it says it was interrupted, and after how long.
-    const last = requests.at(-1)!.request.step, interruptedCount = requests.filter(entry => entry.request.step.interrupted).length;
-    const label = live ? 'Thinking' : last.interrupted ? 'Thinking · interrupted after ' + duration(stepElapsed(last, now))
-      : count === 1 ? 'Thought for ' + duration(totalMs) : `Thought ${count} times · ${duration(totalMs)}` + (interruptedCount ? ` · ${interruptedCount} interrupted` : '');
-    const text = lead + label + (!live && tokenText ? ' · ' + tokenText : '');
+    // An attempt the connection dropped on never reads as a live or completed thought: it says it was interrupted, after how long, and what its retry did.
+    const dropped = requests[0]!.request.step.interrupted ? requests[0]! : undefined;
+    const retry = dropped ? attempts.get(dropped.item.id) : undefined;
+    const label = dropped ? 'Thinking · interrupted after ' + duration(stepElapsed(dropped.request.step, now)) + (retry ? ' · ' + retry : '')
+      : live ? 'Thinking' : count === 1 ? 'Thought for ' + duration(totalMs) : `Thought ${count} times · ${duration(totalMs)}`;
+    const text = lead + label + (!live && !dropped && tokenText ? ' · ' + tokenText : '');
     const runningStep = live ? (() => {
       const running = requests.filter(entry => entry.request.step.state === 'running').map(entry => entry.request.step);
       const since = Math.min(...running.map(step => step.runningSince ?? now));
