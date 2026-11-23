@@ -48,7 +48,7 @@ async function seed(app: App) {
     rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', ownedFiles: ['src/parser/**'], acceptance: ['all tests pass']});
   app.store.activities.create({...base, activityId: 'kal', ownerId: 'kalon', kind: 'actor', title: 'Kalon · Aesthete', taskTitle: 'Polish the output', status: 'queued', stage: 'Waiting on Techne',
     rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', after: ['tech']});
-  const swarm: AutomaSwarm = {name: 'work crew', jobs: [{id: 'T1', title: 'Find the callers', state: 'done', elapsedMs: 4200, calls: [], route: 'read', model: 'mock/reader', stopReason: 'completed',
+  const swarm: AutomaSwarm = {name: 'work crew', jobs: [{id: 'T1', name: 'scout', title: 'Find the callers', state: 'done', elapsedMs: 4200, calls: [], route: 'read', model: 'mock/reader', stopReason: 'completed',
     summary: 'three callers', evidence: ['a.ts:1'], notVerified: ['b.ts']}]};
   app.store.message(app.sessionId, 'techne', 'assistant', '', {activityId: 'tech', kind: 'tool', step: {title: 'Automa', state: 'completed', elapsedMs: 0, swarm}});
   await app.journal.append({version: 1, sessionId: app.sessionId, activityId: 'tech', ownerId: 'techne', role: 'assistant', text: 'x', message: {role: 'assistant', text: 'x'},
@@ -92,7 +92,7 @@ test('a delegation opens its detail: assignment, status, result; Esc closes it',
     await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the worker detail'});
     page = surface(app);
     const job = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!;
-    assert.match(job.lines.join('\n'), /Worker: T1 · read route · mock\/reader/);
+    assert.match(job.lines.join('\n'), /Worker: T1 · scout · read route · mock\/reader/);
     assert.match(job.lines.join('\n'), /Summary: three callers/); assert.match(job.lines.join('\n'), /a\.ts:1/); assert.match(job.lines.join('\n'), /b\.ts/);
     assert.deepEqual(job.actions?.map(action => action.label), ['Worker transcript']);
   } finally {await f.close();}
@@ -126,7 +126,7 @@ test('with no plan the task graph is reachable through /tasks; a double click op
     assert.match(screen(), /▸ Tasks \d+\/\d+/, 'the footer chip offers it');
     await act(async () => {await app.submit('/tasks');}); await instance.waitUntilRenderFlush();
     await waitFor(() => sidebar(), text => /Tasks · no plan/.test(text) && /│ \S Build/.test(text) && /│ \S Polish/.test(text), {label: 'the task graph of the work'});
-    assert.match(sidebar(), /│ \S Find/);
+    assert.match(sidebar(), /│ \S scout · Find/, 'a named worker leads with its name on the task graph');
     assert.doesNotMatch(sidebar(), /\b\d+(\.\d+)+\b/, 'no node id on the sidebar');
     await clickCard('Build'); await clickCard('Build');
     await waitFor(() => screen(), text => /Assignment/.test(text) && /src\/parser/.test(text), {label: 'the delegation detail'});

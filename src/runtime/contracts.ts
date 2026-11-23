@@ -168,6 +168,8 @@ export interface Message {
 const automaJobStateSchema = z.strictObject({
   /** The worker's readable id (`T1`), which a later `continue` names. */
   id: z.string().optional(),
+  /** The optional short handle the dispatcher gave the job (`scout`); a later call may name the worker by it. */
+  name: z.string().optional(),
   title: z.string(),
   /** The plan node the job carries out (`Automa` job field `node`). */
   node: z.string().optional(),

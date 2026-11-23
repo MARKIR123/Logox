@@ -651,7 +651,7 @@ test('The tool contract states continue and release concisely', () => {
   assert.match(AUTOMA_DESCRIPTION, /`context` is written once for all jobs/);
   assert.match(AUTOMA_DESCRIPTION, /`exact` .*`bounded` .*`open` /);
   assert.doesNotMatch(AUTOMA_DESCRIPTION, /preset|`files`|receipt|Verdict/);
-  assert.ok(AUTOMA_DESCRIPTION.length <= 3100, String(AUTOMA_DESCRIPTION.length));
+  assert.ok(AUTOMA_DESCRIPTION.length <= 3400, String(AUTOMA_DESCRIPTION.length));
   const properties = (automaSchema.toJSONSchema() as unknown as {properties: {jobs: {items: {properties: object; required: string[]}}}}).properties.jobs.items;
   const keys = Object.keys(properties.properties);
   assert.ok(keys.includes('keep') && keys.includes('continue') && !keys.includes('persistence') && !keys.includes('instance'));

@@ -4,6 +4,7 @@ import {ownsPath, patternsOverlap} from '../../ownership.js';
 import {canonicalPath, within} from './paths.js';
 import {chooseStyle, type AutomaProfile} from './preset.js';
 import {resolveAfter} from './graph.js';
+import {nameProblem, nameTaken, nameTwice, refKey} from './names.js';
 
 /**
  * What one job may do beyond the baseline (read whatever the dispatcher can read, run commands the permission engine allows,
@@ -58,6 +59,8 @@ export function pathDenial(tool: string, grant: JobGrant, path: GrantPath): stri
 
 export interface AutomaJobArgs {
   readonly title?: string | undefined;
+  /** Optional short handle (lowercase kebab-case, 1-24 characters) that later calls may use instead of the id; unique among the dispatcher's live and parked workers. */
+  readonly name?: string | undefined;
   readonly brief: string;
   /** How open the problem is; absent counts as `bounded`. */
   readonly scope?: 'exact' | 'bounded' | 'open' | undefined;
@@ -81,6 +84,7 @@ export interface AutomaJobArgs {
 
 export interface RetainedGrant {
   readonly id: string;
+  readonly name?: string | undefined;
   readonly grant: JobGrant;
   readonly system: string;
   /** A finished fork: its continue stays a fork. */
@@ -143,6 +147,10 @@ export function planDispatch(input: {
   readonly ids?: readonly string[] | undefined;
   /** Workers named by `after` that belong to another dispatcher, with their owner. */
   readonly foreign?: ReadonlyMap<string, string> | undefined;
+  /** Lower-case name of every live or parked worker (and running background job) of this dispatcher, with its id: a new job may not reuse one. */
+  readonly taken?: ReadonlyMap<string, string> | undefined;
+  /** Lower-case name to id of this dispatcher's finished workers that `after` may name. */
+  readonly aliases?: ReadonlyMap<string, string> | undefined;
   /** Most jobs one call may carry (`[automa] max_per_dispatch`). */
   readonly maxJobs: number;
   /** Who currently holds a write pattern, when it is not the principal. */
@@ -171,6 +179,18 @@ export function planDispatch(input: {
     if (continuing.has(id)) {notes.push(`Release of "${id}" ignored: it is continued in this dispatch.`); return false;}
     return true;
   });
+  // Names: valid, unique within the call, and not held by a live or parked worker of this dispatcher (a worker released by this very call frees its name).
+  const given = new Set<string>();
+  for (const job of input.jobs) {
+    if (job.name === undefined || job.continue) continue;
+    const problem = nameProblem(job.name);
+    if (problem) return refuse(problem);
+    const key = refKey(job.name);
+    if (given.has(key)) return refuse(nameTwice(job.name));
+    given.add(key);
+    const holder = input.taken?.get(key);
+    if (holder && !release.includes(holder)) return refuse(nameTaken(job.name, holder));
+  }
   const fresh = resolved.filter(item => !item.resume);
   const choice = chooseStyle(profile, input.style, fresh.some(item => item.job.writes?.length));
   if (choice.note) notes.push(choice.note);
@@ -188,9 +208,10 @@ export function planDispatch(input: {
     if (resume) {
       const instance = input.retained.find(item => item.id === resume)!;
       if (job.writes) notes.push(`Worker "${resume}" keeps the writes it was created with; \`writes\` on "${job.title}" was ignored.`);
-      const {writes: _writes, keep: _keep, ...rest} = job;
+      if (job.name !== undefined && refKey(job.name) !== refKey(instance.name ?? '')) notes.push(`Worker "${resume}" keeps ${instance.name ? `its name "${instance.name}"` : 'no name'}; \`name\` on "${job.title}" was ignored.`);
+      const {writes: _writes, keep: _keep, name: _name, ...rest} = job;
       const {fork: _fork, ...continued} = rest;
-      planned.push({job: {...continued, continue: resume}, grant: instance.grant, system: instance.system, ...(instance.fork ? {fork: true} : {}), ...coordinate(heldBy(instance.grant.writes))});
+      planned.push({job: {...continued, ...(instance.name ? {name: instance.name} : {}), continue: resume}, grant: instance.grant, system: instance.system, ...(instance.fork ? {fork: true} : {}), ...coordinate(heldBy(instance.grant.writes))});
       continue;
     }
     const writes: string[] = [];
@@ -205,8 +226,8 @@ export function planDispatch(input: {
     const grant: JobGrant = {writes, exclusive: profile.exclusive ?? []};
     planned.push({job: {...rest, ...(fork ? {fork: true} : {}), ...(writes.length ? {writes} : {})}, grant, system, ...(fork ? {fork: true} : {model: style.model ?? profile.model}), ...coordinate(heldBy(writes))});
   }
-  const sequence = resolveAfter(planned.map((item, index) => ({id: input.ids?.[index] ?? '#' + (index + 1), title: item.job.title, after: item.job.after})),
-    {live, ...(input.foreign ? {foreign: input.foreign} : {})});
+  const sequence = resolveAfter(planned.map((item, index) => ({id: input.ids?.[index] ?? '#' + (index + 1), title: item.job.title, name: item.job.name, after: item.job.after})),
+    {live, ...(input.aliases ? {aliases: input.aliases} : {}), ...(input.foreign ? {foreign: input.foreign} : {})});
   if (!sequence.ok) return refuse(sequence.error);
   const graph = sequence.graph;
   const ordered = planned.map((item, index) => graph.needs[index]!.length || graph.workers[index]!.length ? {...item, needs: graph.needs[index]!, needsWorkers: graph.workers[index]!} : item);

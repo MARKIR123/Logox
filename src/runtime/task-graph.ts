@@ -101,7 +101,9 @@ export function taskGraph(plan: Pick<Plan, 'id' | 'title' | 'status' | 'createdA
       return parent;
     }
     const id = nextId(parent), note = item.result?.summary ? cleanTitle(item.result.summary).slice(0, 160) : undefined;
-    drafts.set(id, {id, title: headline(item.assignment.title || item.title, fallback), owner: ownerOf(item), after: [], acceptance: [], links: [linkOf(item)], ...(note ? {note} : {})});
+    // A named worker's node leads with its name (`scout · Find every caller`).
+    const title = headline(item.assignment.title || item.title, fallback);
+    drafts.set(id, {id, title: item.workerName ? item.workerName + ' · ' + title : title, owner: ownerOf(item), after: [], acceptance: [], links: [linkOf(item)], ...(note ? {note} : {})});
     nodeOf.set(item.id, id); synthetic.add(id); delegationOf.set(id, item.id);
     return id;
   };

@@ -21,7 +21,8 @@ import {USER_STEER_NOTICE} from '../prompts/runtime/interruption.js';
 
 export type TeamKind = 'assign' | 'message' | 'workers' | 'result' | 'report' | 'waiting' | 'user';
 export type TeamStatus = 'done' | 'blocked' | 'failed' | 'interrupted';
-export interface TeamItem {readonly title: string; readonly fork: boolean}
+/** One job of a `workers` event: its title, whether it is a fork, and the name its dispatcher gave it (absent for an unnamed worker). */
+export interface TeamItem {readonly title: string; readonly fork: boolean; readonly name?: string}
 export interface TeamEvent {
   /** Stable across projections (`user:<messageId>`, `assign:<activityId>`, ...). */
   readonly id: string;
@@ -43,6 +44,8 @@ export interface TeamEvent {
   /** `message` and `user`: the full text without its envelope. */
   readonly detail?: string;
   readonly worker?: string;
+  /** `result` and `waiting` of a worker: the name its dispatcher gave it, when it has one. */
+  readonly workerName?: string;
   readonly dispatcher?: string;
 }
 
@@ -194,7 +197,7 @@ export function teamEvents(input: TeamInput): TeamEvent[] {
     ids.forEach(id => {if (!jobAt.has(id)) jobAt.set(id, {at: message.time, seq});});
     const forks = swarm.jobs.filter(job => job.kind === 'fork').length;
     add({id: 'workers:' + message.id, from: dispatcher.ownerId, to: [], kind: 'workers', text: swarm.jobs.length + (forks === swarm.jobs.length ? (forks === 1 ? ' fork' : ' forks') : swarm.jobs.length === 1 ? ' worker' : ' workers'),
-      ref: ids[0]!, items: swarm.jobs.map(job => ({title: oneLine(job.title, 80), fork: job.kind === 'fork'}))}, message.time, seq);
+      ref: ids[0]!, items: swarm.jobs.map(job => ({title: oneLine(job.title, 80), fork: job.kind === 'fork', ...(job.name ? {name: job.name} : {})}))}, message.time, seq);
   });
 
   // ------------------------------------------------------------------------------------------------------------------------------ results, reports, waits
@@ -204,13 +207,13 @@ export function teamEvents(input: TeamInput): TeamEvent[] {
       if (item.result && status) {
         const where = jobAt.get(item.id);
         add({id: 'result:' + item.id, from: 'automa', to: [item.ownerId], kind: 'result', status, title: oneLine(item.title, 80), text: oneLine(withoutStatusLine(item.result.summary)),
-          ref: item.id, ...(item.jobId ? {worker: item.jobId} : {}), dispatcher: item.ownerId},
+          ref: item.id, ...(item.jobId ? {worker: item.jobId} : {}), ...(item.workerName ? {workerName: item.workerName} : {}), dispatcher: item.ownerId},
         where?.at === undefined ? undefined : where.at + (item.durationMs ?? 0), where?.seq ?? Number.POSITIVE_INFINITY);
       }
       if (item.after?.length && item.status !== 'skipped') {
         const where = jobAt.get(item.id);
-        const owners = item.after.map(id => delegationById.get(id)?.jobId ?? id.split('/')[1] ?? id);
-        add({id: 'wait:' + item.id, from: 'automa', to: [item.ownerId], kind: 'waiting', text: 'waiting on ' + owners.join(', '), ref: item.id, ...(item.jobId ? {worker: item.jobId} : {}), dispatcher: item.ownerId}, where?.at, where?.seq ?? Number.POSITIVE_INFINITY);
+        const owners = item.after.map(id => delegationById.get(id)?.workerName ?? delegationById.get(id)?.jobId ?? id.split('/')[1] ?? id);
+        add({id: 'wait:' + item.id, from: 'automa', to: [item.ownerId], kind: 'waiting', text: 'waiting on ' + owners.join(', '), ref: item.id, ...(item.jobId ? {worker: item.jobId} : {}), ...(item.workerName ? {workerName: item.workerName} : {}), dispatcher: item.ownerId}, where?.at, where?.seq ?? Number.POSITIVE_INFINITY);
       }
       continue;
     }

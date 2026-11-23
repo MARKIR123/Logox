@@ -18,6 +18,7 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 - \`vision: true\` when the job must look at images (screenshots, mockups, image files); the job then runs on a model that can see images.
 - Workers read whatever you can read and run commands; every call is judged by your permission rules and can never exceed them.
 - Every finished worker can be continued with \`continue: "<id from the result>"\` and a new \`brief\`; it keeps its context. \`release\` ends workers you no longer need; all of them end with your task.
+- \`name\` is an optional short handle for a worker you may continue or refer to later: lowercase kebab-case, at most 24 characters (\`scout\`, \`api-tests\`), unique among your workers. Wherever an id is accepted (\`continue\`, \`after\`, \`wait\`, \`release\`) its name works too; ids still work.
 
 Unknown fields are ignored with a note; a refused call states its exact fix.`;
 
@@ -44,8 +45,8 @@ export const queuedJobsLine = (queued: number, total: number, maxRunning: number
 /** The last line of a background dispatch's receipt. */
 export const BACKGROUND_RECEIPT_SENTENCE = 'Results arrive as messages while you keep working; you do not need to wait for them.';
 /** One receipt line per job of a background dispatch. */
-export const backgroundReceiptLine = (id: string, title: string, state: 'running' | 'queued' | 'waiting', after: readonly string[]): string =>
-  `${id} ${title.replace(/\s+/g, ' ').trim()} · ${state === 'waiting' ? 'waiting on ' + after.join(', ') : state}`;
+export const backgroundReceiptLine = (id: string, title: string, state: 'running' | 'queued' | 'waiting', after: readonly string[], name?: string): string =>
+  `${id}${name ? ` (${name})` : ''} ${title.replace(/\s+/g, ' ').trim()} · ${state === 'waiting' ? 'waiting on ' + after.join(', ') : state}`;
 /** `Automa` called with `wait` together with other fields. */
 export const WAIT_ALONE = 'Send `wait` alone. Fix: {"wait":["T3"]}, ids of your own background jobs; dispatch more jobs in a separate call.';
 /** `wait` named ids that are not background jobs of this task. */

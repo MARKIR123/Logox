@@ -29,6 +29,8 @@ export type BackgroundState = 'waiting' | 'queued' | 'running' | 'ended';
 
 export interface BackgroundJob {
   readonly id: string;
+  /** The optional handle the dispatcher gave the job; `wait` may name the job by it (case-insensitive). */
+  readonly name?: string | undefined;
   readonly title: string;
   state: BackgroundState;
   /** How it ended (`done`, `blocked`, `failed`, `cancelled`, `denied`, `skipped`); set with the block. */
@@ -67,8 +69,8 @@ export class BackgroundBoard {
   private waiters = new Set<() => void>();
 
   /** Registers a dispatch whose jobs start as `waiting`, `queued` or `running`. */
-  start(scope: BackgroundScope, controller: AbortController, jobs: readonly {id: string; title: string; state: Exclude<BackgroundState, 'ended'>}[], sink: BackgroundSink): BackgroundDispatch {
-    const group: Group = {scope, controller, sink, jobs: new Map(jobs.map(job => [job.id, {id: job.id, title: job.title, state: job.state, delivered: false}])),
+  start(scope: BackgroundScope, controller: AbortController, jobs: readonly {id: string; name?: string | undefined; title: string; state: Exclude<BackgroundState, 'ended'>}[], sink: BackgroundSink): BackgroundDispatch {
+    const group: Group = {scope, controller, sink, jobs: new Map(jobs.map(job => [job.id, {id: job.id, ...(job.name ? {name: job.name} : {}), title: job.title, state: job.state, delivered: false}])),
       pending: [], timer: undefined, sending: false, closed: false};
     this.groups.add(group);
     this.changed();
@@ -137,7 +139,21 @@ export class BackgroundBoard {
   find(scope: BackgroundScope, ids: readonly string[]): {readonly found: readonly {group: BackgroundDispatch; job: BackgroundJob}[]; readonly unknown: readonly string[]; readonly known: readonly string[]} {
     const mine = [...this.groups].filter(group => group.scope.sessionId === scope.sessionId && group.scope.ownerId === scope.ownerId && group.scope.activityId === scope.activityId);
     const all = new Map(mine.flatMap(group => [...group.jobs.values()].map(job => [job.id, {group: group as BackgroundDispatch, job}] as const)));
-    return {found: ids.flatMap(id => all.has(id) ? [all.get(id)!] : []), unknown: ids.filter(id => !all.has(id)), known: [...all.keys()]};
+    // An id, or a name (case-insensitive); the same job named twice is returned once.
+    const named = new Map([...all.values()].flatMap(item => item.job.name ? [[item.job.name.toLowerCase(), item] as const] : []));
+    const lookup = (ref: string) => all.get(ref) ?? all.get(ref.trim().toUpperCase()) ?? named.get(ref.trim().toLowerCase());
+    const found = [...new Set(ids.flatMap(id => lookup(id) ?? []))];
+    return {found, unknown: ids.filter(id => !lookup(id)), known: [...all.keys()]};
+  }
+
+  /** The names of this dispatcher's background jobs of the task that have not ended, as `lower-case name -> id`: a worker that ends is shelved and its name is held there. */
+  names(scope: BackgroundScope): Map<string, string> {
+    const open = new Map<string, string>();
+    for (const group of this.groups) {
+      if (group.closed || group.scope.sessionId !== scope.sessionId || group.scope.ownerId !== scope.ownerId || group.scope.activityId !== scope.activityId) continue;
+      for (const job of group.jobs.values()) if (job.name && job.state !== 'ended') open.set(job.name.toLowerCase(), job.id);
+    }
+    return open;
   }
 
   /** Resolves when every named job has ended; rejects with the signal's reason. Never sends a request. */

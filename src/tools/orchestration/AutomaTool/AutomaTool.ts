@@ -43,6 +43,7 @@ export type AutomaScope = typeof AUTOMA_SCOPES[number];
 const automaJobSchema = z.strictObject({
   brief: z.string().trim().min(1).describe('What the worker must do and report. Stands alone: it never sees your conversation. When continuing a finished worker, only the next step'),
   title: z.string().trim().min(1).max(80).optional().describe('Short label for the stage; omit to use the start of the brief'),
+  name: z.string().trim().min(1).max(64).optional().describe('Optional short handle for a worker you may continue or refer to later: lowercase kebab-case, at most 24 characters (scout, api-tests). Unique among your workers; later calls may use it instead of the id'),
   scope: z.enum(AUTOMA_SCOPES).describe('How open the problem is, not how much work it is: exact, bounded or open'),
   acceptance: z.array(z.string().min(1).max(300)).min(1).max(8).optional().describe('The checks that define done; the worker meets them and the result shows them'),
   writes: z.array(z.string().min(1)).min(1).max(64).optional().describe('Workspace paths or globs the job may edit. Omit for read-only work: reading, searching, commands and scratch scripts need no grant'),
@@ -70,7 +71,7 @@ export type AutomaArgs = z.infer<typeof automaArgs>;
 export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
-const JOB_KEYS = new Set(['brief', 'title', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node', 'fork']);
+const JOB_KEYS = new Set(['brief', 'title', 'name', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node', 'fork']);
 const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
@@ -109,6 +110,9 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
       }
       if (typeof job.title === 'string' && !job.title.trim()) delete job.title;
       if (job.title === undefined && typeof job.brief === 'string' && job.brief.trim()) job.title = titleFrom(job.brief);
+      // A name is checked by `planDispatch()` (with its fix); here only an empty one, a placeholder or a non-string is dropped.
+      if (typeof job.name === 'number') job.name = String(job.name);
+      if (typeof job.name !== 'string' || PLACEHOLDER.test(job.name.trim())) delete job.name; else job.name = job.name.trim();
       const scope = typeof job.scope === 'string' ? job.scope.trim().toLowerCase() : undefined;
       if (scope && (AUTOMA_SCOPES as readonly string[]).includes(scope)) job.scope = scope;
       else {
@@ -292,12 +296,12 @@ export interface DispatchOptions {
 type JobStatus = Extract<AutomaJobState['state'], 'done' | 'blocked' | 'failed' | 'cancelled' | 'denied' | 'skipped'>;
 
 /** How one job ended, with the runtime's result block. */
-export interface JobOutcome {readonly id: string; readonly title: string; readonly status: JobStatus; readonly block: string}
+export interface JobOutcome {readonly id: string; readonly name?: string | undefined; readonly title: string; readonly status: JobStatus; readonly block: string}
 
 /** What a call that started a dispatch has right away. */
 export interface DispatchRun {
   /** Where each job stands as the call returns: `running`, `queued` (a free place or running slot is awaited) or `waiting` (it follows unfinished jobs); `after` lists what it follows. */
-  readonly initial: readonly {readonly id: string; readonly title: string; readonly state: 'running' | 'queued' | 'waiting'; readonly after: readonly string[]}[];
+  readonly initial: readonly {readonly id: string; readonly name?: string | undefined; readonly title: string; readonly state: 'running' | 'queued' | 'waiting'; readonly after: readonly string[]}[];
   /** Settles when every job has ended. */
   readonly done: Promise<ToolResult>;
   /** The results of these jobs reached the dispatcher: the card shows them as delivered. */
@@ -383,13 +387,14 @@ interface ResultParts {
 }
 
 /** The runtime's result block for one job; everything the worker wrote is escaped, everything measured is added by the runtime. */
-export function resultBlock(head: {id: string; title: string; status: JobStatus; elapsedMs: number; model: string; stop?: StopReasonCode | undefined; kind?: 'fork' | undefined; cache?: number | undefined}, parts: ResultParts): string {
+export function resultBlock(head: {id: string; name?: string | undefined; title: string; status: JobStatus; elapsedMs: number; model: string; stop?: StopReasonCode | undefined; kind?: 'fork' | undefined; cache?: number | undefined}, parts: ResultParts): string {
   const list = (label: string, items: readonly string[] | undefined) => items?.length ? [label + ':', ...items.map(item => '- ' + escapeBlock(item))] : [];
   // `status` is what the worker reported; `stop` says how the run ended and is shown only when it was not an ordinary completion.
   const stop = head.stop && head.stop !== 'completed' ? ` stop="${head.stop}"` : '';
   // A fork says so, and what share of its first request's input was read from the provider's cache.
   const kind = head.kind ? ` kind="${head.kind}"` : '', cache = head.cache !== undefined ? ` cache="${head.cache}%"` : '';
-  return [`<automa-result id="${attribute(head.id)}"${kind} title="${attribute(head.title)}" status="${head.status}"${stop} took="${took(head.elapsedMs)}" model="${attribute(head.model)}"${cache}>`,
+  const named = head.name ? ` name="${attribute(head.name)}"` : '';
+  return [`<automa-result id="${attribute(head.id)}"${named}${kind} title="${attribute(head.title)}" status="${head.status}"${stop} took="${took(head.elapsedMs)}" model="${attribute(head.model)}"${cache}>`,
     'Summary: ' + escapeBlock(parts.summary),
     ...list('Evidence', parts.evidence), ...list('Not verified', parts.notVerified),
     ...(parts.question ? ['Question: ' + escapeBlock(parts.question)] : []),
@@ -418,7 +423,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   needs.forEach((list, index) => list.forEach(prerequisite => dependents[prerequisite]!.push(index)));
   const followed = jobs.map((_, index) => [...needs[index]!.map(prerequisite => jobs[prerequisite]!.id), ...workerNeeds[index]!]);
   const ordered = followed.some(list => list.length > 0);
-  const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
+  const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, ...(planned.job.name ? {name: planned.job.name} : {}), title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
     ...(planned.job.node ? {node: planned.job.node} : {}), ...(planned.fork ? {kind: 'fork' as const} : {}),
     ...(followed[index]!.length ? {after: followed[index]!} : {}), ...(options.background ? {delivered: false} : {})}));
   const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {})});
@@ -452,7 +457,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const finishCore = async (index: number, status: JobStatus, started: number, model: string, parts: ResultParts, route?: AutomaRoute, how: {error?: unknown; stalled?: boolean} = {}, shelve?: Omit<IdleWorker, 'last'>) => {
     const planned = jobs[index]!, id = planned.id, elapsed = Date.now() - started, stop = stopOf(status, how);
     finished[index] = true;
-    const receipt = resultBlock({id, title: planned.job.title, status, elapsedMs: elapsed, model, stop, ...(planned.fork ? {kind: 'fork' as const} : {}),
+    const receipt = resultBlock({id, name: planned.job.name, title: planned.job.title, status, elapsedMs: elapsed, model, stop, ...(planned.fork ? {kind: 'fork' as const} : {}),
       ...(cacheShare[index] !== undefined ? {cache: cacheShare[index]} : {})}, {...parts, acceptance: planned.job.acceptance});
     receipts[index] = receipt; statuses[index] = status;
     // Shelved before anything hears of the result, so a dispatcher that answers it at once can continue the worker.
@@ -465,10 +470,10 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
     states[index] = {...settled, state: status, elapsedMs: elapsed, receipt: receipt.slice(0, 4000), ...(planned.fork ? {} : {route: shown}), ...(model ? {model} : {}), stopReason: stop, summary: parts.summary.slice(0, 600),
       ...(parts.evidence?.length ? {evidence: parts.evidence.slice(0, 8)} : {}), ...(parts.notVerified?.length ? {notVerified: parts.notVerified.slice(0, 8)} : {}), ...(parts.question ? {question: parts.question} : {})};
     publish();
-    await journal(index, 'end', {id, state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision),
+    await journal(index, 'end', {id, ...(planned.job.name ? {name: planned.job.name} : {}), state: status, status, stop, elapsedMs: elapsed, receipt, model, route: shown, scope: planned.job.scope ?? 'bounded', vision: Boolean(planned.job.vision),
       ...(options.background ? {background: true} : {})});
   };
-  const outcomeOf = (index: number): JobOutcome => ({id: jobs[index]!.id, title: jobs[index]!.job.title, status: statuses[index] as JobStatus, block: receipts[index]!});
+  const outcomeOf = (index: number): JobOutcome => ({id: jobs[index]!.id, ...(jobs[index]!.job.name ? {name: jobs[index]!.job.name} : {}), title: jobs[index]!.job.title, status: statuses[index] as JobStatus, block: receipts[index]!});
 
   /** The jobs that follow this one, directly or not, that have not ended, nearest first. */
   const downstream = (index: number): number[] => {
@@ -557,7 +562,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
     let succeeded = 0, lastInput = 0, modelName = '', route: AutomaRoute | undefined;
     states[index] = {...states[index]!, state: 'running', startedAt: started};
     publish();
-    await journal(index, 'start', {id, title: planned.job.title, brief: planned.job.brief, grant, workerId, ...(idle ? {continued: id} : {})});
+    await journal(index, 'start', {id, ...(planned.job.name ? {name: planned.job.name} : {}), title: planned.job.title, brief: planned.job.brief, grant, workerId, ...(idle ? {continued: id} : {})});
     const measured = () => ({changed: changeLine(written, options.root), ran: ranLine(ran), denied: refused.join(', ')});
     let change: string | undefined, fingerprint: string | undefined;
     try {
@@ -633,7 +638,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
       stopTracking();
       const notes: string[] = end.imagesOmitted ? [imagesOmittedNote(modelName)] : [];
       // Whatever the outcome, a worker that ended through the loop (Finish, or the stall rule) stays on the shelf with its history.
-      const shelve: Omit<IdleWorker, 'last'> = {id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, grant, system: planned.system,
+      const shelve: Omit<IdleWorker, 'last'> = {id, sessionId: options.sessionId, ownerId: options.principal, activityId: options.activityId, workerId, ...(planned.job.name ? {name: planned.job.name} : {}), grant, system: planned.system,
         preferred: idle ? idle.preferred : planned.model, vision: idle ? idle.vision : Boolean(planned.job.vision), resolved, messages, lastInput, idleSince: Date.now(), busy: false,
         ...(fingerprint ? {fingerprint} : {}), ...(forkBase ? {kind: 'fork' as const, fork: forkBase} : {})};
       const large = idle && !isFork && lastInput >= AUTOMA_RETAINED_INPUT_LIMIT ? LARGE_CONTEXT_NOTE : undefined;
@@ -684,7 +689,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   let startable = 0;
   // Forks also need a place under their dispatcher's own limit: the room that is free now.
   let forkRoom = options.fork?.slots.capacity !== undefined ? Math.max(0, options.fork.slots.capacity - (options.fork.slots.running ?? 0) - (options.fork.slots.waiting ?? 0)) : Infinity;
-  const initial = jobs.map((planned, index) => ({id: planned.id, title: planned.job.title, after: followed[index]!,
+  const initial = jobs.map((planned, index) => ({id: planned.id, ...(planned.job.name ? {name: planned.job.name} : {}), title: planned.job.title, after: followed[index]!,
     state: needs[index]!.length ? 'waiting' as const : startable++ < options.parallel && !options.slots?.saturated && (!planned.fork || forkRoom-- > 0) ? 'running' as const : 'queued' as const}));
 
   const run = async (): Promise<ToolResult> => {

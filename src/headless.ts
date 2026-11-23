@@ -287,7 +287,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
   const costs = activityCosts(ledgers);
   const delegations = projectDelegations({snapshot, sessionId: session, deliveries: app.ensemble.deliveries.snapshot()})
     .filter(node => node.kind === 'automa' ? node.parentId !== undefined && ids.has(node.parentId) : node.kind === 'actor' && ids.has(node.id))
-    .map(node => ({id: node.kind === 'automa' ? node.jobId! : node.id, owner: node.ownerId, kind: node.fork ? 'fork' as const : node.kind as 'actor' | 'automa', parentId: node.parentId ?? null, title: node.title,
+    .map(node => ({id: node.kind === 'automa' ? node.jobId! : node.id, owner: node.ownerId, kind: node.fork ? 'fork' as const : node.kind as 'actor' | 'automa', ...(node.workerName ? {name: node.workerName} : {}), parentId: node.parentId ?? null, title: node.title,
       status: node.status, stopReason: node.stopReason ?? null, durationMs: node.durationMs ?? null,
       costUsd: costs.has(node.id) ? Number(costs.get(node.id)!.toFixed(6)) : null,
       ...(node.route ? {route: node.route} : {}), ...(node.model ? {model: node.model} : {}),

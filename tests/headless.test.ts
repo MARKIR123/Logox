@@ -82,7 +82,7 @@ test('the CLI waits for a dispatched companion and an Automa job and reports bot
       if (text.includes('child done')) return reply('Everything is finished.');
       if (answered(request)) return reply('Dispatched; waiting for the reports.');
       return calls({name: 'Actor', arguments: {tasks: [{ownerId: 'kalon', prompt: 'child work', title: 'Child'}]}},
-        {name: 'Automa', arguments: {jobs: [{title: 'Find the answer', brief: 'Find the answer in notes.txt', scope: 'exact'}]}});
+        {name: 'Automa', arguments: {jobs: [{title: 'Find the answer', name: 'answer-scout', brief: 'Find the answer in notes.txt', scope: 'exact'}]}});
     }};
     const h = harness(dir, provider, {fetcher, env: {}});
     assert.equal(await runHeadless(['-p', 'go', '--output', 'json', '--model', 'session-model', '--provider', 'alpha', '--permission-mode', 'creative'], h.io), 0, h.stderr());
@@ -99,7 +99,7 @@ test('the CLI waits for a dispatched companion and an Automa job and reports bot
     assert.equal(typeof child.parentId, 'string'); assert.ok(child.durationMs >= 0); assert.ok(child.costUsd === null || typeof child.costUsd === 'number');
     assert.equal(child.result.summary.length > 0, true); assert.deepEqual(child.result.notVerified, []);
     const worker = report.delegations.find((item: {kind: string}) => item.kind === 'automa');
-    assert.match(worker.id, /^[A-Z]\d+$/); assert.equal(worker.title, 'Find the answer'); assert.equal(worker.status, 'done'); assert.equal(worker.stopReason, 'completed');
+    assert.match(worker.id, /^[A-Z]\d+$/); assert.equal(worker.title, 'Find the answer'); assert.equal(worker.name, 'answer-scout', 'the worker name reaches the delegations JSON'); assert.equal(child.name, undefined); assert.equal(worker.status, 'done'); assert.equal(worker.stopReason, 'completed');
     assert.equal(worker.route, 'read'); assert.equal(worker.parentId !== null, true); assert.equal(worker.result.summary, 'the answer is 42');
     assert.equal(report.delegations.length, 2);
   } finally {await rm(dir, {recursive: true, force: true});}

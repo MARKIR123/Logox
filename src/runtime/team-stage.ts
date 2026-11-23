@@ -158,7 +158,7 @@ export function stageAt(events: readonly TeamEvent[], index: number): StageSnaps
     actors: rosterOrder(seen).map(id => {
       const list = jobs.get(id) ?? [];
       return {id, state: state.get(id) ?? 'idle', workers: list.filter(job => job.status === 'running' && !job.item.fork).length, forks: list.filter(job => job.status === 'running' && job.item.fork).length,
-        jobs: list.map((job): StageJob => ({name: workerName(job.item as TeamItem & {name?: string}), title: job.item.title, fork: job.item.fork, status: job.status, startedAt: job.startedAt, ...(job.ms !== undefined ? {ms: job.ms} : {})}))};
+        jobs: list.map((job): StageJob => ({name: workerName(job.item), title: job.item.title, fork: job.item.fork, status: job.status, startedAt: job.startedAt, ...(job.ms !== undefined ? {ms: job.ms} : {})}))};
     }),
     hasUser,
     edges: [...edges.values()],

@@ -2,16 +2,21 @@
  * The order of one Automa dispatch: what each job's `after` names, checked as a whole. Pure: it reads titles, ids and the shelf's worker ids,
  * and either returns the graph (indices of the jobs in the call, ids of shelved workers) or the one refusal with its exact fix.
  */
+import {refKey} from './names.js';
 
 export interface GraphJob {
   readonly id: string;
   readonly title: string;
+  /** The job's optional name (`scout`); `after` may name it, case-insensitively. */
+  readonly name?: string | undefined;
   readonly after?: readonly string[] | undefined;
 }
 
 export interface GraphShelf {
   /** Ids of this dispatcher's finished workers of the current task. */
   readonly live: ReadonlySet<string>;
+  /** Lower-case name (or id) to the id of a finished worker of this dispatcher, for an `after` entry that names one by its name. */
+  readonly aliases?: ReadonlyMap<string, string> | undefined;
   /** Ids of workers that belong to someone else, with their owner. */
   readonly foreign?: ReadonlyMap<string, string> | undefined;
 }
@@ -31,6 +36,7 @@ const display = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
 export function resolveAfter(jobs: readonly GraphJob[], shelf: GraphShelf): {ok: true; graph: JobGraph} | {ok: false; error: string} {
   const names = jobs.map(job => job.id);
   const byId = new Map(names.map((id, index) => [id, index] as const));
+  const byName = new Map(jobs.flatMap((job, index) => job.name ? [[refKey(job.name), index] as const] : []));
   const needs: number[][] = jobs.map(() => []);
   const workers: string[][] = jobs.map(() => []);
   const label = (index: number) => `"${jobs[index]!.title}"`;
@@ -44,14 +50,16 @@ export function resolveAfter(jobs: readonly GraphJob[], shelf: GraphShelf): {ok:
         target = Number(position[1]) - 1;
         if (target < 0 || target >= jobs.length) return {ok: false, error: `Job ${label(index)} lists after "${entry}", but ${known()}. Fix: use "#1" to "#${jobs.length}", an id, or the exact title of another job of this call.`};
       } else if (byId.has(entry)) target = byId.get(entry)!;
+      else if (byName.has(refKey(entry))) target = byName.get(refKey(entry))!;
       else {
         const titled = jobs.flatMap((other, at) => other.title === entry ? [at] : []);
         if (titled.length > 1) return {ok: false, error: `Job ${label(index)} lists after "${entry}", which is the title of ${titled.length} jobs (${titled.map(at => names[at]).join(', ')}). Fix: name the one you mean by its id or "#n".`};
         if (titled.length === 1) target = titled[0]!;
       }
       if (target === undefined) {
-        if (shelf.live.has(entry)) {if (!workers[index]!.includes(entry)) workers[index]!.push(entry); continue;}
-        const owner = shelf.foreign?.get(entry);
+        const worker = shelf.live.has(entry) ? entry : shelf.aliases?.get(refKey(entry));
+        if (worker && shelf.live.has(worker)) {if (!workers[index]!.includes(worker)) workers[index]!.push(worker); continue;}
+        const owner = shelf.foreign?.get(entry) ?? shelf.foreign?.get(shelf.aliases?.get(refKey(entry)) ?? '');
         if (owner) return {ok: false, error: `Job ${label(index)} lists after "${entry}", which is a worker of ${display(owner)}, not yours. Fix: follow only jobs of this call or your own finished workers; ask ${display(owner)} for what you need instead.`};
         return {ok: false, error: `Job ${label(index)} lists after "${entry}", which is not a job of this call or a live worker of yours; ${known()}. Fix: name a job by its id, "#n" or exact title, or a finished worker by the id its result gave, or remove the entry.`};
       }

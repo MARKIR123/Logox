@@ -34,8 +34,9 @@ function automaTitle(call: ToolCall): string {
   const jobs = Array.isArray(args.jobs) ? args.jobs : [];
   const background = args.mode === 'background' ? SEP + 'background' : '';
   if (jobs.length === 1) {
-    const title = jobs[0] && typeof jobs[0] === 'object' ? (jobs[0] as Record<string, unknown>).title : undefined;
-    if (typeof title === 'string' && clip(title)) return 'Automa · ' + clip(title) + background;
+    const first = jobs[0] && typeof jobs[0] === 'object' ? jobs[0] as Record<string, unknown> : {};
+    const title = first.title, name = typeof first.name === 'string' && clip(first.name, 24) ? clip(first.name, 24) + SEP : '';
+    if (typeof title === 'string' && clip(title)) return 'Automa · ' + name + clip(title) + background;
   }
   if (jobs.length > 1) return `Automa · ${jobs.length} jobs` + background;
   if (Array.isArray(args.wait) && args.wait.length) return 'Automa · wait for ' + args.wait.filter(id => typeof id === 'string').join(', ');
@@ -66,6 +67,9 @@ const stateLabel = (job: AutomaJobState, background: boolean): string =>
   job.state + (background ? job.delivered ? SEP + 'delivered' : !OPEN_JOB.has(job.state) && job.state !== 'interrupted' ? SEP + 'not delivered' : '' : '');
 const jobStep = (job: AutomaJobState): Step | undefined => job.state === 'running' && job.startedAt !== undefined
   ? {state: 'running', title: job.title, elapsedMs: 0, runningSince: job.startedAt} : undefined;
+
+/** What a job row calls the job: its name first (it survives clipping), then its title; an unnamed job shows its title alone. */
+const jobLabel = (job: AutomaJobState): string => job.name ? job.name + SEP + job.title : job.title;
 
 /** The dispatcher's symbol and `⑂`: how a fork row is marked. */
 const forkMark = (context: ToolRenderContext): string => (context.ownerSymbol ?? '◇') + FORK_MARK;
@@ -119,7 +123,7 @@ function renderSwarm(context: ToolRenderContext): void {
         builder.pushFramedLine(id + '-live', accent, [
           mark ? {text: mark, color: accent, selectionKey: id + ':fork_icon', selectionOffset: 0}
             : {text: AUTOMA_ANIMATION_FRAMES[0]!, color: palette.automa, selectionKey: id + ':swarm_icon', selectionOffset: 0},
-          {text: ' ' + fit(job.title, room), color: palette.fg, selectionKey: id + ':job_title', selectionOffset: 0},
+          {text: ' ' + fit(jobLabel(job), room), color: palette.fg, selectionKey: id + ':job_title', selectionOffset: 0},
           {text: SEP, color: palette.muted, separator: true, selectionKey: id + ':job_sep', selectionOffset: 0},
           {text: swarmElapsed(stepElapsed(live)), color: palette.muted, selectionKey: id + ':swarm_time', selectionOffset: 0},
         ], indented);
@@ -141,7 +145,7 @@ function renderJob(context: ToolRenderContext, job: AutomaJobState, id: string, 
   const running = jobStep(job);
   const tag = (job.kind === 'fork' ? forkMark(context) + ' ' : '') + (job.id ? job.id + SEP : '');
   const label = stateLabel(job, background);
-  const text = (open ? '▾ ' : '▸ ') + tag + fit(job.title, Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - label.length - 8 - tag.length)) + SEP + label;
+  const text = (open ? '▾ ' : '▸ ') + tag + fit(jobLabel(job), Math.max(1, parent.innerWidth - 4 - 2 - SEP.length - label.length - 8 - tag.length)) + SEP + label;
   const color = bad ? palette.error : job.state === 'running' ? palette.fg : palette.muted;
   builder.pushOrdinaryCard({
     id, ownerId: message.ownerId, kind: 'Tool', title: text,

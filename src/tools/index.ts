@@ -67,6 +67,7 @@ import {getActorScratchpadDir, getScratchpadDir} from '../kernel/scratchpad.js';
 import type {ModelTurn} from '../runtime/messages.js';
 import {AUTOMA_DESCRIPTION, AUTOMA_TOOL_NAME, BACKGROUND_RECEIPT_SENTENCE, BACKGROUND_UNAVAILABLE, FORK_NOT_HERE, FORK_NO_CONTEXT, FORK_REFUSAL, FORK_REFUSED_TOOLS, WAIT_ALONE, backgroundDeliverySummary, backgroundReceiptLine, forksUncachedLine, waitUnknown} from './orchestration/AutomaTool/prompt.js';
 import {forkBase} from './orchestration/AutomaTool/fork.js';
+import {looksLikeId, refKey} from './orchestration/AutomaTool/names.js';
 import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
@@ -470,6 +471,14 @@ export class Tools {
       return refuse(text);
     };
     if (!args.jobs?.length && !args.release?.length) return refuseAndRemember('Automa needs `jobs`. Fix: send {"jobs":[{"brief":"Find every caller of parseConfig and list path:line"}]}, or `release` with ids of finished workers.');
+    // A worker may be named by its id (`T1`) or by the name it was given (`scout`), in any letter case: `continue`, `release` and `after` are read as ids from here on.
+    const followedRefs = [...new Set((args.jobs ?? []).flatMap(job => job.after ?? []).filter(entry => !/^#\d+$/.test(entry)))];
+    const refs = [...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? []), ...followedRefs];
+    // The shelf's names are read (parked files included) only when a name is in play.
+    const shelfNames = (args.jobs ?? []).some(job => job.name !== undefined) || refs.some(ref => !looksLikeId(ref)) ? await this.shelf.names(sessionId, ownerId, activityId) : new Map<string, string>();
+    const idOf = (ref: string): string => looksLikeId(ref) ? ref.trim().charAt(0).toUpperCase() + ref.trim().slice(1) : shelfNames.get(refKey(ref)) ?? ref;
+    const aliases = new Map(followedRefs.map(entry => [refKey(entry), idOf(entry)] as const));
+    args = {...args, ...(args.jobs ? {jobs: args.jobs.map(job => job.continue ? {...job, continue: idOf(job.continue)} : job)} : {}), ...(args.release ? {release: args.release.map(idOf)} : {})};
     // A fork is a copy of an actor: never inside a worker or a fork, and only where the request behind this call is known.
     const forking = (args.jobs ?? []).some(job => job.fork);
     if (forking && context.via) return refuse(FORK_NOT_HERE);
@@ -481,10 +490,10 @@ export class Tools {
     }
     // The workers this call names are looked up first (a parked one is read back from disk), awaited before the one-dispatch check.
     // A job may follow a finished worker (`after`), so those are looked up too.
-    const followed = [...new Set((args.jobs ?? []).flatMap(job => job.after ?? []).filter(entry => !/^#\d+$/.test(entry)))];
+    const followed = followedRefs.map(idOf);
     const named = new Set([...(args.jobs ?? []).flatMap(job => job.continue ? [job.continue] : []), ...(args.release ?? []), ...followed]);
     const retained = (await Promise.all([...named].map(id => this.shelf.find(sessionId, ownerId, activityId, id))))
-      .flatMap(worker => worker ? [{id: worker.id, grant: worker.grant, system: worker.system, ...(worker.kind === 'fork' ? {fork: true} : {})}] : []);
+      .flatMap(worker => worker ? [{id: worker.id, ...(worker.name ? {name: worker.name} : {}), grant: worker.grant, system: worker.system, ...(worker.kind === 'fork' ? {fork: true} : {})}] : []);
     await this.shelf.prepare(sessionId, ownerId);
     if (this.starting.has(key)) return refuse('You already have an Automa dispatch in progress; wait for it to return.');
     const background = args.mode === 'background';
@@ -498,7 +507,9 @@ export class Tools {
       const owner = retained.some(item => item.id === name) ? undefined : this.shelf.ownerOf(sessionId, name);
       if (owner && owner !== ownerId) foreign.set(name, owner);
     }
-    const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained, ids, foreign,
+    // Names a new job may not take: every live or parked worker of this dispatcher, and its background jobs still running.
+    const taken = new Map([...shelfNames, ...this.background.names({sessionId, ownerId, activityId})]);
+    const plan = planDispatch({jobs: args.jobs ?? [], style: args.style, release: args.release ?? [], profile, cwd: this.cwd, retained, ids, foreign, taken, aliases,
       maxJobs: environment.maxPerDispatch?.() ?? AUTOMA_DEFAULT_PER_DISPATCH,
       scratch: getActorScratchpadDir(this.cwd, sessionId, ownerId), system: workerSystem(rules, args.context),
       holder: pattern => this.patternHolder(ownerId, pattern, sessionId)});
@@ -565,7 +576,7 @@ export class Tools {
       let run!: DispatchRun, board!: BackgroundDispatch;
       run = startAutomaDispatch({...common, background: true,
         onResults: results => this.background.ended(board, results.map(result => ({id: result.id, status: result.status, block: result.block})))});
-      board = this.background.start(scope, controller, run.initial.map(item => ({id: item.id, title: item.title, state: item.state})), {
+      board = this.background.start(scope, controller, run.initial.map(item => ({id: item.id, ...(item.name ? {name: item.name} : {}), title: item.title, state: item.state})), {
         deliver: (text, delivered) => environment.deliver!(scope, text + '\n\n' + TRUST_LINE, backgroundDeliverySummary(delivered)),
         delivered: delivered => run.markDelivered(delivered),
         ...(environment.coalesceMs ? {coalesceMs: environment.coalesceMs()} : {}),
@@ -576,7 +587,7 @@ export class Tools {
         context.signal.removeEventListener('abort', link);
         this.dispatches.delete(dispatchKey);
       });
-      return {text: [...run.initial.map(item => backgroundReceiptLine(item.id, item.title, item.state, item.after)), BACKGROUND_RECEIPT_SENTENCE, ...(released.length ? [`Released ${released.join(', ')}.`] : []), ...(note ? [note] : []), ...(forkNote ? [forkNote] : [])].join('\n'), isError: false};
+      return {text: [...run.initial.map(item => backgroundReceiptLine(item.id, item.title, item.state, item.after, item.name)), BACKGROUND_RECEIPT_SENTENCE, ...(released.length ? [`Released ${released.join(', ')}.`] : []), ...(note ? [note] : []), ...(forkNote ? [forkNote] : [])].join('\n'), isError: false};
     } finally {
       this.starting.delete(key);
       if (!detached) this.dispatches.delete(dispatchKey);

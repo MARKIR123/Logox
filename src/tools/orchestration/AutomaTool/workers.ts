@@ -8,6 +8,7 @@ import {replaceFile} from '../../../store/replace-file.js';
 import type {ResolvedAutomaModel} from './AutomaTool.js';
 import type {JobGrant} from './grant.js';
 import type {ForkBase} from './fork.js';
+import {refKey} from './names.js';
 
 /** A finished worker whose context reached this many input tokens is parked at once: re-sending it costs more than a fresh brief. */
 export const AUTOMA_RETAINED_INPUT_LIMIT = 64_000;
@@ -23,6 +24,8 @@ export interface IdleWorker {
   readonly ownerId: string;
   readonly activityId: string;
   readonly workerId: string;
+  /** The optional short handle the dispatcher gave it (`scout`); unique among the dispatcher's live and parked workers. Absent for an unnamed worker and for workers parked by older versions. */
+  readonly name?: string | undefined;
   readonly grant: JobGrant;
   readonly system: string;
   /** The model name the dispatch asked for (style or role), so a worker revived after a restart resolves its model the same way. */
@@ -55,7 +58,7 @@ export interface ShelfSettings {
 }
 
 interface ParkedFile {
-  readonly id: string; readonly sessionId: string; readonly ownerId: string; readonly activityId: string; readonly workerId: string;
+  readonly id: string; readonly sessionId: string; readonly ownerId: string; readonly activityId: string; readonly workerId: string; readonly name?: string;
   readonly grant: JobGrant; readonly system: string; readonly preferred?: string; readonly vision: boolean; readonly fingerprint?: string; readonly lastInput: number;
   readonly last?: WorkerResult;
   readonly kind?: 'fork';
@@ -132,6 +135,29 @@ export class WorkerShelf {
     return this.entries.get(this.key(sessionId, id))?.ownerId;
   }
 
+  /**
+   * The names of this dispatcher's workers of the current task, held in memory or parked on disk, as `lower-case name -> id`. A parked file is read only when this
+   * process does not hold the worker (after a restart); a call with no named job never asks.
+   */
+  async names(sessionId: string, ownerId: string, activityId: string): Promise<Map<string, string>> {
+    const found = new Map<string, string>();
+    const held = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (entry.sessionId !== sessionId || entry.ownerId !== ownerId || entry.activityId !== activityId) continue;
+      held.add(entry.id);
+      if (entry.name) found.set(refKey(entry.name), entry.id);
+    }
+    const directory = join(this.settings.dir(sessionId), safeSegment(activityId));
+    for (const file of await readdir(directory).catch(() => [] as string[])) {
+      if (!file.endsWith('.json') || held.has(file.slice(0, -5))) continue;
+      try {
+        const data = JSON.parse(await readFile(join(directory, file), 'utf8')) as ParkedFile;
+        if (data.name && data.ownerId === ownerId && data.sessionId === sessionId && !held.has(data.id)) found.set(refKey(data.name), data.id);
+      } catch {}
+    }
+    return found;
+  }
+
   /** After a restart the counter starts above every id a parked file of an open task still carries. */
   private async highestOnDisk(sessionId: string, letter: string): Promise<number> {
     let highest = 0;
@@ -155,7 +181,7 @@ export class WorkerShelf {
     try {
       const data = JSON.parse(await readFile(path, 'utf8')) as ParkedFile;
       if (data.id !== id || data.ownerId !== ownerId || data.sessionId !== sessionId) return undefined;
-      const entry: IdleWorker = {id, sessionId, ownerId, activityId, workerId: data.workerId, grant: data.grant, system: data.system, preferred: data.preferred,
+      const entry: IdleWorker = {id, sessionId, ownerId, activityId, workerId: data.workerId, ...(data.name ? {name: data.name} : {}), grant: data.grant, system: data.system, preferred: data.preferred,
         vision: data.vision, ...(data.fingerprint ? {fingerprint: data.fingerprint} : {}), ...(data.last ? {last: data.last} : {}), ...(data.kind ? {kind: data.kind} : {}), resolved: undefined, messages: undefined, lastInput: data.lastInput, idleSince: this.settings.now(), busy: false};
       this.entries.set(this.key(sessionId, id), entry);
       this.arm();
@@ -189,7 +215,7 @@ export class WorkerShelf {
   async park(entry: IdleWorker): Promise<void> {
     if (!entry.messages) return;
     const path = this.file(entry.sessionId, entry.activityId, entry.id);
-    const data: ParkedFile = {id: entry.id, sessionId: entry.sessionId, ownerId: entry.ownerId, activityId: entry.activityId, workerId: entry.workerId,
+    const data: ParkedFile = {id: entry.id, sessionId: entry.sessionId, ownerId: entry.ownerId, activityId: entry.activityId, workerId: entry.workerId, ...(entry.name ? {name: entry.name} : {}),
       grant: entry.grant, system: entry.system, ...(entry.preferred !== undefined ? {preferred: entry.preferred} : {}), vision: entry.vision, ...(entry.fingerprint ? {fingerprint: entry.fingerprint} : {}),
       ...(entry.last ? {last: entry.last} : {}), ...(entry.kind ? {kind: entry.kind} : {}), lastInput: entry.lastInput, messages: entry.messages};
     await mkdir(join(path, '..'), {recursive: true});

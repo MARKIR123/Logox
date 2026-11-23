@@ -113,7 +113,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
       ...(deliveryText(node) ? [row.field('Mode', 'background · ' + (node.delivered ? 'result delivered' : node.result ? 'result not delivered yet' : 'result pending'))] : []),
       ...(node.durationMs !== undefined ? [row.field('Duration', formatDuration(node.durationMs))] : []),
       ...(cost !== undefined ? [row.field('Cost', money(cost))] : []),
-      ...(node.jobId ? [row.field('Worker', node.jobId + (node.route ? ' · ' + node.route + ' route' : '') + (node.model ? ' · ' + node.model : ''))] : []),
+      ...(node.jobId ? [row.field('Worker', node.jobId + (node.workerName ? ' · ' + node.workerName : '') + (node.route ? ' · ' + node.route + ' route' : '') + (node.model ? ' · ' + node.model : ''))] : []),
       ...(node.batchId ? [row.field('Batch', node.batchId)] : []),
       ...(node.parentId ? [row.field('Parent', all.find(item => item.id === node.parentId)?.title ?? 'an earlier task')] : []),
       ...(earlier.length ? [row.blank(), row.heading('Earlier attempts'), ...earlier.map(item => row.bullet(name(item.ownerId) + ' · ' + item.status + (item.stopReason && item.stopReason !== 'completed' ? ' (stop: ' + item.stopReason + ')' : '') +
@@ -157,7 +157,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
    * its full text as Markdown under a one-line header. Esc closes either.
    */
   const openTeamPost = async (event: TeamEvent): Promise<boolean> => {
-    const who = (id: string) => id === 'user' ? 'you' : id === 'automa' ? 'worker ' + (event.worker ?? '') : name(id).toLowerCase();
+    const who = (id: string) => id === 'user' ? 'you' : id === 'automa' ? 'worker ' + (event.worker ?? '') + (event.workerName ? ' · ' + event.workerName : '') : name(id).toLowerCase();
     if (event.kind !== 'message' && event.kind !== 'user' || !event.detail) {
       if (await openDelegation(event.ref, async () => {})) return true;
     }
@@ -226,7 +226,7 @@ export function createTasksCommand(deps: TasksPageDeps) {
     /** The title of one delegation, for links from other pages. */
     titleOf(id: string): string | undefined {
       const node = project().find(item => item.id === id);
-      return node ? (node.kind === 'automa' ? (node.jobId ?? 'job') + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title : undefined;
+      return node ? (node.kind === 'automa' ? (node.jobId ?? 'job') + (node.workerName ? ' · ' + node.workerName : '') + ' · ' : name(node.ownerId) + ' · ') + node.assignment.title : undefined;
     },
   };
 }
