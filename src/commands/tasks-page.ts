@@ -1,25 +1,20 @@
 /**
- * `/team` shows the sidebar on its Team tab (the team event stream, `src/runtime/team-events.ts`) and registers `CommandSurfaces.teamPostOpener`, what a team post opens
- * (the delegation detail for work, the full text as Markdown for a message).
- *
- * `/tasks`: shows or hides the task flowchart sidebar (`/tasks sidebar [show|hide|toggle]`, the same as Ctrl+B), `/tasks plans` opens the plan switcher
- * (`src/commands/plan-page.ts`). The sidebar draws the session's task graph (the plan with the work nobody linked to it, or the work alone: `src/runtime/task-graph.ts`),
- * else the latest plan of an earlier session; this file owns what a work-graph node opens: the read-only detail page of a delegation (Assignment, Status and
- * Result, with the footer actions `o` and `t`), reached by `CommandSurfaces.openWorkNode()` and by the links of a plan node's page. Nothing here owns state:
- * the detail is projected from the runtime snapshot (`src/runtime/delegations.ts`) each time it opens.
+ * `/team` shows, hides or toggles the sidebar (the team stage: one act at a time of the task graph with the team event stream under it, `src/runtime/team-acts.ts`)
+ * and registers what the stage opens: `CommandSurfaces.teamPostOpener` (a team post: the delegation detail for work, the full text as Markdown for a message),
+ * `CommandSurfaces.teamActorOpener` (an actor's page) and, through `openDelegation()`, the read-only detail page of a delegation (Assignment, Status and Result, with
+ * the footer actions `o` and `t`) that the Programme page (`src/commands/plan-page.ts`) and a plan node's page link to. Nothing here owns state: every detail is
+ * projected from the runtime snapshot (`src/runtime/delegations.ts`) each time it opens.
  */
 import type {TabRow} from '../runtime/command-surface.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import {projectDelegations, type Delegation} from '../runtime/delegations.js';
-import {foldAttempts, taskGraph} from '../runtime/task-graph.js';
+import {foldAttempts} from '../runtime/task-graph.js';
 import type {TeamEvent} from '../runtime/team-events.js';
 import type {ActorDetail} from '../runtime/team-stage.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
-import type {CommandSurfaces, PageActions, PlanSidebarMode} from './surfaces.js';
+import type {CommandSurfaces, PageActions, SidebarMode} from './surfaces.js';
 
-export const TASKS_USAGE = 'Usage: /tasks [plans | sidebar [show|hide|toggle]]';
-export const TASKS_NO_TERMINAL = 'The task sidebar needs the terminal UI.';
 export const TEAM_USAGE = 'Usage: /team [sidebar] [show|hide|toggle]';
 export const TEAM_NO_TERMINAL = 'The team sidebar needs the terminal UI.';
 
@@ -150,7 +145,6 @@ export function createTasksCommand(deps: TasksPageDeps) {
     await openDetail(node, (await costs().catch(() => new Map<string, number>())).get(id), backTo);
     return true;
   };
-  surfaces.workNodeOpener = id => openDelegation(id, async () => {});
 
   /**
    * The detail page of a team post: work (an assignment, report, wait, workers, a worker's result) opens the delegation detail; a message or the person's own text opens
@@ -202,27 +196,14 @@ export function createTasksCommand(deps: TasksPageDeps) {
   surfaces.teamActorOpener = openTeamActor;
 
   return {
-    /** `/tasks` toggles the sidebar; `/tasks sidebar show|hide|toggle` sets it; `/tasks plans` opens the plan switcher; other arguments are not accepted. */
-    async command(argument: string): Promise<void> {
-      const text = argument.trim();
-      const sidebar = /^sidebar(?:\s+(show|hide|toggle))?$/i.exec(text);
-      if (text === '' || sidebar) {
-        if (!surfaces.requestPlanSidebar((sidebar?.[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode, 'tasks')) throw new Error(TASKS_NO_TERMINAL);
-        return;
-      }
-      if (/^plans$/i.test(text)) {await surfaces.plansOpener?.(); return;}
-      throw new Error(TASKS_USAGE);
-    },
-    /** `/team` shows the sidebar on the Team tab (a second `/team` on it hides the sidebar); `/team [sidebar] show|hide|toggle` sets it. */
+    /** `/team` toggles the sidebar (a second `/team` hides it); `/team [sidebar] show|hide|toggle` sets it. */
     async team(argument: string): Promise<void> {
       const match = /^(?:sidebar\s*)?(show|hide|toggle)?$/i.exec(argument.trim());
       if (!match) throw new Error(TEAM_USAGE);
-      if (!surfaces.requestPlanSidebar((match[1]?.toLowerCase() ?? 'toggle') as PlanSidebarMode, 'team')) throw new Error(TEAM_NO_TERMINAL);
+      if (!surfaces.requestSidebar((match[1]?.toLowerCase() ?? 'toggle') as SidebarMode)) throw new Error(TEAM_NO_TERMINAL);
     },
     /** Opens the detail page of one delegation (an activity id, or `<activityId>/<jobId>`), Esc returning through `backTo`; false when the session does not know it. */
     openDelegation,
-    /** Whether the session has delegated work the sidebar can draw as the work graph. */
-    hasWork(): boolean {return taskGraph(undefined, project(), session) !== undefined;},
     /** The title of one delegation, for links from other pages. */
     titleOf(id: string): string | undefined {
       const node = project().find(item => item.id === id);

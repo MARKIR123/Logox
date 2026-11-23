@@ -24,7 +24,7 @@ import type {useCursor, useStdout} from 'ink';
 import type {CommandSurface} from '../../runtime/command-surface.js';
 import type {CommandSurfaces} from '../../commands/surfaces.js';
 import type {MouseSubscriber} from '../terminal/mouse.js';
-import type {PlanSidebar} from '../panels/use-plan-sidebar.js';
+import type {TeamSidebar} from '../panels/use-team-sidebar.js';
 
 export type Setter<T> = Dispatch<SetStateAction<T>>;
 type Ref<T> = MutableRefObject<T>;
@@ -177,7 +177,7 @@ export interface ShellContext {
   noticeInline: boolean;
   activePills: readonly ActivePillItem[];
   // The plan sidebar (docked or overlay), its footer chip and the timeline width it leaves.
-  planSidebar: PlanSidebar;
+  planSidebar: TeamSidebar;
   timelineWidth: number;
   /** Scrolls the timeline to an actor's latest card (an actor pill click, a sidebar owner name). */
   locateActor(ownerId: string): void;

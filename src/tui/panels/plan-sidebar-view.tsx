@@ -1,5 +1,5 @@
-// Ink drawing of the plan sidebar's lines, for the two places the terminal plane does not paint them: the overlay a narrow terminal opens, and a timeline
-// without a plane (a plain Ink render). The lines come from `plan-sidebar.ts:paintSidebar`; this file only turns segments into `Text`.
+// Ink drawing of the sidebar's lines, for the two places the terminal plane does not paint them: the overlay a narrow terminal opens, and a timeline
+// without a plane (a plain Ink render). The lines come from `team-sidebar.ts:paintTeam`; this file only turns segments into `Text`.
 import {Box, Text} from 'ink';
 import {palette} from '../appearance/theme.js';
 import {formatClock} from '../terminal/text.js';
@@ -18,7 +18,7 @@ export function SideLines({lines}: {lines: readonly (readonly SideSegment[])[]})
 /** The sidebar as a panel on the right edge of the screen; the rest of the screen is a muted hint and a click target that closes it. */
 export function PlanOverlay({lines, x, width, height}: {lines: readonly (readonly SideSegment[])[]; x: number; width: number; height: number}) {
   return <Box flexDirection="row" width={x + width} height={height} overflow="hidden">
-    <Box width={x} height={height} flexShrink={0} flexDirection="column">{x > 0 ? <Text color={palette.muted} wrap="truncate">{' Tasks · Esc or Ctrl+B closes'}</Text> : null}</Box>
+    <Box width={x} height={height} flexShrink={0} flexDirection="column">{x > 0 ? <Text color={palette.muted} wrap="truncate">{' Team · Esc or Ctrl+B closes'}</Text> : null}</Box>
     <SideLines lines={lines}/>
   </Box>;
 }

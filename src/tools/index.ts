@@ -1,5 +1,6 @@
 import {dirname, join, relative, resolve} from 'node:path';
 import type {Activity} from '../runtime/contracts.js';
+import {isDirector} from '../runtime/director-id.js';
 import {inside, overreach, overreachNote, patternHolder, patternsOverlap} from './ownership.js';
 import {realpath} from 'node:fs/promises';
 import {existsSync, readFileSync} from 'node:fs';
@@ -552,7 +553,7 @@ export class Tools {
       }
       const common: DispatchOptions = {
         ...(fork ? {fork} : {}),
-        jobs, parallel, swarmName: profile.name, signal,
+        jobs, parallel, swarmName: profile.name, signal, ...(args.continueAct && isDirector(ownerId) ? {continueAct: true} : {}),
         cwd: this.cwd, root: await realpath(this.cwd), sessionId, principal: ownerId, activityId, released,
         resolveModel: environment.resolveModel,
         ...(environment.retries ? {retries: environment.retries()} : {}),

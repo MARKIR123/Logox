@@ -54,7 +54,7 @@ export interface SubmitDeps {
   session: string; cwd: string; homeDir: string; state: SessionState; env: NodeJS.ProcessEnv; resourceOptions: ResourceOptions | undefined;
   store: RuntimeStore; journal: Journal; surfaces: CommandSurfaces; authentication: LoginFlow; ensemble: DynamicEnsemble;
   permissions: PermissionEngine; tools: Tools; toolRegistry: ToolRegistry; actors: ActorCatalog; actorServices: ActorServices;
-  /** The session's plan board behind the task sidebar (`/tasks`). */
+  /** The session's plan board behind the team stage (`/team`) and the Programme page. */
   plans: PlanBoard;
   resources: Resources; contexts: ContextManager; registry: ProviderRegistry; modelPool: ModelPool;
   /** Every owner the session has a ledger for; `/undo` walks them. */
@@ -84,7 +84,7 @@ export function createSubmit(deps: SubmitDeps) {
   const anamnesisCommand = createAnamnesisCommand({surfaces, anamnesis, registry, modelPool, receipt});
   const tasksCommand = createTasksCommand({surfaces, store, session, actors, deliveries: () => actorServices.deliveries.snapshot(), journalPath: () => tools.automa?.journalPath?.(session),
     costs: async () => activityCosts((await Promise.all(owners.map(owner => journal.load(session, owner).catch(() => [])))).flat())});
-  createPlanPages({surfaces, board: plans, tasks: tasksCommand, actors, workTitle: id => tasksCommand.titleOf(id), hasWork: () => tasksCommand.hasWork()});
+  createPlanPages({surfaces, board: plans, tasks: tasksCommand, actors, store, session, workTitle: id => tasksCommand.titleOf(id)});
   /** `/providers check` and `/check-provider`: one request against the session provider, reported in a result panel. */
   const checkProvider = async (source: string) => {
     if (ensemble.isBusy()) throw new InputRejected('Tasks are running. Wait or cancel before checking provider.');
@@ -197,8 +197,6 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
     if (text === '/theme') {pages.openTheme(); return;}
-    const tasksArgs = /^\/tasks(?:\s+([\s\S]*))?$/i.exec(text);
-    if (tasksArgs) {await tasksCommand.command(tasksArgs[1] ?? ''); return;}
     const teamArgs = /^\/team(?:\s+([\s\S]*))?$/i.exec(text);
     if (teamArgs) {await tasksCommand.team(teamArgs[1] ?? ''); return;}
     const anamnesisArgs = /^\/anamnesis(?:\s+([\s\S]*))?$/i.exec(text);

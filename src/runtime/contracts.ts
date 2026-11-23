@@ -9,7 +9,9 @@ const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
   /** The plan node this task carries out (`src/runtime/plan.ts`); the plan holds the link, the activity keeps the origin. */
   planNode: z.string().trim().min(1).max(40).optional(),
-  resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), ownedFiles: z.array(z.string().trim().min(1)).max(32).optional(), acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional(), after: z.array(id).max(8).optional(), coordinationWake: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
+  resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), ownedFiles: z.array(z.string().trim().min(1)).max(32).optional(), acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional(), after: z.array(id).max(8).optional(), coordinationWake: z.boolean().optional(),
+  /** The Director's first dispatch of a new round reopens the previous act of the team stage instead of opening a new one (`src/runtime/team-acts.ts`); only a Director's dispatch carries it. */
+  continueAct: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),
   inputKind: inputKindSchema.optional(), authorization: z.array(z.string()).max(8).optional(),
   /** How the work ended (`stop-reason.ts`); while a task is stopping it briefly holds the cause word (`user`, `director_cancel`), and older sessions keep those words. */
   stopReason: storedStopSchema.optional(),
@@ -195,7 +197,9 @@ const automaJobStateSchema = z.strictObject({
 });
 export const automaSwarmSchema = z.strictObject({name: z.string(), jobs: z.array(automaJobStateSchema),
   /** The dispatch runs in the background: its tool step ended at once and the card keeps updating. */
-  background: z.boolean().optional()});
+  background: z.boolean().optional(),
+  /** The Director's dispatch reopens the previous act of the team stage (`src/runtime/team-acts.ts`). */
+  continueAct: z.boolean().optional()});
 export type AutomaJobState = z.infer<typeof automaJobStateSchema>;
 export type AutomaSwarm = z.infer<typeof automaSwarmSchema>;
 export const stepSchema = z.strictObject({title: z.string(), callId: z.string().optional(), call: toolCallSchema.optional(),

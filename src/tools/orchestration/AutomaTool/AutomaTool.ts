@@ -65,6 +65,7 @@ export const automaArgs = z.strictObject({
   release: z.array(z.string().min(1)).min(1).max(32).optional().describe('Rare: ids of finished workers to end now; they also end with your task'),
   mode: z.enum(AUTOMA_MODES).optional().describe('`wait` (default) returns when every job has ended; `background` returns at once and delivers each result as a message'),
   wait: z.array(z.string().min(1)).min(1).max(64).optional().describe('Alone: ids of your background jobs to wait for; their results come back as this call\'s result'),
+  continueAct: z.boolean().optional().describe('Rare, Director only: true when this first dispatch of a new round is the same piece of work as the last act on the team stage (a follow-up fix, the next step the user asked for in discussion): the act reopens instead of a new one starting. Ignored mid-act and for other callers'),
 });
 
 export type AutomaArgs = z.infer<typeof automaArgs>;
@@ -72,7 +73,7 @@ export const automaSchema = automaArgs;
 
 const PLACEHOLDER = /^(?:|n\/?a|na|none|null|nil|undefined|no|false|new|fresh|omit(?:ted)?|unused|default|auto|default_preset|-+|\/|\.|\.\w+|_+\w*_+|<.*>)$/i;
 const JOB_KEYS = new Set(['brief', 'title', 'name', 'scope', 'acceptance', 'writes', 'keep', 'continue', 'vision', 'after', 'node', 'fork']);
-const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait']);
+const TOP_KEYS = new Set(['context', 'jobs', 'style', 'parallel', 'release', 'mode', 'wait', 'continueAct']);
 
 function cleanList(value: unknown, keep?: RegExp): unknown {
   if (typeof value === 'string') value = [value];
@@ -169,6 +170,8 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
     const ids = raw.wait.filter(id => typeof id === 'string' && !PLACEHOLDER.test(id.trim())).map(id => (id as string).trim());
     if (ids.length) raw.wait = [...new Set(ids)]; else delete raw.wait;
   } else delete raw.wait;
+  if (raw.continueAct === 'true' || raw.continueAct === 'false') raw.continueAct = raw.continueAct === 'true';
+  if (raw.continueAct !== true) delete raw.continueAct;
   if (typeof raw.style !== 'string' || PLACEHOLDER.test(raw.style.trim())) delete raw.style; else raw.style = raw.style.trim();
   if (typeof raw.parallel !== 'number' || !Number.isInteger(raw.parallel) || raw.parallel < 1 || raw.parallel > 32) delete raw.parallel;
   for (const key of Object.keys(raw)) {
@@ -250,6 +253,8 @@ export interface DispatchOptions {
   readonly jobs: readonly (PlannedJob & {readonly id: string})[];
   readonly parallel: number;
   readonly swarmName: string;
+  /** The Director's dispatch reopens the previous act of the team stage (`src/runtime/team-acts.ts`); published on the swarm, never set for another caller. */
+  readonly continueAct?: boolean | undefined;
   readonly signal: AbortSignal;
   readonly cwd: string;
   readonly root: string;
@@ -426,7 +431,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
   const states: AutomaJobState[] = jobs.map((planned, index) => ({id: planned.id, ...(planned.job.name ? {name: planned.job.name} : {}), title: planned.job.title, state: followed[index]!.length ? 'waiting' : 'queued', elapsedMs: 0, calls: [],
     ...(planned.job.node ? {node: planned.job.node} : {}), ...(planned.fork ? {kind: 'fork' as const} : {}),
     ...(followed[index]!.length ? {after: followed[index]!} : {}), ...(options.background ? {delivered: false} : {})}));
-  const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {})});
+  const publish = () => options.onProgress?.({name: options.swarmName, jobs: states.map(state => ({...state, calls: [...state.calls]})), ...(options.background ? {background: true} : {}), ...(options.continueAct ? {continueAct: true} : {})});
   const finished: boolean[] = jobs.map(() => false);
   /** Results of finished workers this job follows, read before anything starts. */
   const external: {id: string; status: string; block: string | undefined}[][] = jobs.map(() => []);

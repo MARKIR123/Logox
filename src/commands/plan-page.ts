@@ -1,36 +1,43 @@
 /**
- * The plan pages behind the flowchart sidebar (`/tasks` shows it; there is no `/plan` command): a node's detail (acceptance, evidence, prerequisites and
- * links; a link opens the `/tasks` detail of that work) and the plan switcher (`/tasks plans`, the sidebar header's click and `p`) with one row per plan of
- * the project, a row for the session's work graph, and a re-activate row for a plan of an earlier session (`PlanBoard.adopt()`). Choosing a row tells the
- * sidebar what to draw (`CommandSurfaces.requestSidebarSource()`). Pages are a stack of the existing surfaces like `/tasks`, so keyboard, click, hover and
- * wheel behave as on every list. Nothing here owns state: rows come from the board (`src/store/plans.ts`) each time a level opens. The flowchart sidebar
- * (`src/tui/panels/plan-sidebar.ts`) opens a node's detail through `CommandSurfaces.openPlanNode()`.
+ * The plan pages behind the team stage (`/team`): the Programme page and a plan node's detail. The Programme (a click on the act header, or `p`) lists the acts of
+ * the session (natural rounds of work, `src/runtime/team-acts.ts`) in order, each with its tasks (the plan's nodes made inside it and the delegations) (status glyph, title, owner, how long it took or that it runs, `after <title>` prerequisites, `⑂` for a
+ * fork and `◦N` for its workers), marks the act the stage shows, and ends with the plans of earlier sessions that can be re-activated (`PlanBoard.adopt()`).
+ * Choosing an act heading moves the stage to that act (`CommandSurfaces.requestStageAct()`), a task opens its detail (a plan node's page with acceptance,
+ * evidence, prerequisites and links, or the delegation page of work nobody named in the plan; a link opens the delegation detail, Esc comes back), an earlier plan
+ * becomes this session's again. Ids are never shown. Pages are a stack of the existing surfaces, so keyboard, click, hover and wheel behave as on every list.
+ * Nothing here owns state: rows are projected from the store and the board (`src/store/plans.ts`) each time the page opens, with the same functions the stage
+ * uses (`src/runtime/team-acts.ts`), so the page and the stage always agree.
  */
 import type {PickerItem, TabAction, TabRow} from '../runtime/command-surface.js';
 import {formatDuration} from './tasks-page.js';
 import type {TasksCommand} from './tasks-page.js';
+import {projectDelegations} from '../runtime/delegations.js';
 import type {DerivedNode, DerivedPlan, NodeStatus} from '../runtime/plan.js';
+import type {RuntimeStore} from '../runtime/store.js';
+import {actIndexAt, actModel, directorCloses, programme, type ProgrammeAct, type ProgrammeTask} from '../runtime/team-acts.js';
+import {teamEvents} from '../runtime/team-events.js';
+import {taskGraph, type TaskGraph} from '../runtime/task-graph.js';
 import type {PlanBoard} from '../store/plans.js';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions} from './surfaces.js';
 
-export const PLAN_EMPTY_TEXT = 'There is no plan yet. The Director creates one with Plan when a request has more than one piece of work.';
+export const PROGRAMME_EMPTY_TEXT = 'Nothing has been planned or delegated in this session yet. The programme lists the acts once the Director plans a request or dispatches work.';
 export const PLAN_GLYPHS: Readonly<Record<NodeStatus, string>> = {pending: '○', ready: '◌', running: '●', waiting: '◐', done: '◉', accepted: '✓', failed: '✗', interrupted: '⊘', abandoned: '–'};
-const AUTO = '@auto', WORK = '@work', ADOPT = '@adopt:';
+const ACT = 'act:', TASK = 'task:', ADOPT = 'adopt:', EARLIER = '@earlier';
 
 export interface PlanPageDeps {
   surfaces: CommandSurfaces;
-  board: Pick<PlanBoard, 'peek' | 'view' | 'projectPlans' | 'adopt' | 'active'>;
+  board: Pick<PlanBoard, 'peek' | 'projectPlans' | 'adopt' | 'active'>;
   tasks: Pick<TasksCommand, 'openDelegation'>;
   actors: {find(id: string): {name: string} | undefined};
-  /** The title of linked work (`/tasks` row id), when the session knows it. */
+  store: Pick<RuntimeStore, 'getSnapshot'>;
+  session: string;
+  /** The title of linked work (a delegation id), when the session knows it. */
   workTitle(id: string): string | undefined;
-  /** Whether the session has delegated work to draw as the work graph. */
-  hasWork(): boolean;
 }
 
 export function createPlanPages(deps: PlanPageDeps) {
-  const {surfaces, board, tasks, workTitle} = deps;
+  const {surfaces, board, tasks, workTitle, store, session} = deps;
   const name = (ownerId: string) => deps.actors.find(ownerId)?.name ?? ownerId;
   const open = async (...args: Parameters<CommandSurfaces['openPicker']>) => {
     if (surfaces.getSnapshot()) surfaces.close();
@@ -75,43 +82,65 @@ export function createPlanPages(deps: PlanPageDeps) {
     surfaces.openPage('Plan node · ' + node.title, [{id: 'detail', title: name(node.owner), ...tabContent(body), ...(actions.length ? {actions} : {})}], 'detail', pageActions);
   };
 
-  /** The detail page of one node of the session's plan (the sidebar's double-click and Enter), or of the earlier session's plan named by `planId` (read-only); Esc closes it. */
-  const openNode = async (id: string, planId?: string): Promise<void> => {
-    const plan = planId === undefined ? board.peek() : await board.view(planId);
-    const node = plan?.nodes.find(item => item.id === id);
-    if (!plan || !node) throw new Error('That node no longer exists.');
-    await openDetail(plan, node, async () => {});
+  /** The task graph and the acts the stage draws right now (the same projection the terminal makes). */
+  const current = (): {graph: TaskGraph | undefined; model: ReturnType<typeof actModel>} => {
+    const snapshot = store.getSnapshot();
+    const graph = taskGraph(board.peek(), projectDelegations({snapshot, sessionId: session}), session);
+    return {graph, model: actModel(graph, teamEvents({snapshot, sessionId: session}), directorCloses(snapshot, session))};
   };
-  surfaces.planNodeOpener = openNode;
 
-  /** What the sidebar draws, chosen from a list of the project's plans (and the session's work). */
-  const openSwitcher = async (): Promise<void> => {
-    const headers = await board.projectPlans();
-    const items: PickerItem[] = [{id: AUTO, label: 'Follow the session', description: 'The plan, else the work done so far, else the latest earlier plan'}];
-    if (deps.hasWork()) items.push({id: WORK, label: 'Work so far', description: 'The delegated work of this session as a graph (no plan)'});
-    for (const header of headers) {
-      items.push({id: header.id, label: header.title,
-        description: [header.status, header.nodes + ' nodes', header.current ? 'this session' : 'earlier session, read-only', formatAge(header.updatedAt)].join(' · ')});
-      if (!header.current && header.status !== 'abandoned') items.push({id: ADOPT + header.id, label: '  Re-activate "' + header.title + '" in this session',
-        description: board.active() ? 'Another plan is active: abandon it first' : 'Work then links to it again'});
+  const taskRow = (task: ProgrammeTask): PickerItem => {
+    const parts = [name(task.owner), task.status === 'running' ? 'running' : task.took !== undefined ? formatDuration(task.took) : task.status,
+      ...(task.after.length ? ['after ' + task.after.join(', ')] : []), ...(task.forked ? ['⑂'] : []), ...(task.workers ? ['◦' + task.workers] : [])];
+    return {id: TASK + task.id, label: '    ' + '  '.repeat(task.depth) + PLAN_GLYPHS[task.status] + ' ' + task.title, description: parts.join(' · ')};
+  };
+  const actRow = (act: ProgrammeAct, total: number, here: number): PickerItem => {
+    const p = act.progress;
+    return {id: ACT + act.index, label: (act.index === here ? '▸ ' : '  ') + `Act ${act.index + 1} of ${total} · ${act.title}`,
+      description: `${p.done}/${p.total}` + (p.failed ? ` · ${p.failed} failed` : '') + ' · ' + act.status};
+  };
+
+  /**
+   * The Programme page: every act with its tasks, the act the stage shows marked (`here`, else the act of the newest event), and the plans of earlier sessions to
+   * re-activate at the bottom.
+   */
+  const openProgramme = async (here?: number): Promise<void> => {
+    const {graph, model} = current();
+    const acts = programme(model), shown = here ?? actIndexAt(model, model.events.length - 1);
+    const earlier = (await board.projectPlans().catch(() => [])).filter(header => !header.current && header.status !== 'abandoned');
+    const items: PickerItem[] = acts.flatMap(act => [actRow(act, acts.length, shown), ...act.tasks.map(taskRow)]);
+    if (earlier.length) {
+      items.push({id: EARLIER, label: 'Earlier plans · re-activate', description: board.active() ? 'Another plan is active: abandon it first' : 'Work then links to the plan again', disabled: true});
+      for (const header of earlier) items.push({id: ADOPT + header.id, label: '    ' + header.title, description: [header.nodes + ' nodes', header.status, formatAge(header.updatedAt)].join(' · ')});
     }
-    await open({title: 'Plans', description: 'Enter shows it in the sidebar · Esc closes', current: '', items, emptyText: PLAN_EMPTY_TEXT},
+    const back = async () => {await openProgramme(here);};
+    await open({title: 'Programme', description: 'Enter shows an act on the stage or opens a task · Esc closes', current: '', items, emptyText: PROGRAMME_EMPTY_TEXT},
       async () => ({items}), async id => {
-        if (id === AUTO) {surfaces.requestSidebarSource({kind: 'auto'}); surfaces.requestPlanSidebar('show'); return {};}
-        if (id === WORK) {surfaces.requestSidebarSource({kind: 'work'}); surfaces.requestPlanSidebar('show'); return {};}
-        if (id.startsWith(ADOPT)) {
-          const adopted = await board.adopt(id.slice(ADOPT.length));
-          if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
-          surfaces.requestSidebarSource({kind: 'plan', id: id.slice(ADOPT.length)}); surfaces.requestPlanSidebar('show');
-          return {message: 'Plan "' + (headers.find(header => header.id === id.slice(ADOPT.length))?.title ?? 'earlier plan') + '" is active in this session again.', presentation: 'status' as const};
+        if (id.startsWith(ACT)) {
+          const act = acts.find(item => item.index === Number(id.slice(ACT.length)));
+          if (!act) return {message: 'That act no longer exists.', kind: 'command_error' as const};
+          surfaces.requestSidebar('show'); surfaces.requestStageAct(act.index);
+          return {};
         }
-        surfaces.requestSidebarSource({kind: 'plan', id}); surfaces.requestPlanSidebar('show');
+        if (id.startsWith(TASK)) {
+          const nodeId = id.slice(TASK.length), task = acts.flatMap(act => act.tasks).find(item => item.id === nodeId);
+          const node = graph?.plan.nodes.find(item => item.id === nodeId);
+          if (task?.delegation && await tasks.openDelegation(task.delegation, back)) return {};
+          if (graph && node) {await openDetail(graph.plan, node, back); return {};}
+          return {message: 'That task no longer exists.', kind: 'command_error' as const};
+        }
+        if (id.startsWith(ADOPT)) {
+          const planId = id.slice(ADOPT.length), adopted = await board.adopt(planId);
+          if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
+          surfaces.requestSidebar('show');
+          return {message: 'Plan "' + (earlier.find(header => header.id === planId)?.title ?? 'earlier plan') + '" is active in this session again.', presentation: 'status' as const};
+        }
         return {};
       });
   };
-  surfaces.plansOpener = openSwitcher;
+  surfaces.programmeOpener = openProgramme;
 
-  return {openNode, openSwitcher};
+  return {openProgramme, openDetail};
 }
 export type PlanPages = ReturnType<typeof createPlanPages>;
 

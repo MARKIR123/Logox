@@ -2,11 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import type {TeamEvent} from '../src/runtime/team-events.js';
-import {actorDetail, rosterOrder, stageAt, workerName} from '../src/runtime/team-stage.js';
-import {CONTENT_X} from '../src/tui/panels/plan-sidebar.js';
+import type {Delegation} from '../src/runtime/delegations.js';
+import type {Plan, PlanNode} from '../src/runtime/plan.js';
+import {taskGraph} from '../src/runtime/task-graph.js';
+import {actModel, finalScene, plannedWork, sceneAt} from '../src/runtime/team-acts.js';
+import {actorDetail, rosterOrder, stageAt, workerName, type StageSnapshot} from '../src/runtime/team-stage.js';
+import {CONTENT_X} from '../src/tui/panels/sidebar-frame.js';
 import {PLAY_STEP_MS, arrived, buildTeamLayout, emptyTeamView, paintTeam, positionOf, selectedId, stageRowsFor, stepPlay, stepTeamKey, stepTeamMouse, teamGeometry, teamGeometryFor, teamLabeler, teamWidth,
   togglePlay, type TeamLayout, type TeamPointer, type TeamView} from '../src/tui/panels/team-sidebar.js';
-import {GAP, PULSE_MS, buildStage, controlsRow, nextSpeed, pulseAt, scrubPosition, stageHeight, stripRow, workerPieces, type StagePlan} from '../src/tui/panels/team-stage.js';
+import {GAP, PULSE_MS, buildStage, controlsRow, nextSpeed, pulseAt, reserveFor, scrubPosition, stageHeight, stripRow, workerPieces, type StagePlan} from '../src/tui/panels/team-stage.js';
 
 const SYMBOLS: Record<string, string> = {logox: '◈', kalon: '✧', techne: '⊞', aletheia: '◎'};
 const label = teamLabeler(id => ({symbol: SYMBOLS[id] ?? '◇', name: id}));
@@ -30,7 +34,12 @@ function story(): TeamEvent[] {
     wait('aletheia', 'techne'), report('techne'), message('kalon', 'aletheia')];
 }
 const ROWS = (plan: StagePlan) => plan.rows.map(row => row.map(cell => cell.text).join(''));
-const stageOf = (events: readonly TeamEvent[], index: number, width: number): StagePlan => buildStage(stageAt(events, index), stageAt(events, events.length - 1), width, label);
+/** A stage of one scene (no acts): its height reserved from the end of the stream, as the sidebar does for each act. */
+const buildOne = (snapshot: StageSnapshot, final: StageSnapshot, width: number): StagePlan => {
+  const need = reserveFor([final]);
+  return buildStage(snapshot, need, stageHeight([final], need, width, label), width, label);
+};
+const stageOf = (events: readonly TeamEvent[], index: number, width: number): StagePlan => buildOne(stageAt(events, index), stageAt(events, events.length - 1), width);
 
 // ---------------------------------------------------------------------------------------------------------------------------------- state
 test('only the actors that appeared up to the index are on stage, in roster order whatever the order of appearance', () => {
@@ -127,7 +136,8 @@ test('every row is exactly the width at 36, 56 and 80 columns and the height nev
       assert.ok(ROWS(plan).every(row => stringWidth(row) === width), `${width}: every row is ${width} cells\n` + ROWS(plan).join('\n'));
     }
     assert.equal(heights.size, 1, `${width}: one height for the whole replay`);
-    assert.equal(stageHeight(stageAt(events, events.length - 1), width, label), [...heights][0]);
+    const final = stageAt(events, events.length - 1);
+    assert.equal(stageHeight([final], reserveFor([final]), width, label), [...heights][0]);
   }
   assert.equal(stageOf(events, 3, 12).height, 0, 'no room for a stage under 20 columns');
 });
@@ -195,7 +205,7 @@ test('a message is the segment of the channel under the cards between the two po
 test('no edge is ever drawn through a card and the cards read the same with or without edges', () => {
   const events = story();
   for (const width of [33, 53, 77]) for (let index = 0; index < events.length; index++) {
-    const plan = stageOf(events, index, width), bare = buildStage({...stageAt(events, index), edges: [], waits: [], recent: [], current: undefined as never, hasUser: false}, stageAt(events, events.length - 1), width, label);
+    const plan = stageOf(events, index, width), bare = buildOne({...stageAt(events, index), edges: [], waits: [], recent: [], current: undefined as never, hasUser: false}, stageAt(events, events.length - 1), width);
     const rows = ROWS(plan), bareRows = ROWS(bare);
     for (const box of plan.boxes) {
       if (box.id === 'user') continue;
@@ -307,7 +317,7 @@ test('a short sidebar collapses the stage to the controls and a one-line status;
   const wide = paintTeam({layout: roomy, view: {...emptyTeamView, live: false, selected: roomy.ids[5]!}, width: 64, height: 24, focused: false, ownerColor: () => '#fff', label, stage: true}).map(line => line.map(segment => segment.text).join(''));
   assert.match(wide[3]!, /^│ Working ✧ kalon ⊞ techne · Waiting ◎ aletheia · Done —/);
   assert.match(lines[2]!, /^│ ◀ ▶ ▶ Play /);
-  assert.match(lines.at(-1)!, /^│ +all members ▾ *$/, 'with a stage the footer keeps only the member filter');
+  assert.match(lines.at(-1)!, /^│ [●○] Live +all members ▾ *$/, 'with a stage the footer keeps the Live switch and the member filter; the controls row carries the stepping');
   assert.equal(lines.filter(line => line.includes('◀ ▶')).length, 1, 'the stepping buttons appear once');
   const plain = paintTeam({layout, view: {...emptyTeamView, live: false, selected: layout.ids[5]!}, width: 56, height: 24, focused: false, ownerColor: () => '#fff', label}).map(line => line.map(segment => segment.text).join(''));
   assert.match(plain.at(-1)!, /^│ ◀ ▶ {3}6 \/ 8 /, 'without a stage the footer keeps the full form');
@@ -490,8 +500,8 @@ test('the controls work by click and key: play and pause, step, speed, Home and 
   const end = stepTeamKey(layout, view, geometry, {end: true}).view;
   assert.equal(end.live, true);
   assert.equal(selectedId(layout, end), layout.ids.at(-1));
-  // The Live switch of the header still works.
-  const live = stepTeamMouse(layout, view, geometry, {x: 56 - 3, y: 0, action: 'press'}, 0, 56, label).view;
+  // The Live switch sits at the left of the footer row, beside the member filter.
+  const live = stepTeamMouse(layout, view, geometry, {x: CONTENT_X + 2, y: geometry.height - 1, action: 'press'}, 0, 56, label).view;
   assert.equal(live.live, true);
 });
 
@@ -521,7 +531,7 @@ test('the scrubber jumps on a click and follows a drag, even outside the panel, 
 
 test('a click on a card selects it and filters the feed to that member, again clears it; a double click (or Enter) opens the actor; hover brightens', () => {
   const {events, layout, geometry, press} = setup();
-  const plan = buildStage(stageAt(events, 7), stageAt(events, events.length - 1), layout.width, label);
+  const plan = buildOne(stageAt(events, 7), stageAt(events, events.length - 1), layout.width);
   const kalon = plan.boxes.find(item => item.id === 'kalon')!, logox = plan.boxes.find(item => item.id === 'logox')!;
   const px = kalon.x0 + 2, py = geometry.header + 1 + kalon.y0 + 1;
   const view: TeamView = {...emptyTeamView, live: false, selected: layout.ids[7]!};
@@ -576,4 +586,65 @@ test('on a short sidebar the strip names are clickable too, and the stage rows s
   const feedY = geometry.header + geometry.stage;
   const click = stepTeamMouse(layout, view, geometry, {x: CONTENT_X + 12, y: feedY + 1, action: 'press'}, 0, 56, label);
   assert.ok(click.view.selected !== undefined && click.effects.some(effect => effect.kind === 'focus'));
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------- acts: the cards carry the task
+/** Two acts of one plan (`Draw`, then `Animate`); the second has a worker out, a wait, a task not started yet and a failure on request. */
+function acted(failTechne = false) {
+  const node = (id: string, extra: Partial<PlanNode> = {}): PlanNode => ({id, title: 'Node ' + id, owner: 'techne', after: [], acceptance: [], links: [], ...extra});
+  const plan: Plan = {id: 'p1', title: 'Pelican', status: 'active', createdAt: 0, updatedAt: 1, sessionId: 's', nodes: [
+    node('1', {title: 'Draw', owner: 'logox'}), node('1.1', {title: 'Ink', owner: 'kalon', links: [{activityId: 'k1'}]}),
+    node('2', {title: 'Animate', owner: 'logox'}), node('2.1', {title: 'Pedal', links: [{activityId: 't2'}, {automaJob: 't2/J1'}]}),
+    node('2.2', {title: 'Review', owner: 'aletheia', after: ['2.1'], links: [{activityId: 'al'}]}), node('2.3', {title: 'Ship', owner: 'aletheia'})]};
+  const d = (id: string, extra: Partial<Delegation> = {}): Delegation => ({id, kind: 'actor', ownerId: 'techne', title: id, status: 'completed', rootId: id, children: [], blockedBy: [],
+    assignment: {title: extra.title ?? id, owns: [], acceptance: []}, ...extra});
+  const delegations = [d('R', {kind: 'director', ownerId: 'logox'}), d('k1', {ownerId: 'kalon', parentId: 'R', rootId: 'R'}), d('t2', {parentId: 'R', rootId: 'R'}),
+    d('al', {ownerId: 'aletheia', parentId: 'R', rootId: 'R', status: 'queued'}), d('t2/J1', {kind: 'automa', jobId: 'J1', parentId: 't2', rootId: 'R', status: 'done', title: 'scout'})];
+  fresh();
+  const at = (event: TeamEvent, ref: string, extra: Partial<TeamEvent> = {}): TeamEvent => ({...event, ref, ...extra});
+  const events = [user(), at(assign('kalon'), 'k1'), at(report('kalon'), 'k1'), user(), at(assign('techne'), 't2'), at(workers('techne', {title: 'scout'}), 't2/J1'), at(wait('aletheia', 'techne'), 'al'),
+    at(result('techne', 'scout'), 't2/J1'), at(report('techne', failTechne ? 'failed' : 'done'), 't2')];
+  const closes = [events[2]!.at + 1000];
+  return {events, model: actModel(taskGraph(plan, delegations, 's'), events, closes)};
+}
+const sceneStage = (model: ReturnType<typeof acted>['model'], index: number, width: number) => {
+  const scene = sceneAt(model, index), final = finalScene(model, scene.act), need = reserveFor([final], plannedWork(model));
+  return buildStage(scene.snapshot, need, stageHeight([final], need, width, label), width, label);
+};
+
+test('the cards say what each actor is doing in the act: its task with n/m, why it waits, done or failed, its workers, and the next task that has not started', () => {
+  const {model} = acted();
+  const text = (index: number, width = 56) => ROWS(sceneStage(model, index, width)).join('\n');
+  // Act 1: Kalon sketches, then its report settles the task.
+  assert.match(text(1), /✧ Kalon/);
+  assert.match(text(1), /│ Ink +│/);
+  assert.match(text(2), /Ink +done/, 'settled: the title with `done`');
+  assert.doesNotMatch(text(2), /Techne|Animate|Pedal|Review/, 'act 1 is its own scene');
+  // Act 2 with the worker out and Aletheia held: Techne reads `Pedal loop 0/1` and its worker; Aletheia the wait reason and its next task.
+  const mid = text(6);
+  assert.match(mid, /Pedal +0\/1/);
+  assert.match(mid, /◦ scout …/);
+  assert.match(mid, /waits techne/);
+  assert.match(mid, /next: Ship/);
+  assert.doesNotMatch(mid, /Kalon|Ink/, 'Kalon left the stage with act 1');
+  assert.match(text(7), /Pedal +1\/1/, 'the worker\'s result moves n');
+  const done = text(8);
+  assert.match(done, /Pedal +done/);
+  assert.doesNotMatch(done, /waits techne/, 'the wait ended with the report');
+  assert.match(done, /Review/, 'Aletheia is on its own task once its wait ended');
+  // A failure reads failed.
+  assert.match(ROWS(sceneStage(acted(true).model, 8, 56)).join('\n'), /Pedal +failed/);
+  // The height never moves inside an act, whatever the point, and every row is as wide as the stage.
+  for (let index = 4; index <= 8; index++) {const plan = sceneStage(model, index, 56); assert.equal(plan.height, sceneStage(model, 4, 56).height); assert.ok(ROWS(plan).every(row => stringWidth(row) === 56));}
+});
+
+test('with no task for an actor the card falls back to its state word; the next row exists only where the plan has tasks not yet started', () => {
+  const {model} = acted();
+  fresh();
+  const events = [user(), assign('kalon'), report('kalon')];
+  const bare = actModel(undefined, events, []);
+  assert.match(ROWS(sceneStage(bare, 1, 56)).join('\n'), /working/, 'no task graph: the card shows the state word');
+  const withPlan = sceneStage(model, 2, 56), without = sceneStage(bare, 2, 56);
+  assert.ok(withPlan.height > without.height, 'the plan reserves the next row');
+  assert.doesNotMatch(ROWS(without).join('\n'), /next:/);
 });

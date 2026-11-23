@@ -281,7 +281,7 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
     for (const item of used) groups.set(key(item), [...groups.get(key(item)) ?? [], item.record]);
     return Object.fromEntries([...groups].map(([name, list]) => [name, totalsOf(list, config)]));
   };
-  // The delegation record of this run (the same projection `/tasks` reads): every companion activity and Automa job, with how it ended.
+  // The delegation record of this run (the same projection the Programme page reads): every companion activity and Automa job, with how it ended.
   const owners = [...new Set(activities.map(activity => activity.ownerId))];
   const ledgers = (await Promise.all(owners.map(owner => app.journal.load(session, owner).catch(() => [])))).flat().filter(entry => entry.activityId && ids.has(entry.activityId));
   const costs = activityCosts(ledgers);

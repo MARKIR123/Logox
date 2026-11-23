@@ -21,7 +21,8 @@ import {rowText} from '../src/commands/tab-rows.js';
 import {projectDelegations} from '../src/runtime/delegations.js';
 import {statusText} from '../src/commands/tasks-page.js';
 import {derivePlan, type Plan} from '../src/runtime/plan.js';
-import {buildFlow} from '../src/tui/panels/plan-flow.js';
+import {actModel, programme} from '../src/runtime/team-acts.js';
+import {taskGraph} from '../src/runtime/task-graph.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
@@ -416,10 +417,9 @@ test('Fork: forks are marked in the delegation record, /tasks, the plan and the 
     {id: '1.2', title: 'Worker step', owner: 'techne', after: [], acceptance: [], links: [{automaJob: 'a/T2'}]}]};
   const derived = derivePlan(plan, records);
   assert.deepEqual(derived.nodes.map(node => node.forked), [undefined, true, undefined]);
-  const flow = buildFlow(derived, {width: 40, perRow: 1, expanded: new Map([['1', true]]), owners: owner => ({symbol: '◆', name: owner})});
-  const flowText = JSON.stringify(flow.rows.map(row => row.map(cell => cell.text).join('')));
-  assert.match(flowText, /╭─+ techne ⑂ ◦1 ─╮/, 'a fork shows its owner as the actor and ⑂ in the owner tag of the top border of its card');
-  assert.equal((flowText.match(/⑂/g) ?? []).length, 1, 'only the forked node carries the mark');
+  const dispatch = {id: 'w', at: 1000, from: 'techne', to: [], kind: 'workers' as const, text: '2 workers', ref: 'a/T1', refs: ['a/T1', 'a/T2']};
+  const tasks = programme(actModel(taskGraph(plan, records, 's'), [dispatch]))[0]!.tasks.filter(task => task.id !== '1');
+  assert.deepEqual(tasks.map(task => [task.title, task.owner, task.forked, task.workers]), [['Forked step', 'techne', true, 1], ['Worker step', 'techne', false, 1]], 'the Programme page marks the forked task and keeps the actor as owner');
 
   const rows = (folds: Record<string, boolean> = {}) => buildStageRows(snapshot, 's', 'techne', 100, folds, null);
   const text = (row: SceneRow) => row.displayText ?? row.text;

@@ -30,7 +30,7 @@ export const TASKS_TITLE = 'Tasks';
 export interface TaskGraph {
   /** The merged plan with statuses derived from the delegations. */
   readonly plan: DerivedPlan;
-  /** Synthesized node id -> the delegation id whose detail page it opens (`/tasks` detail). */
+  /** Synthesized node id -> the delegation id whose detail page it opens (the Programme page). */
   readonly delegationOf: ReadonlyMap<string, string>;
   /** The ids of the synthesized nodes (everything else is a node of the plan). */
   readonly synthetic: ReadonlySet<string>;

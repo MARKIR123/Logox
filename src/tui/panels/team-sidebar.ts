@@ -1,8 +1,13 @@
 /**
- * The Team tab of the sidebar (the team event stream of `src/runtime/team-events.ts`: every dispatch and reply of the team, in time order) as pure functions:
- * `buildTeamLayout()` (events + width + member filter -> rows of cells and the hit boxes of the posts), `paintTeam()` (layout + view -> one line of styled
+ * The sidebar: the team stage and the team event stream under it (`src/runtime/team-events.ts`: every dispatch and reply of the team, in time order), one act at
+ * a time (`src/runtime/team-acts.ts`: an act is a top-level phase of the task graph) as pure functions:
+ * `buildTeamLayout()` (events + acts + width + member filter -> rows of cells and the hit boxes of the posts), `paintTeam()` (layout + view -> one line of styled
  * segments per screen row, each exactly the sidebar's width) and the two reducers that run keyboard (`stepTeamKey`) and mouse (`stepTeamMouse`).
- * `use-plan-sidebar.ts` holds the state and applies the effects. Nothing here reads a clock or a store, and no cell ever carries a background.
+ * `use-team-sidebar.ts` holds the state and applies the effects. Nothing here reads a clock or a store, and no cell ever carries a background.
+ *
+ * The header is the act header: `‹ Act 2 of 3 · <phase title>   ━━━ 3/5 ›` (`‹ ›` and `[` `]` step to the previous or next act that has events, a click on the
+ * title or `p` opens the Programme page), with a muted ` · 1 failed` when an item failed. The act follows the replay point (the selected event; the newest while
+ * Live), and the stage shows only that act's events up to the replay point.
  *
  * A post is two rows: the header (the sender's glyph and name in its actor colour, ` → @a @b` the recipients, ` · assign` / ` · done` a muted kind or a status
  * word in its status colour, the time `HH:MM` right-aligned) and one faint body line clipped with `…`. A `waiting` post is the header alone and a `workers` post
@@ -14,19 +19,20 @@
  * view follows it, so the scroll position is always derived from the selection (`effectiveScroll`) and a width or filter change never loses it. The selected
  * index (`positionOf`) counts the visible posts; the unfiltered stream and its index are what a later graph with replay reads.
  *
- * Geometry: column 0 is the border (as in `plan-sidebar.ts`), the content starts at column 2. Rows: header (tabs and Live, then a rule), the body, footer (a rule,
- * then `◀ ▶ · selected / total · elapsed · member filter`). A screen too short for both drops the rules.
+ * Geometry: column 0 is the border (`sidebar-frame.ts`), the content starts at column 2. Rows: header (the act header, then a rule), the body, footer (a rule,
+ * then `◀ ▶ · selected / total · elapsed · member filter`; with the stage `● Live` and the member filter). A screen too short for both drops the rules.
  */
 import stringWidth from 'string-width';
+import {actIndexAt, actModel, actProgress, actStatus, sceneAt, finalScene, plannedWork, type ActModel, type ActStatus, type Scene} from '../../runtime/team-acts.js';
 import {involves, teamMembers, type TeamEvent, type TeamStatus} from '../../runtime/team-events.js';
-import {stageAt, type StageSnapshot} from '../../runtime/team-stage.js';
+import type {StageSnapshot} from '../../runtime/team-stage.js';
 import {faintColor, frameColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
-import {fit, formatTook, type FlowTone} from './plan-flow.js';
-import {CONTENT_X, DOUBLE_CLICK_MS, TASKS_LABEL, TEAM_LABEL, sideLine, toneColor} from './plan-sidebar.js';
-import {FEED_MIN, STAGE_FULL_MIN, STRIP_MIN, buildStage, controlsRow, nextSpeed, pulseAt, scrubPosition, stageHeight, stripRow, type ControlsRow, type StageBox, type StageCell, type StageLabeler,
-  type StagePlan, type StageRow} from './team-stage.js';
+import {fit, formatTook, type FlowTone} from './panel-text.js';
+import {CONTENT_X, DOUBLE_CLICK_MS, sideLine, toneColor} from './sidebar-frame.js';
+import {FEED_MIN, STAGE_FULL_MIN, STRIP_MIN, buildStage, controlsRow, nextSpeed, pulseAt, reserveFor, scrubPosition, stageHeight, stripRow, type ControlsRow, type Reserve, type StageBox, type StageCell,
+  type StageLabeler, type StagePlan, type StageRow} from './team-stage.js';
 
 // ---------------------------------------------------------------------------------------------------------------------------------- layout
 export interface TeamCell {
@@ -53,6 +59,8 @@ export interface TeamLayout {
   /** The visible events and the whole stream (the filter is applied to it). */
   readonly events: readonly TeamEvent[];
   readonly all: readonly TeamEvent[];
+  /** The acts of the session and the act of every event of `all` (`src/runtime/team-acts.ts`). */
+  readonly acts: ActModel;
   /** When the stream began (the elapsed time counts from it). */
   readonly firstAt: number;
   /** The members of the whole stream, for the filter picker. */
@@ -61,7 +69,9 @@ export interface TeamLayout {
   readonly width: number;
 }
 export type Labeler = (id: string) => {readonly symbol: string; readonly name: string};
-export interface TeamOptions {readonly width: number; readonly filter?: string | undefined; readonly label: Labeler}
+export interface TeamOptions {readonly width: number; readonly filter?: string | undefined; readonly label: Labeler;
+  /** The acts (`actModel(graph, events)` of the same events); absent: the stream is one scene with no acts. */
+  readonly acts?: ActModel | undefined}
 /** Counts layouts built; tests assert an unrelated store change builds none. */
 export const teamStats = {builds: 0};
 
@@ -153,11 +163,12 @@ export function buildTeamLayout(all: readonly TeamEvent[], options: TeamOptions)
     rows.push(head.row);
     if (lines) rows.push(lines);
   }
-  return {rows, boxes, ids: events.map(event => event.id), byId, events, all, firstAt: all[0]?.at ?? 0, members: teamMembers(all), filter, width};
+  const acts = options.acts && options.acts.events === all ? options.acts : actModel(options.acts?.graph, all);
+  return {rows, boxes, ids: events.map(event => event.id), byId, events, all, acts, firstAt: all[0]?.at ?? 0, members: teamMembers(all), filter, width};
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------- view
-export type TeamControl = 'tasks' | 'live' | 'prev' | 'next' | 'filter';
+export type TeamControl = 'act' | 'actPrev' | 'actNext' | 'live' | 'prev' | 'next' | 'filter';
 export interface TeamView {
   /** Follows the newest post. */
   readonly live: boolean;
@@ -206,17 +217,25 @@ export function teamGeometry(height: number, stage: {readonly rows: number; read
   return {height, header, footer, stage: rows, stageMode: rows ? stage.mode : 'off', body: Math.max(0, height - header - footer - rows)};
 }
 const stubLabel: StageLabeler = id => ({symbol: '◇', name: id});
-const finals = new WeakMap<readonly TeamEvent[], StageSnapshot>();
-/** The stage at the end of the stream (memoised per array: it reserves the stage's height). */
-function finalOf(all: readonly TeamEvent[]): StageSnapshot {
-  let known = finals.get(all);
-  if (!known) {known = stageAt(all, all.length - 1); finals.set(all, known);}
+interface Metrics {readonly reserve: Reserve; readonly height: number}
+const metrics = new WeakMap<ActModel, Map<number, Metrics>>();
+/** What every act of the stream reserves and the rows of the tallest scene at `width` (memoised per model and width): the stage keeps one height for the whole replay. */
+function metricsFor(model: ActModel, width: number): Metrics {
+  let byWidth = metrics.get(model);
+  if (!byWidth) {byWidth = new Map(); metrics.set(model, byWidth);}
+  let known = byWidth.get(width);
+  if (!known) {
+    const finals = Array.from({length: Math.max(1, model.acts.length)}, (_, act) => finalScene(model, act));
+    const reserve = reserveFor(finals, plannedWork(model));
+    known = {reserve, height: stageHeight(finals, reserve, width, stubLabel)};
+    byWidth.set(width, known);
+  }
   return known;
 }
 /** How many rows the stage takes in a panel `height` rows tall: the full stage (controls, graph, current post) on a tall sidebar, the controls and a one-line status on a short one, nothing under `STRIP_MIN`. */
 export function stageRowsFor(layout: TeamLayout, height: number): {readonly rows: number; readonly mode: StageMode} {
-  if (!layout.all.length || height < STRIP_MIN) return {rows: 0, mode: 'off'};
-  const graph = stageHeight(finalOf(layout.all), layout.width, stubLabel), full = 1 + graph + 3;
+  if (!layout.all.length && !layout.acts.acts.length || height < STRIP_MIN) return {rows: 0, mode: 'off'};
+  const graph = metricsFor(layout.acts, layout.width).height, full = 1 + graph + 3;
   if (graph > 0 && height >= STAGE_FULL_MIN && height - 4 - full >= FEED_MIN) return {rows: full, mode: 'full'};
   return {rows: 2, mode: 'strip'};
 }
@@ -288,22 +307,77 @@ const filtered = (view: TeamView, member: string | undefined): TeamView => ({...
 interface Region {readonly x0: number; readonly x1: number; readonly control: TeamControl}
 interface Chrome {readonly cells: readonly TeamCell[]; readonly regions: readonly Region[]}
 const LIVE_ON = '● Live', LIVE_OFF = '○ Live';
-/** The tabs and the Live switch (content coordinates, `content` cells wide). */
-function headerChrome(content: number, view: TeamView): Chrome {
-  const live = view.live ? LIVE_ON : LIVE_OFF, liveX = Math.max(TASKS_LABEL.length + 2 + TEAM_LABEL.length + 1, content - live.length);
-  const cells: TeamCell[] = [{text: TASKS_LABEL, tone: view.hoveredControl === 'tasks' ? 'accent' : 'muted'}, {text: '  ', tone: 'fg'}, {text: TEAM_LABEL, tone: 'strong', bold: true},
-    {text: ' '.repeat(Math.max(1, liveX - TASKS_LABEL.length - 2 - TEAM_LABEL.length)), tone: 'fg'},
-    {text: live, tone: view.hoveredControl === 'live' ? 'accent' : view.live ? 'success' : 'muted', bold: view.live}];
-  return {cells, regions: [{x0: 0, x1: TASKS_LABEL.length, control: 'tasks'}, {x0: liveX, x1: liveX + live.length, control: 'live'}]};
+/** The index (into all events) of the replay point: the selected event, -1 with none. */
+function replayIndex(layout: TeamLayout, view: TeamView): number {
+  const id = selectedId(layout, view);
+  return id === undefined ? -1 : indexInAll(layout.all, id);
+}
+/** The act the replay point is in (0 with no acts). */
+export const currentAct = (layout: TeamLayout, view: TeamView): number => actIndexAt(layout.acts, replayIndex(layout, view));
+/** Selects the first visible event of `act` (and leaves Live); undefined when the act has none under the member filter. */
+export function jumpToAct(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, act: number): TeamView | undefined {
+  const id = layout.ids.find(item => layout.acts.actOf[indexInAll(layout.all, item)] === act);
+  return id === undefined ? undefined : selectAt(layout, view, geometry, layout.byId.get(id)!);
+}
+/** The view stepped to the first event of the nearest previous (`-1`) or next (`1`) act that has events; undefined at the ends. */
+export function stepAct(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, direction: 1 | -1): TeamView | undefined {
+  const act = actTarget(layout, view, direction);
+  return act === undefined ? undefined : jumpToAct(layout, view, geometry, act);
+}
+/** The nearest act in `direction` with a visible event. */
+function actTarget(layout: TeamLayout, view: TeamView, direction: 1 | -1): number | undefined {
+  if (layout.acts.acts.length < 2) return undefined;
+  for (let act = currentAct(layout, view) + direction; act >= 0 && act < layout.acts.acts.length; act += direction) {
+    if (layout.ids.some(item => layout.acts.actOf[indexInAll(layout.all, item)] === act)) return act;
+  }
+  return undefined;
+}
+const ACT_STATUS_TONE: Readonly<Record<ActStatus, FlowTone>> = {pending: 'muted', running: 'accent', done: 'success', failed: 'error'};
+/** `‹ Act 2 of 3 · Phase title      ━━━━ 3/5 ›` in `content` cells: the act header with the step arrows; the bar goes first when narrow, then the words of the label. */
+function headerChrome(layout: TeamLayout, view: TeamView, content: number): Chrome {
+  const model = layout.acts, acts = model.acts;
+  const hot = (control: TeamControl, base: FlowTone): FlowTone => view.hoveredControl === control ? 'accent' : base;
+  if (!acts.length) {
+    const text = fit('Team · no acts yet', Math.max(1, content));
+    return {cells: [{text, tone: hot('act', 'muted'), bold: view.hoveredControl === 'act'}], regions: [{x0: 0, x1: stringWidth(text), control: 'act'}]};
+  }
+  const index = replayIndex(layout, view), k = actIndexAt(model, index), act = acts[k]!;
+  const progress = actProgress(model, act, index), status = actStatus(model, act, index, progress), tone = ACT_STATUS_TONE[status];
+  const hasPrev = actTarget(layout, view, -1) !== undefined, hasNext = actTarget(layout, view, 1) !== undefined;
+  const counter = `${progress.done}/${progress.total}`, failed = progress.failed ? ` · ${progress.failed} failed` : '';
+  const prefixes = [`Act ${k + 1} of ${acts.length} · `, `${k + 1}/${acts.length} · `];
+  const arrows = 4; // '‹ ' and ' ›'
+  const variants: {prefix: string; bar: number; failed: boolean}[] = [];
+  for (const prefix of prefixes) for (const bar of [8, 0]) for (const withFailed of [true, false]) variants.push({prefix, bar, failed: withFailed && failed !== ''});
+  const right = (variant: {bar: number; failed: boolean}) => (variant.bar ? variant.bar + 1 : 0) + counter.length + (variant.failed ? failed.length : 0);
+  const room = (variant: {prefix: string; bar: number; failed: boolean}) => content - arrows - stringWidth(variant.prefix) - 1 - right(variant);
+  const chosen = variants.find(variant => room(variant) >= 8) ?? variants.find(variant => room(variant) >= 3) ?? variants.at(-1)!;
+  const title = fit(act.title, Math.max(1, room(chosen)));
+  const left = [{text: '‹', tone: hot('actPrev', hasPrev ? 'fg' : 'faint')}, {text: ' ', tone: 'fg' as const}];
+  const label: TeamCell[] = [{text: chosen.prefix.replace(/ · $/, ''), tone: hot('act', tone)}, {text: ' · ', tone: 'muted'}, {text: title, tone: hot('act', 'strong'), bold: true}];
+  const labelWidth = stringWidth(chosen.prefix) + stringWidth(title);
+  const filled = chosen.bar ? progress.total ? Math.round(chosen.bar * progress.done / progress.total) : 0 : 0;
+  const tail: TeamCell[] = [
+    ...(chosen.bar ? [{text: '━'.repeat(filled), tone: 'success' as const}, {text: '─'.repeat(chosen.bar - filled), tone: 'line' as const}, {text: ' ', tone: 'fg' as const}] : []),
+    {text: counter, tone: 'fg'}, ...(chosen.failed ? [{text: failed, tone: 'muted' as const}] : [])];
+  const tailWidth = right(chosen);
+  const gap = Math.max(1, content - 2 - labelWidth - tailWidth - 2);
+  const cells: TeamCell[] = [...left, ...label, {text: ' '.repeat(gap), tone: 'fg'}, ...tail, {text: ' ', tone: 'fg'}, {text: '›', tone: hot('actNext', hasNext ? 'fg' : 'faint')}];
+  const nextX = 2 + labelWidth + gap + tailWidth + 1;
+  return {cells, regions: [{x0: 0, x1: 1, control: 'actPrev'}, {x0: 2, x1: 2 + labelWidth, control: 'act'}, {x0: nextX, x1: nextX + 1, control: 'actNext'}]};
 }
 /** `◀ ▶   13 / 26 · +9m47s            all members ▾`: the stepping buttons, where the selection is and the member filter; the elapsed time and then words go first when narrow. With a stage (`staged`) only the member filter remains, right-aligned. */
 function footerChrome(layout: TeamLayout, view: TeamView, content: number, label: Labeler, staged = false): Chrome {
   if (staged) {
-    // The stage's controls row already carries the stepping buttons, the counter and the elapsed time: the footer keeps the member filter only, right-aligned.
-    const name = (view.filter === undefined ? 'all members' : label(view.filter).name) + ' ▾', text = stringWidth(name) <= content ? name : view.filter === undefined ? 'all ▾' : '▾';
-    const x = Math.max(0, content - stringWidth(text));
-    return {cells: [{text: ' '.repeat(x), tone: 'fg'}, {text, tone: view.hoveredControl === 'filter' || view.picker !== undefined ? 'accent' : view.filter === undefined ? 'muted' : 'fg', bold: view.filter !== undefined}],
-      regions: [{x0: x, x1: content, control: 'filter'}]};
+    // The stage's controls row already carries the stepping buttons, the counter and the elapsed time: the footer keeps the Live switch at the left and the member filter, right-aligned.
+    const live = view.live ? LIVE_ON : LIVE_OFF;
+    const name = (view.filter === undefined ? 'all members' : label(view.filter).name) + ' ▾';
+    const fits = (text: string) => stringWidth(text) + live.length + 1 <= content;
+    const text = fits(name) ? name : view.filter === undefined ? 'all ▾' : '▾';
+    const x = Math.max(live.length + 1, content - stringWidth(text));
+    return {cells: [{text: live, tone: view.hoveredControl === 'live' ? 'accent' : view.live ? 'success' : 'muted', bold: view.live}, {text: ' '.repeat(x - live.length), tone: 'fg'},
+      {text, tone: view.hoveredControl === 'filter' || view.picker !== undefined ? 'accent' : view.filter === undefined ? 'muted' : 'fg', bold: view.filter !== undefined}],
+      regions: [{x0: 0, x1: live.length, control: 'live'}, {x0: x, x1: content, control: 'filter'}]};
   }
   const position = positionOf(layout, view), selected = selectedId(layout, view);
   const at = selected === undefined ? undefined : layout.events[layout.byId.get(selected)!]!.at;
@@ -356,18 +430,19 @@ function indexInAll(all: readonly TeamEvent[], id: string): number {
   if (!map) {map = new Map(all.map((event, at) => [event.id, at] as const)); indexes.set(all, map);}
   return map.get(id) ?? -1;
 }
-let snapshotCache: {all: readonly TeamEvent[]; index: number; snapshot: StageSnapshot} | undefined;
-const snapshotAt = (all: readonly TeamEvent[], index: number): StageSnapshot => {
-  if (snapshotCache?.all === all && snapshotCache.index === index) return snapshotCache.snapshot;
-  const snapshot = stageAt(all, index);
-  snapshotCache = {all, index, snapshot};
-  return snapshot;
+let sceneCache: {acts: ActModel; index: number; scene: Scene} | undefined;
+const sceneFor = (acts: ActModel, index: number): Scene => {
+  if (sceneCache?.acts === acts && sceneCache.index === index) return sceneCache.scene;
+  const scene = sceneAt(acts, index);
+  sceneCache = {acts, index, scene};
+  return scene;
 };
-let planCache: {all: readonly TeamEvent[]; index: number; width: number; label: Labeler; plan: StagePlan} | undefined;
-const planAt = (all: readonly TeamEvent[], index: number, width: number, label: Labeler): StagePlan => {
-  if (planCache?.all === all && planCache.index === index && planCache.width === width && planCache.label === label) return planCache.plan;
-  const plan = buildStage(snapshotAt(all, index), finalOf(all), width, label);
-  planCache = {all, index, width, label, plan};
+let planCache: {acts: ActModel; index: number; width: number; label: Labeler; plan: StagePlan} | undefined;
+const planAt = (acts: ActModel, index: number, width: number, label: Labeler): StagePlan => {
+  if (planCache?.acts === acts && planCache.index === index && planCache.width === width && planCache.label === label) return planCache.plan;
+  const {reserve, height} = metricsFor(acts, width);
+  const plan = buildStage(sceneFor(acts, index).snapshot, reserve, height, width, label);
+  planCache = {acts, index, width, label, plan};
   return plan;
 };
 /** `── #13  ⊞ techne → @logox · done ─────────── 08:32`, one body line and a closing rule: the current post under the stage. */
@@ -382,12 +457,11 @@ function eventCard(event: TeamEvent, ordinal: number, width: number, label: Labe
 function stageModel(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, label: Labeler): StageModel | undefined {
   if (geometry.stageMode === 'off') return undefined;
   const selected = selectedId(layout, view);
-  if (selected === undefined) return undefined;
-  const event = layout.events[layout.byId.get(selected)!]!, index = indexInAll(layout.all, selected);
-  const snapshot = snapshotAt(layout.all, index);
+  const event = selected === undefined ? undefined : layout.events[layout.byId.get(selected)!]!, index = selected === undefined ? -1 : indexInAll(layout.all, selected);
+  const snapshot = sceneFor(layout.acts, index).snapshot;
   const controls = controlsRow({width: layout.width, playing: view.playing ?? false, speed: speedOf(view), position: positionOf(layout, view), total: layout.ids.length,
-    elapsed: event.at - layout.firstAt, hovered: view.hoveredStage});
-  if (geometry.stageMode === 'full') return {mode: 'full', controls, plan: planAt(layout.all, index, layout.width, label), card: eventCard(event, index + 1, layout.width, label), stripBoxes: [], snapshot};
+    elapsed: event ? event.at - layout.firstAt : 0, hovered: view.hoveredStage});
+  if (geometry.stageMode === 'full') return {mode: 'full', controls, plan: planAt(layout.acts, index, layout.width, label), ...(event ? {card: eventCard(event, index + 1, layout.width, label)} : {}), stripBoxes: [], snapshot};
   const strip = stripRow(snapshot.actors, layout.width, label), boxes: StripBox[] = [];
   let x = 0;
   for (const cell of strip) {const size = stringWidth(cell.text); if (cell.actor !== undefined) boxes.push({id: cell.actor, x0: x, x1: x + size}); x += size;}
@@ -478,7 +552,7 @@ export function paintTeam(input: TeamPaint): SideSegment[][] {
   const paintRow = (row: TeamRow) => row.map(cell => segmentOf(cell, input, selected));
   const lines: SideSegment[][] = [];
   const rule = (): SideSegment[] => sideLine(frame, [{text: '─'.repeat(Math.max(0, content)), color: palette.line}]);
-  if (geometry.header >= 1) lines.push(sideLine(frame, paintRow(headerChrome(content, view).cells), true));
+  if (geometry.header >= 1) lines.push(sideLine(frame, paintRow(headerChrome(layout, view, content).cells), true));
   if (geometry.header >= 2) lines.push(rule());
   if (geometry.stage > 0) {
     const model = stageModel(layout, view, geometry, label);
@@ -531,14 +605,18 @@ export type TeamEffect =
   | {readonly kind: 'close'}
   | {readonly kind: 'drag'}
   | {readonly kind: 'reset-width'}
-  | {readonly kind: 'tab'; readonly tab: 'tasks' | 'team'}
+  /** Open the Programme page (the acts with their tasks, and the earlier plans to re-activate). */
+  | {readonly kind: 'programme'}
   /** Open the detail page of a stage card's actor. */
   | {readonly kind: 'actor'; readonly id: string};
 export interface TeamStep {readonly view: TeamView; readonly effects: readonly TeamEffect[]; readonly consumed: boolean}
 export interface TeamKey {readonly up?: boolean; readonly down?: boolean; readonly left?: boolean; readonly right?: boolean; readonly enter?: boolean; readonly escape?: boolean;
   readonly pageUp?: boolean; readonly pageDown?: boolean; readonly home?: boolean; readonly end?: boolean;
-  /** `t`: back to the Tasks tab. */
-  readonly tab?: boolean;
+  /** `p`: the Programme page. */
+  readonly programme?: boolean;
+  /** `[` and `]`: the previous and the next act. */
+  readonly actPrev?: boolean;
+  readonly actNext?: boolean;
   /** `f`: the member filter. */
   readonly filter?: boolean;
   /** Space: play or pause the replay. */
@@ -548,8 +626,9 @@ export interface TeamKey {readonly up?: boolean; readonly down?: boolean; readon
   readonly slower?: boolean}
 
 /**
- * Keyboard while the sidebar has focus on the Team tab: arrows step through the posts, Enter opens one (or the chosen stage card's actor), End returns to Live, Space plays or pauses the
- * replay, `+` and `-` change its speed, `f` opens the member filter, `t` the Tasks tab. `now` is the host's clock (a replay started by Space pulses from it).
+ * Keyboard while the sidebar has focus: arrows step through the posts, `[` `]` jump to the previous or next act, Enter opens a post (or the chosen stage card's actor),
+ * End returns to Live, Space plays or pauses the replay, `+` and `-` change its speed, `f` opens the member filter, `p` the Programme page. `now` is the host's
+ * clock (a replay started by Space pulses from it).
  */
 export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, key: TeamKey, now = 0): TeamStep {
   const done = (next: TeamView, effects: readonly TeamEffect[] = []): TeamStep => ({view: next, effects, consumed: true});
@@ -563,7 +642,8 @@ export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGe
     return done(view);
   }
   if (key.escape) return done(view, [{kind: 'blur'}]);
-  if (key.tab) return done(view, [{kind: 'tab', tab: 'tasks'}]);
+  if (key.programme) return done(view, [{kind: 'programme'}]);
+  if (key.actPrev || key.actNext) return done(stepAct(layout, manual(view), geometry, key.actNext ? 1 : -1) ?? view);
   if (key.space) return done(togglePlay(layout, view, geometry, now));
   if (key.faster || key.slower) return done({...view, speed: nextSpeed(speedOf(view), key.faster ? 1 : -1, false)});
   if (key.filter) return done({...view, picker: layout.filter === undefined ? 0 : layout.members.indexOf(layout.filter) + 1});
@@ -660,11 +740,11 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     return done(...stagePress(layout, current, geometry, model, hit, cx, now));
   }
   if (pointer.y < geometry.header && pointer.y === 0) {
-    const control = regionAt(headerChrome(content, current), cx);
+    const control = regionAt(headerChrome(layout, current, content), cx);
     if (pointer.action === 'move') return move(control === current.hoveredControl && current.hovered === undefined ? current : rest({hoveredControl: control}));
     if (pointer.action === 'press') {
-      if (control === 'tasks') return done(current, [{kind: 'focus'}, {kind: 'tab', tab: 'tasks'}]);
-      if (control === 'live') return done(goLive(layout, current, geometry), [{kind: 'focus'}]);
+      if (control === 'act') return done(current, [{kind: 'focus'}, {kind: 'programme'}]);
+      if (control === 'actPrev' || control === 'actNext') return done(stepAct(layout, manual(current), geometry, control === 'actNext' ? 1 : -1) ?? current, [{kind: 'focus'}]);
       return done(current, [{kind: 'focus'}]);
     }
     return done(current);
@@ -677,6 +757,7 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     const index = positionOf(layout, current) - 1;
     if (control === 'prev') return done(selectAt(layout, current, geometry, index - 1), [{kind: 'focus'}]);
     if (control === 'next') return done(selectAt(layout, current, geometry, index + 1), [{kind: 'focus'}]);
+    if (control === 'live') return done(goLive(layout, current, geometry), [{kind: 'focus'}]);
     if (control === 'filter') return done({...current, picker: current.filter === undefined ? 0 : layout.members.indexOf(current.filter) + 1}, [{kind: 'focus'}]);
     return done(current, [{kind: 'focus'}]);
   }

@@ -5,9 +5,12 @@
  * position of the travelling dot as a function of elapsed milliseconds; `controlsRow()` and `stripRow()` are the timeline controls and the one-line status the
  * stage collapses to on a short sidebar. No cell ever carries a background.
  *
- * Cards: rounded (`╭╮╰╯`), equal width per row (`MIN_CARD` to `CAP_CARD`, `GAP` between), four rows (border, `<glyph> Name`, state, border) plus one row for the
- * workers the actor dispatched when any actor ever did (`◦ scout ✓  ◦ palette …  ⑂ sketch`, `◦3 ✓2` when narrow); a narrow or crowded stage uses the compact
- * form (name and a state glyph share a row). Companions that do not fit one row wrap into evenly filled rows left aligned at column 2.
+ * Cards: rounded (`╭╮╰╯`), equal width per row (`MIN_CARD` to `CAP_CARD`, `GAP` between), four rows (border, `<glyph> Name`, the actor's task in the act, border)
+ * plus one row for the workers the actor dispatched when any actor ever did (`◦ scout ✓  ◦ palette …  ⑂ sketch`, `◦3 ✓2` when narrow) and one for `next: <task>`
+ * when the plan has tasks that are not started (`Reserve.next`). The task row (`StageCard`, filled by `src/runtime/team-acts.ts:stageCards`) is the task title
+ * clipped with ` n/m` at the right, or the wait reason (`waits techne`, `awaiting approval`), or the title with `done` / `failed`; an actor with no task shows its
+ * state word. A narrow or crowded stage uses the compact form (name and a state glyph share a row, no task row). Companions that do not fit one row wrap into evenly
+ * filled rows left aligned at column 2. A stage shows one act: its height is the tallest of the acts, so it never moves while a replay runs.
  *
  * Edges are right-angled box characters on one canvas with connection masks (left, right, up, down), so lines join wherever they meet and never enter a card
  * (cards are locked cells). Assign and report run along the bus: down the stem under Logox, along the bus row, a trunk in column 0 to the next card row, and
@@ -21,7 +24,7 @@
 import stringWidth from 'string-width';
 import {DIRECTOR_ID} from '../../runtime/director-id.js';
 import type {StageActor, StageJob, StageSnapshot, StageState} from '../../runtime/team-stage.js';
-import {fit, formatTook, type FlowTone} from './plan-flow.js';
+import {fit, formatTook, type FlowTone} from './panel-text.js';
 
 export const GAP = 3, MIN_CARD = 11, CAP_CARD = 16, LOGOX_CARD = 13, LOGOX_ROWS = 3;
 /** Rows of channels under every card row that has message traffic. */
@@ -182,6 +185,27 @@ export function workerPieces(jobs: readonly StageJob[], room: number): Piece[] {
   return [{text: fit('◦' + jobs.length, room), tone: 'muted'}];
 }
 
+const OUTCOME_TONE: Readonly<Record<'done' | 'failed' | 'interrupted', FlowTone>> = {done: 'success', failed: 'error', interrupted: 'muted'};
+/** The task row of a card in `room` cells: the wait reason, the title with `done`/`failed`, the title with ` n/m` at the right, or the state word when the actor has no task. */
+export function taskPieces(actor: StageActor, room: number): Piece[] {
+  const card = actor.card;
+  if (room < 2) return [];
+  if (card?.wait) return [{text: fit(card.wait, room), tone: 'warning'}];
+  if (card?.title === undefined) return [{text: fit(actor.state, room), tone: STATE_TONE[actor.state]}];
+  if (card.outcome) {
+    const word = card.outcome, gap = room - stringWidth(word) - 1;
+    return gap >= 3 ? [{text: fit(card.title, gap) + ' ', tone: 'fg'}, {text: word, tone: OUTCOME_TONE[word]}] : [{text: fit(word, room), tone: OUTCOME_TONE[word]}];
+  }
+  if (card.m !== undefined && card.n !== undefined) {
+    const count = ` ${card.n}/${card.m}`, gap = room - stringWidth(count);
+    if (gap >= 3) {
+      const title = fit(card.title, gap);
+      return [{text: title, tone: 'fg'}, {text: ' '.repeat(Math.max(0, gap - stringWidth(title))), tone: 'fg'}, {text: count, tone: 'muted'}];
+    }
+  }
+  return [{text: fit(card.title, room), tone: 'fg'}];
+}
+
 interface Cards {readonly cw: number; readonly rows: readonly (readonly StageActor[])[]; readonly x0: number}
 function cardsFor(actors: readonly StageActor[], width: number, centre: number): Cards {
   const n = actors.length;
@@ -203,8 +227,10 @@ function cardsFor(actors: readonly StageActor[], width: number, centre: number):
 
 // ---------------------------------------------------------------------------------------------------------------------------------- layout
 /** What the vertical geometry keeps free so it never moves while a replay runs: derived from the final state of the stream. */
-export interface Reserve {readonly user: boolean; readonly workers: boolean; readonly channels: number}
-export const reserveFor = (final: StageSnapshot): Reserve => ({user: final.hasUser, workers: final.actors.some(actor => actor.jobs.length > 0), channels: final.peers ? CHANNELS : 0});
+export interface Reserve {readonly user: boolean; readonly workers: boolean; readonly channels: number; readonly next: boolean}
+/** The rows to keep free for a stage whose acts end in `finals` (one snapshot per act); `next` when the plan has tasks that may still be waiting to start. */
+export const reserveFor = (finals: readonly StageSnapshot[], next = false): Reserve =>
+  ({user: finals.some(final => final.hasUser), workers: finals.some(final => final.actors.some(actor => actor.jobs.length > 0)), channels: finals.some(final => final.peers) ? CHANNELS : 0, next});
 
 interface Edge {readonly from: string; readonly to: string; readonly style: Style}
 interface Slot {readonly actor: StageActor; readonly row: number; readonly index: number; readonly x: number; readonly ccx: number}
@@ -218,7 +244,8 @@ function layout(snapshot: StageSnapshot, width: number, label: StageLabeler, nee
   const user = need.user || snapshot.hasUser;
   const workersRow = need.workers || snapshot.actors.some(actor => actor.jobs.length > 0);
   const compact = cards.cw < 13 || snapshot.actors.length > 6;
-  const height = (compact ? 3 : 4) + (workersRow ? 1 : 0);
+  const nextRow = need.next && !compact;
+  const height = (compact ? 3 : 4) + (workersRow ? 1 : 0) + (nextRow ? 1 : 0);
   const channels = Math.max(need.channels, snapshot.peers ? CHANNELS : 0);
   const yL = user ? 2 : 0, yS = yL + LOGOX_ROWS, yB = yS + 1;
   const trunkX = width - 1;
@@ -277,9 +304,11 @@ function layout(snapshot: StageSnapshot, width: number, label: StageLabeler, nee
       canvas.put(slot.x + cards.cw - 3, y + 1, STATE_GLYPH[actor.state], {tone: STATE_TONE[actor.state], actor: id}, {force: true, lock: true});
     } else {
       centred(id, slot.x, y + 1, cards.cw, [{text: fit(name.symbol + ' ' + title(name.name), inner), tone: 'owner'}], true, id);
-      centred(id, slot.x, y + 2, cards.cw, [{text: actor.state, tone: STATE_TONE[actor.state]}]);
+      // The task row may reach the right border's neighbour cell: `waits techne` and `2/3` read in a card of 14.
+      left(id, slot.x, y + 2, taskPieces(actor, inner - 1));
     }
-    if (workersRow) left(id, slot.x, y + height - 2, workerPieces(actor.jobs, inner - 2));
+    if (workersRow) left(id, slot.x, y + height - 2 - (nextRow ? 1 : 0), workerPieces(actor.jobs, inner - 2));
+    if (nextRow && actor.card?.next) left(id, slot.x, y + height - 2, [{text: 'next: ', tone: 'muted'}, {text: fit(actor.card.next, Math.max(1, inner - 2 - 6)), tone: 'faint'}]);
   }
   if (user) {
     const text = '✓ you', x = Math.max(0, cx - Math.floor(stringWidth(text) / 2));
@@ -410,7 +439,7 @@ function layout(snapshot: StageSnapshot, width: number, label: StageLabeler, nee
       for (const to of current.to) {
         const slot = slots.get(to);
         if (!slot || !workersRow) continue;
-        const wy = top[slot.row]! + height - 2;
+        const wy = top[slot.row]! + height - 2 - (nextRow ? 1 : 0);
         paths.push([{x: slot.ccx, y: wy}, {x: slot.ccx, y: wy - 1}, ...(compact ? [] : [{x: slot.ccx, y: wy - 2}])]);
       }
     } else if (current.kind !== 'workers') {
@@ -426,23 +455,20 @@ function layout(snapshot: StageSnapshot, width: number, label: StageLabeler, nee
   return {width, height: rows.length, rows, boxes, paths};
 }
 
-/** The rows the stage needs at the end of the replay (and so at every point of it); 0 when `width` is too small for a stage. */
-export function stageHeight(final: StageSnapshot, width: number, label: StageLabeler): number {
+/** The rows the stage needs for the tallest of its acts (`finals` holds the end state of each, `need` what they reserve), so it never moves; 0 when `width` is too small for a stage. */
+export function stageHeight(finals: readonly StageSnapshot[], need: Reserve, width: number, label: StageLabeler): number {
   if (width < 20) return 0;
-  return layout(final, width, label, reserveFor(final)).height;
+  return Math.max(layout(finals[0] ?? EMPTY_SNAPSHOT, width, label, need).height, ...finals.map(final => layout(final, width, label, need).height));
 }
+const EMPTY_SNAPSHOT: StageSnapshot = {index: -1, actors: [], hasUser: false, edges: [], waits: [], recent: [], peers: false};
 
-/**
- * The stage of `snapshot`, `width` cells wide. `final` is the state at the end of the stream: it reserves the rows (the user marker, the worker row and the
- * channel rows) so the height never changes while a replay steps through.
- */
-export function buildStage(snapshot: StageSnapshot, final: StageSnapshot, width: number, label: StageLabeler): StagePlan {
+/** The stage of `snapshot`, `width` cells wide, padded to `height` (the tallest act, `stageHeight()`) so the rows never change while a replay steps through. */
+export function buildStage(snapshot: StageSnapshot, need: Reserve, height: number, width: number, label: StageLabeler): StagePlan {
   if (width < 20) return {width, height: 0, rows: [], boxes: [], paths: []};
-  const need = reserveFor(final);
-  const plan = layout(snapshot, width, label, need), full = layout(final, width, label, need).height;
-  if (plan.height >= full) return plan;
-  const pad: StageRow[] = Array.from({length: full - plan.height}, () => [{text: ' '.repeat(width), tone: 'fg'}]);
-  return {...plan, height: full, rows: [...plan.rows, ...pad]};
+  const plan = layout(snapshot, width, label, need);
+  if (plan.height >= height) return plan;
+  const pad: StageRow[] = Array.from({length: height - plan.height}, () => [{text: ' '.repeat(width), tone: 'fg'}]);
+  return {...plan, height, rows: [...plan.rows, ...pad]};
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------- pulse

@@ -39,15 +39,17 @@ async function fixture() {
     async close() {for (const app of apps) await app.close().catch(() => {}); await rm(root, {recursive: true, force: true});}};
 }
 const surface = (app: App) => app.surfaces.getSnapshot();
+/** What a click on a team post of work does: the delegation detail of `ref`. */
+const openWork = (app: App, ref: string) => app.surfaces.openTeamPost({id: 'work:' + ref, at: 0, from: 'logox', to: ['techne'], kind: 'assign', text: ref, ref});
 
 /** One Director round that dispatched Techne (waiting for approval, with a job under it) and Kalon after it. */
 async function seed(app: App) {
   const base = {sessionId: app.sessionId, stage: '', detail: ''};
   app.store.activities.create({...base, activityId: 'root', ownerId: 'logox', kind: 'director', title: 'Fix the parser', status: 'running', rootActivityId: 'root'});
   app.store.activities.create({...base, activityId: 'tech', ownerId: 'techne', kind: 'actor', title: 'Techne · Builder', taskTitle: 'Build the parser', status: 'running', stage: 'On stage',
-    rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', ownedFiles: ['src/parser/**'], acceptance: ['all tests pass']});
+    rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', ownedFiles: ['src/parser/**'], acceptance: ['all tests pass'], inputKind: 'director'});
   app.store.activities.create({...base, activityId: 'kal', ownerId: 'kalon', kind: 'actor', title: 'Kalon · Aesthete', taskTitle: 'Polish the output', status: 'queued', stage: 'Waiting on Techne',
-    rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', after: ['tech']});
+    rootActivityId: 'root', parentActivityId: 'root', batchId: 'batch-1', after: ['tech'], inputKind: 'director'});
   const swarm: AutomaSwarm = {name: 'work crew', jobs: [{id: 'T1', name: 'scout', title: 'Find the callers', state: 'done', elapsedMs: 4200, calls: [], route: 'read', model: 'mock/reader', stopReason: 'completed',
     summary: 'three callers', evidence: ['a.ts:1'], notVerified: ['b.ts']}]};
   app.store.message(app.sessionId, 'techne', 'assistant', '', {activityId: 'tech', kind: 'tool', step: {title: 'Automa', state: 'completed', elapsedMs: 0, swarm}});
@@ -55,7 +57,7 @@ async function seed(app: App) {
     usage: {input: 10, output: 5, cacheRead: 0, cacheWrite: 0, provider: 'p', model: 'm', cost: 0.0123, currency: 'USD'}});
 }
 
-test('the work of a round reads as a graph: phases, steps, tasks, after edges and statuses come from the delegation record (the pure merge is in task-graph.test.ts)', async () => {
+test('the delegation record carries the work of a round: after edges and statuses (the pure merge is in task-graph.test.ts, the acts in team-acts.test.ts)', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
@@ -77,7 +79,7 @@ test('a delegation opens its detail: assignment, status, result; Esc closes it',
     const app = await f.open();
     await seed(app);
     app.store.activities.update(app.sessionId, 'tech', {status: 'completed', stage: 'Completed', stopReason: 'completed', title: 'Parser built', summary: {title: 'Parser built', report: 'Built the parser; tests pass.', source: 'model'}});
-    app.surfaces.openWorkNode('tech');
+    openWork(app, 'tech');
     await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the detail'});
     let page = surface(app);
     const lines = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!.lines.join('\n');
@@ -88,7 +90,7 @@ test('a delegation opens its detail: assignment, status, result; Esc closes it',
     app.surfaces.cancel();
     await waitFor(() => surface(app), current => current === null, {label: 'closed'});
     // A worker: its own detail, with the result fields and a transcript action.
-    app.surfaces.openWorkNode('tech/T1');
+    openWork(app, 'tech/T1');
     await waitFor(() => surface(app)?.kind, kind => kind === 'page', {label: 'the worker detail'});
     page = surface(app);
     const job = (page as Extract<CommandSurface, {kind: 'page'}>).tabs[0]!;
@@ -98,7 +100,7 @@ test('a delegation opens its detail: assignment, status, result; Esc closes it',
   } finally {await f.close();}
 });
 
-test('with no plan the task graph is reachable through /tasks; a double click opens a work node, a click on Open conversation switches to the actor, Esc comes back', {timeout: 30000}, async () => {
+test('with no plan the work of a round is one act on the stage (/team); the act header opens the Programme, a task opens its delegation detail, Open conversation switches to the actor, Esc comes back', {timeout: 30000}, async () => {
   const f = await fixture();
   const input = new TerminalInput(), output = new TerminalScreen();
   output.columns = 120; output.rows = 32;
@@ -114,26 +116,24 @@ test('with no plan the task graph is reachable through /tasks; a double click op
     const sidebar = () => output.lines.map(line => line.slice(79)).join('\n');
     const find = (needle: string, x0 = 0) => {const y = output.lines.findLastIndex(line => line.indexOf(needle, x0) >= 0); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); return {y, x: output.lines[y]!.indexOf(needle, x0)};};
     const click = async (needle: string, x0 = 79) => {const {x, y} = find(needle, x0); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
-    /** A click on the title row of a card (the tooltip row repeats the title of the hovered node, so a plain text search would find that). */
-    const clickCard = async (title: string) => {
-      const pattern = new RegExp('│ \\S ' + title), y = output.lines.findIndex(line => pattern.test(line.slice(79)));
-      assert.ok(y >= 0, title + ' card on screen:\n' + screen());
-      const x = 79 + output.lines[y]!.slice(79).search(pattern) + 3;
-      await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);
-    };
+    /** Two clicks on the first row that reads `needle` (a click selects a picker row, the second one chooses it). */
+    const clickFirst = async (needle: string) => {const y = output.lines.findIndex(line => line.includes(needle)); assert.ok(y >= 0, needle + ' on screen:\n' + screen()); const x = output.lines[y]!.indexOf(needle); await send(`\x1b[<0;${x + 1};${y + 1}M`); await send(`\x1b[<0;${x + 1};${y + 1}m`);};
+    const choose = async (needle: string) => {await delay(150); await clickFirst(needle); await delay(80); await clickFirst(needle);};
     await delay(100);
-    assert.ok(!/no plan/.test(screen()), 'a session without a plan does not open the sidebar by itself');
-    assert.match(screen(), /▸ Tasks \d+\/\d+/, 'the footer chip offers it');
-    await act(async () => {await app.submit('/tasks');}); await instance.waitUntilRenderFlush();
-    await waitFor(() => sidebar(), text => /Tasks · no plan/.test(text) && /│ \S Build/.test(text) && /│ \S Polish/.test(text), {label: 'the task graph of the work'});
-    assert.match(sidebar(), /│ \S scout · Find/, 'a named worker leads with its name on the task graph');
+    assert.ok(!/Act 1 of 1/.test(screen()), 'a session without a plan does not open the sidebar by itself');
+    assert.match(screen(), /▸ Act 1\/1 · \d\/2/, 'the footer chip offers it');
+    await act(async () => {await app.submit('/team');}); await instance.waitUntilRenderFlush();
+    await waitFor(() => sidebar(), text => /‹ Act 1 of 1 · (Build|Polish)/.test(text) && /\d\/2 ›/.test(text), {label: 'the act header of the round'});
     assert.doesNotMatch(sidebar(), /\b\d+(\.\d+)+\b/, 'no node id on the sidebar');
-    await clickCard('Build'); await clickCard('Build');
+    await click('Act 1 of 1');
+    await waitFor(() => screen(), text => /Programme/.test(text) && /Build the parser/.test(text) && /Polish the output/.test(text), {label: 'the Programme page'});
+    assert.match(screen(), /scout · Find the callers/, 'a named worker leads with its name on the programme');
+    await choose('● Build the parser');
     await waitFor(() => screen(), text => /Assignment/.test(text) && /src\/parser/.test(text), {label: 'the delegation detail'});
     assert.match(screen(), /o Open conversation/);
     await send('\x1b');
-    await waitFor(() => screen(), text => !/Assignment/.test(text) && /│ \S Polish/.test(sidebar()), {label: 'back on the sidebar'});
-    await clickCard('Build'); await clickCard('Build');
+    await waitFor(() => screen(), text => /Programme/.test(text) && !/Assignment/.test(text), {label: 'back on the programme'});
+    await choose('● Build the parser');
     await waitFor(() => screen(), text => /o Open conversation/.test(text), {label: 'the detail page again'});
     await click('o Open conversation', 0);
     await waitFor(() => surface(app), current => current === null, {label: 'the page closed'});

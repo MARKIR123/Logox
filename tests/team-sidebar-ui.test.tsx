@@ -78,53 +78,41 @@ const hasCard = (text: string) => /│ \S Palette/.test(text);
 const posts = (rig: Rig) => rig.side().join('\n');
 /** The first match in the feed, under the stage's current-post card (which repeats the selected post). */
 const feed = (rig: Rig, needle: string) => rig.find(needle, rig.sidebarX, rig.find('── #').y + 2);
-/** A click on the rule under the tabs gives the sidebar the keyboard and changes nothing else. */
-const focusSidebar = async (rig: Rig) => {const head = rig.find('Tasks'); await rig.click(rig.sidebarX + 10, head.y + 1);};
+/** A click on the rule under the act header gives the sidebar the keyboard and changes nothing else. */
+const focusSidebar = async (rig: Rig) => {const head = rig.find('Act 1 of 1', rig.sidebarX); await rig.click(rig.sidebarX + 10, head.y + 1);};
 
-test('the sidebar header has two tabs: a click switches, `t` toggles from the keyboard, and the choice is remembered across hide and show', {timeout: 60000}, async () => {
+test('the sidebar is the team stage alone (no tabs): the plan opens it, its header is the act header, and Ctrl+B hides and shows it again', {timeout: 60000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     seed(app);
     await app.plans.apply([{op: 'create', title: 'Theme preview', nodes: NODES as never}], 'logox');
     rig = await mount(app, 120, 34);
-    await waitFor(() => rig.screen(), text => hasCard(text), {label: 'the sidebar opens on Tasks'});
-    assert.match(rig.side()[0]!, /Tasks Theme preview +Team/, 'Tasks is the title of its tab, Team the other tab at the right end');
-    await rig.clickText('Team');
-    await waitFor(() => posts(rig), text => /Tasks {2}Team +● Live/.test(text) && text.includes('◈ logox → @kalon · assign'), {label: 'the Team tab'});
-    assert.ok(!hasCard(rig.screen()));
+    await waitFor(() => posts(rig), text => /Act 1 of 1 · /.test(text) && /● Live/.test(text) && text.includes('◈ logox → @kalon · assign'), {label: 'the sidebar opens on the stage'});
+    assert.match(rig.side()[0]!, /^› +‹ Act 1 of 1 · Draw th/, 'the act is titled by its first assignment: the plan has no work linked yet, so its nodes belong to no act');
+    assert.doesNotMatch(posts(rig), /Tasks|Team +●/, 'no tabs');
     for (const expected of ['✓ you → @logox', '◈ logox → @kalon · assign', '⊞ techne → @kalon', 'Draw the SVG', 'Renamed to buildStreetProps()']) assert.ok(posts(rig).includes(expected), expected + '\n' + posts(rig));
     assert.match(posts(rig), /◀ ▶ ▶ \S+ .*3\/3 · \+\d+s/, 'the stage controls carry the stepping and the counter');
-    assert.match(posts(rig).split('\n').find(line => line.includes('all members ▾'))!, /^ *│? *all members ▾ *$/, 'the footer keeps only the member filter');
-    await rig.clickText('Tasks');
-    await waitFor(() => rig.screen(), text => hasCard(text), {label: 'back to Tasks'});
-    // The click gave the sidebar the keyboard: t switches both ways.
-    await rig.send('t');
-    await waitFor(() => posts(rig), text => /● Live/.test(text), {label: 't opens Team'});
-    await rig.send('t');
-    await waitFor(() => rig.screen(), text => hasCard(text) && !/● Live/.test(posts(rig)), {label: 't opens Tasks'});
-    await rig.send('t');
-    await waitFor(() => posts(rig), text => /● Live/.test(text), {label: 'Team again'});
-    // Ctrl+B hides it (the keyboard is in it), Ctrl+B shows it again on the tab it was on.
-    await rig.send('\x02');
+    assert.match(posts(rig).split('\n').find(line => line.includes('all members ▾'))!, /^ *│? *● Live +all members ▾ *$/, 'the footer keeps the Live switch and the member filter');
+    // Ctrl+B focuses it, again hides it, again shows it.
+    await rig.send('\x02'); await rig.send('\x02');
     await waitFor(() => posts(rig), text => !/● Live/.test(text), {label: 'hidden'});
     await rig.send('\x02');
-    await waitFor(() => posts(rig), text => /Tasks {2}Team +● Live/.test(text), {label: 'shown on Team'});
+    await waitFor(() => posts(rig), text => /Act 1 of 1 · /.test(text) && /● Live/.test(text), {label: 'shown again'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('/team opens the sidebar on Team (a second /team hides it), works with no task graph, and /tasks still needs one; the catalog and help list it', {timeout: 60000}, async () => {
+test('/team opens the sidebar (a second /team hides it) even with no acts, and /tasks no longer exists; the catalog and help list /team', {timeout: 60000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     app.store.message(app.sessionId, 'logox', 'user', 'Hello team', {inputKind: 'human', source: 'direct'});
     rig = await mount(app, 120, 32);
     await waitFor(() => rig.screen(), text => text.includes('Ready when you are.'), {label: 'mounted'});
-    assert.ok(!/Tasks {2}Team/.test(posts(rig)), 'nothing opens by itself');
-    await act(async () => {await app.submit('/tasks');});
-    await waitFor(() => rig.screen(), text => /Nothing has been planned or delegated/.test(text), {label: '/tasks needs a task graph'});
+    assert.ok(!/no acts yet/.test(posts(rig)), 'nothing opens by itself');
+    await assert.rejects(app.submit('/tasks'), /Unknown command/);
     await act(async () => {await app.submit('/team');});
-    await waitFor(() => posts(rig), text => /Tasks {2}Team +● Live/.test(text) && text.includes('✓ you → @logox'), {label: '/team shows the feed'});
+    await waitFor(() => posts(rig), text => /Team · no acts yet/.test(text) && /● Live/.test(text) && text.includes('✓ you → @logox'), {label: '/team shows the feed; nothing was dispatched, so there is no act'});
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => !/● Live/.test(text), {label: 'a second /team hides it'});
     await act(async () => {await app.submit('/team show');});
@@ -133,7 +121,7 @@ test('/team opens the sidebar on Team (a second /team hides it), works with no t
     await waitFor(() => posts(rig), text => !/● Live/.test(text), {label: '/team hide'});
     await assert.rejects(app.submit('/team sideways'), /Usage: \/team/);
     assert.ok(commandCatalog.some(command => command.name === 'team'));
-    assert.match(commandHelp(), /\/team \[show\|hide\|toggle\]: Team feed sidebar/);
+    assert.match(commandHelp(), /\/team \[show\|hide\|toggle\]: Team stage sidebar/);
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 

@@ -15,6 +15,7 @@ export type TaskSpec = z.infer<typeof taskSpecSchema>;
 export const actorSchema = z.strictObject({
   tasks: z.array(taskSpecSchema).max(16).default([]),
   resumeBatch: z.string().optional(),
+  continueAct: z.boolean().optional().describe('Rare: true when this first dispatch of a new round is the same piece of work as the last act on the team stage (a follow-up fix, the next step the user asked for in discussion): the act reopens instead of a new one starting. Ignored mid-act'),
   briefCheck: z.enum(['skip']).optional().describe('Set to "skip" to dispatch without the runtime brief check (it runs before a dispatch of two or more tasks, or of a prompt longer than 1500 characters, and returns the gaps it finds without starting anything). Omit it normally; skip only when you are sure a reported gap is not one.'),
 }).refine(input => input.tasks.length > 0 || Boolean(input.resumeBatch), 'Specify at least one task or a batch to resume');
 

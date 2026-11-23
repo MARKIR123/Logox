@@ -61,9 +61,10 @@ import {createMouseHandler, locateActor} from './input/mouse-router.js';
 import {useKeyboard} from './input/keyboard.js';
 import type {ShellContext} from './input/shell-context.js';
 import {QuestionDock} from './interactions/question-dock.js';
-import {CHIP_HINT, usePlanSidebar} from './panels/use-plan-sidebar.js';
+import {CHIP_HINT, useTeamSidebar} from './panels/use-team-sidebar.js';
 import {projectDelegations} from '../runtime/delegations.js';
 import {TeamStream} from '../runtime/team-events.js';
+import {directorCloses} from '../runtime/team-acts.js';
 import type {PlanBoard} from '../store/plans.js';
 
 export interface AppProps {
@@ -211,7 +212,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
     setHoveredStop(''); setFocus('input');
   };
 
-  // A page can ask for an actor's window (`/tasks` "Open conversation"); only known actors are switched to.
+  // A page can ask for an actor's window (a detail page's "Open conversation"); only known actors are switched to.
   const switchViewRef = useRef(switchView), knownRoles = useRef(roles);
   switchViewRef.current = switchView; knownRoles.current = roles;
   useEffect(() => surfaces?.subscribeWindow(ownerId => {if (Object.hasOwn(knownRoles.current, ownerId)) switchViewRef.current(ownerId);}), [surfaces]);
@@ -241,13 +242,13 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const welcome = !demoScene && !activities.length && !pending.length && !visibleMessages.some(message =>
     message.role !== 'system' || !message.systemPresentation || message.systemPresentation === 'timeline'
   ) ? visibleMessages.findLast(message => message.role === 'system' && message.systemPresentation === 'welcome') : undefined;
-  // The plan sidebar: docked beside the timeline (the timeline is then `timelineWidth` wide) or, in a narrow terminal, an overlay opened on request.
+  // The sidebar (the team stage): docked beside the timeline (the timeline is then `timelineWidth` wide) or, in a narrow terminal, an overlay opened on request.
   const locateRef = useRef<(ownerId: string) => void>(() => {});
-  // The team event stream the Team tab draws: projected once per store revision, the same array while the events do not change.
+  // The team event stream the stage replays: projected once per store revision, the same array while the events do not change.
   const teamStream = useMemo(() => new TeamStream(), []);
-  const planSidebar = usePlanSidebar({board: plans, surfaces, revision: deferredSnapshot.revision, sessionId, delegations: () => projectDelegations({snapshot: deferredSnapshot, sessionId}),
-    team: () => teamStream.get({snapshot: deferredSnapshot, sessionId}), columns, width, screenRows, roles, themeVersion, welcome: Boolean(welcome), focus,
-    setFocus, flash, locate: ownerId => locateRef.current(ownerId)});
+  const planSidebar = useTeamSidebar({board: plans, surfaces, revision: deferredSnapshot.revision, sessionId, delegations: () => projectDelegations({snapshot: deferredSnapshot, sessionId}),
+    team: () => teamStream.get({snapshot: deferredSnapshot, sessionId}), closes: () => directorCloses(deferredSnapshot, sessionId), columns, width, screenRows, roles, themeVersion, welcome: Boolean(welcome), focus,
+    setFocus, flash});
   const timelineWidth = planSidebar.timelineWidth;
   const welcomeLines = useMemo(() => welcome
     ? layoutInput({text: safeText((welcome.systemTitle ? welcome.systemTitle + '\n' : '') + welcome.text).replace(/\t/g, '  '), cursor: 0}, timelineWidth).lines
@@ -336,7 +337,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   };
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
-  // The `▸ Plan 3/7` chip sits at the right end of row 1; the pills and the status text make room for it.
+  // The `▸ Act 2/3 · 3/5` chip sits at the right end of row 1; the pills and the status text make room for it.
   const chipSpace = planSidebar.chip ? planSidebar.chip.width + 1 : 0;
   const {activePills} = useActivePills({snapshot, sessionId, roles, width: width - chipSpace, themeVersion});
 

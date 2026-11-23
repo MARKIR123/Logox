@@ -3,7 +3,8 @@
  * stage (only those that appeared in an event up to and including the index, in a fixed roster order so cards never jump), what each one is doing, the workers
  * it has dispatched (name, status, duration), which edges the story has used so far (with counts), which waits are still open, the messages of the last few
  * events and the edge of the current event. `src/tui/panels/team-stage.ts` lays it out and draws it; `actorDetail()` is what an actor's detail page shows.
- * Nothing here reads a clock or a store.
+ * Nothing here reads a clock or a store. Which events make up a scene (one act of the task graph) is decided by `team-acts.ts`, which hands `stageAt()` that
+ * act's events.
  */
 import {DIRECTOR_ID} from './director-id.js';
 import type {TeamEvent, TeamItem, TeamStatus} from './team-events.js';
@@ -24,9 +25,24 @@ export interface StageJob {
   readonly startedAt: number;
   readonly ms?: number;
 }
+/** What a card says of the actor's work in the current act (`team-acts.ts:stageCards` fills it from the task graph; absent for a stage with no acts). */
+export interface StageCard {
+  /** The title of the actor's current task (the node it is working on, or the last one it settled). */
+  readonly title?: string;
+  /** Settled over total of what the task holds (its sub-tasks, else its workers); absent when it holds nothing. */
+  readonly n?: number;
+  readonly m?: number;
+  /** The last task of the actor in this act settled this way (shown instead of the progress). */
+  readonly outcome?: 'done' | 'failed' | 'interrupted';
+  /** Why the actor waits (`waits techne`, `awaiting approval`). */
+  readonly wait?: string;
+  /** The title of a task assigned to the actor in this act that has no work yet. */
+  readonly next?: string;
+}
 export interface StageActor {
   readonly id: string;
   readonly state: StageState;
+  readonly card?: StageCard;
   /** Workers and forks running now (dispatched and not yet settled). */
   readonly workers: number;
   readonly forks: number;

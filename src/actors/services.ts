@@ -272,7 +272,7 @@ export class ActorServices {
         } else {
           parsedInput = actorSchema.parse(input);
         }
-        const {tasks, resumeBatch, briefCheck} = parsedInput;
+        const {tasks, resumeBatch, briefCheck, continueAct} = parsedInput;
         const saved = tasks.some(task => task.resumeTask) ? await this.options.journal.activeTasks(context.sessionId) : [];
         const resumed = new Set<string>(), roots = new Set<string>(), resumeNotes: string[] = [];
         for (const task of tasks) {
@@ -371,7 +371,7 @@ export class ActorServices {
         }
         const origin: TaskOrigin = {parentActivityId: context.activityId, rootActivityId,
           inputKind: 'director', authorization: context.reviewMessages?.().filter(message => message.role === 'user').map(message => message.text).slice(-8) ?? context.authorization ?? [],
-          ...(recovery ? {recovery} : {})};
+          ...(recovery ? {recovery} : {}), ...(continueAct && isDirector(context.ownerId) ? {continueAct: true} : {})};
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const dispatched = new Map<string, string>();

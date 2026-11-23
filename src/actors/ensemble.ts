@@ -386,6 +386,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(origin.fingerprint ? {fingerprint: origin.fingerprint} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),
       ...(origin.coordinationWake ? {coordinationWake: true} : {}),
+      ...(origin.continueAct ? {continueAct: true} : {}),
       ...(origin.recovery ? {recovery: {key: origin.recovery.key, attempt: origin.recovery.attempt,
         ...(origin.recovery.actorTask ? {actorTask: origin.recovery.actorTask} : {}),
         ...(origin.recovery.exhausted !== undefined ? {exhausted: origin.recovery.exhausted} : {})}} : {}),

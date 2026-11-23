@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import type {TeamEvent} from '../src/runtime/team-events.js';
 import {palette} from '../src/tui/appearance/theme.js';
-import {CONTENT_X} from '../src/tui/panels/plan-sidebar.js';
+import {CONTENT_X} from '../src/tui/panels/sidebar-frame.js';
 import {buildTeamLayout, effectiveScroll, emptyTeamView, paintTeam, positionOf, selectedId, stepTeamKey, stepTeamMouse, teamGeometry, teamLabeler, teamStats, teamWidth,
   type TeamEffect, type TeamLayout, type TeamPointer, type TeamStep, type TeamView} from '../src/tui/panels/team-sidebar.js';
 
@@ -97,17 +97,16 @@ test('selection draws the accent marker and a bold header; hover and a hovered n
   assert.equal(layoutAt(56).rows.length, layout.rows.length);
 });
 
-test('the footer reads ◀ ▶ selected / total · elapsed and the member filter; Live shows in the header and turns hollow after any navigation', () => {
+test('the header is the act header; the footer reads ◀ ▶ selected / total · elapsed and the member filter', () => {
   const layout = layoutAt(56);
   const geometry = teamGeometry(20);
   const first = plain(paint(layout, 56, 20));
-  assert.match(first[0]!, /^› +Tasks {2}Team +● Live *$/);
+  assert.match(first[0]!, /^› ‹ Act 1 of 1 · 绘制海岸鹈鹕骑车 SVG +─+ 0\/0 ›\s*$/, 'one act (the dispatch opened it), titled by its first assignment; the bar is empty with no task graph');
   assert.match(first[1]!, /^│ ─+ *$/);
   assert.match(first.at(-1)!, /^│ ◀ ▶ {3}7 \/ 7 · \+18m +all members ▾ *$/);
   assert.match(first.at(-2)!, /^│ ─+ *$/);
   const step = stepTeamKey(layout, emptyTeamView, geometry, {up: true});
   const middle = plain(paint(layout, 56, 20, step.view));
-  assert.match(middle[0]!, /Tasks {2}Team +○ Live *$/);
   assert.match(middle.at(-1)!, /^│ ◀ ▶ {3}6 \/ 7 · \+15m +all members ▾ *$/);
   // The first event is the zero of the elapsed time.
   const top = plain(paint(layout, 56, 20, stepTeamKey(layout, emptyTeamView, geometry, {home: true}).view));
@@ -135,7 +134,7 @@ test('arrows, page keys, Home and End move the selection and the view follows; E
   key({end: true});
   assert.deepEqual([view.live, positionOf(layout, view)], [true, 30]);
   assert.deepEqual(key({escape: true}).effects, [{kind: 'blur'}]);
-  assert.deepEqual(key({tab: true}).effects, [{kind: 'tab', tab: 'tasks'}]);
+  assert.deepEqual(key({programme: true}).effects, [{kind: 'programme'}]);
   assert.deepEqual(key({enter: true}).effects, [{kind: 'open', id: 'e29'}]);
   assert.equal(stepTeamKey(layout, view, geometry, {}).consumed, false, 'a typing key is not taken');
   // The member picker: f opens it on the current filter, arrows move, Enter chooses, Esc closes.
@@ -171,7 +170,7 @@ test('click selects, a second click within 350 ms opens the post, the wheel step
   assert.equal(mouse(emptyTeamView, {x: 10, y: geometry.header + layout.rows.length + 2, action: 'move'}).view.hovered, undefined);
 });
 
-test('◀ ▶ step the selection, Live returns to following, and the tabs are click targets', () => {
+test('◀ ▶ step the selection, Live returns to following, and the act header is a click target (no tabs: it has no Tasks view to switch to)', () => {
   const layout = layoutAt(56), geometry = teamGeometry(20);
   const footerY = geometry.height - 1;
   const painted = plain(paint(layout, 56, 20));
@@ -184,15 +183,24 @@ test('◀ ▶ step the selection, Live returns to following, and the tabs are cl
   view = press(view, next, footerY).view;
   assert.equal(positionOf(layout, view), 6);
   const header = plain(paint(layout, 56, 20, view))[0]!;
-  assert.match(header, /○ Live/);
-  const live = press(view, column(header, '○ Live') + 1, 0);
+  assert.match(header, /Act 1 of 1 · 绘制海岸鹈鹕骑车 SVG/);
+  assert.doesNotMatch(header, /Tasks|Team|Live/, 'no tabs and no Live switch up here');
+  const programme = press(view, column(header, 'Act 1'), 0);
+  assert.deepEqual(programme.effects, [{kind: 'focus'}, {kind: 'programme'}], 'a click on the act title opens the Programme');
+  assert.equal(press(view, stringWidth(header.slice(0, header.lastIndexOf('›'))), 0).view, view, 'one act only: the arrows have nowhere to go');
+  const hover = stepTeamMouse(layout, view, geometry, {x: column(header, 'Act 1'), y: 0, action: 'move'}, 0, 56, label);
+  assert.equal(hover.view.hoveredControl, 'act');
+  // No acts at all (nobody dispatched anything): the header says so and still opens the Programme.
+  const talk = buildTeamLayout(STREAM.filter(event => event.kind === 'user'), {width: teamWidth(56), label});
+  const empty = plain(paint(talk, 56, 20))[0]!;
+  assert.match(empty, /Team · no acts yet/);
+  assert.deepEqual(stepTeamMouse(talk, emptyTeamView, geometry, {x: column(empty, 'Team'), y: 0, action: 'press'}, 0, 56, label).effects, [{kind: 'focus'}, {kind: 'programme'}]);
+  // Live moved down beside the member filter once the stage is on (the stage controls carry the stepping).
+  const staged = teamGeometry(30, {rows: 12, mode: 'strip'});
+  const footer = plain(paint(layout, 56, 30, view, {stage: true})).at(-1)!;
+  assert.match(footer, /^[│›] ○ Live +all members ▾ *$/);
+  const live = stepTeamMouse(layout, view, staged, {x: column(footer, '○ Live') + 1, y: 29, action: 'press'}, 0, 56, label);
   assert.deepEqual([live.view.live, positionOf(layout, live.view)], [true, 7]);
-  const tasks = press(view, column(header, 'Tasks'), 0);
-  assert.deepEqual(tasks.effects, [{kind: 'focus'}, {kind: 'tab', tab: 'tasks'}]);
-  assert.equal(press(view, column(header, 'Team'), 0).effects.some(effect => effect.kind === 'tab'), false, 'the active tab is not a button');
-  const hover = stepTeamMouse(layout, view, geometry, {x: column(header, 'Tasks'), y: 0, action: 'move'}, 0, 56, label);
-  assert.equal(hover.view.hoveredControl, 'tasks');
-  assert.equal(plain(paint(layout, 56, 20, hover.view))[0]!.includes('Tasks'), true);
 });
 
 test('a click on a name filters to that member (again clears it), and the footer opens a picker of members to choose from', () => {

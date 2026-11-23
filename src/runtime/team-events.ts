@@ -39,6 +39,10 @@ export interface TeamEvent {
   readonly text: string;
   /** What the detail page opens: a delegation id (`<activityId>` or `<activityId>/<jobId>`), or the id of the message record (then `detail` holds its text). */
   readonly ref: string;
+  /** `assign` of a batch of more than one activity, `workers` of more than one job: every delegation id of the dispatch, `ref` being the first (the acts of `team-acts.ts` need them all to follow the work). */
+  readonly refs?: readonly string[];
+  /** `assign` and `workers` only: the Director asked that this dispatch reopen the previous act of the team stage if its round started after that act closed (`continueAct`; only a Director's dispatch carries it). */
+  readonly continueAct?: true;
   /** `workers` only: the jobs, in dispatch order. */
   readonly items?: readonly TeamItem[];
   /** `message` and `user`: the full text without its envelope. */
@@ -185,7 +189,8 @@ export function teamEvents(input: TeamInput): TeamEvent[] {
   for (const item of assigns) {
     const titles = item.activities.map(activity => oneLine(activity.taskTitle ?? activity.title, 120));
     add({id: 'assign:' + item.activities[0]!.activityId, from: item.from, to: [...new Set(item.activities.map(activity => activity.ownerId))], kind: 'assign',
-      text: oneLine(titles.join(' ／ ')), ref: item.activities[0]!.activityId}, item.at, item.seq);
+      text: oneLine(titles.join(' ／ ')), ref: item.activities[0]!.activityId, ...(item.activities.length > 1 ? {refs: item.activities.map(activity => activity.activityId)} : {}),
+      ...(item.activities.some(activity => activity.continueAct) ? {continueAct: true as const} : {})}, item.at, item.seq);
   }
 
   // ------------------------------------------------------------------------------------------------------------------------------ Automa
@@ -197,7 +202,7 @@ export function teamEvents(input: TeamInput): TeamEvent[] {
     ids.forEach(id => {if (!jobAt.has(id)) jobAt.set(id, {at: message.time, seq});});
     const forks = swarm.jobs.filter(job => job.kind === 'fork').length;
     add({id: 'workers:' + message.id, from: dispatcher.ownerId, to: [], kind: 'workers', text: swarm.jobs.length + (forks === swarm.jobs.length ? (forks === 1 ? ' fork' : ' forks') : swarm.jobs.length === 1 ? ' worker' : ' workers'),
-      ref: ids[0]!, items: swarm.jobs.map(job => ({title: oneLine(job.title, 80), fork: job.kind === 'fork', ...(job.name ? {name: job.name} : {})}))}, message.time, seq);
+      ref: ids[0]!, ...(ids.length > 1 ? {refs: ids} : {}), ...(swarm.continueAct ? {continueAct: true as const} : {}), items: swarm.jobs.map(job => ({title: oneLine(job.title, 80), fork: job.kind === 'fork', ...(job.name ? {name: job.name} : {})}))}, message.time, seq);
   });
 
   // ------------------------------------------------------------------------------------------------------------------------------ results, reports, waits
