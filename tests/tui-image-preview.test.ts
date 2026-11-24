@@ -83,7 +83,7 @@ test('half-block rendering: the top pixel is the foreground, the bottom pixel th
   assert.deepEqual(halfBlockBackend.render(rgb, 2, 1), [[{text: '▀', color: '#ff0000', bg: '#0000ff'}, {text: '▀', color: '#00ff00', bg: '#0000ff'}]]);
   const same = new Uint8Array([255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255]);
   assert.deepEqual(halfBlockBackend.render(same, 2, 1), [[{text: '▀▀', color: '#ff0000', bg: '#0000ff'}]]);
-  assert.equal(toHex(1, 2, 255), '#0102ff'); assert.deepEqual(parseHex('#abc'), {r: 170, g: 187, b: 204});
+  assert.equal(toHex(1, 2, 255), '#0102ff'); assert.deepEqual(parseHex('#ff0000'), {r: 255, g: 0, b: 0}); assert.deepEqual(parseHex('#dc1e1e'), {r: 220, g: 30, b: 30}); assert.deepEqual(parseHex('#abc'), {r: 170, g: 187, b: 204});
   assert.deepEqual(HALF_BLOCK_GRID, {x: 1, y: 2});
   const four = raster(2, 4, (x, y) => [y * 60, x * 100, 0, 255]);
   const rows = renderCrop(four, {x: 0, y: 0, width: 2, height: 4}, 2, 2, parseHex('#000000'));

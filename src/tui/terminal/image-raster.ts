@@ -78,7 +78,7 @@ export function fitScale(width: number, height: number, areaCols: number, areaRo
 export function placeAtScale(width: number, height: number, areaCols: number, areaRows: number, scale: number, cx = 0.5, cy = 0.5, grid: CellGrid = HALF_BLOCK_GRID): Placement {
   const areaW = Math.max(1, areaCols) * grid.x, areaH = Math.max(1, areaRows) * grid.y;
   const shownW = Math.min(width * scale, areaW), shownH = Math.min(height * scale, areaH);
-  const cols = clamp(Math.round(shownW / grid.x), 1, Math.max(1, areaCols)), rows = clamp(Math.round(shownH / grid.y), 1, Math.max(1, areaRows));
+  const cols = clamp(Math.ceil(shownW / grid.x - 1e-6), 1, Math.max(1, areaCols)), rows = clamp(Math.ceil(shownH / grid.y - 1e-6), 1, Math.max(1, areaRows));
   const cropWidth = Math.min(width, cols * grid.x / scale), cropHeight = Math.min(height, rows * grid.y / scale);
   const x = clamp(cx * width - cropWidth / 2, 0, width - cropWidth), y = clamp(cy * height - cropHeight / 2, 0, height - cropHeight);
   return {
@@ -152,7 +152,7 @@ const hex2 = (value: number): string => value.toString(16).padStart(2, '0');
 export const toHex = (r: number, g: number, b: number): string => '#' + hex2(r) + hex2(g) + hex2(b);
 /** `#rrggbb` (or `#rgb`) to its channels; black for anything else. */
 export function parseHex(color: string): Rgb {
-  const text = /^#([\da-f]{3}|[\da-f]{6})/i.exec(color)?.[1];
+  const text = /^#([\da-f]{6}|[\da-f]{3})(?![\da-f])/i.exec(color)?.[1];
   if (!text) return {r: 0, g: 0, b: 0};
   const full = text.length === 3 ? [...text].map(char => char + char).join('') : text;
   return {r: parseInt(full.slice(0, 2), 16), g: parseInt(full.slice(2, 4), 16), b: parseInt(full.slice(4, 6), 16)};

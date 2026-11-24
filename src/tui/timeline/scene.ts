@@ -54,6 +54,8 @@ export interface SceneAction {
 
 export interface SceneRow extends Row {
   readonly color?: string;
+  /** One row of a picture that can be drawn as pixels over its half-block cells (see `terminal/image-graphics.ts`). */
+  readonly image?: import('../terminal/image-graphics.js').ImageSlot;
   readonly hover?: {readonly foldId: string; readonly startCol: number; readonly endCol: number};
   readonly bg?: string;
   readonly prefixSegments?: readonly SceneSegment[];

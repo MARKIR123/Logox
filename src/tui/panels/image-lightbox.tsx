@@ -1,6 +1,6 @@
 import {statSync} from 'node:fs';
 import {basename} from 'node:path';
-import {useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
+import {useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
 import {Box, Text, useInput} from 'ink';
 import stringWidth from 'string-width';
 import {palette} from '../appearance/theme.js';
@@ -9,6 +9,8 @@ import {openInEditor} from '../../commands/editor.js';
 import {formatByteSize} from '../../tools/ui-format.js';
 import {safeText} from '../terminal/text.js';
 import {useHoverColor, useMouse, usePointer} from '../terminal/mouse.js';
+import {TerminalPlaneContext} from '../terminal/terminal.js';
+import {imageGraphics} from '../terminal/image-graphics.js';
 import {parseHex, renderCrop, type ImageRow} from '../terminal/image-raster.js';
 import {imageRevision, imageState, retryImage, subscribeImages} from '../terminal/image-source.js';
 import {
@@ -37,7 +39,7 @@ export function ImageLightbox({path, width, height, onClose}: {path: string; wid
   const pathLabel = 'Open original: ';
   const wanted = stringWidth(fitTitle('Image', details(true), name, 1000));
   const layout = cardLayout({screenCols: width, screenRows: height, ...(image ? {image: {width: image.width, height: image.height}} : {}), view, titleWidth: wanted,
-    pathLabelWidth: stringWidth(pathLabel + elideMiddle(path, 1000))});
+    pathLabelWidth: stringWidth(pathLabel + elideMiddle(path, 1000)), grid: imageGraphics.grid()});
   const latest = useRef({view, layout, image});
   latest.current = {view, layout, image};
   const drag = useRef<{x: number; y: number; view: LightboxView; layout: CardLayout} | null>(null);
@@ -105,6 +107,15 @@ export function ImageLightbox({path, width, height, onClose}: {path: string; wid
   const surface = palette.surface, edge = palette.line, quiet = faintColor();
   const title = fitTitle('Image', details(true), name, layout.titleColumns);
   const head = borderTitle(title, layout.cardCols);
+  // With Sixel the real pixels go over the picture's cells after Ink writes them (at 100% one file pixel is one screen pixel); the half
+  // blocks stay beneath as the fallback and keep the rows identical while the placement holds, so Ink never repaints over the pixels.
+  const plane = useContext(TerminalPlaneContext), cell = imageGraphics.cell, placement = layout.placement;
+  const placed = imageGraphics.active && image && placement ? {id: 'lightbox:' + path, x: layout.imageX, y: layout.imageY, cols: placement.cols, rows: placement.rows,
+    spec: {image, crop: placement.crop, outWidth: Math.max(1, Math.round(Math.min(placement.crop.width * placement.scale, placement.cols * cell.width))),
+      outHeight: Math.max(1, Math.round(Math.min(placement.crop.height * placement.scale, placement.rows * cell.height))), bg: palette.surface}} : null;
+  const placedKey = placed ? [placed.x, placed.y, placed.cols, placed.rows, placed.spec.outWidth, placed.spec.outHeight, placed.spec.crop.x, placed.spec.crop.y, placed.spec.crop.width, placed.spec.crop.height].join('|') : '';
+  useEffect(() => {plane?.setOverlay(placed);}, [plane, placedKey, image]);
+  useEffect(() => () => plane?.setOverlay(null), [plane]);
   const closeHover = pointer !== null && overClose(layout, pointer.x, pointer.y);
   const pixels = useMemo((): readonly ImageRow[] => {
     if (!image || !layout.placement) return [];

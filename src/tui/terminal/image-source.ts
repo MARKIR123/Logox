@@ -33,6 +33,8 @@ let revision = 0, clock = 0;
 
 /** Bumped whenever a decode ends or an entry is dropped; layouts that show an image include it in their cache key. */
 export const imageRevision = (): number => revision;
+/** Tells layouts that something about images changed without a decode (the terminal's image protocol or cell size). */
+export function touchImages(): void {changed();}
 export function subscribeImages(listener: () => void): () => void {listeners.add(listener); return () => {listeners.delete(listener);};}
 function changed(): void {revision++; for (const listener of [...listeners]) listener();}
 

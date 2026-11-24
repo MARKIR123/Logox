@@ -7,6 +7,7 @@ import {clipLine} from '../terminal/text.js';
 import type {ToolCall} from '../../runtime/messages.js';
 import {baseCardTitle} from '../../tools/ui-format.js';
 import type {createBuilder, SceneAction, SceneSegment} from './scene.js';
+import type {ImageSlot} from '../terminal/image-graphics.js';
 
 /**
  * Shared anatomy of every tool card body. A tool UI builds a `ToolView` (summary after the title plus a rendered user view of
@@ -29,6 +30,8 @@ export interface ToolLine {
   readonly paint?: (context: {readonly innerWidth: number; readonly bg: string | undefined; readonly hovered: boolean}) => readonly SceneSegment[];
   /** Makes the row one hover and click target (`foldId` names the hover state; `action` runs on a click). */
   readonly target?: {readonly foldId: string; readonly action: SceneAction};
+  /** Marks the row as one slice of a picture the plane may draw as Sixel pixels over the row's cells; receives the row's background. */
+  readonly slot?: (bg: string | undefined) => ImageSlot;
 }
 export interface ToolBody {
   /** Always-visible rows above the lines (Shell: `$ command`; an image's preview, which depends on the width). Not counted against the cap. */
@@ -155,6 +158,10 @@ function pushLine(builder: ReturnType<typeof createBuilder>, id: string, accent:
     : clipSegments(line.segments ?? [], frame.innerWidth);
   const first = builder.rows.length;
   builder.pushFramedLine(id, accent, segments, frame, target?.action, line.bg);
+  if (line.slot) {
+    const image = line.slot(frame.bg);
+    for (let index = first; index < builder.rows.length; index++) builder.rows[index] = {...builder.rows[index]!, image};
+  }
   if (!target) return;
   for (let index = first; index < builder.rows.length; index++) {
     const row = builder.rows[index]!;

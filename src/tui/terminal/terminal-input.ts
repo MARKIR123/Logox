@@ -4,6 +4,7 @@ import {useEffect, type MutableRefObject} from 'react';
 import type {useStdin, useStdout} from 'ink';
 import {FocusReportFilter, FOCUS_REPORTING_OFF, FOCUS_REPORTING_ON} from './focus.js';
 import {parseSgrMouse, type SgrMouseEvent} from './mouse.js';
+import {imageGraphics} from './image-graphics.js';
 
 export function useTerminalInput(stdin: ReturnType<typeof useStdin>['stdin'], stdout: ReturnType<typeof useStdout>['stdout'],
   mouseHandlerRef: MutableRefObject<(event: SgrMouseEvent) => void>, foldTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>): void {
@@ -31,13 +32,16 @@ export function useTerminalInput(stdin: ReturnType<typeof useStdin>['stdin'], st
         const tail = /\[<[\d;]*$/.exec(text);
         carry = tail ? tail[0] : '';
         // Focus reports (`ESC [ I` / `ESC [ O`) update the terminal focus state and never reach the key parser.
+        // Replies to the image capability probe (Device Attributes, cell size) also never reach the key parser.
         let cleaned = raw;
-        try {cleaned = focusFilter.push(raw);} catch {cleaned = raw;}
+        try {cleaned = focusFilter.push(imageGraphics.feed(raw));} catch {cleaned = raw;}
         if (cleaned === raw) return chunk;
         if (cleaned === '') continue;
         return (typeof chunk === 'string' ? cleaned : Buffer.from(cleaned)) as typeof chunk;
       }
     }) as typeof stdin.read;
+    // Ask once what the terminal can draw (Sixel, cell pixels); the answers are taken out of the stream above. Only a real terminal is asked.
+    if (stdout && process.stdout.isTTY && process.stdin.isTTY && !process.env['NODE_TEST_CONTEXT'] && stdin === process.stdin) void imageGraphics.probe(text => process.stdout.write(text), process.stdout.columns ?? 80, process.stdout.rows ?? 24);
     return () => {
       if (foldTimerRef.current) clearTimeout(foldTimerRef.current);
       stdin.read = originalRead;

@@ -15,7 +15,7 @@ const layout: Record<string, string[]> = {
     'use-team-sidebar.ts'],
   previews: ['provider-wizard-preview.ts', 'question-preview.tsx', 'slash-preview.tsx'],
   status: ['actor-pills.tsx', 'footer-bar.tsx', 'footer-model.ts', 'notification-line.ts', 'statusbar-editor.tsx', 'statusbar.ts', 'use-active-pills.ts', 'use-notices.ts'],
-  terminal: ['clipboard.ts', 'focus.ts', 'image-raster.ts', 'image-source.ts', 'metrics.ts', 'mouse.ts', 'notify.ts', 'terminal-input.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
+  terminal: ['clipboard.ts', 'focus.ts', 'image-graphics.ts', 'image-protocol.ts', 'image-raster.ts', 'image-source.ts', 'metrics.ts', 'mouse.ts', 'notify.ts', 'sixel-worker.ts', 'sixel.ts', 'terminal-input.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
   timeline: ['activity-card.tsx', 'actor-location.ts', 'group-row.ts', 'image-thumb.ts', 'live-status.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts', 'tool-card.ts', 'tool-code.ts',
     'scene.ts', 'selection.ts', 'stage.ts', 'thinking-groups.ts', 'tool-groups.ts', 'timeline-click.ts', 'timeline-pane.tsx', 'tool-ui.ts', 'use-reading.ts', 'use-splash.ts', 'viewport.ts'],
 };

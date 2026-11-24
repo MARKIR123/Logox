@@ -6,6 +6,11 @@ import {themeRevision} from '../../config/theme-palette.js';
 import {decorateRow, presentedSegments, railCell} from '../timeline/row-presentation.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from '../timeline/viewport.js';
 import {formatClock} from './text.js';
+import {imageGraphics, type EncodeSpec} from './image-graphics.js';
+
+/** A picture drawn as Sixel pixels over cells: `x`, `y` are screen cells, `id` names the picture, `spec` what to encode. */
+export interface Placed {readonly id: string; readonly x: number; readonly y: number; readonly cols: number; readonly rows: number; readonly spec: EncodeSpec}
+const sameSpot = (a: Placed, b: Placed): boolean => a.id === b.id && a.x === b.x && a.y === b.y && a.cols === b.cols && a.rows === b.rows;
 
 /** A segment of a side line; `clock` marks a fixed-width placeholder the plane fills with the time elapsed since that epoch time (ms) each second. */
 export interface SideSegment extends SceneSegment {readonly clock?: number}
@@ -84,7 +89,14 @@ export class TerminalPlane {
   private closed = false;
   private outputHeld = false;
   private sideBusy = false;
-  constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {}
+  /** Pictures believed to be on screen as Sixel pixels (timeline thumbnails), and the lightbox picture wanted and shown. */
+  private shown: Placed[] = [];
+  private overlayWanted: Placed | null = null;
+  private overlayShown: Placed | null = null;
+  private readonly stopImages: () => void;
+  constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {
+    this.stopImages = imageGraphics.subscribe(() => {if (this.closed) return; this.drawOverlay(); if (this.frame) this.flush();});
+  }
 
   get rows(): readonly Row[] {return this.displayedRows;}
   get time(): number {return this.clock;}
@@ -114,8 +126,36 @@ export class TerminalPlane {
     if (!this.active || this.closed) return;
     if (text.includes('\x1b[2J') || text.includes('\x1b[1;1H\x1b[J') || text.includes('\x1b[H\x1b[J')) this.invalidate();
     this.flush();
+    if (this.overlayWanted) this.drawOverlay();
   }
-  invalidate(): void {this.previous = undefined; this.previousLines = []; this.previousSide = [];}
+  /** A cleared or repainted screen no longer shows any picture: the next frame draws them again. */
+  invalidate(): void {this.previous = undefined; this.previousLines = []; this.previousSide = []; this.shown = []; this.overlayShown = null;}
+  /**
+   * The lightbox's picture: `null` removes it (its cells are blanked). The picture is drawn after the next Ink write, or when its encoding
+   * lands; Ink keeps painting the half-block cells beneath, which are the fallback and never change while the placement holds.
+   */
+  setOverlay(placed: Placed | null): void {
+    const before = this.overlayWanted;
+    this.overlayWanted = placed;
+    if (!placed) {this.eraseOverlay(); return;}
+    if (before && !sameSpot(before, placed)) this.eraseOverlay();
+    if (!this.outputHeld && imageGraphics.encoded(placed.spec) !== undefined) this.drawOverlay();
+  }
+  private eraseOverlay(): void {
+    const shown = this.overlayShown;
+    this.overlayShown = null;
+    if (!shown || !this.active || this.closed) return;
+    const rows = Array.from({length: shown.rows}, (_, i) => `\x1b[${shown.y + i + 1};${shown.x + 1}H${rgb(shown.spec.bg, true)}\x1b[${shown.cols}X`).join('');
+    this.write('\x1b[?2026h\x1b7' + rows + reset + '\x1b8\x1b[?2026l');
+  }
+  private drawOverlay(): void {
+    const wanted = this.overlayWanted;
+    if (!wanted || !this.active || this.closed || (this.overlayShown && sameSpot(this.overlayShown, wanted))) return;
+    const data = imageGraphics.encoded(wanted.spec);
+    if (data === undefined) return;
+    this.write('\x1b[?2026h\x1b7' + `\x1b[${wanted.y + 1};${wanted.x + 1}H` + data + reset + '\x1b8\x1b[?2026l');
+    this.overlayShown = wanted;
+  }
   beginOutput(): void {this.outputHeld = true; this.cancel();}
   endOutput(): void {this.outputHeld = false; this.flush();}
   private erase(): void {
@@ -154,8 +194,21 @@ export class TerminalPlane {
     this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, wait);
     this.animationTimer.unref?.();
   }
+  /** Pictures whose rows are all on screen inside the history rectangle; a partly visible one stays as half blocks. */
+  private placements(frame: PlaneFrame): Placed[] {
+    const found: Placed[] = [], rows = this.displayedRows as readonly SceneRow[];
+    for (let i = 0; i < frame.height; i++) {
+      const image = rows[i]?.image;
+      if (!image || image.slot !== 0 || i + image.slots > frame.height) continue;
+      let whole = true;
+      for (let k = 1; k < image.slots && whole; k++) {const next = rows[i + k]?.image; whole = Boolean(next && next.id === image.id && next.slot === k);}
+      const x = rows[i]!.gutterCols + image.indent;
+      if (whole && x + image.cols <= frame.width) found.push({id: image.id, x, y: i, cols: image.cols, rows: image.slots, spec: image.spec});
+    }
+    return found;
+  }
   private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
-  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined;}
+  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined; this.stopImages();}
   flush(): void {
     this.cancel();
     const frame = this.frame;
@@ -188,12 +241,19 @@ export class TerminalPlane {
         shifted = delta > 0 ? [...shifted.slice(delta), ...Array<string>(delta).fill('')] : [...Array<string>(-delta).fill(''), ...shifted.slice(0, delta)];
       }
     }
+    // Sixel pictures: any that moved, scrolled or lost a repainted row are blanked by repainting their rows (cell text overwrites pixels), then drawn again.
+    const wanted = imageGraphics.active ? this.placements(frame) : [];
+    const stale = scrolled !== 0 || !same ? this.shown : this.shown.filter(spot => !wanted.some(want => sameSpot(want, spot)));
+    const forced = new Set<number>();
+    for (const spot of stale) for (let r = spot.y; r < spot.y + spot.rows; r++) forced.add(r);
+    const repainted = new Set<number>();
     const chunks: string[] = [];
     if (scrolled) chunks.push(reset + `\x1b[1;${frame.height}r\x1b[${Math.abs(scrolled)}${scrolled > 0 ? 'S' : 'T'}\x1b[r`);
     let paintedRows = 0;
     for (let i = 0; i < lines.length; i++) {
       // A newly exposed blank row has already been cleared by SU/SD.
-      const historyDirty = !(same && lines[i] === shifted[i]);
+      const historyDirty = !(same && lines[i] === shifted[i]) || forced.has(i);
+      if (historyDirty) repainted.add(i);
       // The scroll moves the side column with the rows, so every side line is painted again after one; otherwise only a changed side line is.
       const sideDirty = side !== undefined && (scrolled !== 0 || !same || sideLines[i] !== this.previousSide[i]);
       // Beside a side column a row is padded to its width instead of erased to the end of the line, which would wipe the side line.
@@ -203,6 +263,15 @@ export class TerminalPlane {
       if (historyDirty || sideDirty) paintedRows++;
     }
     this.previous = frame; this.previousLines = lines; this.previousSide = sideLines;
+    const kept = this.shown.filter(spot => !stale.includes(spot) && ![...repainted].some(row => row >= spot.y && row < spot.y + spot.rows));
+    for (const want of wanted) {
+      if (kept.some(spot => sameSpot(spot, want))) continue;
+      const data = imageGraphics.encoded(want.spec);
+      if (data === undefined) continue; // the half blocks stay until the worker has it
+      chunks.push(`\x1b[${want.y + 1};${want.x + 1}H${reset}${data}`);
+      kept.push(want);
+    }
+    this.shown = kept;
     if (chunks.length) {
       // DEC save/restore preserves Ink's composer cursor (including pending wrap); margins are always reset.
       this.write('\x1b[?2026h\x1b7' + chunks.join('') + reset + '\x1b8\x1b[?2026l');

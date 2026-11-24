@@ -4,7 +4,8 @@
 // a decode ends.
 import {palette} from '../appearance/theme.js';
 import {faintColor} from '../appearance/colors.js';
-import {fitThumbnail, parseHex, renderCrop, type ImageRow} from '../terminal/image-raster.js';
+import {fitThumbnail, parseHex, renderCrop, type CellGrid, type ImageRow, type ThumbnailFit} from '../terminal/image-raster.js';
+import {imageGraphics} from '../terminal/image-graphics.js';
 import {imageState, memoFor, type DecodedImage} from '../terminal/image-source.js';
 import {clipLine} from '../terminal/text.js';
 import type {SceneAction, SceneSegment} from './scene.js';
@@ -31,13 +32,13 @@ function segmentsOf(rows: readonly ImageRow[], index: number): SceneSegment[] {
 const marker = (hovered: boolean): SceneSegment => ({text: hovered ? '▎ ' : '  ', color: palette.muted});
 
 /** The thumbnail's rows for `image` at `maxLong` cells, composited over `background` (memoized per image, size and background). */
-export function thumbnailRows(image: DecodedImage, maxLong: number, background: string): {readonly rows: readonly ImageRow[]; readonly cols: number; readonly cropped: boolean} {
-  return memoFor(image, `thumb|${maxLong}|${background}`, () => {
-    const fit = fitThumbnail(image.width, image.height, maxLong);
+export function thumbnailRows(image: DecodedImage, maxLong: number, background: string, grid: CellGrid = imageGraphics.grid()): {readonly rows: readonly ImageRow[]; readonly cols: number; readonly cropped: boolean; readonly fit: ThumbnailFit} {
+  return memoFor(image, `thumb|${maxLong}|${background}|${grid.x}x${grid.y}`, () => {
+    const fit = fitThumbnail(image.width, image.height, maxLong, grid);
     // The crop is in the file's pixels; the mip is a smaller copy of the same picture.
     const sx = image.mip.width / image.width, sy = image.mip.height / image.height;
     const crop = {x: fit.crop.x * sx, y: fit.crop.y * sy, width: fit.crop.width * sx, height: fit.crop.height * sy};
-    return {rows: renderCrop(image.mip, crop, fit.cols, fit.rows, parseHex(background)), cols: fit.cols, cropped: fit.cropped};
+    return {rows: renderCrop(image.mip, crop, fit.cols, fit.rows, parseHex(background)), cols: fit.cols, cropped: fit.cropped, fit};
   });
 }
 
@@ -66,9 +67,13 @@ export function imageThumbnailLines(path: string, messageId: string, innerWidth:
   }
   const image = state.image, maxLong = Math.max(4, Math.min(THUMB_COLUMNS, room));
   const rowsAt = (background: string | undefined) => thumbnailRows(image, maxLong, background ?? palette.bg);
-  const count = rowsAt(undefined).rows.length;
+  const first = rowsAt(undefined), count = first.rows.length, imageId = messageId + ':' + path;
+  const cell = imageGraphics.cell;
   const picture: ToolLine[] = Array.from({length: count}, (_, index): ToolLine => ({
     target,
+    // With Sixel the plane draws the real pixels over these cells; the half blocks stay underneath as the fallback.
+    ...(imageGraphics.active ? {slot: (bg: string | undefined) => ({id: imageId, slot: index, slots: count, indent: INDENT, cols: first.cols,
+      spec: {image, crop: first.fit.crop, outWidth: first.cols * cell.width, outHeight: count * cell.height, bg: bg ?? palette.bg}})} : {}),
     paint: ({bg, hovered}) => [marker(hovered), ...segmentsOf(rowsAt(bg).rows, index)],
   }));
   const caption: ToolLine = {
