@@ -157,7 +157,8 @@ test('the memory section: exact text, stable order, capped list, empty case, byt
     await f.store.save(draft('mid', 'user'), 'user');
     const first = memorySection({...dirs, records: await f.store.list()}), second = memorySection({...dirs, records: await f.store.list()});
     assert.equal(first, second, 'byte-identical');
-    assert.ok(first.endsWith('\n\n- project/alpha.md (project): About alpha\n- project/zeta.md (project): About zeta\n- user/mid.md (user): About mid'), first.slice(-200));
+    assert.ok(first.endsWith('\n\n- ' + join(dirs.projectMemoryDir, 'alpha.md') + ' (project): About alpha\n- ' + join(dirs.projectMemoryDir, 'zeta.md') + ' (project): About zeta\n- ' + join(dirs.userMemoryDir, 'mid.md') + ' (user): About mid'), first.slice(-200));
+    assert.ok(!first.includes('- user/') && !first.includes('- project/'), 'no scope prefix that reads like a subfolder');
     assert.ok(!first.includes('No records yet.'));
     const many = Array.from({length: MEMORY_RECORD_LIMIT + 5}, (_, index) => ({scope: 'project', name: 'r' + String(index).padStart(3, '0'), type: 'project', description: 'D' + index}));
     const capped = memorySection({...dirs, records: many}).split('\n').filter(line => line.startsWith('- ') && line.includes('.md ('));

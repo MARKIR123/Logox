@@ -65,7 +65,7 @@ test('the memory section reaches every actor, stays byte-identical for the sessi
     assert.ok(director && companion);
     for (const system of [director, companion]) {
       assert.match(system, /## Memory\n\nLong-term memory is two folders of Markdown records: `[^`]*\.logox[\\/]memory` \(this project\) and `[^`]*\.logox[\\/]memory` \(every project of this user\)\./);
-      assert.ok(system.includes('- project/prefers-tabs.md (feedback): The user wants tabs\n- user/role.md (user): Staff engineer'), system.slice(system.indexOf('## Memory')));
+      assert.ok(system.includes('- ' + join(f.cwd, '.logox', 'memory', 'prefers-tabs.md') + ' (feedback): The user wants tabs\n- ' + join(f.home, '.logox', 'memory', 'role.md') + ' (user): Staff engineer'), system.slice(system.indexOf('## Memory')));
       assert.ok(system.indexOf('## Memory') > system.indexOf('# Project Guidelines') && system.indexOf('## Memory') < system.indexOf('# Tools & Skills'), 'after the project rules, before tools');
     }
     assert.equal(memoryBlock(director), memoryBlock(companion), 'the same bytes for every actor');
@@ -80,7 +80,7 @@ test('the memory section reaches every actor, stays byte-identical for the sessi
     await app.submit('/reload');
     app.surfaces.cancel();
     await speak(app, 'third question');
-    assert.ok(systems(f.seen.slice(requestsBefore)).at(-1)!.includes('- project/late-fact.md (project): Saved mid-session'), '/reload reads the records again');
+    assert.ok(systems(f.seen.slice(requestsBefore)).at(-1)!.includes('late-fact.md (project): Saved mid-session'), '/reload reads the records again');
 
     assert.equal(f.seen.filter(isAnamnesis).length, 0, 'without a started interval nothing asks the model on its own');
     await app.close();

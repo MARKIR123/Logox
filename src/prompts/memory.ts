@@ -14,8 +14,14 @@ export interface MemoryLine {readonly scope: string; readonly name: string; read
 
 /** The section for the records known now; `records` arrive in their stable order. */
 export function memorySection(input: {projectMemoryDir: string; userMemoryDir: string; records: readonly MemoryLine[]}): string {
+  // Each record carries its full path: a `scope/name` prefix reads like a subfolder and sent models to `<dir>/user/<name>.md`.
+  const pathOf = (record: MemoryLine): string => {
+    const dir = record.scope === 'user' ? input.userMemoryDir : input.projectMemoryDir;
+    const sep = dir.includes('\\') ? '\\' : '/';
+    return (dir.endsWith(sep) ? dir : dir + sep) + record.name + '.md';
+  };
   const shown = input.records.slice(0, MEMORY_RECORD_LIMIT).map(record =>
-    '- ' + record.scope + '/' + record.name + '.md (' + record.type + '): ' + record.description.replace(/\s+/g, ' ').trim());
+    '- ' + pathOf(record) + ' (' + record.type + '): ' + record.description.replace(/\s+/g, ' ').trim());
   const more = input.records.length - shown.length;
   const lines = shown.length ? [...shown, ...more > 0 ? ['- … ' + more + ' more records in the folders above'] : []] : [MEMORY_EMPTY_LINE];
   return MEMORY_SECTION.replace('{{projectMemoryDir}}', () => input.projectMemoryDir).replace('{{userMemoryDir}}', () => input.userMemoryDir)
