@@ -14,7 +14,7 @@ import {imageGraphics} from '../terminal/image-graphics.js';
 import {parseHex, renderCrop, type ImageRow} from '../terminal/image-raster.js';
 import {imageRevision, imageState, retryImage, subscribeImages} from '../terminal/image-source.js';
 import {
-  CLOSE_GLYPH, FIT_VIEW, borderTitle, buttonAt, cardLayout, elideMiddle, fitTitle, inCard, overClose, overImage, overPath, stepView,
+  CLOSE_GLYPH, FIT_VIEW, overlaySize, borderTitle, buttonAt, cardLayout, elideMiddle, fitTitle, inCard, overClose, overImage, overPath, stepView,
   type CardLayout, type LightboxView, type ViewCommand,
 } from './image-lightbox-view.js';
 
@@ -111,18 +111,18 @@ export function ImageLightbox({path, width, height, onClose}: {path: string; wid
   // blocks stay beneath as the fallback and keep the rows identical while the placement holds, so Ink never repaints over the pixels.
   const plane = useContext(TerminalPlaneContext), cell = imageGraphics.cell, placement = layout.placement;
   const placed = imageGraphics.active && image && placement ? {id: 'lightbox:' + path, x: layout.imageX, y: layout.imageY, cols: placement.cols, rows: placement.rows,
-    spec: {image, crop: placement.crop, outWidth: Math.max(1, Math.round(Math.min(placement.crop.width * placement.scale, placement.cols * cell.width))),
-      outHeight: Math.max(1, Math.round(Math.min(placement.crop.height * placement.scale, placement.rows * cell.height))), bg: palette.surface}} : null;
+    spec: {image, crop: placement.crop, ...overlaySize(placement, cell), bg: palette.surface}} : null;
   const placedKey = placed ? [placed.x, placed.y, placed.cols, placed.rows, placed.spec.outWidth, placed.spec.outHeight, placed.spec.crop.x, placed.spec.crop.y, placed.spec.crop.width, placed.spec.crop.height].join('|') : '';
   useEffect(() => {plane?.setOverlay(placed);}, [plane, placedKey, image]);
   useEffect(() => () => plane?.setOverlay(null), [plane]);
   const closeHover = pointer !== null && overClose(layout, pointer.x, pointer.y);
   const pixels = useMemo((): readonly ImageRow[] => {
     if (!image || !layout.placement) return [];
-    const {placement} = layout, sx = image.raster.width / image.width, sy = image.raster.height / image.height;
-    return renderCrop(image.raster, {x: placement.crop.x * sx, y: placement.crop.y * sy, width: placement.crop.width * sx, height: placement.crop.height * sy},
+    // With Sixel the half blocks are only the instant interim while zooming and panning, so they are made from the small copy (cheap).
+    const {placement} = layout, source = imageGraphics.active ? image.mip : image.raster, sx = source.width / image.width, sy = source.height / image.height;
+    return renderCrop(source, {x: placement.crop.x * sx, y: placement.crop.y * sy, width: placement.crop.width * sx, height: placement.crop.height * sy},
       placement.cols, placement.rows, parseHex(surface));
-  }, [image, layout.placement?.crop.x, layout.placement?.crop.y, layout.placement?.crop.width, layout.placement?.crop.height, layout.placement?.cols, layout.placement?.rows, surface]);
+  }, [image, imageGraphics.active, layout.placement?.crop.x, layout.placement?.crop.y, layout.placement?.crop.width, layout.placement?.crop.height, layout.placement?.cols, layout.placement?.rows, surface]);
 
   const inner = layout.cardCols - 2;
   const line = (key: string, pieces: readonly Piece[], used: number) => <Box key={key} height={1} flexShrink={0}><Text wrap="truncate">

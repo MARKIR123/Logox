@@ -127,6 +127,12 @@ test('the plane draws Sixel over a fully visible thumbnail once, erases and redr
     const repainted = [...scrolled.matchAll(/\x1b\[(\d+);1H\x1b\[0m\x1b\[2K/g)].map(match => Number(match[1]) - 1);
     assert.ok(repainted.includes(first - 1) || repainted.includes(first), 'the rows it covered are repainted first, which blanks the old pixels');
 
+    // A real scroll (same size): the half blocks move at once, the pixels follow when the timeline has been still for a moment.
+    out.length = 0;
+    plane.present(frame(2, rows.length - 1)); plane.flush();
+    assert.ok(!out.join('').includes('\x1bP0;1;0q'), 'no pixels are written while the timeline is moving');
+    await waitFor(async () => out.join('').includes('\x1bP0;1;0q'), done => done, {timeoutMs: 5000, label: 'pixels after the scroll settles'});
+
     out.length = 0;
     plane.present(frame(0, last));
     plane.flush();
@@ -142,10 +148,84 @@ test('the plane draws Sixel over a fully visible thumbnail once, erases and redr
     assert.ok(out.join('').includes('\x1b[5;11H\x1bP0;1;0q'), 'at the overlay rectangle');
     out.length = 0;
     plane.setOverlay(null);
-    assert.equal([...out.join('').matchAll(/\x1b\[\d+;11H\x1b\[48;2;32;32;32m\x1b\[16X/g)].length, 4, 'every row of the rectangle is blanked in the background colour');
+    assert.equal([...out.join('').matchAll(/\x1b\[\d+;11H\x1b\[48;2;32;32;32m {16}/g)].length, 4, 'every row of the rectangle is blanked in the background colour');
     plane.dispose();
   } finally {
     imageGraphics.configure({protocol: 'halfblock'}); imageGraphics.dispose();
     await rm(dir, {recursive: true, force: true});
   }
+});
+
+import {handle, stats} from '../src/tui/terminal/sixel-worker.js';
+import {overlaySize} from '../src/tui/panels/image-lightbox-view.js';
+
+async function withReadyImage<T>(run: (image: Extract<Awaited<ReturnType<typeof imageSettled>>, {status: 'ready'}>['image'], writes: string[], plane: TerminalPlane) => Promise<T>): Promise<T> {
+  clearImages(); imageGraphics.clear();
+  const dir = await mkdtemp(join(tmpdir(), 'logox-test-')), file = join(dir, 'bands.png');
+  imageGraphics.configure({protocol: 'sixel', cell: {width: 8, height: 16}});
+  const writes: string[] = [], plane = new TerminalPlane(text => writes.push(text));
+  plane.afterInkWrite('\x1b[?1049h');
+  try {
+    await writeFile(file, bands());
+    const state = await imageSettled(file);
+    if (state.status !== 'ready') throw new Error('image not ready');
+    return await run(state.image, writes, plane);
+  } finally {
+    plane.dispose(); imageGraphics.configure({protocol: 'halfblock'}); imageGraphics.dispose();
+    await rm(dir, {recursive: true, force: true});
+  }
+}
+const sixelWrites = (writes: readonly string[]) => writes.filter(text => text.includes('\x1bP0;1;0q'));
+const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+test('zoom and pan: pixels are drawn once after the input settles, and an encode that a newer one replaced is never drawn', async () => {
+  await withReadyImage(async (image, writes, plane) => {
+    const at = (i: number) => ({id: 'lb', x: 4, y: 2, cols: 16, rows: 4, spec: {image, crop: {x: i, y: 0, width: 64, height: 32}, outWidth: 128 - i, outHeight: 64, bg: '#202020'}});
+    plane.setOverlay(at(0));
+    await waitFor(async () => sixelWrites(writes).length, count => count === 1, {timeoutMs: 10000, label: 'the first picture'});
+    for (let i = 1; i <= 12; i++) {plane.setOverlay(at(i)); await pause(10);}
+    assert.equal(sixelWrites(writes).length, 1, 'no pixels are written while the input keeps coming (the half blocks carry the interaction)');
+    await waitFor(async () => sixelWrites(writes).length, count => count === 2, {timeoutMs: 10000, label: 'the settled picture'});
+    await pause(300);
+    assert.equal(sixelWrites(writes).length, 2, 'exactly one write after the burst');
+    assert.equal(decodeSixel(sixelWrites(writes)[1]!.slice(sixelWrites(writes)[1]!.indexOf('\x1bP'))).width, 128 - 12, 'and it is the newest view, not an older one');
+  });
+});
+
+test('closing: the rectangle is overwritten with spaces in one write, and an encode that lands after the close is dropped', async () => {
+  await withReadyImage(async (image, writes, plane) => {
+    const spec = {image, crop: {x: 0, y: 0, width: 128, height: 64}, outWidth: 128, outHeight: 64, bg: '#202020'};
+    plane.setOverlay({id: 'lb', x: 4, y: 2, cols: 16, rows: 4, spec});
+    await waitFor(async () => sixelWrites(writes).length, count => count === 1, {timeoutMs: 10000, label: 'the picture'});
+    const before = writes.length;
+    plane.setOverlay(null);
+    assert.equal(writes.length, before + 1, 'one write carries the whole erase');
+    const erase = writes.at(-1)!;
+    assert.ok(!erase.includes('\x1bP') && erase.includes(' '.repeat(16)), 'real spaces, no pixels');
+    assert.equal([...erase.matchAll(/\x1b\[\d+;5H/g)].length, 4, 'one positioned row per cell row of the rectangle');
+    // Reopen with a new view and close before it settles: the late result must never be drawn.
+    plane.setOverlay({id: 'lb', x: 4, y: 2, cols: 16, rows: 4, spec: {...spec, crop: {x: 10, y: 0, width: 100, height: 64}}});
+    plane.setOverlay({id: 'lb', x: 4, y: 2, cols: 16, rows: 4, spec: {...spec, crop: {x: 20, y: 0, width: 100, height: 64}}});
+    plane.setOverlay(null);
+    const count = sixelWrites(writes).length;
+    await pause(700);
+    assert.equal(sixelWrites(writes).length, count, 'nothing is drawn after the close');
+  });
+});
+
+test('one palette per picture is reused for every region, and a zoomed view encodes only its viewport', async () => {
+  await withReadyImage(async image => {
+    const base = stats.palettes;
+    const request = (id: number, x: number) => ({id, assetId: 987654, ...(id === 1 ? {asset: {width: image.raster.width, height: image.raster.height, data: image.raster.data as Uint8Array}} : {}),
+      crop: {x, y: 0, width: 32, height: 16}, outWidth: 64, outHeight: 32, background: parseHex('#202020')});
+    const first = handle(request(1, 0)), second = handle(request(2, 40)), third = handle(request(3, 80));
+    assert.ok('data' in first && 'data' in second && 'data' in third);
+    assert.equal(stats.palettes - base, 1, 'the palette was built once, not per region');
+    const huge = placeAtScale(4000, 3000, 91, 33, 8, 0.5, 0.5, {x: 8, y: 16});
+    const size = overlaySize(huge, {width: 8, height: 16});
+    assert.ok(size.outWidth * size.outHeight <= 91 * 8 * 33 * 16, 'never more pixels than the cell box');
+    assert.ok(size.outWidth * size.outHeight < 4000 * 3000 / 10, 'a zoomed region costs the viewport, not the whole image');
+    const fit = overlaySize(placeAtScale(1280, 720, 91, 33, fitScale(1280, 720, 91, 33, {x: 8, y: 16}), 0.5, 0.5, {x: 8, y: 16}), {width: 8, height: 16});
+    assert.ok(fit.outWidth <= 728 && fit.outHeight <= 528, 'fit is capped by the box too');
+  });
 });

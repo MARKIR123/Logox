@@ -147,3 +147,11 @@ export function borderTitle(title: string, cardCols: number): {readonly before: 
   const text = title ? ' ' + title + ' ' : '', fill = Math.max(0, fixed - stringWidth(text)), leftFill = Math.floor(fill / 2);
   return {before: '╭' + '─'.repeat(leftFill), title: text, after: '─'.repeat(fill - leftFill)};
 }
+
+/** The screen pixels of the picture's Sixel: its visible region at its own scale, never more than the cell box it sits in (so a zoomed picture costs the viewport, not the image). */
+export function overlaySize(placement: Placement, cell: {readonly width: number; readonly height: number}): {readonly outWidth: number; readonly outHeight: number} {
+  return {
+    outWidth: Math.max(1, Math.round(Math.min(placement.crop.width * placement.scale, placement.cols * cell.width))),
+    outHeight: Math.max(1, Math.round(Math.min(placement.crop.height * placement.scale, placement.rows * cell.height))),
+  };
+}

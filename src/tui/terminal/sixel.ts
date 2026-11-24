@@ -2,7 +2,7 @@
 // Everything here is deterministic and free of I/O so it can run in a worker thread (`sixel-worker.ts`) and be tested on tiny images.
 // The overall shape (an image quantised to one palette and emitted band by band with a shared palette) follows the approach of
 // dsh-tui's `ink/sixel-codec.js` (MIT, https://github.com/ccch1mneyyy/dsh-TUI), which delegates to native libraries; this is Logox's own code.
-import {flatten, resample, type Crop, type Raster, type Rgb} from './image-raster.js';
+import {flatten, resample, shrinkTo, type Crop, type Raster, type Rgb} from './image-raster.js';
 
 export interface Quantized {
   /** Palette entries, three bytes each. */
@@ -16,7 +16,7 @@ export interface Quantized {
  * more are split along their widest channel at the weighted median until `maxColors` boxes exist. Every box is represented by the
  * average of the real pixels in it, and each pixel is mapped through its histogram bin, so there is no per-pixel palette search.
  */
-export function quantize(rgb: Uint8Array, pixels: number, maxColors = 256): Quantized {
+export function buildPalette(rgb: Uint8Array, pixels: number, maxColors = 256): SharedPalette {
   const count = new Uint32Array(32768), sumR = new Float64Array(32768), sumG = new Float64Array(32768), sumB = new Float64Array(32768);
   const binOf = new Uint16Array(pixels);
   for (let pixel = 0; pixel < pixels; pixel++) {
@@ -53,10 +53,30 @@ export function quantize(rgb: Uint8Array, pixels: number, maxColors = 256): Quan
     for (const bin of box) {n += count[bin]!; r += sumR[bin]!; g += sumG[bin]!; b += sumB[bin]!; lookup[bin] = index;}
     palette[index * 3] = Math.round(r / n); palette[index * 3 + 1] = Math.round(g / n); palette[index * 3 + 2] = Math.round(b / n);
   });
-  const indices = new Uint8Array(pixels);
-  for (let pixel = 0; pixel < pixels; pixel++) indices[pixel] = lookup[binOf[pixel]!]!;
-  return {palette, indices};
+  // Colours that never occur in the image (resampled regions average into new ones) map to the nearest palette entry.
+  const entries = boxes.length;
+  for (let bin = 0; bin < 32768; bin++) {
+    if (count[bin]) continue;
+    const r = ((bin >> 10) << 3) + 4, g = (((bin >> 5) & 31) << 3) + 4, b = ((bin & 31) << 3) + 4;
+    let best = 0, distance = Infinity;
+    for (let index = 0; index < entries; index++) {
+      const dr = palette[index * 3]! - r, dg = palette[index * 3 + 1]! - g, db = palette[index * 3 + 2]! - b, d = dr * dr + dg * dg + db * db;
+      if (d < distance) {distance = d; best = index;}
+    }
+    lookup[bin] = best;
+  }
+  return {palette, lookup};
 }
+
+/** A palette and the 5-bit-per-channel lookup that maps any colour to its entry, built once per image and reused for every region and zoom. */
+export interface SharedPalette {readonly palette: Uint8Array; readonly lookup: Uint8Array}
+/** Maps every pixel through a palette's lookup (no search, no median cut). */
+export function mapPixels(rgb: Uint8Array, pixels: number, shared: SharedPalette): Quantized {
+  const indices = new Uint8Array(pixels), {lookup} = shared;
+  for (let pixel = 0; pixel < pixels; pixel++) indices[pixel] = lookup[(rgb[pixel * 3]! >> 3) << 10 | (rgb[pixel * 3 + 1]! >> 3) << 5 | (rgb[pixel * 3 + 2]! >> 3)]!;
+  return {palette: shared.palette, indices};
+}
+export function quantize(rgb: Uint8Array, pixels: number, maxColors = 256): Quantized {return mapPixels(rgb, pixels, buildPalette(rgb, pixels, maxColors));}
 
 /** The Sixel data stream for a quantised image: DCS, raster attributes (1:1 pixels), the palette, six-row bands, ST. Unpainted pixels stay transparent (P2 = 1). */
 export function sixelData(image: Quantized, width: number, height: number): string {
@@ -101,9 +121,17 @@ export function sixelData(image: Quantized, width: number, height: number): stri
   return parts.join('');
 }
 
-/** One Sixel image of `crop` of `source` at `outWidth` by `outHeight` pixels (area-averaged), flattened onto `background`. */
-export function encodeSixel(source: Raster, crop: Crop, outWidth: number, outHeight: number, background: Rgb): string {
-  const small = resample(source, crop, outWidth, outHeight);
-  const quantized = quantize(flatten(small, background), small.width * small.height);
-  return sixelData(quantized, small.width, small.height);
+/** The palette of a whole picture (from a copy of at most 1024 px on the long edge), built once and shared by every region and zoom of it. */
+export function paletteOf(source: Raster, background: Rgb): SharedPalette {
+  const small = shrinkTo(source, 1024);
+  return buildPalette(flatten(small, background), small.width * small.height);
+}
+
+/**
+ * One Sixel image of `crop` of `source` at `outWidth` by `outHeight` pixels (area-averaged), flattened onto `background`. With a shared
+ * palette the pixels are only mapped through its lookup; without one a palette is built for this region.
+ */
+export function encodeSixel(source: Raster, crop: Crop, outWidth: number, outHeight: number, background: Rgb, shared?: SharedPalette): string {
+  const small = resample(source, crop, outWidth, outHeight), rgb = flatten(small, background), count = small.width * small.height;
+  return sixelData(shared ? mapPixels(rgb, count, shared) : quantize(rgb, count), small.width, small.height);
 }

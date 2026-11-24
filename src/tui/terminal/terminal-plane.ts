@@ -6,11 +6,13 @@ import {themeRevision} from '../../config/theme-palette.js';
 import {decorateRow, presentedSegments, railCell} from '../timeline/row-presentation.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from '../timeline/viewport.js';
 import {formatClock} from './text.js';
-import {imageGraphics, type EncodeSpec} from './image-graphics.js';
+import {IMAGE_DEBUG, debugLog, imageGraphics, type EncodeSpec} from './image-graphics.js';
 
 /** A picture drawn as Sixel pixels over cells: `x`, `y` are screen cells, `id` names the picture, `spec` what to encode. */
 export interface Placed {readonly id: string; readonly x: number; readonly y: number; readonly cols: number; readonly rows: number; readonly spec: EncodeSpec}
-const sameSpot = (a: Placed, b: Placed): boolean => a.id === b.id && a.x === b.x && a.y === b.y && a.cols === b.cols && a.rows === b.rows;
+const sameSpot = (a: Placed, b: Placed): boolean => a.id === b.id && a.x === b.x && a.y === b.y && a.cols === b.cols && a.rows === b.rows && imageGraphics.keyOf(a.spec) === imageGraphics.keyOf(b.spec);
+/** A moved, scrolled or zoomed picture is drawn as pixels only once it has been still this long; the half blocks show meanwhile. */
+const SETTLE_MS = 140;
 
 /** A segment of a side line; `clock` marks a fixed-width placeholder the plane fills with the time elapsed since that epoch time (ms) each second. */
 export interface SideSegment extends SceneSegment {readonly clock?: number}
@@ -94,6 +96,10 @@ export class TerminalPlane {
   private overlayWanted: Placed | null = null;
   private overlayShown: Placed | null = null;
   private readonly stopImages: () => void;
+  private overlayTimer: ReturnType<typeof setTimeout> | undefined;
+  private overlaySettleAt = 0;
+  private thumbSettleAt = 0;
+  private thumbTimer: ReturnType<typeof setTimeout> | undefined;
   constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {
     this.stopImages = imageGraphics.subscribe(() => {if (this.closed) return; this.drawOverlay(); if (this.frame) this.flush();});
   }
@@ -137,23 +143,41 @@ export class TerminalPlane {
   setOverlay(placed: Placed | null): void {
     const before = this.overlayWanted;
     this.overlayWanted = placed;
-    if (!placed) {this.eraseOverlay(); return;}
-    if (before && !sameSpot(before, placed)) this.eraseOverlay();
-    if (!this.outputHeld && imageGraphics.encoded(placed.spec) !== undefined) this.drawOverlay();
+    if (!placed) {
+      // Closed: nothing pending may draw it again, and its rectangle is overwritten with real cells at once (before Ink's next write).
+      imageGraphics.cancelLane('overlay');
+      if (this.overlayTimer) clearTimeout(this.overlayTimer);
+      this.overlayTimer = undefined; this.overlaySettleAt = 0;
+      this.eraseOverlay();
+      return;
+    }
+    if (before && sameSpot(before, placed)) return;
+    // Zoomed or panned: Ink repaints the half-block cells now (cheap); the pixels follow once the input has been still for a moment.
+    this.overlaySettleAt = before ? performance.now() + SETTLE_MS : 0;
+    this.drawOverlay();
   }
   private eraseOverlay(): void {
     const shown = this.overlayShown;
     this.overlayShown = null;
     if (!shown || !this.active || this.closed) return;
-    const rows = Array.from({length: shown.rows}, (_, i) => `\x1b[${shown.y + i + 1};${shown.x + 1}H${rgb(shown.spec.bg, true)}\x1b[${shown.cols}X`).join('');
+    // Real spaces in the surface colour: overwriting cells is what removes pixels everywhere; ECH is not relied on.
+    const blank = ' '.repeat(shown.cols);
+    const rows = Array.from({length: shown.rows}, (_, i) => `\x1b[${shown.y + i + 1};${shown.x + 1}H${rgb(shown.spec.bg, true)}${blank}`).join('');
     this.write('\x1b[?2026h\x1b7' + rows + reset + '\x1b8\x1b[?2026l');
   }
   private drawOverlay(): void {
     const wanted = this.overlayWanted;
     if (!wanted || !this.active || this.closed || (this.overlayShown && sameSpot(this.overlayShown, wanted))) return;
-    const data = imageGraphics.encoded(wanted.spec);
+    const wait = this.overlaySettleAt - performance.now();
+    if (wait > 0) {
+      if (!this.overlayTimer) {this.overlayTimer = setTimeout(() => {this.overlayTimer = undefined; this.drawOverlay();}, wait + 1); this.overlayTimer.unref?.();}
+      return;
+    }
+    const data = imageGraphics.encoded(wanted.spec, 'overlay');
     if (data === undefined) return;
+    const began = performance.now();
     this.write('\x1b[?2026h\x1b7' + `\x1b[${wanted.y + 1};${wanted.x + 1}H` + data + reset + '\x1b8\x1b[?2026l');
+    if (IMAGE_DEBUG) debugLog(`overlay write ${data.length} bytes, ${(performance.now() - began).toFixed(1)} ms`);
     this.overlayShown = wanted;
   }
   beginOutput(): void {this.outputHeld = true; this.cancel();}
@@ -208,7 +232,7 @@ export class TerminalPlane {
     return found;
   }
   private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
-  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined; this.stopImages();}
+  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined; this.stopImages(); if (this.overlayTimer) clearTimeout(this.overlayTimer); if (this.thumbTimer) clearTimeout(this.thumbTimer);}
   flush(): void {
     this.cancel();
     const frame = this.frame;
@@ -264,8 +288,15 @@ export class TerminalPlane {
     }
     this.previous = frame; this.previousLines = lines; this.previousSide = sideLines;
     const kept = this.shown.filter(spot => !stale.includes(spot) && ![...repainted].some(row => row >= spot.y && row < spot.y + spot.rows));
+    // A scrolling timeline keeps its half blocks; pixels are drawn once the frame has been still for a moment.
+    if (scrolled !== 0 || (previous && previous.start !== frame.start)) this.thumbSettleAt = performance.now() + SETTLE_MS;
+    const waiting = performance.now() < this.thumbSettleAt;
     for (const want of wanted) {
       if (kept.some(spot => sameSpot(spot, want))) continue;
+      if (waiting) {
+        if (!this.thumbTimer) {this.thumbTimer = setTimeout(() => {this.thumbTimer = undefined; this.flush();}, this.thumbSettleAt - performance.now() + 1); this.thumbTimer.unref?.();}
+        continue;
+      }
       const data = imageGraphics.encoded(want.spec);
       if (data === undefined) continue; // the half blocks stay until the worker has it
       chunks.push(`\x1b[${want.y + 1};${want.x + 1}H${reset}${data}`);
