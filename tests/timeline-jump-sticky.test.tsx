@@ -271,3 +271,30 @@ test('the floating chip and sticky row never defeat hardware scrolling, and are 
   assert.match(strip(out), /End/, 'the chip row is painted again after the scroll');
   plane.dispose();
 });
+
+test('over a tinted row the chip takes the covered background: caps blend into it, the fill tints it and nothing sticks out', () => {
+  const height = 20, width = 80, tint = '#203040';
+  const plain = rowsOf(conversation());
+  const tinted = plain.map(row => ({...row, bg: tint}) as SceneRow);
+  const chip = (rows: readonly SceneRow[]) => {
+    const view = overlayView({rows, height, width, anchor: at(rows, 0, height)});
+    const box = view.overlay.pill!, segments = (view.rows[box.y] as SceneRow).segments!;
+    return {box, segments, row: view.rows[box.y] as SceneRow};
+  };
+  const widthOfText = (list: readonly {text: string}[]) => list.reduce((sum, s) => sum + [...s.text].length, 0);
+  const a = chip(tinted);
+  const left = a.segments.find(s => s.text === '▐')!, right = a.segments.find(s => s.text === '▌')!;
+  assert.equal(left.bg, tint, 'the left cap keeps the covered background behind its transparent half');
+  assert.equal(right.bg, tint);
+  const fill = a.segments.find(s => /Latest/.test(s.text))!.bg;
+  assert.notEqual(fill, tint, 'the chip itself is still visibly a chip'); assert.notEqual(fill, undefined);
+  const first = a.segments.findIndex(s => s.text === '▐'), last = a.segments.findIndex(s => s.text === '▌');
+  assert.equal(widthOfText(a.segments.slice(0, first)), a.box.x, 'nothing is painted left of the chip');
+  assert.equal(widthOfText(a.segments.slice(first, last + 1)), a.box.width, 'the chip is exactly label plus caps');
+  assert.ok(a.segments.slice(last + 1).every(s => s.bg === tint || s.bg === undefined), 'the row to the right keeps its own background');
+  const b = chip(plain as SceneRow[]);
+  assert.equal(b.segments.find(s => s.text === '▐')!.bg, undefined, 'over a plain row the cap has no background of its own');
+  assert.notEqual(b.segments.find(s => /Latest/.test(s.text))!.bg, fill, 'the fill follows what is underneath');
+  const hover = (a.row.glow!.paint(1)).find(s => s.text === '▐')!;
+  assert.equal(hover.bg, tint, 'hovered caps blend too');
+});

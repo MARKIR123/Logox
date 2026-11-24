@@ -5,7 +5,7 @@
 // for the mouse router, and a `glow` the terminal plane eases on hover. Selection, copy and scrolling keep reading the real rows.
 import stringWidth from 'string-width';
 import type {MutableRefObject} from 'react';
-import {mixHex} from '../appearance/colors.js';
+import {canvasBg, mixHex} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import {safeText} from '../terminal/text.js';
 import {railCell, rowSegments} from './row-presentation.js';
@@ -97,21 +97,33 @@ export function pillBox(width: number, height: number, newCount: number): NonNul
   return {x: Math.floor((width - boxWidth) / 2), y: height >= 6 ? height - 2 : height - 1, width: boxWidth, height: 1, label};
 }
 /** The chip at a hover level 0..1: `▐ ↓ Latest  End ▌`, a soft accent fill that deepens toward a stronger accent, half-block caps in the fill colour on the terminal's own background. */
-export function pillChip(label: string, level: number): SceneSegment[] {
-  const fill = mixHex(palette.accent, palette.bg, 0.2 + 0.28 * level);
+export function pillChip(label: string, level: number, under: {readonly left?: string | undefined; readonly mid?: string | undefined; readonly right?: string | undefined} = {}): SceneSegment[] {
+  // The fill tints whatever the chip floats over; each cap's other half keeps the covered cell's own background (none: the terminal's).
+  const fill = mixHex(palette.accent, under.mid ?? canvasBg() ?? palette.bg, 0.2 + 0.28 * level);
   const text = mixHex(palette.fg, fill, 0.8 + 0.2 * level);
   const [arrow, ...rest] = [...label];
   const tail = rest.join('');
   const at = tail.lastIndexOf('End');
   const arrowColor = mixHex(palette.accent, palette.fg, 0.75 + 0.25 * level);
   return [
-    {text: '▐', color: fill},
+    {text: '▐', color: fill, ...(under.left ? {bg: under.left} : {})},
     {text: ' ', bg: fill},
     {text: arrow ?? '', color: arrowColor, bg: fill, bold: true},
     ...(at < 0 ? [{text: tail, color: text, bg: fill}] : [{text: tail.slice(0, at), color: text, bg: fill}, {text: 'End', color: palette.muted, bg: fill}]),
     {text: ' ', bg: fill},
-    {text: '▌', color: fill},
+    {text: '▌', color: fill, ...(under.right ? {bg: under.right} : {})},
   ];
+}
+
+/** The background of the cell at display column `column` of a flattened row, if it has one. */
+function bgAt(segments: readonly SceneSegment[], column: number): string | undefined {
+  let at = 0;
+  for (const segment of segments) {
+    const end = at + stringWidth(segment.text);
+    if (column < end) return segment.bg;
+    at = end;
+  }
+  return undefined;
 }
 
 function pillRows(box: NonNullable<OverlayInfo['pill']>, view: TimelineView): Row[] {
@@ -119,10 +131,13 @@ function pillRows(box: NonNullable<OverlayInfo['pill']>, view: TimelineView): Ro
   const flat = under ? flatten(under) : [];
   const left = pad(sliceSegments(flat, 0, box.x), box.x);
   const right = sliceSegments(flat, box.x + box.width, Infinity);
-  const paint = (level: number): readonly SceneSegment[] => merge([...left, ...pillChip(box.label, level), ...right]);
+  const rowBg = (under as SceneRow | undefined)?.bg;
+  const covered = {left: bgAt(flat, box.x) ?? rowBg, mid: bgAt(flat, box.x + Math.floor(box.width / 2)) ?? rowBg, right: bgAt(flat, box.x + box.width - 1) ?? rowBg};
+  const paint = (level: number): readonly SceneSegment[] => merge([...left, ...pillChip(box.label, level, covered), ...right]);
   const action: SceneAction = {kind: 'jump_bottom'};
   return [{
     messageId: JUMP_ID, line: 0, text: '', railColor: '', gutterCols: 0, softWrap: false, noSelect: true, tone: 'body',
+    ...(rowBg ? {bg: rowBg} : {}),
     segments: paint(0), hover: {foldId: JUMP_ID, startCol: box.x, endCol: box.x + box.width},
     hits: [{startCol: box.x, endCol: box.x + box.width, action}], glow: {id: JUMP_ID, paint},
   } as SceneRow];
