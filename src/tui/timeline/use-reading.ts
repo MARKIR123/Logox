@@ -9,6 +9,7 @@ import type {PlaneSide, TerminalPlane} from '../terminal/terminal-plane.js';
 import {decorateRow} from './row-presentation.js';
 import {selectionRange, selectionInViewport, type ContentSelection} from './selection.js';
 import {extractSelection, normalizeSelection, viewport, type Anchor, type Row} from './viewport.js';
+import {timelineView} from './timeline-overlay.js';
 
 export interface ReadingInput {
   plane: TerminalPlane | null;
@@ -24,20 +25,24 @@ export interface ReadingInput {
   contentSelection: MutableRefObject<ContentSelection | null>;
   hoveredFoldIdRef: MutableRefObject<string | null>;
   view: ReturnType<typeof viewport>;
+  /** Per window: the row count when the person left the bottom (the jump pill's "new" count). */
+  baselines: MutableRefObject<Record<string, number>>;
   selection: ReturnType<typeof selectionInViewport>;
   setAnchor(next: Anchor | null): void;
   /** The plan sidebar docked beside the timeline, painted by the plane in the same frame. */
   side?: PlaneSide | undefined;
   /** The narrow-terminal plan overlay covers the screen like the other takeover pages. */
   planOverlay?: boolean;
+  /** The timeline is the focused region (see `input/focus-regions.ts`). */
+  focused?: boolean;
 }
 
 export function useReading({plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface, welcome, width, layout, contentSelection,
-  hoveredFoldIdRef, view, selection, setAnchor, side, planOverlay = false}: ReadingInput) {
+  hoveredFoldIdRef, view, baselines, selection, setAnchor, side, planOverlay = false, focused = false}: ReadingInput) {
   const [, refreshReading] = useState(0);
   const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || surface?.kind === 'image' || welcome;
   const presentReading = () => {
-    const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
+    const current = timelineView(messageRows, timelineHeight, width, anchors.current[currentView] ?? null, baselines, currentView);
     if (plane && covered()) {plane.hide(); return;}
     if (plane) plane.present({
       ...current,
@@ -47,6 +52,7 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
       motion: layout?.motion ?? true,
       hoveredFoldId: hoveredFoldIdRef.current,
       side,
+      focus: focused,
     });
     else refreshReading(value => value + 1);
   };
@@ -62,6 +68,7 @@ export function useReading({plane, messageRows, timelineHeight, anchors, current
       motion: layout?.motion ?? true,
       hoveredFoldId: hoveredFoldIdRef.current,
       side,
+      focus: focused,
     });
   });
   const copySelection = () => {

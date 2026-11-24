@@ -15,7 +15,7 @@ import {effortSchema} from '../config/model-preferences.js';
 import {settingDefinition, settingDefinitions, settingOptions, settingsPages, saveSettings, type SettingsEnv} from '../config/settings-definitions.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, loadThemePresets, resolveTheme, themeListing, type CursorStyleName} from '../config/theme-presets.js';
-import {UiPreferences} from '../config/ui-settings.js';
+import {applyUiSettings, UiPreferences} from '../config/ui-settings.js';
 import {saveUserName, setUserLabel} from '../config/user-profile.js';
 import {mcpRegistrations, type ProjectExtensions} from '../extensions/runtime.js';
 import type {PermissionEngine} from '../permissions/engine.js';
@@ -170,10 +170,10 @@ export function createPages(deps: PagesDeps) {
   const themePage = (): {data: ThemePageData; actions: ThemeActions} => {
     loadThemePresets(homeDir);
     return {
-      data: {themes: themeListing(), current: savedTheme()},
+      data: {themes: themeListing(), current: savedTheme(), backgrounds: {...ui.get().themeBackgrounds}},
       actions: {
-        apply: name => {applyThemePreset(name);},
-        save: async name => {await ui.save({theme: name}); applyThemePreset(name);},
+        apply: (name, backgrounds) => {if (backgrounds) applyUiSettings({themeBackgrounds: backgrounds}); applyThemePreset(name);},
+        save: async (name, backgrounds) => {await ui.save({theme: name, themeBackgrounds: backgrounds}); applyThemePreset(name);},
       },
     };
   };

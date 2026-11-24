@@ -21,6 +21,9 @@ export function clickTimeline(ctx: ShellContext, act: SceneAction, clickedRow: S
   const {actorNameOf, choosePermission, commitAnswer, confirmScenePermission, confirmSceneStyle, demoScene, foldActivityId, foldIds,
       foldTimerRef, lastClickRef, pending, request, scene, setCardCursor, setEditingCustom, setFocus, setResponses, setScene,
       setSelectedActivityId, setSelectedRequestId, snapshot, stage, stopActor, switchView} = ctx;
+  // The two floating controls: back to the latest output, or to the top of the user message pinned above the viewport.
+  if (act.kind === 'jump_bottom') {ctx.setAnchor(null); return;}
+  if (act.kind === 'jump_message' && act.value) {ctx.setAnchor({messageId: act.value, line: 0, screenOffset: 0}); return;}
   if (stage && act.foldId && act.kind !== 'stop_actor') {
     const index = foldIds.indexOf(act.foldId);
     if (index >= 0) setCardCursor(index);

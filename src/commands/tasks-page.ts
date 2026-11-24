@@ -14,9 +14,11 @@ import type {ActorDetail} from '../runtime/team-stage.js';
 import {readFile} from 'node:fs/promises';
 import {row, tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, SidebarMode} from './surfaces.js';
+import {SIDEBAR_TAB_IDS} from './surfaces.js';
 
 export const TEAM_USAGE = 'Usage: /team [sidebar] [show|hide|toggle]';
 export const TEAM_NO_TERMINAL = 'The team sidebar needs the terminal UI.';
+export const SIDEBAR_USAGE = 'Usage: /sidebar [team|changes|usage] [show|hide|toggle]';
 
 export interface TasksPageDeps {
   surfaces: CommandSurfaces;
@@ -200,7 +202,15 @@ export function createTasksCommand(deps: TasksPageDeps) {
     async team(argument: string): Promise<void> {
       const match = /^(?:sidebar\s*)?(show|hide|toggle)?$/i.exec(argument.trim());
       if (!match) throw new Error(TEAM_USAGE);
-      if (!surfaces.requestSidebar((match[1]?.toLowerCase() ?? 'toggle') as SidebarMode)) throw new Error(TEAM_NO_TERMINAL);
+      if (!surfaces.requestSidebar((match[1]?.toLowerCase() ?? 'toggle') as SidebarMode, 'team')) throw new Error(TEAM_NO_TERMINAL);
+    },
+    /** `/sidebar [tab] [show|hide|toggle]`: a tab opens and shows it (toggling an already shown tab hides the sidebar); without a tab only the visibility changes (toggle by default). */
+    async sidebar(argument: string): Promise<void> {
+      const words = argument.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const tab = words[0] !== undefined && (SIDEBAR_TAB_IDS as readonly string[]).includes(words[0]) ? words.shift() : undefined;
+      const mode = words.shift() ?? 'toggle';
+      if (words.length || !['show', 'hide', 'toggle'].includes(mode)) throw new Error(SIDEBAR_USAGE);
+      if (!surfaces.requestSidebar(mode as SidebarMode, tab)) throw new Error(TEAM_NO_TERMINAL);
     },
     /** Opens the detail page of one delegation (an activity id, or `<activityId>/<jobId>`), Esc returning through `backTo`; false when the session does not know it. */
     openDelegation,

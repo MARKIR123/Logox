@@ -121,7 +121,6 @@ test('with no plan the work of a round is one act on the stage (/team); the act 
     const choose = async (needle: string) => {await delay(150); await clickFirst(needle); await delay(80); await clickFirst(needle);};
     await delay(100);
     assert.ok(!/Act 1 of 1/.test(screen()), 'a session without a plan does not open the sidebar by itself');
-    assert.match(screen(), /▸ Act 1\/1 · \d\/2/, 'the footer chip offers it');
     await act(async () => {await app.submit('/team');}); await instance.waitUntilRenderFlush();
     await waitFor(() => sidebar(), text => /‹ Act 1 of 1 · (Build|Polish)/.test(text) && /\d\/2 ›/.test(text), {label: 'the act header of the round'});
     assert.doesNotMatch(sidebar(), /\b\d+(\.\d+)+\b/, 'no node id on the sidebar');

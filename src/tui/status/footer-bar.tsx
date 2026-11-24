@@ -25,23 +25,19 @@ export interface FooterBarProps {
   hoveredPill: string | null;
   keys: string;
   note: readonly NoteSegment[];
-  /** The `▸ Plan 3/7` chip docked at the right end of row 1 while a plan exists and its sidebar is hidden. */
-  chip?: {readonly label: string; readonly width: number} | undefined;
-  chipHover?: boolean;
 }
 
 export function FooterBar({height, width, hasStatus: getStatus, noticeInline, demoScene, notice, statusLeft, statusLeftColor, statusText: footerStatusText,
-  layout: footerLayout, pills: activePills, pillsWidth, hoveredPill, keys: renderedFooterKeys, note: footerNote, chip, chipHover = false}: FooterBarProps) {
+  layout: footerLayout, pills: activePills, pillsWidth, hoveredPill, keys: renderedFooterKeys, note: footerNote}: FooterBarProps) {
   const footerStatusParts = footerLayout.parts;
   return <Box height={height} flexShrink={0} flexDirection="column">
       <Box height={1} flexShrink={0} flexDirection="row">
         <Text color={statusLeftColor} wrap="truncate">{getStatus && !noticeInline
           ? footerStatusParts.map((part, index) => <Text key={index} color={part.color ?? statusLeftColor} {...(part.bold ? {bold: true} : {})} {...(part.backgroundColor ? {backgroundColor: part.backgroundColor} : {})}>{part.text}</Text>)
           : footerStatusText}</Text>
-        {activePills.length > 0 || chip ? <>
-          <Text>{' '.repeat(Math.max(0, width - (getStatus && !noticeInline ? footerLayout.width : stringWidth(footerStatusText)) - pillsWidth - (chip ? chip.width + (activePills.length > 0 ? 1 : 0) : 0)))}</Text>
-          {activePills.length > 0 ? <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/> : null}
-          {chip ? <>{activePills.length > 0 ? <Text> </Text> : null}<Text color={chipHover ? palette.strong : palette.accent} backgroundColor={mixHex(palette.accent, palette.bg, chipHover ? 0.34 : 0.2)}>{chip.label}</Text></> : null}
+        {activePills.length > 0 ? <>
+          <Text>{' '.repeat(Math.max(0, width - (getStatus && !noticeInline ? footerLayout.width : stringWidth(footerStatusText)) - pillsWidth))}</Text>
+          <ActorPills pills={activePills} hoveredOwnerId={hoveredPill}/>
         </> : demoScene && !getStatus && !notice && stringWidth(statusLeft) + stringWidth(renderedFooterKeys) + 2 <= width ? <>
           <Text>{' '.repeat(width - stringWidth(statusLeft) - stringWidth(renderedFooterKeys))}</Text>
           <Text color={palette.muted}>{renderedFooterKeys}</Text>

@@ -590,7 +590,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
       builder.pushBlank();
       const queued = source === 'human' && activity && ['queued', 'paused'].includes(activity.status);
       builder.pushTurnHeader(message.id + '-who', source === 'director' ? message.source ?? message.ownerId : 'user',
-        steered ? 'steered' : queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source);
+        steered ? 'steered' : queued ? 'Queued' : source === 'director' ? 'Assignment' : message.source, undefined, undefined, true);
       body(message);
     } else {
       if (systemLike) {

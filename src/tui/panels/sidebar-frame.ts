@@ -2,7 +2,7 @@
  * The frame of the sidebar (the team stage of `team-sidebar.ts`) as pure functions and constants: how wide it docks, where its content starts, the border
  * column with the collapse button and resize handle (`sideLine()`), and the palette colour of a cell tone (`toneColor()`). Nothing here reads a clock or a store.
  *
- * Geometry: column 0 is the border (`│`, accent while the sidebar has the keyboard; on the first row the `›` collapse button), column 1 a space, the content
+ * Geometry: column 0 is the border and resize handle (`│`, accent while the sidebar has the keyboard or the pointer is on it), column 1 a space, the content
  * starts at column 2.
  */
 import stringWidth from 'string-width';
@@ -10,6 +10,7 @@ import {faintColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
 import {fit, type FlowTone} from './panel-text.js';
+import {dimmed, lerpColor} from './hover-fade.js';
 
 /** The sidebar docks beside the timeline only at this many columns or more; narrower terminals open it as an overlay. */
 export const DOCK_MIN_COLUMNS = 110;
@@ -31,9 +32,6 @@ export const clampSidebarWidth = (requested: number, width: number): number => M
 export const sidebarWidth = (width: number, preferred?: number): number => preferred === undefined ? defaultSidebarWidth(width) : clampSidebarWidth(preferred, width);
 /** The sidebar width while its border is dragged to terminal column `x` (the sidebar spans the right-hand `width - x` columns). */
 export const dragWidth = (width: number, x: number): number => clampSidebarWidth(width - x, width);
-
-/** The collapse button in the border column of the header row (one cell wide). */
-export const COLLAPSE = '›';
 
 export function toneColor(tone: FlowTone): string {
   switch (tone) {
@@ -59,9 +57,13 @@ function merge(segments: readonly SideSegment[]): SideSegment[] {
   return result;
 }
 /** What a sidebar line needs of its frame: the panel width, the pointer over its border and whether the border wears the accent (keyboard focus or a drag). */
-export interface SideFrame {readonly width: number; readonly hoveredEdge?: 'collapse' | 'handle' | undefined; readonly accent: boolean}
-/** The border (the `›` collapse button on the first row, else the resize handle), then the cells of `row` clipped to the content width and padded: one line exactly `width` cells wide. */
-export function sideLine(frame: SideFrame, row: readonly SideSegment[], first = false): SideSegment[] {
+export interface SideFrame {
+  readonly width: number; readonly hoveredEdge?: 'handle' | undefined; readonly accent: boolean;
+  /** The focus chrome 0..1 (`FadeSet` key `focus`): the border eases from a dim line to the accent. Absent: the border is the accent while `accent`, else the plain line. */
+  readonly level?: number | undefined;
+}
+/** The border (the resize handle), then the cells of `row` clipped to the content width and padded: one line exactly `width` cells wide. */
+export function sideLine(frame: SideFrame, row: readonly SideSegment[]): SideSegment[] {
   const room = frame.width - CONTENT_X;
   const out: SideSegment[] = [];
   let used = 0;
@@ -72,7 +74,8 @@ export function sideLine(frame: SideFrame, row: readonly SideSegment[], first = 
     out.push({...segment, text: fit(segment.text, room - used).replace(/…$/, ' ')}); used = room; break;
   }
   const {hoveredEdge} = frame;
-  const edgeColor = frame.accent || hoveredEdge === 'handle' ? palette.accent : palette.line;
-  const border: SideSegment[] = first ? [{text: COLLAPSE, color: hoveredEdge === 'collapse' ? palette.accent : palette.muted, bold: true}, {text: ' ', color: palette.fg}] : [{text: '│ ', color: edgeColor}];
+  const rest = frame.level === undefined ? palette.line : lerpColor(dimmed(palette.line), palette.accent, frame.level);
+  const edgeColor = frame.accent || hoveredEdge === 'handle' ? palette.accent : rest;
+  const border: SideSegment[] = [{text: '│ ', color: edgeColor}];
   return merge([...border, ...out, {text: ' '.repeat(Math.max(0, room - used)), color: palette.fg}]);
 }

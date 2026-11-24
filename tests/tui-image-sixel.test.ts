@@ -148,7 +148,7 @@ test('the plane draws Sixel over a fully visible thumbnail once, erases and redr
     assert.ok(out.join('').includes('\x1b[5;11H\x1bP0;1;0q'), 'at the overlay rectangle');
     out.length = 0;
     plane.setOverlay(null);
-    assert.equal([...out.join('').matchAll(/\x1b\[\d+;11H\x1b\[48;2;32;32;32m {16}/g)].length, 4, 'every row of the rectangle is blanked in the background colour');
+    assert.equal([...out.join('').matchAll(/\x1b\[\d+;11H\x1b\[0m {16}/g)].length, 4, 'every row of the rectangle is blanked in the default colours (the surface colour would linger)');
     plane.dispose();
   } finally {
     imageGraphics.configure({protocol: 'halfblock'}); imageGraphics.dispose();
@@ -227,5 +227,32 @@ test('one palette per picture is reused for every region, and a zoomed view enco
     assert.ok(size.outWidth * size.outHeight < 4000 * 3000 / 10, 'a zoomed region costs the viewport, not the whole image');
     const fit = overlaySize(placeAtScale(1280, 720, 91, 33, fitScale(1280, 720, 91, 33, {x: 8, y: 16}), 0.5, 0.5, {x: 8, y: 16}), {width: 8, height: 16});
     assert.ok(fit.outWidth <= 728 && fit.outHeight <= 528, 'fit is capped by the box too');
+  });
+});
+
+test('closing the lightbox repaints the timeline underneath in the same moment, even though Ink then clears the cells the card covered', async () => {
+  await withReadyImage(async (image, writes, plane) => {
+    const fixture = toolFixture('Read', {file_path: 'a.txt'}, '1: first line of the file\n2: second line');
+    const rows = fixture.rows();
+    const frame = {rows, start: 0, width: 100, height: rows.length, selection: null};
+    const shown = (list: readonly string[]) => list.join('').includes('Go.');
+    plane.present(frame); plane.flush();
+    assert.ok(shown(writes), 'the timeline is painted');
+    // Opening the lightbox: the plane hides, Ink paints the card, the picture is drawn over a rectangle of the timeline.
+    plane.hide();
+    const spec = {image, crop: {x: 0, y: 0, width: 128, height: 64}, outWidth: 128, outHeight: 64, bg: '#202020'};
+    plane.setOverlay({id: 'lb', x: 2, y: 0, cols: 16, rows: 4, spec});
+    await waitFor(async () => sixelWrites(writes).length, count => count === 1, {timeoutMs: 10000, label: 'the picture'});
+    // Closing: the cleanup erases, the app presents the timeline again, then Ink writes its close frame (which blanks the card's cells).
+    const mark = writes.length;
+    plane.setOverlay(null);
+    plane.present(frame);
+    plane.beginOutput(); plane.afterInkWrite('\x1b[4;1H\x1b[2K'); plane.endOutput();
+    const after = writes.slice(mark);
+    assert.ok(after[0]!.includes('\x1b[0m' + ' '.repeat(16)) && !/48;2/.test(after[0]!), 'the erase uses default blanks, in the very write of the close');
+    const last = after.filter(text => text.includes('\x1b[2K'));
+    assert.ok(last.length >= 1 && shown(last.slice(-1)), 'the write after Ink\'s close frame carries the timeline text again');
+    const repainted = last.at(-1)!;
+    assert.ok([...repainted.matchAll(/\x1b\[(\d+);1H/g)].length >= rows.length, 'every row of the timeline is written, not only the changed ones');
   });
 });

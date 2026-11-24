@@ -199,6 +199,8 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/theme') {pages.openTheme(); return;}
     const teamArgs = /^\/team(?:\s+([\s\S]*))?$/i.exec(text);
     if (teamArgs) {await tasksCommand.team(teamArgs[1] ?? ''); return;}
+    const sidebarArgs = /^\/sidebar(?:\s+([\s\S]*))?$/i.exec(text);
+    if (sidebarArgs) {await tasksCommand.sidebar(sidebarArgs[1] ?? ''); return;}
     const anamnesisArgs = /^\/anamnesis(?:\s+([\s\S]*))?$/i.exec(text);
     if (anamnesisArgs) {await anamnesisCommand.command(anamnesisArgs[1] ?? '', source); return;}
     const pageSpec = createCommandTabsFor(text, buildContext());

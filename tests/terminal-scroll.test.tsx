@@ -33,8 +33,8 @@ test('实际会话屏幕中的表格保持内容宽度，代码框线铺满，�
       const codeTop = output.lines.find(line => line.includes('── powershell'));
       const codeBottom = output.lines.find(line => /^[▎│] ─+$/.test(line));
       assert.ok(top && bottom && codeTop && codeBottom, '上下框线都出现在实际屏幕');
-      for (const line of [top, bottom]) assert.equal(stringWidth(line), 23, '宽窗口不拉伸短表格');
-      for (const line of [codeTop, codeBottom]) assert.equal(stringWidth(line), width - 1, '代码横线继续铺满可用宽度');
+      for (const line of [top, bottom]) assert.equal(stringWidth(line), Math.min(23, width - 3), '宽窗口不拉伸短表格');
+      for (const line of [codeTop, codeBottom]) assert.equal(stringWidth(line), width - 3, '代码横线继续铺满可用宽度（右侧留出开关图标的两列）');
       assert.ok(top.endsWith('┐') && bottom.endsWith('┘'), '右侧角点未被终端裁掉');
       assert.ok(output.lines.some(line => line.includes('npm start')), '代码正文没有被框线覆盖');
     }
@@ -54,7 +54,7 @@ test('独立滚动画布：实际屏幕正确，纯滚轮不更新 React，输�
     onSubmit={async () => {}} onCancel={() => {}} onClose={async () => {}}/></Profiler>,
     {stdout: output, stdin: input, stderr: output, interactive: true, alternateScreen: true, incrementalRendering: true, maxFps: 30, patchConsole: false, exitOnCtrlC: false});
   const settle = async () => {await delay(65); await instance.waitUntilRenderFlush();};
-  const topText = () => output.lines[0]!.replace(/^[▎│] /, '');
+  const topText = () => output.lines[0]!.replace(/^[▎│] /, '').replace(/\s*◨$/, '');
   try {
     await settle(); input.write('保留草稿'); await settle();
     const footer = output.lines.slice(61);

@@ -18,6 +18,7 @@ import {imagePathAt} from '../timeline/image-thumb.js';
 import {activateImage} from '../timeline/timeline-click.js';
 import {draftSelection, emptyDraft, erase, graphemes, insert, move, moveToLineEdge, moveVertical, moveWord, navigateDraft, removeDraftSelection, selectedText} from './editor.js';
 import type {ShellContext} from './shell-context.js';
+import {scrolledUp} from '../timeline/timeline-overlay.js';
 
 
 const foldableDemoIds = ['main-thinking', 'main-tool', 'main-aletheia', 'main-aletheia-reads', 'main-techne', 'main-kalon', 'main-memory'] as const;
@@ -31,10 +32,12 @@ export function useKeyboard(ctx: ShellContext): void {
       notice, onCancel, pending, plane, questionPanel, request, response, roles, scene, selection, sendSceneInput, sessionId, setAnchor,
       setCardCursor, setCompletion, setDetailOffset, setDraft, setEditingCustom, setExpanded, setFocus, setFocusedStop, setNotice,
       setScene, setSelectedActivityId, setSelectedRequestId, snapshot, stage, stdout, steerInput, stopActor, store, suggestionIndex,
-      suggestions, surface, switchView, timelineHeight, planSidebar} = ctx;
+      suggestions, surface, switchView, timelineHeight, planSidebar, anchors, composerBlurred, setComposerBlurred, keepTimeline} = ctx;
     plane?.noteInput();
     if (closing || key.eventType === 'release') return;
     if (!key.escape) escArmedUntil.current = 0; // Any other key ends the second-Esc window.
+    // A blurred composer wakes on Esc, on a printable key, Backspace/Delete, or Enter with a draft (the key itself still does its normal work).
+    if (composerBlurred && (key.escape || input.length > 0 && !key.ctrl && !key.meta && !key.return && !key.tab && !key.escape || key.backspace || key.delete || key.return && draft.text)) setComposerBlurred(false);
     if (composerExpanded) {
       if (!(key.ctrl && input === 'c')) exitDeadline.current = 0;
       return;
@@ -81,10 +84,11 @@ export function useKeyboard(ctx: ShellContext): void {
     if (key.tab) {
       if (stage) {
         const stops = [...new Set(messageRows.flatMap(row => (row as SceneRow).controls?.filter(item => !item.disabled).flatMap(item => item.action.foldId ? [item.action.foldId] : []) ?? []))];
-        const targets = ['input', ...pending.map(item => 'question:' + item.requestId), ...stops.map(id => 'stop:' + id), ...(planSidebar.docked ? ['plan'] : [])];
-        const current = focus === 'stop' ? 'stop:' + focusedStop : focus === 'question' ? 'question:' + request?.requestId : focus === 'plan' ? 'plan' : 'input';
+        const targets = ['input', ...pending.map(item => 'question:' + item.requestId), ...stops.map(id => 'stop:' + id), ...(pending.length || stops.length ? [] : ['timeline']), ...(planSidebar.docked ? ['plan'] : [])];
+        const current = focus === 'stop' ? 'stop:' + focusedStop : focus === 'question' ? 'question:' + request?.requestId : focus === 'plan' ? 'plan' : composerBlurred ? 'timeline' : 'input';
         const selected = targets[(Math.max(0, targets.indexOf(current)) + targets.length + (key.shift ? -1 : 1)) % targets.length]!;
-        if (selected === 'input') {setFocus('input'); return;}
+        if (selected === 'input') {setComposerBlurred(false); setFocus('input'); return;}
+        if (selected === 'timeline') {keepTimeline.current = focus !== 'input'; setComposerBlurred(true); setFocus('input'); return;}
         if (selected === 'plan') {setFocus('plan'); return;}
         const kind = selected.startsWith('stop:') ? 'stop' : 'question', id = selected.slice(kind.length + 1);
         setFocus(kind);
@@ -130,12 +134,14 @@ export function useKeyboard(ctx: ShellContext): void {
     }
     if (stage && key.ctrl && (input === 'n' || input === 'o')) {
       if (input === 'n') {
+        setComposerBlurred(true);
         const index = foldIds.length ? (cardCursor + 1) % foldIds.length : 0;
         setCardCursor(index); setSelectedActivityId(foldActivityId(foldIds[index]));
       } else {const id = foldIds[cardCursor % Math.max(1, foldIds.length)]; const image = imagePathAt(messageRows as readonly SceneRow[], id); if (image) activateImage(ctx, image); else if (id) setScene(prev => ({...prev, folds: {...prev.folds, [id]: !stageFoldOpen(snapshot, id, prev.folds)}}));}
       return;
     }
     if (key.ctrl && input === 'n') {
+      setComposerBlurred(true);
       if (demoScene) {
         setCardCursor(c => (c + 1) % foldableDemoIds.length);
         return;
@@ -239,6 +245,15 @@ export function useKeyboard(ctx: ShellContext): void {
     }
     if (key.pageUp || key.pageDown) { scroll((key.pageUp ? -1 : 1) * Math.max(1, timelineHeight - 1)); return; }
     if (key.ctrl && input === 'e') { setAnchor(null); return; }
+    // The timeline is the focused region: arrows and Home/End move the reading position (typing, paste and a click on the composer wake the composer instead).
+    if (composerBlurred && focus === 'input' && !editingCustom && !menuHeight && !key.ctrl && !key.meta && !key.shift && (key.upArrow || key.downArrow || key.home || key.end)) {
+      if (key.upArrow || key.downArrow) scroll(key.upArrow ? -1 : 1);
+      else setAnchor(key.home ? {messageId: '__top__', line: 0} : null);
+      return;
+    }
+    // Scrolled up with nothing typed: End or Enter (the jump pill's keys) return to the latest output; with a draft both stay the composer's.
+    if (editableComposer && focus === 'input' && !editingCustom && !menuHeight && !draft.text && (key.end && !key.ctrl && !key.shift || key.return && !key.ctrl && !key.shift && !key.meta)
+      && scrolledUp(messageRows, timelineHeight, anchors.current[currentView] ?? null)) { setAnchor(null); return; }
     if ((key.upArrow || key.downArrow) && editableComposer) {
       const direction = key.upArrow ? -1 : 1;
       const atEdge = direction < 0 ? inputLayout.cursorRow === 0 : inputLayout.cursorRow === inputLayout.lines.length - 1;

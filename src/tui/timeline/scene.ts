@@ -45,6 +45,8 @@ export interface SceneAction {
     | 'confirm_answer'
     | 'stop_actor'
     | 'open_image'
+    | 'jump_bottom'
+    | 'jump_message'
     | 'later';
   readonly requestId?: string;
   readonly foldId?: string;
@@ -57,6 +59,10 @@ export interface SceneRow extends Row {
   /** One row of a picture that can be drawn as pixels over its half-block cells (see `terminal/image-graphics.ts`). */
   readonly image?: import('../terminal/image-graphics.js').ImageSlot;
   readonly hover?: {readonly foldId: string; readonly startCol: number; readonly endCol: number};
+  /** Marks the header of a user turn (a human message, or the Director's assignment in an actor window): the sticky header pins the latest one above the viewport. */
+  readonly turnStart?: boolean;
+  /** A hover fade (`timeline/timeline-overlay.ts`): the plane eases `level` from 0 to 1 while `hover.foldId === id` is hovered and back, and asks `paint` for the row's segments at each level. */
+  readonly glow?: {readonly id: string; readonly paint: (level: number) => readonly SceneSegment[]};
   readonly bg?: string;
   readonly prefixSegments?: readonly SceneSegment[];
   readonly suffixSegments?: readonly SceneSegment[];
@@ -129,7 +135,7 @@ export interface RowBuilder {
   contentWidth: number;
   hoveredFoldId: string | null;
   pushBlank(railColor?: string, frame?: FrameWrap, action?: SceneAction): void;
-  pushTurnHeader(id: string, who: string, origin?: string, clock?: string, activity?: TurnActivity): void;
+  pushTurnHeader(id: string, who: string, origin?: string, clock?: string, activity?: TurnActivity, userTurn?: boolean): void;
   pushProse(id: string, text: string, railColor: string, tone?: 'body' | 'direction', frame?: FrameWrap, action?: SceneAction, color?: string): void;
   /** `accent` colours inline code and other emphasis; it follows the OWNER of the text (default: the rail colour). */
   pushMarkdown(id: string, text: string, railColor: string, frame?: FrameWrap, accent?: string): void;
@@ -292,7 +298,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     }
   };
 
-  const pushTurnHeader: RowBuilder['pushTurnHeader'] = (id, who, origin = '', clock = '', activity) => {
+  const pushTurnHeader: RowBuilder['pushTurnHeader'] = (id, who, origin = '', clock = '', activity, userTurn = false) => {
     const railColor = railColorFor(who, roles);
     const pieces: SceneSegment[] = [{text: whoName(who, roles), color: railColor, bold: true, selectionKey: id + ':name', selectionOffset: 0}];
     if (origin) pieces.push({text: ' · ' + origin, color: palette.muted, selectionKey: id + ':origin'});
@@ -310,7 +316,7 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
     if (clock && used + stringWidth(clock) + 2 <= contentWidth) pieces.push({text: ' '.repeat(contentWidth - used - stringWidth(clock)) + clock, color: palette.muted});
     const first = rows.length;
     pushFramedLine(id, railColor, pieces, topFrame());
-    rows[first] = {...rows[first]!, railGlyph: whoGlyph(who, roles)};
+    rows[first] = {...rows[first]!, railGlyph: whoGlyph(who, roles), ...(userTurn ? {turnStart: true} : {})};
   };
 
   const pushProse: RowBuilder['pushProse'] = (id, text, railColor, tone = 'body', frame, action, color) => {

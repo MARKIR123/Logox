@@ -86,13 +86,16 @@ async function unmount(rig: Rig) {try {await act(async () => rig.instance.unmoun
 const surface = (app: Application): CommandSurface | null => app.surfaces.getSnapshot();
 const sidebarLines = (rig: Rig) => rig.output.lines.map(line => line.slice(rig.sidebarX));
 const sidebarText = (rig: Rig) => sidebarLines(rig).join('\n');
+/** The toggle icon in the top-right gutter while the sidebar is closed (the last two columns of the usable width are its own). */
+const gutterX = (rig: Rig) => rig.output.columns - 2;
+const gutterIcon = (rig: Rig) => rig.output.lines[0]![gutterX(rig)];
 
 test('the stage appears beside the timeline when a plan is created, with the timeline narrowed and still working; its header is the act header', {timeout: 30000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINELEFT hello');
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), text => text.includes('TIMELINELEFT'), {label: 'the timeline'});
     assert.ok(!stageUp(rig.screen()), 'no plan, no sidebar');
     await act(async () => {await create(app);});
@@ -101,30 +104,29 @@ test('the stage appears beside the timeline when a plan is created, with the tim
     assert.ok(rig.find('Act 2 of 2', rig.sidebarX).x >= rig.sidebarX, 'the header is in the right-hand column');
     assert.ok(rig.find('TIMELINELEFT').x < rig.sidebarX);
     assert.ok(sidebarLines(rig).some(line => line.startsWith('│')), 'the border column');
-    assert.match(sidebarLines(rig)[0]!, /^› +‹ Act 2 of 2 · Pelican +━+ 1\/1 ›/, 'the act header: step arrows, the plan\'s title, bar and what is settled');
+    assert.match(sidebarLines(rig)[2]!, /^│ +‹ Act 2 of 2 · Pelican +━+ 1\/1 ›/, 'the act header: step arrows, the plan\'s title, bar and what is settled');
     assert.doesNotMatch(sidebarText(rig), /Tasks|\b\d+\.\d+\b/, 'no Tasks tab, no node id');
-    assert.ok(!rig.output.lines.at(-1)!.includes('▸ Act'), 'no chip while the sidebar is shown');
     await act(async () => {app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINESECOND');});
     await waitFor(() => rig.screen(), text => text.includes('TIMELINESECOND'), {label: 'the timeline keeps working'});
     assert.ok(stageUp(rig.screen()));
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('finishing the plan hides the sidebar with a notice and the chip `▸ Act 2/2 · 1/1`; the chip brings it back', {timeout: 40000}, async () => {
+test('finishing the plan hides the sidebar with a notice and the toggle icon in the top-right gutter brings it back', {timeout: 40000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar from the start (a resumed plan)'});
     // Accepting every top-level node finishes the plan.
     await act(async () => {
       for (const id of ['1.1', '1', '2.1', '2']) assert.ok((await app.plans.apply([{op: 'accept', id, evidence: ['checked']}], 'logox')).ok);
     });
-    await waitFor(() => rig.screen(), text => !stageUp(text) && text.includes('▸ Act 2/2 · 1/1'), {label: 'hidden, with the chip'});
-    assert.ok(rig.output.lines.at(-1)!.includes('▸ Act 2/2 · 1/1'), 'the chip is on the footer row');
-    await rig.clickText('▸ Act');
-    await waitFor(() => rig.screen(), text => /Act 2 of 2 · Pelican/.test(text) && !text.includes('▸ Act 2/2'), {label: 'shown again by the chip'});
+    await waitFor(() => gutterIcon(rig), glyph => glyph === '◨', {label: 'hidden, with the icon in the gutter'});
+    assert.ok(!stageUp(rig.screen()));
+    await rig.click(gutterX(rig), 0);
+    await waitFor(() => rig.screen(), text => /Act 2 of 2 · Pelican/.test(text), {label: 'shown again by the icon'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -133,7 +135,7 @@ test('each act is its own scene: the header follows the replay point, `[` `]` an
   try {
     const app = await f.open();
     await twoActs(app);
-    rig = await mount(app, 120, 44);
+    rig = await mount(app, 120, 46);
     await act(async () => {await app.submit('/team');});
     // Live: the act of the newest event, titled by the Director's assignment (no plan).
     await waitFor(() => rig.screen(), text => /Act 2 of 2 · Pedal/.test(text) && /Techne/.test(sidebarText(rig)) && /Peda/.test(sidebarText(rig)), {label: 'Live is in the second act'});
@@ -168,12 +170,12 @@ test('each act is its own scene: the header follows the replay point, `[` `]` an
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('keyboard: Ctrl+B shows and focuses, Esc returns to the composer, typing goes to the composer, Ctrl+B again hides, the chip brings it back; /team sets it', {timeout: 40000}, async () => {
+test('keyboard: Ctrl+B shows and focuses, Esc returns to the composer, typing goes to the composer, Ctrl+B again hides, the gutter icon brings it back; /team sets it', {timeout: 40000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 120, 32, {getStatus: (ownerId: string) => ({ownerId, name: ownerId, state: 'ready'})});
+    rig = await mount(app, 120, 34, {getStatus: (ownerId: string) => ({ownerId, name: ownerId, state: 'ready'})});
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar'});
     await rig.send('hi');
     assert.ok(rig.screen().includes('hi'), 'typing reaches the composer while the sidebar is unfocused');
@@ -183,13 +185,11 @@ test('keyboard: Ctrl+B shows and focuses, Esc returns to the composer, typing go
     await rig.send('x');
     assert.ok(/❯ hix/.test(rig.screen()), 'the key was typed into the composer:\n' + rig.screen());
     await rig.send('\x02'); await rig.send('\x02'); // focus, then hide
-    await waitFor(() => rig.screen(), text => !stageUp(text) && text.includes('▸ Act 2/2 · 1/1'), {label: 'hidden by the shortcut; the chip shows'});
-    // The chip is a button: hover shows its hint, a click shows the sidebar again.
-    const chip = rig.find('▸ Act 2/2 · 1/1');
-    await rig.mouse('move', chip.x + 2, chip.y);
-    await waitFor(() => rig.screen(), text => text.includes('click or Ctrl+B shows it'), {label: 'the chip hint on the notification row'});
-    await rig.click(chip.x + 2, chip.y);
-    await waitFor(() => rig.screen(), text => stageUp(text) && !text.includes('▸ Act 2/2'), {label: 'shown again'});
+    await waitFor(() => rig.screen(), text => !stageUp(text) && gutterIcon(rig) === '◨', {label: 'hidden by the shortcut; the icon shows'});
+    // The icon is a button: a click shows the sidebar again.
+    await rig.mouse('move', gutterX(rig), 0);
+    await rig.click(gutterX(rig), 0);
+    await waitFor(() => rig.screen(), text => stageUp(text), {label: 'shown again'});
     // /team hides it and shows it again; /tasks is not a command.
     await act(async () => {await app.submit('/team sidebar hide');});
     await waitFor(() => rig.screen(), text => !stageUp(text), {label: '/team sidebar hide'});
@@ -204,9 +204,9 @@ test('a hidden sidebar stays hidden when the next plan starts; below 110 columns
   try {
     const app = await f.open();
     app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINEWORD');
-    rig = await mount(app, 90, 28);
+    rig = await mount(app, 90, 30);
     await act(async () => {await create(app);});
-    await waitFor(() => rig.screen(), text => text.includes('▸ Act 2/2 · 1/1'), {label: 'only the chip at 90 columns'});
+    await waitFor(() => rig.screen(), text => gutterIcon(rig) === '◨' && !stageUp(text), {label: 'only the icon at 90 columns'});
     assert.ok(!stageUp(rig.screen()), 'never squeezes the timeline');
     assert.ok(rig.find('TIMELINEWORD').x < 5);
     await rig.send('\x02');
@@ -229,7 +229,7 @@ test('unrelated store changes neither rebuild the layout nor repaint the sidebar
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar'});
     await delay(60);
     const builds = teamStats.builds;
@@ -245,7 +245,7 @@ test('unrelated store changes neither rebuild the layout nor repaint the sidebar
 const swarmJob = (app: Application, activityId: string, id: string, title: string) => app.store.message(app.sessionId, 'techne', 'assistant', '', {activityId, kind: 'tool',
   step: {title: 'Automa', state: 'completed', elapsedMs: 0, swarm: {name: 'crew', jobs: [{id, title, state: 'done', elapsedMs: 100, calls: [], route: 'read', model: 'mock/reader', stopReason: 'completed', summary: 'found them'}]}}} as never);
 
-test('with no plan the work of the session is one act per round: nothing opens by itself, the chip offers it, /team shows it, a click on the header opens the Programme', {timeout: 40000}, async () => {
+test('with no plan the work of the session is one act per round: nothing opens by itself, /team shows it, a click on the header opens the Programme', {timeout: 40000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
@@ -253,12 +253,11 @@ test('with no plan the work of the session is one act per round: nothing opens b
     app.store.activities.create({...base, activityId: 'root', ownerId: 'logox', kind: 'director', title: 'Fix the parser', status: 'completed'});
     app.store.activities.create({...base, activityId: 'tech', ownerId: 'techne', kind: 'actor', title: 'Techne · Builder', taskTitle: 'Build the palette', status: 'running', stage: 'On stage', parentActivityId: 'root', inputKind: 'director', startedAt: Date.now() - 130_000});
     swarmJob(app, 'tech', 'T1', 'Find the callers');
-    rig = await mount(app, 120, 44);
-    await waitFor(() => rig.screen(), text => /▸ Act 1\/1 · \d\/\d/.test(text), {label: 'the chip offers the act'});
+    rig = await mount(app, 120, 46);
+    await waitFor(() => gutterIcon(rig), glyph => glyph === '◨', {label: 'the icon offers the sidebar'});
     assert.ok(!rig.screen().includes('Act 1 of 1'), 'a session without a plan never opens the sidebar by itself');
     await act(async () => {await app.submit('/team');});
     await waitFor(() => rig.screen(), text => /‹ Act 1 of 1 · Build/.test(text) && /│ Build/.test(sidebarText(rig)), {label: 'the act of the round titled by the first assignment, the card names its task'});
-    assert.ok(!rig.output.lines.at(-1)!.includes('▸ Act'), 'no chip while it is shown');
     const head = rig.find('Build', rig.sidebarX);
     await rig.click(head.x + 2, head.y);
     await waitFor(() => surface(app)?.kind, kind => kind === 'picker', {label: 'the programme'});
@@ -266,19 +265,18 @@ test('with no plan the work of the session is one act per round: nothing opens b
     app.surfaces.cancel();
     await waitFor(() => surface(app), current => current === null, {label: 'closed'});
     await act(async () => {await app.submit('/team sidebar hide');});
-    await waitFor(() => rig.screen(), text => !text.includes('Act 1 of 1') && /▸ Act 1\/1/.test(text), {label: 'hidden again'});
+    await waitFor(() => rig.screen(), text => !text.includes('Act 1 of 1') && gutterIcon(rig) === '◨', {label: 'hidden again'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('Ctrl+B with nothing planned or delegated says so instead of opening an empty sidebar', {timeout: 30000}, async () => {
+test('Ctrl+B with nothing planned or delegated opens the sidebar with the empty Team page', {timeout: 30000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), text => text.includes('Ready when you are.'), {label: 'mounted'});
     await rig.send('\x02');
-    await waitFor(() => rig.screen(), text => /Nothing has been planned or delegated/.test(text), {label: 'the empty notice'});
-    assert.ok(!stageUp(rig.screen()));
+    await waitFor(() => rig.screen(), text => /No team activity yet/.test(text) && text.includes('Team'), {label: 'the empty Team page'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
@@ -292,7 +290,7 @@ test('dragging the border resizes the docked sidebar live within its range, rele
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar'});
     const width = 119; // usable width: one column less than the terminal
     assert.equal(borderX(rig), rig.sidebarX);
@@ -331,7 +329,7 @@ test('a remembered sidebar width is used at start, re-clamped when the terminal 
     await create(app);
     app.surfaces.sidebarWidthStore!.set(56);
     await waitFor(() => app.surfaces.sidebarWidthStore!.get(), value => value === 56, {label: 'saved'});
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar'});
     assert.equal(borderX(rig), 119 - 56);
     await act(async () => {rig.output.resize(112, 32);});
@@ -346,32 +344,34 @@ test('a remembered sidebar width is used at start, re-clamped when the terminal 
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('the header row carries a collapse button in the border: a click hides the sidebar and the chip brings it back', {timeout: 40000}, async () => {
+test('the toggle icon in the header bar hides the sidebar; the icon in the top-right gutter brings it back', {timeout: 40000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), stageUp, {label: 'the sidebar'});
     const x = rig.sidebarX;
-    assert.equal(rig.output.lines[0]![x], '›', 'the glyph is on the header row');
+    assert.equal(rig.output.lines[0]![x], '│', 'the border column is plain on the header row');
     assert.equal(rig.output.lines[6]![x], '│', 'the border continues below');
-    await rig.click(x, 0);
-    await waitFor(() => rig.screen(), text => !stageUp(text) && text.includes('▸ Act 2/2 · 1/1'), {label: 'hidden, with the chip'});
-    await rig.clickText('▸ Act');
-    await waitFor(() => rig.screen(), stageUp, {label: 'shown again by the chip'});
+    const icon = rig.output.lines[0]!.indexOf('◨');
+    assert.ok(icon > x, 'the toggle icon is in the header bar');
+    await rig.click(icon, 0);
+    await waitFor(() => rig.screen(), text => !stageUp(text) && gutterIcon(rig) === '◨', {label: 'hidden, with the icon in the gutter'});
+    await rig.click(gutterX(rig), 0);
+    await waitFor(() => rig.screen(), stageUp, {label: 'shown again by the icon'});
   } finally {if (rig) await unmount(rig); await f.close();}
 });
 
-test('the overlay of a narrow terminal has the collapse button but no resize handle', {timeout: 40000}, async () => {
+test('the overlay of a narrow terminal has the toggle icon but no resize handle', {timeout: 40000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     await create(app);
-    rig = await mount(app, 100, 30);
+    rig = await mount(app, 100, 32);
     await act(async () => {await app.submit('/team');});
     await waitFor(() => rig.screen(), stageUp, {label: 'the overlay'});
-    const x = rig.output.lines[0]!.indexOf('›');
+    const x = rig.output.lines[0]!.indexOf('◨');
     assert.ok(x > 0, 'the glyph is drawn');
     const before = borderX(rig, 6);
     await rig.send(press(before, 10)); await rig.send(dragTo(before - 10, 10)); await rig.send(release(before - 10, 10));
@@ -387,7 +387,7 @@ test('timeline text selection still works next to the docked sidebar, also when 
     const app = await f.open();
     app.store.message(app.sessionId, 'logox', 'assistant', 'TIMELINELEFT hello');
     await create(app);
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), text => stageUp(text) && text.includes('TIMELINELEFT'), {label: 'both'});
     const at = rig.find('TIMELINELEFT');
     await rig.send(press(at.x, at.y) + dragTo(rig.sidebarX + 10, at.y) + release(rig.sidebarX + 10, at.y));

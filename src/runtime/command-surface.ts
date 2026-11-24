@@ -82,8 +82,8 @@ export interface SettingsItem {
 export interface SettingsPageLink {readonly id: string; readonly label: string; readonly description: string; readonly group?: string | undefined; readonly value?: string | undefined}
 /** One row of the /theme list: a usable theme, or a file that failed to load (`unavailable` carries the reason). */
 export interface ThemeRow {readonly name: string; readonly source: 'shipped' | 'user'; readonly unavailable?: string | undefined}
-/** Data of the /theme page: the rows and the saved theme (marked in the list). */
-export interface ThemePageData {readonly themes: readonly ThemeRow[]; readonly current: string; readonly saving?: boolean; readonly error?: string}
+/** Data of the /theme page: the rows, the saved theme (marked in the list) and per-theme background overrides. */
+export interface ThemePageData {readonly themes: readonly ThemeRow[]; readonly current: string; readonly backgrounds?: Readonly<Record<string, boolean>> | undefined; readonly saving?: boolean; readonly error?: string}
 /** A page opened from /settings; it draws over the settings page and Esc returns to it. */
 export interface SettingsSubPage {
   readonly id: string; readonly title: string; readonly tabs: readonly CommandTab[]; readonly initialTab: string;

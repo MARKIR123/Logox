@@ -76,7 +76,7 @@ test('long text is clipped with … at every width, wide characters are never sp
 
 test('no sidebar cell carries a background, and the panel is drawn with palette colours only', () => {
   const layout = layoutAt(56);
-  const views: TeamView[] = [emptyTeamView, {...emptyTeamView, live: false, selected: 'e2', hovered: 'e4', hoveredName: 'e2\0techne', picker: 1, hoveredControl: 'filter', hoveredEdge: 'handle'}];
+  const views: TeamView[] = [emptyTeamView, {...emptyTeamView, live: false, selected: 'e2', hovered: 'e4', hoveredName: 'e2\0techne', picker: 1, hoveredControl: 'filter'}];
   for (const view of views) {
     for (const line of paint(layout, 56, 24, view, {focused: true})) for (const segment of line) assert.equal(segment.bg, undefined, JSON.stringify(segment));
   }
@@ -101,7 +101,7 @@ test('the header is the act header; the footer reads ◀ ▶ selected / total ·
   const layout = layoutAt(56);
   const geometry = teamGeometry(20);
   const first = plain(paint(layout, 56, 20));
-  assert.match(first[0]!, /^› ‹ Act 1 of 1 · 绘制海岸鹈鹕骑车 SVG +─+ 0\/0 ›\s*$/, 'one act (the dispatch opened it), titled by its first assignment; the bar is empty with no task graph');
+  assert.match(first[0]!, /^│ ‹ Act 1 of 1 · 绘制海岸鹈鹕骑车 SVG +─+ 0\/0 ›\s*$/, 'one act (the dispatch opened it), titled by its first assignment; the bar is empty with no task graph');
   assert.match(first[1]!, /^│ ─+ *$/);
   assert.match(first.at(-1)!, /^│ ◀ ▶ {3}7 \/ 7 · \+18m +all members ▾ *$/);
   assert.match(first.at(-2)!, /^│ ─+ *$/);
@@ -238,12 +238,10 @@ test('a click on a name filters to that member (again clears it), and the footer
   assert.equal(all.view.filter, undefined);
 });
 
-test('the border keeps its collapse button and resize handle; the layout is rebuilt only when events, width or filter change; new posts keep Live at the tail', () => {
+test('the layout is rebuilt only when events, width or filter change; new posts keep Live at the tail', () => {
   const layout = layoutAt(56), geometry = teamGeometry(20);
-  const effects = (pointer: TeamPointer): readonly TeamEffect[] => stepTeamMouse(layout, emptyTeamView, geometry, pointer, 0, 56, label).effects;
-  assert.deepEqual(effects({x: 0, y: 0, action: 'press'}), [{kind: 'close'}]);
-  assert.deepEqual(effects({x: 0, y: 5, action: 'press', draggable: true}), [{kind: 'drag'}]);
-  assert.deepEqual(effects({x: 0, y: 5, action: 'press', draggable: false}), [{kind: 'focus'}], 'no handle in the overlay');
+  // The border and the header bar belong to the sidebar host (`tests/sidebar-tabs.test.tsx`): every border row of the page is plain.
+  assert.ok(plain(paint(layout, 56, 20)).every(line => line.startsWith('│ ')), 'no collapse button on the border any more');
   const before = teamStats.builds;
   buildTeamLayout(STREAM, {width: teamWidth(56), label});
   assert.equal(teamStats.builds, before + 1);

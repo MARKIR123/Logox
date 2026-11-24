@@ -2,8 +2,11 @@ import {performance} from 'node:perf_hooks';
 import stringWidth from 'string-width';
 import type {SceneRow, SceneSegment} from '../timeline/scene.js';
 import {palette} from '../appearance/theme.js';
+import {canvasBg} from '../appearance/colors.js';
 import {themeRevision} from '../../config/theme-palette.js';
 import {decorateRow, presentedSegments, railCell} from '../timeline/row-presentation.js';
+import {glowStep, type GlowState} from '../timeline/timeline-overlay.js';
+import {subscribeTerminalFocus, terminalFocus} from './focus.js';
 import {rowSelectionBounds, type Row, type SelectionRange} from '../timeline/viewport.js';
 import {formatClock} from './text.js';
 import {IMAGE_DEBUG, debugLog, imageGraphics, type EncodeSpec} from './image-graphics.js';
@@ -22,7 +25,7 @@ export interface PlaneSide {
   /** A short animation (the team stage's pulse): the lines for the plane's clock `now`, and whether it still runs; the plane asks again on its animation frame until `busy` is false. `motion` is the reduced-motion setting. */
   readonly animate?: (now: number, motion: boolean) => {readonly lines: readonly (readonly SideSegment[])[]; readonly busy: boolean};
 }
-export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null; readonly side?: PlaneSide | undefined}
+export interface PlaneFrame {readonly rows: readonly Row[]; readonly start: number; readonly width: number; readonly height: number; readonly selection: SelectionRange | null; readonly motion?: boolean; readonly hoveredFoldId?: string | null; readonly side?: PlaneSide | undefined; /** The timeline is the focused region: its quiet rails ease up to the speaker colour (and back); a terminal that lost focus counts as unfocused. */ readonly focus?: boolean}
 export interface PlaneMetrics {readonly renderTime: number; readonly scrolled: number; readonly paintedRows: number}
 const reset = '\x1b[0m';
 function rgb(color: string | undefined, background = false): string {
@@ -60,17 +63,20 @@ function clipEncoded(text: string, width: number): string {
 /** One side line as terminal text; clock placeholders show the time elapsed at `now`. */
 export function encodeSide(segments: readonly SideSegment[] | undefined, now: number): string {
   if (!segments) return '';
-  return segments.map(segment => styled(segment.clock === undefined ? segment : {...segment, text: formatClock(now - segment.clock).padEnd(segment.text.length)}, palette.fg)).join('') + reset;
+  const fillBg = canvasBg();
+  return segments.map(segment => styled(segment.clock === undefined ? segment : {...segment, text: formatClock(now - segment.clock).padEnd(segment.text.length)}, palette.fg, fillBg)).join('') + reset;
 }
 const encoded = new WeakMap<Row, {revision: number; width: number; text: string}>();
-export function encodeRow(raw: Row, index: number, selection: SelectionRange | null, width = Infinity, isHovered = false): string {
+export function encodeRow(raw: Row, index: number, selection: SelectionRange | null, width = Infinity, isHovered = false, railFocus = 0): string {
   const bounds = rowSelectionBounds(raw, index, selection);
-  if (!bounds && !isHovered) {const known = encoded.get(raw); if (known?.width === width && known.revision === themeRevision()) return known.text;}
+  const cacheable = !bounds && !isHovered && railFocus === 0;
+  if (cacheable) {const known = encoded.get(raw); if (known?.width === width && known.revision === themeRevision()) return known.text;}
   const row = raw as SceneRow;
-  const rail = row.gutterCols > 0 ? styled(railCell(row)) : '';
-  const body = presentedSegments(row, index, selection, isHovered).map(segment => styled(segment, palette.fg, row.bg)).join('');
+  const fillBg = canvasBg();
+  const rail = row.gutterCols > 0 ? styled(railCell(row, railFocus), undefined, fillBg) : '';
+  const body = presentedSegments(row, index, selection, isHovered).map(segment => styled(segment, palette.fg, row.bg ?? fillBg)).join('');
   const result = clipEncoded(rail + body + reset, width);
-  if (!bounds && !isHovered) encoded.set(raw, {revision: themeRevision(), width, text: result});
+  if (cacheable) encoded.set(raw, {revision: themeRevision(), width, text: result});
   return result;
 }
 
@@ -91,16 +97,25 @@ export class TerminalPlane {
   private closed = false;
   private outputHeld = false;
   private sideBusy = false;
+  /** Hover fades of the controls floating over the timeline (`SceneRow.glow`): the eased level per id, and whether any still moves. */
+  private glows = new Map<string, GlowState>();
+  private glowBusy = false;
+  private railState: GlowState | undefined;
+  private readonly stopFocus: () => void;
   /** Pictures believed to be on screen as Sixel pixels (timeline thumbnails), and the lightbox picture wanted and shown. */
   private shown: Placed[] = [];
   private overlayWanted: Placed | null = null;
   private overlayShown: Placed | null = null;
   private readonly stopImages: () => void;
+  private repaintAfterInk = false;
+  private repaintTimer: ReturnType<typeof setTimeout> | undefined;
   private overlayTimer: ReturnType<typeof setTimeout> | undefined;
   private overlaySettleAt = 0;
   private thumbSettleAt = 0;
   private thumbTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastBg: string | undefined = undefined;
   constructor(private readonly write: (text: string) => void, private readonly onFrame?: (metrics: PlaneMetrics) => void) {
+    this.stopFocus = subscribeTerminalFocus(() => {if (!this.closed && this.frame?.focus) this.flush();});
     this.stopImages = imageGraphics.subscribe(() => {if (this.closed) return; this.drawOverlay(); if (this.frame) this.flush();});
   }
 
@@ -110,7 +125,7 @@ export class TerminalPlane {
   noteInput(): void {this.lastInputAt = performance.now();}
   present(frame: PlaneFrame): void {
     if (this.frame && (this.frame.width !== frame.width || this.frame.height !== frame.height || this.frame.side?.x !== frame.side?.x || this.frame.side?.width !== frame.side?.width)) this.erase();
-    const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId;
+    const hoverChanged = this.frame?.hoveredFoldId !== frame.hoveredFoldId || this.frame?.focus !== frame.focus;
     // The first content after an empty history (a new approval, the first message) must not wait for frame pacing.
     const firstContent = this.displayedRows.length === 0 && frame.rows.length > 0;
     this.frame = frame;
@@ -131,6 +146,8 @@ export class TerminalPlane {
     if (text.includes('\x1b[?1049h')) {this.active = true; this.invalidate();}
     if (!this.active || this.closed) return;
     if (text.includes('\x1b[2J') || text.includes('\x1b[1;1H\x1b[J') || text.includes('\x1b[H\x1b[J')) this.invalidate();
+    // The lightbox just closed: Ink's write has cleared the cells it covered, so the timeline model is stale. Every row is written again.
+    if (this.repaintAfterInk) {this.repaintAfterInk = false; this.invalidate();}
     this.flush();
     if (this.overlayWanted) this.drawOverlay();
   }
@@ -149,6 +166,7 @@ export class TerminalPlane {
       if (this.overlayTimer) clearTimeout(this.overlayTimer);
       this.overlayTimer = undefined; this.overlaySettleAt = 0;
       this.eraseOverlay();
+      if (before) this.repaintTimeline();
       return;
     }
     if (before && sameSpot(before, placed)) return;
@@ -160,10 +178,28 @@ export class TerminalPlane {
     const shown = this.overlayShown;
     this.overlayShown = null;
     if (!shown || !this.active || this.closed) return;
-    // Real spaces in the surface colour: overwriting cells is what removes pixels everywhere; ECH is not relied on.
+    // Real spaces in the canvas background (never the picture's surface colour, which would linger): overwriting cells is what removes pixels.
+    const fillBg = canvasBg(), clearBg = fillBg ? rgb(fillBg, true) : '';
     const blank = ' '.repeat(shown.cols);
-    const rows = Array.from({length: shown.rows}, (_, i) => `\x1b[${shown.y + i + 1};${shown.x + 1}H${rgb(shown.spec.bg, true)}${blank}`).join('');
+    const rows = Array.from({length: shown.rows}, (_, i) => `\x1b[${shown.y + i + 1};${shown.x + 1}H${reset}${clearBg}${blank}${reset}`).join('');
     this.write('\x1b[?2026h\x1b7' + rows + reset + '\x1b8\x1b[?2026l');
+  }
+  /**
+   * After the lightbox is gone the cells it covered hold Ink's blanks while this plane still believes its rows are on screen, so a diff would
+   * write nothing there. Forget the model: the rows are written again right now and once more after Ink's next write, with a short
+   * fallback for the case where Ink has nothing to write.
+   */
+  private repaintTimeline(): void {
+    this.invalidate();
+    this.repaintAfterInk = true;
+    if (this.frame && this.active && !this.closed && !this.outputHeld) this.flush();
+    if (this.repaintTimer) clearTimeout(this.repaintTimer);
+    this.repaintTimer = setTimeout(() => {
+      this.repaintTimer = undefined;
+      if (!this.repaintAfterInk) return;
+      this.repaintAfterInk = false; this.invalidate(); this.flush();
+    }, 60);
+    this.repaintTimer.unref?.();
   }
   private drawOverlay(): void {
     const wanted = this.overlayWanted;
@@ -184,8 +220,9 @@ export class TerminalPlane {
   endOutput(): void {this.outputHeld = false; this.flush();}
   private erase(): void {
     if (this.active && !this.closed && !this.outputHeld && this.frame?.height) {
+      const fillBg = canvasBg(), clearBg = fillBg ? rgb(fillBg, true) : '';
       const rows = Array.from({length: this.frame.height}, (_, i) => `\x1b[${i + 1};1H\x1b[2K`).join('');
-      this.write('\x1b[?2026h\x1b7' + reset + rows + '\x1b8\x1b[?2026l');
+      this.write('\x1b[?2026h\x1b7' + reset + clearBg + rows + reset + '\x1b8\x1b[?2026l');
     }
     this.invalidate();
   }
@@ -200,8 +237,8 @@ export class TerminalPlane {
     });
     if (!hasRunning) {
       // A side animation (the team pulse) asks for the animation frame rhythm until it is done.
-      if (this.sideBusy) {
-        this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.frame?.motion === false ? 100 : 80);
+      if (this.sideBusy || this.glowBusy) {
+        this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, this.glowBusy ? 40 : this.frame?.motion === false ? 100 : 80);
         this.animationTimer.unref?.();
         return;
       }
@@ -214,7 +251,7 @@ export class TerminalPlane {
     }
     const sinceInput = performance.now() - this.lastInputAt;
     const baseWait = this.frame?.motion === false ? 100 : 80;
-    const wait = sinceInput < 120 ? Math.max(baseWait, 150 - Math.round(sinceInput)) : baseWait;
+    const wait = this.glowBusy ? 40 : sinceInput < 120 ? Math.max(baseWait, 150 - Math.round(sinceInput)) : baseWait;
     this.animationTimer = setTimeout(() => {this.animationTimer = undefined; this.flush();}, wait);
     this.animationTimer.unref?.();
   }
@@ -231,21 +268,44 @@ export class TerminalPlane {
     }
     return found;
   }
+  /** Rows with a `glow` get the segments of their eased hover level; a control that left the frame forgets its level. */
+  private fade(rows: readonly Row[], hoveredId: string | null | undefined, motion: boolean): Row[] {
+    const next = new Map<string, GlowState>();
+    let busy = false;
+    const levels = new Map<string, number>();
+    const result = rows.map(raw => {
+      const glow = (raw as SceneRow).glow;
+      if (!glow) return raw;
+      let level = levels.get(glow.id);
+      if (level === undefined) {
+        const step = glowStep(this.glows.get(glow.id), hoveredId === glow.id, this.clock, motion);
+        next.set(glow.id, step.state); busy ||= step.busy; level = step.level; levels.set(glow.id, level);
+      }
+      const segments = glow.paint(level);
+      return {...(raw as SceneRow), segments, displayText: segments.map(segment => segment.text).join('')} as Row;
+    });
+    this.glows = next; this.glowBusy = busy;
+    return result;
+  }
   private cancel(): void {this.cancelAnimation(); if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.queued = false;}
-  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined; this.stopImages(); if (this.overlayTimer) clearTimeout(this.overlayTimer); if (this.thumbTimer) clearTimeout(this.thumbTimer);}
+  dispose(): void {this.closed = true; this.cancel(); this.frame = undefined; this.stopImages(); this.stopFocus(); if (this.overlayTimer) clearTimeout(this.overlayTimer); if (this.thumbTimer) clearTimeout(this.thumbTimer); if (this.repaintTimer) clearTimeout(this.repaintTimer);}
   flush(): void {
     this.cancel();
     const frame = this.frame;
     if (!frame || !this.active || this.closed || this.outputHeld) return;
+    const fillBg = canvasBg(), clearBg = fillBg ? rgb(fillBg, true) : '';
+    if (this.lastBg !== fillBg) {this.invalidate(); this.lastBg = fillBg;}
     const began = performance.now();
     this.clock = Date.now();
-    this.displayedRows = frame.rows.map(row => decorateRow(row, this.clock, frame.motion !== false));
     const hoveredFoldId = frame.hoveredFoldId;
+    this.displayedRows = this.fade(frame.rows.map(row => decorateRow(row, this.clock, frame.motion !== false)), hoveredFoldId, frame.motion !== false);
+    const rail = glowStep(this.railState, frame.focus === true && terminalFocus() !== false, this.clock, frame.motion !== false, 220);
+    this.railState = rail.state; if (rail.busy) this.glowBusy = true;
     const lines = Array.from({length: frame.height}, (_, index) => {
       const row = this.displayedRows[index];
       if (!row) return '';
       const isHovered = Boolean(hoveredFoldId && (row as SceneRow).hover?.foldId === hoveredFoldId);
-      return encodeRow(row, index, frame.selection, frame.width, isHovered);
+      return encodeRow(row, index, frame.selection, frame.width, isHovered, rail.level);
     });
     const side = frame.side;
     const live = side?.animate?.(this.clock, frame.motion !== false);
@@ -259,7 +319,12 @@ export class TerminalPlane {
     if (same && delta && Math.abs(delta) < frame.height) {
       const count = frame.height - Math.abs(delta);
       let matches = 0;
-      for (let i = 0; i < count; i++) if (lines[i + Math.max(0, -delta)] === shifted[i + Math.max(0, delta)]) matches++;
+      // Floating controls (the jump chip, the sticky message) stay where they are while the content moves: they never count against a scroll, and are repainted afterwards where they differ.
+      const floating = (rows: readonly Row[], index: number) => Boolean((rows[index] as SceneRow | undefined)?.glow);
+      for (let i = 0; i < count; i++) {
+        const now = i + Math.max(0, -delta), then = i + Math.max(0, delta);
+        if (floating(frame.rows, now) || floating(previous!.rows, then) || lines[now] === shifted[then]) matches++;
+      }
       if (matches === count) {
         scrolled = delta;
         shifted = delta > 0 ? [...shifted.slice(delta), ...Array<string>(delta).fill('')] : [...Array<string>(-delta).fill(''), ...shifted.slice(0, delta)];
@@ -272,7 +337,7 @@ export class TerminalPlane {
     for (const spot of stale) for (let r = spot.y; r < spot.y + spot.rows; r++) forced.add(r);
     const repainted = new Set<number>();
     const chunks: string[] = [];
-    if (scrolled) chunks.push(reset + `\x1b[1;${frame.height}r\x1b[${Math.abs(scrolled)}${scrolled > 0 ? 'S' : 'T'}\x1b[r`);
+    if (scrolled) chunks.push(reset + clearBg + `\x1b[1;${frame.height}r\x1b[${Math.abs(scrolled)}${scrolled > 0 ? 'S' : 'T'}\x1b[r` + reset);
     let paintedRows = 0;
     for (let i = 0; i < lines.length; i++) {
       // A newly exposed blank row has already been cleared by SU/SD.
@@ -280,10 +345,21 @@ export class TerminalPlane {
       if (historyDirty) repainted.add(i);
       // The scroll moves the side column with the rows, so every side line is painted again after one; otherwise only a changed side line is.
       const sideDirty = side !== undefined && (scrolled !== 0 || !same || sideLines[i] !== this.previousSide[i]);
-      // Beside a side column a row is padded to its width instead of erased to the end of the line, which would wipe the side line.
-      if (historyDirty) chunks.push(side ? `\x1b[${i + 1};1H${reset}${lines[i]}${' '.repeat(Math.max(0, frame.width - stringWidth(lines[i]!.replace(/\x1b\[[\d;]*m/g, ''))))}`
-        : `\x1b[${i + 1};1H${reset}\x1b[2K${lines[i]}`);
-      if (sideDirty && side) chunks.push(`\x1b[${i + 1};${side.x + 1}H${reset}${sideLines[i]}`);
+      // Beside a side column a row is padded up to `side.x` (covering any 1-column gap) instead of erased to the end of the line, which would wipe the side line.
+      if (historyDirty) {
+        if (side) {
+          const used = stringWidth(lines[i]!.replace(/\x1b\[[\d;]*m/g, ''));
+          const pad = Math.max(0, side.x - used);
+          chunks.push(`\x1b[${i + 1};1H${reset}${lines[i]}${reset}${clearBg}${' '.repeat(pad)}${reset}`);
+        } else {
+          chunks.push(`\x1b[${i + 1};1H${reset}${clearBg}\x1b[2K${lines[i]}${reset}`);
+        }
+      }
+      if (sideDirty && side) {
+        const sideUsed = stringWidth(sideLines[i]!.replace(/\x1b\[[\d;]*m/g, ''));
+        const sidePad = Math.max(0, side.width - sideUsed);
+        chunks.push(`\x1b[${i + 1};${side.x + 1}H${reset}${sideLines[i]}${sidePad ? clearBg + ' '.repeat(sidePad) : ''}${reset}`);
+      }
       if (historyDirty || sideDirty) paintedRows++;
     }
     this.previous = frame; this.previousLines = lines; this.previousSide = sideLines;

@@ -30,6 +30,7 @@ import {faintColor, frameColor} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SideSegment} from '../terminal/terminal-plane.js';
 import {fit, formatTook, type FlowTone} from './panel-text.js';
+import {lerpColor} from './hover-fade.js';
 import {CONTENT_X, DOUBLE_CLICK_MS, sideLine, toneColor} from './sidebar-frame.js';
 import {FEED_MIN, STAGE_FULL_MIN, STRIP_MIN, buildStage, controlsRow, nextSpeed, pulseAt, reserveFor, scrubPosition, stageHeight, stripRow, type ControlsRow, type Reserve, type StageBox, type StageCell,
   type StageLabeler, type StagePlan, type StageRow} from './team-stage.js';
@@ -184,7 +185,6 @@ export interface TeamView {
   /** `<event id>\0<member>`: the pointer is over a name that a click filters by. */
   readonly hoveredName?: string | undefined;
   readonly hoveredControl?: TeamControl | undefined;
-  readonly hoveredEdge?: 'collapse' | 'handle' | undefined;
   readonly lastClick?: {readonly id: string; readonly time: number} | undefined;
   /** Playback runs: one event per `PLAY_STEP_MS / speed`, then Live at the end. */
   readonly playing?: boolean;
@@ -501,14 +501,15 @@ function withPulse(row: StageRow, x: number): StageRow {
   return out;
 }
 const BORDER = /^[─-╿]+$/;
-function stageSegment(cell: StageCell, view: TeamView, ownerColor: (id: string) => string): SideSegment {
+function stageSegment(cell: StageCell, view: TeamView, ownerColor: (id: string) => string, fade?: (key: string) => number): SideSegment {
   let color: string, bold = cell.bold ?? false;
   if (cell.tone === 'owner') {
     const base = ownerColor(cell.owner ?? '');
     color = cell.frame ? frameColor(base) : base;
     // A card's border: bright under the pointer, accent while it is the chosen member.
     if (cell.actor !== undefined && cell.actor === cell.owner && BORDER.test(cell.text)) {
-      if (view.hoveredStage === 'card:' + cell.actor) {color = base; bold = true;}
+      const hot = fade ? fade('card:' + cell.actor) : view.hoveredStage === 'card:' + cell.actor ? 1 : 0;
+      if (hot > 0) {color = lerpColor(color, base, hot); bold = hot >= 0.5;}
       if (view.card === cell.actor || view.filter === cell.actor) color = palette.accent;
     }
   } else color = toneColor(cell.tone);
@@ -523,6 +524,12 @@ export interface TeamPaint {
   readonly height: number;
   readonly focused: boolean;
   readonly dragging?: boolean;
+  /** The pointer is on the border (the resize handle). */
+  readonly hoveredEdge?: boolean;
+  /** The eased focus chrome 0..1 (border colour); absent: the border is the accent while `focused`. */
+  readonly focusLevel?: number | undefined;
+  /** The eased hover level 0..1 of a stage card by `card:<actor>` (default: 1 under the pointer, else 0). */
+  readonly fade?: ((key: string) => number) | undefined;
   /** The colour of an actor's name (`user` and `automa` included). */
   readonly ownerColor: (id: string) => string;
   readonly label: Labeler;
@@ -547,16 +554,16 @@ function segmentOf(cell: TeamCell, input: TeamPaint, selected: string | undefine
 export function paintTeam(input: TeamPaint): SideSegment[][] {
   const {layout, view, width, height, label} = input;
   const geometry = input.stage ? teamGeometryFor(layout, height) : teamGeometry(height), content = width - CONTENT_X;
-  const frame = {width, hoveredEdge: view.hoveredEdge, accent: Boolean(input.dragging || input.focused)};
+  const frame = {width, hoveredEdge: input.hoveredEdge ? 'handle' as const : undefined, accent: Boolean(input.dragging || input.focusLevel === undefined && input.focused), level: input.focusLevel};
   const selected = selectedId(layout, view);
   const paintRow = (row: TeamRow) => row.map(cell => segmentOf(cell, input, selected));
   const lines: SideSegment[][] = [];
   const rule = (): SideSegment[] => sideLine(frame, [{text: '─'.repeat(Math.max(0, content)), color: palette.line}]);
-  if (geometry.header >= 1) lines.push(sideLine(frame, paintRow(headerChrome(layout, view, content).cells), true));
+  if (geometry.header >= 1) lines.push(sideLine(frame, paintRow(headerChrome(layout, view, content).cells)));
   if (geometry.header >= 2) lines.push(rule());
   if (geometry.stage > 0) {
     const model = stageModel(layout, view, geometry, label);
-    const paintStage = (row: StageRow) => sideLine(frame, row.map(cell => stageSegment(cell, view, input.ownerColor)));
+    const paintStage = (row: StageRow) => sideLine(frame, row.map(cell => stageSegment(cell, view, input.ownerColor, input.fade)));
     if (model) {
       lines.push(paintStage(model.controls.cells));
       if (model.plan) {
@@ -602,7 +609,6 @@ export type TeamEffect =
   | {readonly kind: 'open'; readonly id: string}
   | {readonly kind: 'focus'}
   | {readonly kind: 'blur'}
-  | {readonly kind: 'close'}
   | {readonly kind: 'drag'}
   | {readonly kind: 'reset-width'}
   /** Open the Programme page (the acts with their tasks, and the earlier plans to re-activate). */
@@ -661,12 +667,10 @@ export function stepTeamKey(layout: TeamLayout, view: TeamView, geometry: TeamGe
 }
 
 export interface TeamPointer {
-  /** Coordinates inside the sidebar (0,0 is its top-left cell). */
+  /** Coordinates inside the Team page (0,0 is the top-left cell below the sidebar's header bar). */
   readonly x: number; readonly y: number;
   readonly action: 'press' | 'move' | 'wheel_up' | 'wheel_down' | 'drag' | 'release';
-  readonly draggable?: boolean;
 }
-const EDGE_CLICK = '\0edge';
 /** A press on the stage: the timeline controls, a card (select and filter; a second click opens the actor) or the current post (opens it). */
 function stagePress(layout: TeamLayout, view: TeamView, geometry: TeamGeometry, model: StageModel | undefined, hit: StageHit | undefined, x: number, now: number): [TeamView, readonly TeamEffect[]] {
   const focus: TeamEffect = {kind: 'focus'};
@@ -705,15 +709,7 @@ export function stepTeamMouse(layout: TeamLayout, view: TeamView, geometry: Team
     const model = stageModel(layout, view, geometry, label);
     return done(model ? selectAt(layout, view, geometry, scrubPosition(model.controls.bar, cx, layout.ids.length) - 1) : {...view, scrubbing: false});
   }
-  // Column 0 is the border: the collapse button on the first row, below it the resize handle.
-  if (pointer.x === 0 && (pointer.action === 'move' || pointer.action === 'press') && (pointer.y === 0 || pointer.draggable)) {
-    const part = pointer.y === 0 ? 'collapse' : 'handle';
-    if (pointer.action === 'move') return done(view.hoveredEdge === part && view.hoveredControl === undefined && view.hovered === undefined ? view : {...view, hoveredEdge: part, hoveredControl: undefined, hovered: undefined, hoveredName: undefined});
-    if (part === 'collapse') return done(view, [{kind: 'close'}]);
-    const double = view.lastClick?.id === EDGE_CLICK && now - view.lastClick.time <= DOUBLE_CLICK_MS;
-    return done({...view, lastClick: double ? undefined : {id: EDGE_CLICK, time: now}}, [double ? {kind: 'reset-width'} : {kind: 'drag'}]);
-  }
-  let current = pointer.action === 'move' && view.hoveredEdge ? {...view, hoveredEdge: undefined} : view;
+  let current = view;
   const move = (next: TeamView) => next === view ? done(view) : done(next);
   const rest = (patch: Partial<TeamView>): TeamView => ({...current, hoveredControl: undefined, hovered: undefined, hoveredName: undefined, hoveredStage: undefined, ...patch});
   const row = pointer.y - geometry.header - geometry.stage;

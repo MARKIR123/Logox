@@ -81,15 +81,15 @@ const feed = (rig: Rig, needle: string) => rig.find(needle, rig.sidebarX, rig.fi
 /** A click on the rule under the act header gives the sidebar the keyboard and changes nothing else. */
 const focusSidebar = async (rig: Rig) => {const head = rig.find('Act 1 of 1', rig.sidebarX); await rig.click(rig.sidebarX + 10, head.y + 1);};
 
-test('the sidebar is the team stage alone (no tabs): the plan opens it, its header is the act header, and Ctrl+B hides and shows it again', {timeout: 60000}, async () => {
+test('the Team tab is the team stage: the plan opens the sidebar on it, its header is the act header, and Ctrl+B hides and shows it again', {timeout: 60000}, async () => {
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
     seed(app);
     await app.plans.apply([{op: 'create', title: 'Theme preview', nodes: NODES as never}], 'logox');
-    rig = await mount(app, 120, 34);
+    rig = await mount(app, 120, 36);
     await waitFor(() => posts(rig), text => /Act 1 of 1 · /.test(text) && /● Live/.test(text) && text.includes('◈ logox → @kalon · assign'), {label: 'the sidebar opens on the stage'});
-    assert.match(rig.side()[0]!, /^› +‹ Act 1 of 1 · Draw th/, 'the act is titled by its first assignment: the plan has no work linked yet, so its nodes belong to no act');
+    assert.match(rig.side()[2]!, /^│ +‹ Act 1 of 1 · Draw th/, 'the act is titled by its first assignment: the plan has no work linked yet, so its nodes belong to no act');
     assert.doesNotMatch(posts(rig), /Tasks|Team +●/, 'no tabs');
     for (const expected of ['✓ you → @logox', '◈ logox → @kalon · assign', '⊞ techne → @kalon', 'Draw the SVG', 'Renamed to buildStreetProps()']) assert.ok(posts(rig).includes(expected), expected + '\n' + posts(rig));
     assert.match(posts(rig), /◀ ▶ ▶ \S+ .*3\/3 · \+\d+s/, 'the stage controls carry the stepping and the counter');
@@ -107,7 +107,7 @@ test('/team opens the sidebar (a second /team hides it) even with no acts, and /
   try {
     const app = await f.open();
     app.store.message(app.sessionId, 'logox', 'user', 'Hello team', {inputKind: 'human', source: 'direct'});
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), text => text.includes('Ready when you are.'), {label: 'mounted'});
     assert.ok(!/no acts yet/.test(posts(rig)), 'nothing opens by itself');
     await assert.rejects(app.submit('/tasks'), /Unknown command/);
@@ -129,7 +129,7 @@ test('/team on an empty session shows the empty feed with a hint instead of noth
   const f = await fixture(); let rig!: Rig;
   try {
     const app = await f.open();
-    rig = await mount(app, 120, 32);
+    rig = await mount(app, 120, 34);
     await waitFor(() => rig.screen(), text => text.includes('Ready when you are.'), {label: 'mounted'});
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => text.includes('No team activity yet') && /0 \/ 0/.test(text), {label: 'the empty feed'});
@@ -141,7 +141,7 @@ test('a click selects a post, a double click or Enter opens it (the message as M
   try {
     const app = await f.open();
     seed(app);
-    rig = await mount(app, 120, 34);
+    rig = await mount(app, 120, 36);
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('Renamed to buildStreetProps()'), {label: 'the feed'});
     // Double click on the message post: its full text as Markdown.
@@ -192,7 +192,7 @@ test('◀ ▶ and the wheel leave Live, ● Live returns and follows the newest 
     seed(app);
     const say = (text: string) => app.store.message(app.sessionId, 'kalon', 'user', '[Message from techne · note]\n' + text, {activityId: 'kal', inputKind: 'collaboration', source: 'techne'});
     for (let n = 0; n < 24; n++) say('earlier note ' + n);
-    rig = await mount(app, 120, 30);
+    rig = await mount(app, 120, 32);
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('earlier note 23'), {label: 'the tail is visible while Live'});
     assert.ok(!posts(rig).includes('earlier note 0'), 'the early posts are scrolled away');
@@ -230,7 +230,7 @@ test('the stage above the feed: its cards filter by click and open the actor pag
   try {
     const app = await f.open();
     seed(app);
-    rig = await mount(app, 120, 40);
+    rig = await mount(app, 120, 42);
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => /● Live/.test(text) && text.includes('Kalon') && text.includes('Techne') && text.includes('▶ Play'), {label: 'the stage'});
     // A click on the Kalon card filters the feed to Kalon; a second click on it (same card, slowly) clears the filter.
@@ -273,7 +273,7 @@ test('the Team layout is rebuilt only when the events, the width or the filter c
   try {
     const app = await f.open();
     seed(app);
-    rig = await mount(app, 120, 34);
+    rig = await mount(app, 120, 36);
     await act(async () => {await app.submit('/team');});
     await waitFor(() => posts(rig), text => /● Live/.test(text), {label: 'the feed'});
     const builds = teamStats.builds;

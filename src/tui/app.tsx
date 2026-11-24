@@ -30,15 +30,16 @@ import {InteractionCard} from './interactions/interaction-card.js';
 import {ownerColor, type ActorStyle, type ActorStyles} from './appearance/actor-style.js';
 import {uiSettingsRevision} from '../config/ui-settings.js';
 import {palette} from './appearance/theme.js';
-import {mixHex, windowAccent} from './appearance/colors.js';
+import {canvasBg, mixHex, windowAccent} from './appearance/colors.js';
 import {clipLine, safeText} from './terminal/text.js';
 import {draftSelection, emptyDraft, inputViewport, insert, layoutInput, selectedText, type Draft} from './input/editor.js';
 import type {SceneRow, SceneAction} from './timeline/scene.js';
 import {timelineRows, viewport, type Anchor, type Row} from './timeline/viewport.js';
+import {timelineView} from './timeline/timeline-overlay.js';
 import {osc52Clipboard} from './terminal/clipboard.js';
 import {selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
 import {getInteractionUI} from '../tools/ui-registry.js';
-import {themeRevision} from '../config/theme-palette.js';
+import {subscribeTheme, themeRevision} from '../config/theme-palette.js';
 import {imageRevision, subscribeImages} from './terminal/image-source.js';
 import {userLabelRevision} from '../config/user-profile.js';
 import {useSplash} from './timeline/use-splash.js';
@@ -46,6 +47,8 @@ import {initialResponse, interactionState, type ResponseDraft} from './interacti
 import {TimelinePane} from './timeline/timeline-pane.js';
 import {PendingRows} from './input/pending-rows.js';
 import {ComposerLines} from './input/composer-lines.js';
+import {ComposerRule} from './input/composer-fade.js';
+import {focusRegion} from './input/focus-regions.js';
 import {FooterBar} from './status/footer-bar.js';
 import {useComposerActions} from './input/composer-actions.js';
 import {useInputHistory} from './input/use-input-history.js';
@@ -62,10 +65,12 @@ import {createMouseHandler, locateActor} from './input/mouse-router.js';
 import {useKeyboard} from './input/keyboard.js';
 import type {ShellContext} from './input/shell-context.js';
 import {QuestionDock} from './interactions/question-dock.js';
-import {CHIP_HINT, useTeamSidebar} from './panels/use-team-sidebar.js';
+import {useTeamSidebar} from './panels/use-team-sidebar.js';
 import {projectDelegations} from '../runtime/delegations.js';
 import {TeamStream} from '../runtime/team-events.js';
 import {directorCloses} from '../runtime/team-acts.js';
+import {fileChanges} from './panels/changes-model.js';
+import type {UsageEntry} from './panels/sidebar-pages.js';
 import type {PlanBoard} from '../store/plans.js';
 
 export interface AppProps {
@@ -95,6 +100,20 @@ export interface AppProps {
   onDraft?(): void;
   onClose(): Promise<void>;
 }
+/** Tokens and cost of the Director and every actor this session, for the sidebar's Usage tab. */
+function usageEntries(getStatus: AppProps['getStatus'], roles: ActorStyles): UsageEntry[] {
+  if (!getStatus) return [];
+  const entries: UsageEntry[] = [];
+  for (const id of new Set([DIRECTOR_ID, ...Object.keys(roles)])) {
+    try {
+      const status = getStatus(id), role = roles[id], session = status.usage?.session;
+      if (!session) continue;
+      entries.push({id, name: role?.name ?? status.name, symbol: role?.symbol ?? '◇', color: role?.color, model: status.model?.model, input: session.input, output: session.output, cached: session.cached,
+        ...(status.cost !== undefined && status.costCurrency ? {cost: {amount: status.cost, currency: status.costCurrency, partial: Boolean(status.costPartial)}} : {})});
+    } catch {}
+  }
+  return entries;
+}
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
@@ -102,7 +121,8 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
   const imageVersion = useSyncExternalStore(subscribeImages, imageRevision);
-  const themeVersion = themeRevision() * 1000 + userLabelRevision() + uiSettingsRevision() * 1e9 + imageVersion * 1e12;
+  const themeRev = useSyncExternalStore(subscribeTheme, themeRevision);
+  const themeVersion = themeRev * 1000 + userLabelRevision() + uiSettingsRevision() * 1e9 + imageVersion * 1e12;
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
     if (!definitions) return cast;
@@ -141,6 +161,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   }));
   const topAnchor: Anchor | null = demoScene ? {messageId: '__top__', line: 0} : null;
   const plane = useContext(TerminalPlaneContext);
+  const baselines = useRef<Record<string, number>>({});
   const anchors = useRef<Record<string, Anchor | null>>({
     logox: topAnchor,
     aletheia: topAnchor,
@@ -162,6 +183,9 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const clearSelection = () => {contentSelection.current = null; gesture.current = null; stopEdgeScroll(); presentReading();};
   useEffect(() => () => stopEdgeScroll(), []);
   const [focus, setFocus] = useState<'input' | 'question' | 'stop' | 'plan'>('input');
+  const [composerBlurred, setComposerBlurred] = useState(false);
+  const keepTimeline = useRef(false);
+  useEffect(() => {if (focus === 'input') {if (keepTimeline.current) keepTimeline.current = false; else setComposerBlurred(false);}}, [focus]);
   const [focusedStop, setFocusedStop] = useState('');
   const [hoveredStop, setHoveredStop] = useState('');
   const hoveredStopRef = useRef('');
@@ -249,7 +273,8 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   // The team event stream the stage replays: projected once per store revision, the same array while the events do not change.
   const teamStream = useMemo(() => new TeamStream(), []);
   const planSidebar = useTeamSidebar({board: plans, surfaces, revision: deferredSnapshot.revision, sessionId, delegations: () => projectDelegations({snapshot: deferredSnapshot, sessionId}),
-    team: () => teamStream.get({snapshot: deferredSnapshot, sessionId}), closes: () => directorCloses(deferredSnapshot, sessionId), columns, width, screenRows, roles, themeVersion, welcome: Boolean(welcome), focus,
+    team: () => teamStream.get({snapshot: deferredSnapshot, sessionId}), closes: () => directorCloses(deferredSnapshot, sessionId),
+    changes: () => fileChanges(deferredSnapshot.messages, sessionId), usage: () => usageEntries(getStatus, roles), columns, width, screenRows, roles, themeVersion, motion: layout?.motion ?? true, welcome: Boolean(welcome), focus,
     setFocus, flash});
   const timelineWidth = planSidebar.timelineWidth;
   const welcomeLines = useMemo(() => welcome
@@ -339,13 +364,11 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   };
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
-  // The `▸ Act 2/3 · 3/5` chip sits at the right end of row 1; the pills and the status text make room for it.
-  const chipSpace = planSidebar.chip ? planSidebar.chip.width + 1 : 0;
-  const {activePills} = useActivePills({snapshot, sessionId, roles, width: width - chipSpace, themeVersion});
+  const {activePills} = useActivePills({snapshot, sessionId, roles, width, themeVersion});
 
   const pillsWidth = calculatePillsWidth(activePills);
   const footerStatus = cachedStageStatus;
-  const footerStatusWidth = Math.max(0, width - chipSpace - pillsWidth - (pillsWidth > 0 ? 1 : 0));
+  const footerStatusWidth = Math.max(0, width - pillsWidth - (pillsWidth > 0 ? 1 : 0));
   const noticeInline = Boolean(notice) && (!getStatus || footerHeight < 2);
   // The same layout draws row 1 and answers hover and click hit tests.
   const footerLayout = useMemo(() => footerStatus
@@ -367,7 +390,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const splash = useSplash({welcome, width: timelineWidth, timelineHeight, roles, themeVersion});
   // The sidebar's lines for this frame: a column of the plane beside the timeline when docked, the overlay's lines otherwise.
   const sidebarPanel = planSidebar.render(planSidebar.overlay ? screenRows : timelineHeight);
-  const view = viewport(messageRows, timelineHeight, anchor);
+  const view = timelineView(messageRows, timelineHeight, timelineWidth, anchor, baselines, currentView);
   const selection = selectionInViewport(selectionRange(messageRows, contentSelection.current), view.start);
   const inputY = timelineHeight + (loginFolded ? loginHeight : 0) + activityHeight + questionHeight + menuHeight + pendingHeight + (hairlineHeight ? 1 : 0);
   const pendingY = inputY - (hairlineHeight ? 1 : 0) - pendingHeight;
@@ -384,7 +407,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   useEffect(() => {setExpandHovered(false);}, [showExpandButton, currentView, sessionId, inputY, width]);
   const detailMax = Math.max(0, detailContentHeight - questionHeight);
   const detailStart = Math.min(detailOffset, detailMax);
-  if (!(questionPanel && focus === 'question') && !(loginState?.phase === 'wizard' && !loginFolded)) setCursorPosition((!loginState || loginFolded) && !surface && !composerExpanded && editableComposer && focus !== 'plan' && !closing ? {
+  if (!(questionPanel && focus === 'question') && !(loginState?.phase === 'wizard' && !loginFolded)) setCursorPosition((!loginState || loginFolded) && !surface && !composerExpanded && editableComposer && focus !== 'plan' && !composerBlurred && !closing ? {
     x: Math.min(width - 1, promptWidth + inputLayout.cursorColumn),
     y: inputY + inputLayout.cursorRow - inputView.start,
   } : undefined);
@@ -439,8 +462,10 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
       snapshot.messages.some(item => item.id === id && item.step?.state === 'running')));
     if (next.size !== stopping.size) {stoppingIds.current = next; setStopping(next);}
   }, [snapshot.activities, snapshot.messages, stopping]);
-  const {presentReading, copySelection, readingRows, scroll} = useReading({plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface,
-    welcome, width: timelineWidth, layout, contentSelection, hoveredFoldIdRef, view, selection, setAnchor, side: sidebarPanel?.side,
+  const region = focusRegion({focus, timelineChosen: composerBlurred, editingCustom, takeover: Boolean(surface) || Boolean(loginState)});
+  const composerActive = region === 'composer';
+  const {presentReading, copySelection, readingRows, scroll} = useReading({focused: region === 'timeline', plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface,
+    welcome, width: timelineWidth, layout, contentSelection, hoveredFoldIdRef, view, baselines, selection, setAnchor, side: sidebarPanel?.side,
     planOverlay: planSidebar.overlay && planSidebar.panelVisible && !surface});
 
   const {sendSceneInput, complete, edit, sendPending, takePendingBack, steerInput} = useComposerActions({draft, activities, currentView, stage, demoScene, onSubmit, onDraft,
@@ -460,9 +485,9 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const subscribeMouse = useMemo<MouseSubscriber>(() => handler => {mouseListeners.current.add(handler); return () => {mouseListeners.current.delete(handler);};}, []);
   useTerminalInput(stdin, stdout, mouseHandlerRef, foldTimerRef);
 
-  usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
+  usePaste(text => {exitDeadline.current = 0; if (composerExpanded) return; setNotice(''); setComposerBlurred(false); if ((!loginState || loginFolded) && !surface) edit(current => insert(current, text));});
   const shell: ShellContext = {
-    store, sessionId, stage, demoScene, scenario, snapshot, roles, plane, stdout, onSubmit, onCancel, onDraft, currentView, switchView, activities,
+    store, sessionId, stage, demoScene, scenario, snapshot, roles, plane, stdout, onSubmit, onCancel, onDraft, currentView, switchView, activities, composerBlurred, setComposerBlurred, keepTimeline,
     activity, pending, request, response, questionPanel, inlineRequest, freeAnswer, scene, setScene, foldIds, foldActivityId, cardCursor,
     setCardCursor, setSelectedActivityId, setSelectedRequestId, setResponses, expanded, setExpanded, setDetailOffset, detailMax, focus, setFocus,
     focusedStop, setFocusedStop, editingCustom, setEditingCustom, loginState, loginFolded, surface, composerExpanded, setComposerMode, closing, close,
@@ -481,10 +506,10 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   mouseHandlerRef.current = createMouseHandler(shell);
   useKeyboard(shell);
 
+  const bg = canvasBg();
   const overlay = overlayPage(shell);
-  if (overlay) return overlay;
-  const hairline = '─'.repeat(width);
-  return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden">
+  if (overlay) return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden" backgroundColor={bg}>{overlay}</Box>;
+  return <Box flexDirection="column" width={width} height={screenRows} overflow="hidden" backgroundColor={bg}>
     <TimelinePane splash={splash} welcome={welcome} welcomeLines={welcomeLines} plane={plane} view={view} selection={selection} width={timelineWidth} timelineHeight={timelineHeight} side={sidebarPanel?.side}/>
     {loginState?.phase === 'wizard' && authentication && <MouseHost subscribe={subscribeMouse} color={windowColor}><LoginDialog flow={authentication} state={loginState} width={width} height={loginHeight} y={timelineHeight} onCursor={setCursorPosition} onClose={close} notice={notice}/></MouseHost>}
     {surface?.kind === 'picker' && surfaces ? <MouseHost subscribe={subscribeMouse} color={windowColor}><Picker key={surface.id} title={surface.title} description={surface.description}
@@ -513,15 +538,14 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
         onWheelStep={moveSuggestion}/>
     </MouseHost>}
     {pendingHeight > 0 && <PendingRows shown={pendingShown} height={pendingHeight} width={width} currentView={currentView} roles={roles} hover={pendingHover} windowColor={windowColor}/>}
-    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
+    {hairlineHeight > 0 && <ComposerRule color={composerRule} width={width} active={composerActive} motion={layout?.motion ?? true}/>}
     <ComposerLines editable={editableComposer} height={inputHeight} width={width} textWidth={composerTextWidth} view={inputView} selection={inputSelection}
-      promptWidth={promptWidth} promptGlyph={promptGlyph} promptColor={composerPrompt} editingCustom={editingCustom} showExpandButton={showExpandButton}
+      promptWidth={promptWidth} promptGlyph={promptGlyph} promptColor={composerPrompt} active={composerActive} motion={layout?.motion ?? true} editingCustom={editingCustom} showExpandButton={showExpandButton}
       expandHovered={expandHovered} choiceSummary={choiceSummary}/>
-    {hairlineHeight > 0 && <Box height={1} flexShrink={0}><Text color={composerRule} wrap="truncate">{hairline}</Text></Box>}
+    {hairlineHeight > 0 && <ComposerRule color={composerRule} width={width} active={composerActive} motion={layout?.motion ?? true}/>}
     {footerHeight > 0 && <FooterBar height={footerHeight} width={width} hasStatus={Boolean(getStatus)} noticeInline={noticeInline} demoScene={demoScene} notice={notice}
       statusLeft={statusLeft} statusLeftColor={statusLeftColor} statusText={footerStatusText} layout={footerLayout} pills={activePills} pillsWidth={pillsWidth}
-      hoveredPill={hoveredPill} keys={renderedFooterKeys} note={planSidebar.chipHover && !notice && footerHeight > 1 ? [{text: CHIP_HINT, color: palette.muted}] : footerNote}
-      chip={planSidebar.chip} chipHover={planSidebar.chipHover}/>}
+      hoveredPill={hoveredPill} keys={renderedFooterKeys} note={footerNote}/>}
     </>}
   </Box>;
 }

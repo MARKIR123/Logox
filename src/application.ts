@@ -363,6 +363,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const {checkpoints, owners} = recovered;
   const ui = options.uiPreferences ?? loadUiPreferences(homeDir, config);
   surfaces.sidebarWidthStore = {get: () => ui.get().sidebarWidth, set: width => {void ui.save({sidebarWidth: width}).catch(() => {});}};
+  surfaces.sidebarTabsStore = {get: () => ({open: ui.get().sidebarTabs, active: ui.get().sidebarActive}), set: tabs => {void ui.save({sidebarTabs: [...tabs.open], sidebarActive: tabs.active}).catch(() => {});}};
   const providersPage = createProvidersPage({registry, modelPool, management: providers, signal: commands.signal, selection: modelSelection.current,
     isEnsembleBusy: () => ensemble.isBusy(), commandOwner: () => state.commandOwner, refreshPage: () => pages.refreshCurrentPage()});
   const buildContext = createCommandContext({session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels,

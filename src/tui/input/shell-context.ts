@@ -70,6 +70,11 @@ export interface ShellContext {
   setDetailOffset: Setter<number>;
   detailMax: number;
   focus: FocusTarget;
+  /** The composer gave up the keyboard to a timeline or sidebar click, Ctrl+N or an Esc-able card; it fades until a click on it, typing or a paste. */
+  composerBlurred: boolean;
+  setComposerBlurred(value: boolean): void;
+  /** Set just before moving the keyboard back to `input` while keeping the timeline chosen (Tab / Shift+Tab); the next focus change then keeps the choice. */
+  keepTimeline: {current: boolean};
   setFocus: Setter<FocusTarget>;
   focusedStop: string;
   setFocusedStop: Setter<string>;

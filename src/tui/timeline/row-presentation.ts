@@ -2,7 +2,7 @@ import stringWidth from 'string-width';
 import type {Step} from '../../runtime/contracts.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {stepIcon, thinkingDuration, stepStatus, subtitleClock, swarmElapsed} from '../appearance/animation.js';
-import {mixHex, quietRail} from '../appearance/colors.js';
+import {mixHex, quietRail, QUIET_RAIL} from '../appearance/colors.js';
 import {palette} from '../appearance/theme.js';
 import type {SceneRow, SceneSegment} from './scene.js';
 import {rowSelectionBounds, sliceRowText, type Row, type SelectionRange} from './viewport.js';
@@ -10,12 +10,15 @@ import {rowSelectionBounds, sliceRowText, type Row, type SelectionRange} from '.
 const glyphs = new Intl.Segmenter('zh', {granularity: 'grapheme'});
 
 /** The two rail columns of a row: the speaker glyph (bold, full color) on a turn header, otherwise the quiet `│ `. Always exactly two cells. */
-export function railCell(row: Row): SceneSegment {
+/** Share of the speaker colour a quiet rail keeps while the timeline is the focused region (it is `QUIET_RAIL` otherwise). */
+export const FOCUSED_RAIL = 0.85;
+/** `focus` is the timeline region's eased focus level 0..1: it lifts the quiet `│ ` rails toward the speaker colour. */
+export function railCell(row: Row, focus = 0): SceneSegment {
   if (row.railGlyph) {
     const glyph = glyphs.segment(row.railGlyph)[Symbol.iterator]().next().value?.segment ?? '│';
     return {text: glyph + ' '.repeat(Math.max(0, 2 - stringWidth(glyph))), color: row.railColor, bold: true};
   }
-  return {text: '│ ', color: row.railColor ? quietRail(row.railColor) : row.railColor};
+  return {text: '│ ', color: row.railColor ? focus > 0 ? mixHex(row.railColor, palette.bg, QUIET_RAIL + (FOCUSED_RAIL - QUIET_RAIL) * focus) : quietRail(row.railColor) : row.railColor};
 }
 
 export function rowSegments(row: SceneRow, isHovered = false): readonly SceneSegment[] {

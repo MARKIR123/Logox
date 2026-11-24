@@ -1,6 +1,7 @@
 // The compact composer body: prompt glyph, visible input lines with the selection fill, the expand button, and the
 // one-line choice summary shown while a question owns the keyboard. Layout numbers are computed by `App`.
 import {Box, Text} from 'ink';
+import {useComposerFade, fadedColor} from './composer-fade.js';
 import {palette} from '../appearance/theme.js';
 import {clipLine} from '../terminal/text.js';
 import {COMPOSER_EXPAND_LABEL, COMPOSER_EXPAND_PADDING} from './fullscreen-editor.js';
@@ -16,6 +17,9 @@ export interface ComposerLinesProps {
   promptWidth: number;
   promptGlyph: string;
   promptColor: string;
+  /** The composer has the keyboard: its prompt marker is at full colour, otherwise it fades to a muted tone. */
+  active?: boolean;
+  motion?: boolean;
   editingCustom: boolean;
   showExpandButton: boolean;
   expandHovered: boolean;
@@ -23,11 +27,12 @@ export interface ComposerLinesProps {
 }
 
 export function ComposerLines({editable, height, width, textWidth, view: inputView, selection: inputSelection, promptWidth, promptGlyph, promptColor: composerPrompt,
-  editingCustom, showExpandButton, expandHovered, choiceSummary}: ComposerLinesProps) {
+  editingCustom, showExpandButton, expandHovered, choiceSummary, active = true, motion = true}: ComposerLinesProps) {
+  const level = useComposerFade(active, motion);
   return <Box height={height} flexShrink={0} flexDirection="column" overflow="hidden">
       {editable ? inputView.lines.map((line, index) => <Box key={index} height={1} flexShrink={0}>
         <Box width={textWidth} overflow="hidden"><Text wrap="truncate" color={palette.composerFg}>
-          {promptWidth > 0 && <Text color={editingCustom ? palette.user : composerPrompt} bold={!editingCustom}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
+          {promptWidth > 0 && <Text color={editingCustom ? palette.user : fadedColor(composerPrompt, level)} bold={!editingCustom}>{index === 0 ? promptGlyph : ' '.repeat(promptWidth)}</Text>}
           {(() => {
             if (!inputSelection || inputSelection.end <= line.start || inputSelection.start >= line.end) return line.text;
             const parts = graphemes(line.text), low = Math.max(0, inputSelection.start - line.start), high = Math.min(parts.length, inputSelection.end - line.start);

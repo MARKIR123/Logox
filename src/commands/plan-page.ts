@@ -119,7 +119,7 @@ export function createPlanPages(deps: PlanPageDeps) {
         if (id.startsWith(ACT)) {
           const act = acts.find(item => item.index === Number(id.slice(ACT.length)));
           if (!act) return {message: 'That act no longer exists.', kind: 'command_error' as const};
-          surfaces.requestSidebar('show'); surfaces.requestStageAct(act.index);
+          surfaces.requestSidebar('show', 'team'); surfaces.requestStageAct(act.index);
           return {};
         }
         if (id.startsWith(TASK)) {
@@ -132,7 +132,7 @@ export function createPlanPages(deps: PlanPageDeps) {
         if (id.startsWith(ADOPT)) {
           const planId = id.slice(ADOPT.length), adopted = await board.adopt(planId);
           if (!adopted.ok) return {message: adopted.error, kind: 'command_error' as const};
-          surfaces.requestSidebar('show');
+          surfaces.requestSidebar('show', 'team');
           return {message: 'Plan "' + (earlier.find(header => header.id === planId)?.title ?? 'earlier plan') + '" is active in this session again.', presentation: 'status' as const};
         }
         return {};

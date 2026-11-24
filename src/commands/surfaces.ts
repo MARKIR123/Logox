@@ -1,6 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import {basename} from 'node:path';
-import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
+import {activeTheme, applyTheme, palette, setActiveTheme, type ThemePalette} from '../config/theme-palette.js';
+import {themeBackgroundFor} from '../config/theme-presets.js';
+import {applyUiSettings, themeBackgroundEnabled, uiSettings} from '../config/ui-settings.js';
 import {immutable} from '../runtime/contracts.js';
 import type {TeamEvent} from '../runtime/team-events.js';
 import type {ActorDetail} from '../runtime/team-stage.js';
@@ -41,15 +43,18 @@ export interface SettingsActions {
   /** Data and callbacks of the /theme page the Theme row opens; the saved theme name comes back through `pages` afterwards. */
   openTheme?(): {data: ThemePageData; actions: ThemeActions};
 }
-/** Callbacks of the /theme page. Nothing is written until `save`; the surface restores the palette it found when the page closes without one. */
+/** Callbacks of the /theme page. Nothing is written until `save`; the surface restores the palette and background overrides it found when the page closes without one. */
 export interface ThemeActions {
   /** Puts a theme on the live palette (preview). */
-  apply(name: string): void;
+  apply(name: string, backgrounds?: Readonly<Record<string, boolean>>): void;
   /** Persists the choice through the preference store and applies it. */
-  save(name: string): Promise<void>;
+  save(name: string, backgrounds: Readonly<Record<string, boolean>>): Promise<void>;
 }
-/** What `/team` asks of the terminal: show, hide or toggle the sidebar (the team stage). */
+/** What `/team` and `/sidebar` ask of the terminal: show, hide or toggle the sidebar (with a tab: that tab; `src/tui/panels/sidebar-tabs.ts:SidebarTabId`). */
 export type SidebarMode = 'show' | 'hide' | 'toggle';
+/** The tabs of the sidebar, in the order `+` opens them (their titles and pages are `src/tui/panels/sidebar-tabs.ts`). */
+export const SIDEBAR_TAB_IDS = ['team', 'changes', 'usage'] as const;
+export type SidebarTabId = typeof SIDEBAR_TAB_IDS[number];
 export interface CommandCompletion extends Partial<CommandOrigin> {readonly surfaceId: string; readonly active: boolean}
 
 /** Owns the command surface lifecycle; callbacks and query cancellation signals stay in the business layer. */
@@ -66,8 +71,8 @@ export class CommandSurfaces {
   private ensembleActions: EnsembleActions | undefined;
   private subActions: PageActions | undefined;
   private themeActions: ThemeActions | undefined;
-  /** The palette in force when the /theme page opened; present exactly while a preview may be on screen. */
-  private themeSnapshot: ThemePalette | undefined;
+  /** The palette, active theme name and background overrides in force when the /theme page opened; present while a preview may be on screen. */
+  private themeSnapshot: {readonly palette: ThemePalette; readonly activeTheme: string | undefined; readonly themeBackgrounds: Readonly<Record<string, boolean>>} | undefined;
   getSnapshot = (): CommandSurface | null => this.state;
   subscribe = (listener: () => void): (() => void) => {this.listeners.add(listener); return () => this.listeners.delete(listener);};
   private windowListeners = new Set<(ownerId: string) => void>();
@@ -75,11 +80,11 @@ export class CommandSurfaces {
   subscribeWindow = (listener: (ownerId: string) => void): (() => void) => {this.windowListeners.add(listener); return () => this.windowListeners.delete(listener);};
   /** Asks the terminal to show the conversation window of `ownerId`; a surface without a terminal listening ignores it. */
   requestWindow(ownerId: string): void {for (const listener of this.windowListeners) listener(ownerId);}
-  private sidebarListeners = new Set<(mode: SidebarMode) => void>();
-  /** The terminal subscribes here to show, hide or toggle the sidebar (`/team`). */
-  subscribeSidebar = (listener: (mode: SidebarMode) => void): (() => void) => {this.sidebarListeners.add(listener); return () => this.sidebarListeners.delete(listener);};
-  /** Asks the terminal to show, hide or toggle the sidebar; true when a terminal is listening (a headless run has none). */
-  requestSidebar(mode: SidebarMode): boolean {for (const listener of this.sidebarListeners) listener(mode); return this.sidebarListeners.size > 0;}
+  private sidebarListeners = new Set<(mode: SidebarMode, tab?: string) => void>();
+  /** The terminal subscribes here to show, hide or toggle the sidebar (`/team`, `/sidebar`); `tab` is the tab to open and show. */
+  subscribeSidebar = (listener: (mode: SidebarMode, tab?: string) => void): (() => void) => {this.sidebarListeners.add(listener); return () => this.sidebarListeners.delete(listener);};
+  /** Asks the terminal to show, hide or toggle the sidebar (with `tab`: open and show that tab); true when a terminal is listening (a headless run has none). */
+  requestSidebar(mode: SidebarMode, tab?: string): boolean {for (const listener of this.sidebarListeners) listener(mode, tab); return this.sidebarListeners.size > 0;}
   /** Opens the Programme page (set by `src/commands/plan-page.ts`; a click on the act header and `p` call `openProgramme`); `current` is the act the stage shows (marked on the page). */
   programmeOpener: ((current?: number) => Promise<void>) | undefined;
   openProgramme(current?: number): void {void this.programmeOpener?.(current).catch(() => {});}
@@ -95,6 +100,8 @@ export class CommandSurfaces {
   openTeamActor(detail: ActorDetail): void {void this.teamActorOpener?.(detail).catch(() => {});}
   /** The remembered width of the sidebar (`ui-preferences.json`, set by the application); the terminal reads it at start and writes it when a drag ends or resets. */
   sidebarWidthStore: {get(): number | undefined; set(width: number | undefined): void} | undefined;
+  /** The remembered open tabs and active tab of the sidebar (`ui-preferences.json`, set by the application); the terminal reads it at start and writes it when the tabs change. */
+  sidebarTabsStore: {get(): {readonly open?: readonly string[] | undefined; readonly active?: string | undefined}; set(tabs: {readonly open: readonly string[]; readonly active: string}): void} | undefined;
   constructor(private readonly onDone: (result: CommandResult, completion: CommandCompletion) => void,
     private readonly origin?: () => CommandOrigin) {}
   private completion(state: CommandSurface, active: boolean): CommandCompletion {
@@ -211,13 +218,16 @@ export class CommandSurfaces {
   }
   private beginTheme(actions: ThemeActions): void {
     this.themeActions = actions;
-    this.themeSnapshot = {...palette};
+    this.themeSnapshot = {palette: {...palette}, activeTheme: activeTheme(), themeBackgrounds: {...uiSettings().themeBackgrounds}};
   }
-  /** Puts back the palette found when the page opened (exactly, token by token); a no-op once a theme was saved. */
+  /** Puts back the palette, active theme name and background overrides found when the page opened; a no-op once a theme was saved. */
   private restoreTheme(): void {
     const snapshot = this.themeSnapshot;
     this.themeSnapshot = undefined; this.themeActions = undefined;
-    if (snapshot) applyTheme({...snapshot});
+    if (!snapshot) return;
+    setActiveTheme(snapshot.activeTheme);
+    applyUiSettings({themeBackgrounds: snapshot.themeBackgrounds});
+    applyTheme({...snapshot.palette});
   }
   private themeOpen(surfaceId: string): ThemePageData | undefined {
     const state = this.state;
@@ -225,21 +235,35 @@ export class CommandSurfaces {
     if (state?.kind === 'settings' && state.id === surfaceId) return state.theme;
     return undefined;
   }
+  private patchTheme(surfaceId: string, fields: Partial<ThemePageData>): void {
+    const state = this.state, data = this.themeOpen(surfaceId);
+    if (!state || !data) return;
+    this.publish(state.kind === 'settings' ? {...state, theme: {...data, ...fields}} : {...state, ...fields} as CommandSurface);
+  }
   /** Live preview of one listed theme; nothing is written. */
   previewTheme(surfaceId: string, name: string): void {
     const data = this.themeOpen(surfaceId);
     if (!data || data.saving || !this.themeActions || !data.themes.some(theme => theme.name === name && !theme.unavailable)) return;
-    try {this.themeActions.apply(name);} catch {/* a theme that cannot apply leaves the palette as it was */}
+    try {this.themeActions.apply(name, data.backgrounds);} catch {/* a theme that cannot apply leaves the palette as it was */}
+  }
+  /** Toggles the canvas background fill for one theme in the draft and previews it live; nothing is written until save. */
+  toggleThemeBackground(surfaceId: string, name: string): void {
+    const data = this.themeOpen(surfaceId);
+    if (!data || data.saving || !this.themeActions || !data.themes.some(theme => theme.name === name && !theme.unavailable)) return;
+    const current = data.backgrounds ?? {};
+    const nextBackgrounds = {...current, [name]: !themeBackgroundEnabled(name, themeBackgroundFor(name), current)};
+    this.patchTheme(surfaceId, {backgrounds: nextBackgrounds});
+    try {this.themeActions.apply(name, nextBackgrounds);} catch {/* a theme that cannot apply leaves the palette as it was */}
   }
   /** Saves the chosen theme and closes (back to /settings when it was opened from there). A failure keeps the page open with the reason. */
   async chooseTheme(surfaceId: string, name: string): Promise<void> {
     const data = this.themeOpen(surfaceId), actions = this.themeActions, state = this.state;
     if (!data || !state || data.saving || !actions || !data.themes.some(theme => theme.name === name && !theme.unavailable)) return;
-    const patch = (fields: Partial<ThemePageData>) => this.publish(state.kind === 'settings' ? {...state, theme: {...data, ...fields}} : {...state, ...fields} as CommandSurface);
-    patch({saving: true, error: ''});
-    try {await actions.save(name);}
+    this.patchTheme(surfaceId, {saving: true, error: ''});
+    const backgrounds = data.backgrounds ?? {};
+    try {await actions.save(name, backgrounds);}
     catch (error) {
-      if (this.themeOpen(surfaceId)) patch({saving: false, error: error instanceof Error ? error.message : 'Save failed'});
+      if (this.themeOpen(surfaceId)) this.patchTheme(surfaceId, {saving: false, error: error instanceof Error ? error.message : 'Save failed'});
       return;
     }
     this.themeSnapshot = undefined;
