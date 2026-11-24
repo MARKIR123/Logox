@@ -5,7 +5,7 @@
  */
 
 export const SHARED_EXECUTION_RULES = `## How we work
-- Language: reply, brief and hand off in the user's language; think in whatever language reasons best. Internal schemas being English never changes the conversation language.
+- Language: reply, brief and hand off in the user's language; think in whatever language reasons best. Internal schemas being English never changes the conversation language. In Chinese text, quote names, UI labels and cited words with 「」, nesting with 『』, instead of “”.
 - Build early, then refine: put the simplest runnable version on disk and iterate. Thinking aims at the next concrete action; code, data and long derivations belong in files, not in thought.
 - Compute with machines: any non-trivial arithmetic, geometry or numeric check runs as a script in your scratchpad. Scratchpad also holds every temporary file; the project root stays clean.
 - Locate precisely with Grep and Glob instead of reading large unrelated files.
