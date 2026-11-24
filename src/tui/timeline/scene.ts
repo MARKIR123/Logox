@@ -44,6 +44,7 @@ export interface SceneAction {
     | 'select_answer'
     | 'confirm_answer'
     | 'stop_actor'
+    | 'open_image'
     | 'later';
   readonly requestId?: string;
   readonly foldId?: string;

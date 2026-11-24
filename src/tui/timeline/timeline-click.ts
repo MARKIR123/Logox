@@ -7,6 +7,15 @@ import type {ShellContext} from '../input/shell-context.js';
 import type {SgrMouseEvent} from '../terminal/mouse.js';
 import type {SceneAction, SceneRow} from './scene.js';
 import {stageFoldOpen} from './stage.js';
+import {imageState, retryImage} from '../terminal/image-source.js';
+
+/** A click or Ctrl+O on an image preview: a decoded image opens in the lightbox, a failed one is tried again, a loading one waits. */
+export function activateImage(ctx: Pick<ShellContext, 'surfaces'>, path: string): void {
+  const state = imageState(path);
+  if (state.status === 'failed') {retryImage(path); return;}
+  if (state.status !== 'ready') return;
+  try {ctx.surfaces?.openImage(path);} catch {/* another surface is open */}
+}
 
 export function clickTimeline(ctx: ShellContext, act: SceneAction, clickedRow: SceneRow, event: SgrMouseEvent): void {
   const {actorNameOf, choosePermission, commitAnswer, confirmScenePermission, confirmSceneStyle, demoScene, foldActivityId, foldIds,
@@ -36,6 +45,7 @@ export function clickTimeline(ctx: ShellContext, act: SceneAction, clickedRow: S
     if (request?.requestId === act.requestId) commitAnswer(); else {setSelectedRequestId(act.requestId); setFocus('question');}
     return;
   }
+  if (act.kind === 'open_image' && act.value) {activateImage(ctx, act.value); return;}
   if (act.kind === 'toggle_fold' && act.foldId) {
     const id = act.foldId;
     setScene(prev => ({...prev, folds: {...prev.folds, [id]: !(stage ? stageFoldOpen(snapshot, id, prev.folds) : isFoldOpen(prev, id, false))}}));

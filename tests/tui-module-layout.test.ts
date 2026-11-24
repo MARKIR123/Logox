@@ -11,12 +11,12 @@ const layout: Record<string, string[]> = {
   input: ['composer-actions.ts', 'composer-lines.tsx', 'editor.ts', 'fullscreen-editor.tsx', 'input-delivery.ts', 'keyboard.ts', 'mouse-router.ts', 'pending-rows.tsx', 'screen-heights.ts', 'shell-context.ts', 'use-input-history.ts'],
   interactions: ['answer-actions.ts', 'approval-view.ts', 'choice-style.ts', 'choice-summary.ts', 'interaction-card.tsx', 'production-question.tsx', 'question-dock.tsx', 'question-panel.tsx', 'response-draft.ts'],
   login: ['login.tsx', 'login-wizard.tsx'],
-  panels: ['command-result.tsx', 'ensemble-layout.ts', 'ensemble-page.tsx', 'overlay-page.tsx', 'panel-text.ts', 'permissions-editor.ts', 'picker.tsx', 'plan-sidebar-view.tsx', 'settings-layout.ts', 'settings-page.tsx', 'sidebar-frame.ts', 'tabbed-page.tsx', 'team-sidebar.ts', 'team-stage.ts', 'theme-layout.ts', 'theme-page.tsx', 'theme-sample-data.ts', 'theme-sample.ts', 'toggle-list.tsx',
+  panels: ['command-result.tsx', 'ensemble-layout.ts', 'ensemble-page.tsx', 'image-lightbox-view.ts', 'image-lightbox.tsx', 'overlay-page.tsx', 'panel-text.ts', 'permissions-editor.ts', 'picker.tsx', 'plan-sidebar-view.tsx', 'settings-layout.ts', 'settings-page.tsx', 'sidebar-frame.ts', 'tabbed-page.tsx', 'team-sidebar.ts', 'team-stage.ts', 'theme-layout.ts', 'theme-page.tsx', 'theme-sample-data.ts', 'theme-sample.ts', 'toggle-list.tsx',
     'use-team-sidebar.ts'],
   previews: ['provider-wizard-preview.ts', 'question-preview.tsx', 'slash-preview.tsx'],
   status: ['actor-pills.tsx', 'footer-bar.tsx', 'footer-model.ts', 'notification-line.ts', 'statusbar-editor.tsx', 'statusbar.ts', 'use-active-pills.ts', 'use-notices.ts'],
-  terminal: ['clipboard.ts', 'focus.ts', 'metrics.ts', 'mouse.ts', 'notify.ts', 'terminal-input.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
-  timeline: ['activity-card.tsx', 'actor-location.ts', 'group-row.ts', 'live-status.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts', 'tool-card.ts', 'tool-code.ts',
+  terminal: ['clipboard.ts', 'focus.ts', 'image-raster.ts', 'image-source.ts', 'metrics.ts', 'mouse.ts', 'notify.ts', 'terminal-input.ts', 'terminal-plane.ts', 'terminal.tsx', 'text.ts'],
+  timeline: ['activity-card.tsx', 'actor-location.ts', 'group-row.ts', 'image-thumb.ts', 'live-status.ts', 'markdown-table.ts', 'markdown.ts', 'row-presentation.ts', 'tool-card.ts', 'tool-code.ts',
     'scene.ts', 'selection.ts', 'stage.ts', 'thinking-groups.ts', 'tool-groups.ts', 'timeline-click.ts', 'timeline-pane.tsx', 'tool-ui.ts', 'use-reading.ts', 'use-splash.ts', 'viewport.ts'],
 };
 

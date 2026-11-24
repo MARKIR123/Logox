@@ -1,7 +1,7 @@
 export const WRITE_TOOL_NAME = 'Write';
 
 export const WRITE_DESCRIPTION =
-  'Rule first: an existing file larger than 20 KB or 400 lines is not replaced by Write (the attempt is refused and your content is saved to your scratchpad); change it with Edit, or pass overwrite: true only when a complete replacement is truly intended. Create a UTF-8 file or overwrite a smaller existing file with the complete supplied content; this is not an append operation. Read an existing file before replacing it so unrelated content is preserved; use Edit for a targeted change. Parent directories are created when needed. Existing files and new content are limited to 32 MiB. Successful writes are recorded for round-scoped /undo.';
+  'Rule first: an existing file larger than 20 KB or 400 lines is not replaced by Write (the attempt is refused and your content is saved to your scratchpad); change it with Edit, or pass overwrite: true only when a complete replacement is truly intended. A new file over about 300 lines: write a runnable skeleton, then fill it in with Edit calls (a cut-off reply loses the call). Create a UTF-8 file or overwrite a smaller existing file with the complete supplied content; this is not an append operation. Read an existing file before replacing it so unrelated content is preserved; use Edit for a targeted change. Parent directories are created when needed. Existing files and new content are limited to 32 MiB. Successful writes are recorded for round-scoped /undo.';
 
 /** Existing files above either bound must be changed with Edit unless the caller opts in with overwrite. */
 export const WRITE_LARGE_FILE_BYTES = 20 * 1024;

@@ -195,7 +195,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           context.signal.throwIfAborted();
           const note = kind === 'no_delivery' ? 'This turn produced only thinking; narrow the current step and deliver verifiable output first.'
             : kind === 'text_tool_call' ? TEXT_TOOL_CALL_NOTE
-            : kind === 'truncated_tools' ? 'Tool arguments were incomplete and this batch was not executed; switch to smaller, complete calls.' : 'Output limit reached; keep the existing content and continue from the breakpoint.';
+            : kind === 'truncated_tools' ? 'Tool arguments were incomplete and this batch was not executed; switch to smaller, complete calls.' : 'Output limit reached; a cut-off tool call is lost and must be redone in smaller pieces, cut-off text resumes where it stopped.';
           options.store.updateMessage(thinkingId, {step: {...steps.get(thinkingId), note}});
           options.executionNotice?.(context, note);
           if (decision !== 'retry') throw new ExecutionRecoveryError(kind, decision);

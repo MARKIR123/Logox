@@ -15,6 +15,8 @@ import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {settleToolResults} from './scratchpad.js';
 import {TOOL_CANCELLED_TEXT, DIRECTOR_INTERRUPTED_TOOL_TEXT, USER_INTERRUPTED_TOOL_TEXT} from '../prompts/runtime/interruption.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {readUnchangedStub} from '../prompts/runtime/file-changes.js';
+import {earlierIdenticalRead, readDigest} from './read-reuse.js';
 import type {Prepared, ReadyRequest} from './request.js';
 import type {AgentRun} from './run.js';
 
@@ -231,7 +233,11 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
           let text = output.text;
           if (!neverRan(call)) {
             const unchanged = run.repeat.readNote(call, result);
-            if (unchanged) text += '\n' + unchanged;
+            // The same range, word for word, is still in the request the model last saw: point at it instead of sending it again.
+            const earlier = unchanged && !result.isError && !result.images?.length && output.text === result.text
+              ? earlierIdenticalRead(ready.request.messages, call, result.text, options.cwd) : undefined;
+            if (earlier) text = readUnchangedStub(earlier, readDigest(result.text));
+            else if (unchanged) text += '\n' + unchanged;
             const looping = run.repeat.loopNote(call, result, run.directorWaiting());
             if (looping) loopNote = looping;
           }

@@ -6,6 +6,7 @@ import {cardTitle, keyValueLines, renderToolCard, summaryPiece, type ToolLine, t
 import {codeLines, markdownLines} from '../../tui/timeline/tool-code.js';
 import {callArgs, formatByteSize, isImageFile, stageText} from '../ui-format.js';
 import {imageSize} from './image-size.js';
+import {imageThumbnailLines} from '../../tui/timeline/image-thumb.js';
 
 const totals = new Map<string, {mtimeMs: number; size: number; total: number}>();
 /** Number of lines in a file on disk (cached by mtime and size); undefined when it cannot be read. */
@@ -34,14 +35,15 @@ export function imageFacts(path: string, result: string): ImageFacts {
 }
 
 /**
- * An image Read: a summary after the title and an expandable detail (path, format, size in pixels and bytes). A terminal preview is a later
- * feature: it would add its rows in front of `imageDetailLines()` (the body takes any `ToolLine`), nothing else here has to change.
+ * An image Read: a summary after the title and an expandable detail: a bounded half-block thumbnail on top (a click opens the lightbox;
+ * `src/tui/timeline/image-thumb.ts`, always visible and outside the body cap), then path, format, size in pixels and bytes.
+ * `messageId` names the preview's hover and click target.
  */
-export function imageView(path: string, result: string): ToolView {
+export function imageView(path: string, result: string, messageId = path): ToolView {
   const facts = imageFacts(path, result);
   return {
     summary: [summaryPiece(['image', ...(facts.width && facts.height ? [`${facts.width} × ${facts.height}`] : []), ...(facts.bytes !== undefined ? [formatByteSize(facts.bytes)] : [])].join(' · '))],
-    body: {lines: imageDetailLines(facts)},
+    body: {head: width => imageThumbnailLines(facts.path, messageId, width), lines: imageDetailLines(facts)},
   };
 }
 /** The detail rows of an image Read, one fact per row. */
@@ -55,8 +57,8 @@ export function imageDetailLines(facts: ImageFacts): ToolLine[] {
 }
 
 /** Read card view: numbered, lightly colored excerpt (Markdown rendered), `lines A–B of N`, or one image row. */
-export function readView(path: string, offset: number, result: string): ToolView | undefined {
-  if (isImageFile(path, result)) return imageView(path, result);
+export function readView(path: string, offset: number, result: string, messageId?: string): ToolView | undefined {
+  if (isImageFile(path, result)) return imageView(path, result, messageId);
   const rows = result.split('\n');
   const truncated = rows.at(-1) === '(Remaining lines omitted)';
   if (truncated) rows.pop();
@@ -82,6 +84,6 @@ export const UI: ToolUI = {
     if (!call) return;
     const args = callArgs(call);
     const path = String(args.file_path ?? args.path ?? '');
-    renderToolCard(context, {title: cardTitle(context, call), view: result => readView(path, typeof args.offset === 'number' ? args.offset : 1, result)});
+    renderToolCard(context, {title: cardTitle(context, call), view: result => readView(path, typeof args.offset === 'number' ? args.offset : 1, result, context.message.id)});
   },
 };

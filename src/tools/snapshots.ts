@@ -3,6 +3,7 @@ import {mkdir, readFile, writeFile, unlink, readdir, realpath} from 'node:fs/pro
 import {replaceFile} from '../store/replace-file.js';
 import {dirname, join, resolve} from 'node:path';
 import {z} from 'zod';
+import {FileViews, type LineRange} from './file-views.js';
 
 const snapshotSchema = z.object({
   id: z.string(), activityId: z.string(), path: z.string(), time: z.number(),
@@ -34,6 +35,8 @@ export class Snapshots {
   private readonly observations = new Map<string, Map<string, string>>();
   private readonly writers = new Map<string, {sessionId?: string; ownerId: string; activityId: string; afterHash: string; time: number}>();
   private readonly writeListeners = new Map<string, (file: {path: string; before: Buffer | null; after: Buffer}) => void>();
+  /** What each actor has seen of each file: the base of change notes and of the Edit guard. */
+  readonly views = new FileViews();
   constructor(private readonly directory: string) {}
   private belongs(recordSessionId: string | undefined, sessionId: string | undefined): boolean {
     // A caller without a session is the legacy single-session adapter: it owns one session and sees its records.
@@ -61,8 +64,13 @@ export class Snapshots {
       if (this.locks.get(path) === tail) this.locks.delete(path);
     }
   }
-  observe(path: string, bytes: Uint8Array | null, ownerId?: string, sessionId?: string): void {
+  /** The actor read the file; `range` is the part of it the result showed, null for a file that is not text. */
+  observe(path: string, bytes: Uint8Array | null, ownerId?: string, sessionId?: string, range?: LineRange | null): void {
     if (!ownerId || !bytes) return;
+    if (range !== null) this.views.read(path, bytes, ownerId, sessionId, range);
+    this.observeHash(path, bytes, ownerId, sessionId);
+  }
+  private observeHash(path: string, bytes: Uint8Array, ownerId: string, sessionId?: string): void {
     let byOwner = this.observations.get(path);
     if (!byOwner) {byOwner = new Map(); this.observations.set(path, byOwner);}
     byOwner.set(identity(sessionId, ownerId), hash(bytes));
@@ -93,7 +101,8 @@ export class Snapshots {
       await atomicWrite(path, after);
       if (ownerId) {
         this.writers.set(path, {ownerId, activityId, afterHash, time: this.lastTime, ...(sessionId ? {sessionId} : {})});
-        this.observe(path, after, ownerId, sessionId);
+        this.observeHash(path, after, ownerId, sessionId);
+        this.views.wrote(path, before, after, ownerId, sessionId);
         this.writeListeners.get(identity(sessionId, ownerId))?.({path, before, after});
       }
     } catch (error) {await unlink(file).catch(() => {}); throw error;}

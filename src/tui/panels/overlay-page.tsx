@@ -8,6 +8,7 @@ import {MouseHost} from '../terminal/mouse.js';
 import {osc52Clipboard} from '../terminal/clipboard.js';
 import {CommandResultPanel} from './command-result.js';
 import {EnsemblePage} from './ensemble-page.js';
+import {ImageLightbox} from './image-lightbox.js';
 import {PlanOverlay} from './plan-sidebar-view.js';
 import {SettingsPage} from './settings-page.js';
 import {TabbedPage} from './tabbed-page.js';
@@ -30,6 +31,9 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
   if (surface?.kind === 'result' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <CommandResultPanel key={surface.id} title={surface.title} text={surface.text} styled={surface.lines} markdown={surface.markdown === true} width={width} height={screenRows}
       onClose={() => surfaces.cancel()} onCopy={text => {stdout?.write(osc52Clipboard(text)); exitDeadline.current = 0;}}/>
+  </MouseHost>;
+  if (surface?.kind === 'image' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
+    <ImageLightbox key={surface.id} path={surface.path} width={width} height={screenRows} onClose={() => surfaces.cancel()}/>
   </MouseHost>;
   if (surface?.kind === 'settings' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><SettingsPage key={surface.id} items={surface.items} pages={surface.pages}
     width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} sub={surface.sub} theme={surface.theme}

@@ -1,6 +1,7 @@
 import {resolve} from 'node:path';
 import type {ModelMessage, ToolCall} from '../runtime/messages.js';
 import {canonicalToolName} from '../tools/types.js';
+import {READ_UNCHANGED_STUB} from '../prompts/runtime/file-changes.js';
 
 /** Last line `Read` appends when it returned fewer lines than the file has (`ReadTool.ts:executeRead`). */
 const READ_OMITTED = '(Remaining lines omitted)';
@@ -36,6 +37,8 @@ function parseRead(call: ToolCall, result: Extract<ModelMessage, {role: 'tool'}>
   if (!args || typeof args !== 'object') return undefined;
   const record = args as Record<string, unknown>, path = record.file_path ?? record.path;
   if (typeof path !== 'string' || !path) return undefined;
+  // A stub points at an earlier result that is still in full: it must never replace that result.
+  if (result.text.startsWith(READ_UNCHANGED_STUB)) return undefined;
   const offset = record.offset, limit = record.limit;
   if (offset !== undefined && (!Number.isInteger(offset) || (offset as number) < 1)) return undefined;
   if (limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1)) return undefined;

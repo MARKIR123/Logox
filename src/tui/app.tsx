@@ -39,6 +39,7 @@ import {osc52Clipboard} from './terminal/clipboard.js';
 import {selectionRange, selectionInViewport, type ContentSelection} from './timeline/selection.js';
 import {getInteractionUI} from '../tools/ui-registry.js';
 import {themeRevision} from '../config/theme-palette.js';
+import {imageRevision, subscribeImages} from './terminal/image-source.js';
 import {userLabelRevision} from '../config/user-profile.js';
 import {useSplash} from './timeline/use-splash.js';
 import {initialResponse, interactionState, type ResponseDraft} from './interactions/response-draft.js';
@@ -100,7 +101,8 @@ const noLoginSnapshot = () => null;
 export function App({store, plans, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
-  const themeVersion = themeRevision() * 1000 + userLabelRevision() + uiSettingsRevision() * 1e9;
+  const imageVersion = useSyncExternalStore(subscribeImages, imageRevision);
+  const themeVersion = themeRevision() * 1000 + userLabelRevision() + uiSettingsRevision() * 1e9 + imageVersion * 1e12;
   const definitions = getActors?.();
   const roles = useMemo<ActorStyles>(() => {
     if (!definitions) return cast;
@@ -268,7 +270,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const foldIds = [...new Set(messageRows.flatMap(row => (row as SceneRow).action?.foldId ? [(row as SceneRow).action!.foldId!] : []))];
   const foldActivityId = (id: string | undefined) => {
     if (!id) return '';
-    id = id.replace(/-more$/, ''); // a body expander belongs to its card
+    id = id.replace(/-(more|image)$/, ''); // a body expander belongs to its card
     const direct = activities.find(item => item.activityId === id);
     if (direct) return direct.activityId;
     return snapshot.messages.findLast(message => message.id === id || message.step?.groupId === id)?.activityId ?? '';

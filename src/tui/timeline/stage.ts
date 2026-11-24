@@ -20,6 +20,8 @@ import {inputKind} from '../../runtime/provenance.js';
 import {thinkingRequests, type ThinkingRequest} from './thinking-groups.js';
 import {stepElapsed} from '../../runtime/steps.js';
 import {themeRevision} from '../../config/theme-palette.js';
+import {imageRevision} from '../terminal/image-source.js';
+import {imageFoldId} from './image-thumb.js';
 import {uiSettings} from '../../config/ui-settings.js';
 import {userLabelRevision} from '../../config/user-profile.js';
 import {extractNarration, stripNarration} from '../../runtime/narration.js';
@@ -193,7 +195,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
   // Tool-owned nested folds (swarm jobs) change a message layout without changing the message.
   const nestedKey = (message: Message): string => {
     // A tool body's `… N more lines` expander is a fold of its own (`<id>-more`) that also changes the layout.
-    const more = (open(message.id + '-more') ? 'm' : '') + (hovered === message.id + '-more' ? 'h' : '');
+    const more = (open(message.id + '-more') ? 'm' : '') + (hovered === message.id + '-more' ? 'h' : '') + (hovered === imageFoldId(message.id) ? 'i' : '');
     const jobs = message.step?.swarm?.jobs;
     if (!jobs) return more;
     const prefix = message.id + '-job-';
@@ -217,7 +219,7 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
     const run = runArg ?? editRuns.get(message.id)?.messages;
     const runKey = run ? run.map(item => item.id + ':' + (item.step?.state ?? '') + ':' + (item.step?.elapsedMs ?? 0) + ':' + item.text.length).join('|') : null;
-    const key = JSON.stringify([themeRevision(), userLabelRevision(), width, frameKey, rail, accent, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
+    const key = JSON.stringify([themeRevision(), imageRevision(), userLabelRevision(), width, frameKey, rail, accent, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);

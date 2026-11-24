@@ -45,6 +45,11 @@ export function repeatedCallNote(tool: string, count: number): string {
   return `You called ${tool} ${count} times in a row with identical arguments and got the same result. Do not repeat it: change the arguments, use another tool, or report what you have.`;
 }
 
+/** A tool call cut off by the output limit is lost whole: it cannot be continued, only redone smaller. */
+const TRUNCATED_TOOLS_INSTRUCTION = 'Your reply hit the output token limit while it was writing tool calls, so the cut-off call was lost and the entire batch was not executed. Do not continue it from where it stopped. Redo it in smaller pieces without replaying completed tools: for a large new file, write a short runnable skeleton first and fill it in with several smaller Edit calls.';
+/** A reply with no usable tool call that ended at the output limit: a lost call is redone smaller, plain text resumes where it stopped. */
+const TRUNCATED_TEXT_INSTRUCTION = 'Your previous reply hit the output token limit and was cut off. A tool call that was still being written was lost and not executed: do not continue it from where it stopped; redo it in smaller pieces (a short runnable skeleton, then several smaller Edit calls). If it was plain text, resume that text where it stopped without replanning or repeating delivered content.';
+
 /** Cross-tool output recovery instructions appended only on retry. */
 export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerId: string, adjustment = false): string {
   const next = kind === 'no_delivery'
@@ -54,7 +59,7 @@ export function executionRecoveryInstruction(kind: ExecutionRecoveryKind, ownerI
     : kind === 'text_tool_call'
       ? 'Your previous reply wrote a tool call as plain text, so nothing was executed and it was not delivered. Issue it again as a real tool call.'
     : kind === 'truncated_tools'
-      ? 'Previous tool arguments were truncated; the entire batch was not executed. Issue smaller, complete tool calls without replaying completed tools.'
-      : 'Previous output reached token limits. Continue the current step from the break point using existing text; do not replan or regenerate delivered content.';
+      ? TRUNCATED_TOOLS_INSTRUCTION
+      : TRUNCATED_TEXT_INSTRUCTION;
   return next;
 }

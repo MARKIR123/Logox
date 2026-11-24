@@ -3,6 +3,8 @@ import {z} from 'zod';
 import {pathArg, type ToolResult} from '../types.js';
 import {bytesOrMissing, type Snapshots} from '../snapshots.js';
 import {normalizeAliases} from '../aliases.js';
+import {formatRanges, mergeRanges, type LineRange} from '../file-views.js';
+import {editNoMatchRanges, editUnseenError} from '../../prompts/runtime/file-changes.js';
 
 const editArgs = z.strictObject({
   file_path: pathArg.describe('The absolute path to the file to modify'),
@@ -58,12 +60,27 @@ export async function executeEdit(
     if (index < 0) {
       const peer = snapshots.stalePeerWriter(canonicalPath, before, ownerId, sessionId);
       if (peer) {
-        throw new Error(`No match found for old_string; file was updated by ${peer} since your last read — please Read the file again before editing`);
+        const changed = snapshots.views.unseenIn(canonicalPath, before, ownerId ?? '', sessionId);
+        throw new Error(`No match found for old_string; file was updated by ${peer} since your last read — please Read the file again before editing` +
+          (changed.length ? editNoMatchRanges(formatRanges(changed.slice(0, 12))) : ''));
       }
       throw new Error('No match found for old_string; please re-read file');
     }
     if (!replaceAll && normalized.indexOf(old, index + 1) >= 0) {
       throw new Error('Multiple matches found; provide more context or set replace_all: true');
+    }
+    // Lines another actor or process changed after this actor saw the file, whose content no note showed: do not edit blind over them.
+    if (ownerId) {
+      const unseen = snapshots.views.unseenIn(canonicalPath, before, ownerId, sessionId);
+      if (unseen.length) {
+        const touched: LineRange[] = [], span = old.split('\n').length - 1;
+        for (let at = normalized.indexOf(old); at >= 0; at = replaceAll ? normalized.indexOf(old, at + old.length) : -1) {
+          let first = 1;
+          for (let cursor = normalized.indexOf('\n'); cursor >= 0 && cursor < at; cursor = normalized.indexOf('\n', cursor + 1)) first++;
+          for (const range of unseen) if (range.from <= first + span && range.to >= first) touched.push(range);
+        }
+        if (touched.length) throw new Error(editUnseenError(canonicalPath, formatRanges(mergeRanges(touched).slice(0, 12))));
+      }
     }
 
     // Match logical lines, but map offsets back to the original text before writing.

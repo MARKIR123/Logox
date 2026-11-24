@@ -396,6 +396,15 @@ export class Tools {
     return this.automas.size === 1 ? this.automas.values().next().value : undefined;
   }
   private automaFor(sessionId: string): AutomaEnvironment | undefined {return this.automas.get(sessionId) ?? this.legacyAutoma;}
+  /** The model-only note for files this actor had read or written that someone else changed since (`file-views.ts:FileViews.collect`); null when none changed. */
+  fileChanges(sessionId: string, ownerId: string): Promise<string | null> {
+    return this.snapshots.views.collect(ownerId, sessionId, path => {
+      const shown = relative(this.cwd, path);
+      return shown && !shown.startsWith('..') ? shown.replaceAll('\\', '/') : path;
+    });
+  }
+  /** Forgets what an actor saw of files: its context was folded or compacted, so no content or note is in its view any more. */
+  forgetFileViews(sessionId: string, ownerId: string): void {this.snapshots.views.reset(ownerId, sessionId);}
   /** Releases everything a closed session registered here; other sessions keep their guards, probes, workers and environments. */
   async releaseSession(sessionId: string): Promise<void> {
     this.guards.delete(sessionId); this.registries.delete(sessionId); this.activitiesBySession.delete(sessionId);

@@ -43,11 +43,11 @@ export async function executeRead(args: ReadArgs, canonicalPath: string, snapsho
   const bytes = await bytesOrMissing(canonicalPath);
   if (!bytes) throw new Error('File not found: ' + args.file_path);
   if (bytes.length > 32 * 1024 * 1024) throw new Error('File exceeds 32 MiB, use search to narrow scope');
-  snapshots?.observe(canonicalPath, bytes, ownerId, sessionId);
 
   const ext = canonicalPath.slice(canonicalPath.lastIndexOf('.')).toLowerCase();
   const mime = imageMimes[ext];
   if (mime) {
+    snapshots?.observe(canonicalPath, bytes, ownerId, sessionId, null);
     if (bytes.length > 10 * 1024 * 1024) throw new Error('Image exceeds 10 MiB limit');
     return {
       text: `[Image file: ${args.file_path}, size: ${bytes.length} bytes, format: ${mime}. Visual content presented to model.]`,
@@ -65,6 +65,7 @@ export async function executeRead(args: ReadArgs, canonicalPath: string, snapsho
   if (Buffer.byteLength(text, 'utf8') > 256 * 1024) {
     throw new Error('Read output exceeds 256 KiB. Use offset and limit to select fewer lines, or a bounded extraction for a single oversized line.');
   }
+  snapshots?.observe(canonicalPath, bytes, ownerId, sessionId, {from: offset, to: offset + limit - 1});
   return {text, isError: false};
 }
 

@@ -241,7 +241,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     }, policy: identity => actorServices.policy(identity.ownerId), maxOutput: config.provider.max_tokens,
     model: identity => taskModels.model(identity), summarizer: identity => taskModels.summarizer(identity),
     contract: identity => actorServices.contract(identity.ownerId),
-    folded: identity => actorServices.recordDueFor(identity.ownerId),
+    folded: identity => {tools.forgetFileViews(identity.sessionId, identity.ownerId); return actorServices.recordDueFor(identity.ownerId);},
     anchors: async identity => isDirector(identity.ownerId)
       ? (await journal.activeTasks(session)).filter(task => task.source === 'direct' && !isDirector(task.ownerId) &&
           ['completed', 'failed', 'cancelled'].includes(task.status)).slice(-16).map(task => ({role: 'user',

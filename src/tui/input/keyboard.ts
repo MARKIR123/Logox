@@ -14,6 +14,8 @@ import {completionQuery} from '../commands/completion.js';
 import {osc52Clipboard} from '../terminal/clipboard.js';
 import type {SceneRow} from '../timeline/scene.js';
 import {stageFoldOpen} from '../timeline/stage.js';
+import {imagePathAt} from '../timeline/image-thumb.js';
+import {activateImage} from '../timeline/timeline-click.js';
 import {draftSelection, emptyDraft, erase, graphemes, insert, move, moveToLineEdge, moveVertical, moveWord, navigateDraft, removeDraftSelection, selectedText} from './editor.js';
 import type {ShellContext} from './shell-context.js';
 
@@ -130,7 +132,7 @@ export function useKeyboard(ctx: ShellContext): void {
       if (input === 'n') {
         const index = foldIds.length ? (cardCursor + 1) % foldIds.length : 0;
         setCardCursor(index); setSelectedActivityId(foldActivityId(foldIds[index]));
-      } else {const id = foldIds[cardCursor % Math.max(1, foldIds.length)]; if (id) setScene(prev => ({...prev, folds: {...prev.folds, [id]: !stageFoldOpen(snapshot, id, prev.folds)}}));}
+      } else {const id = foldIds[cardCursor % Math.max(1, foldIds.length)]; const image = imagePathAt(messageRows as readonly SceneRow[], id); if (image) activateImage(ctx, image); else if (id) setScene(prev => ({...prev, folds: {...prev.folds, [id]: !stageFoldOpen(snapshot, id, prev.folds)}}));}
       return;
     }
     if (key.ctrl && input === 'n') {

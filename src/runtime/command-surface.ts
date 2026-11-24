@@ -57,6 +57,8 @@ export type CommandSurface = Partial<CommandOrigin> & (
   | {readonly id: string; readonly kind: 'result'; readonly title: string; readonly text: string; readonly lines?: readonly ResultLine[];
       /** The text is Markdown and is laid out as such (`/team` post detail); copy keeps the source text. */
       readonly markdown?: true}
+  /** The lightbox over one image file (PNG or JPEG), opened by a click on a preview in the timeline. */
+  | {readonly id: string; readonly kind: 'image'; readonly title: string; readonly path: string}
   | {readonly id: string; readonly kind: 'settings'; readonly title: string; readonly items: readonly SettingsItem[]; readonly pages: readonly SettingsPageLink[];
       readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage;
       /** The /theme page opened from the Theme row; it draws over the settings and Esc returns to them. */

@@ -151,7 +151,7 @@ test('recovery instructions narrow the step without raising model output limits'
   assert.match(executionRecoveryInstruction('no_delivery', 'techne'), /minimum deliverable step/i);
   assert.match(executionRecoveryInstruction('no_delivery', 'logox', true), /Pivot the action plan/i);
   assert.match(executionRecoveryInstruction('truncated_tools', 'techne'), /batch was not executed/i);
-  assert.match(executionRecoveryInstruction('truncated_text', 'logox'), /from the break point/i);
+  assert.match(executionRecoveryInstruction('truncated_text', 'logox'), /lost and not executed.*smaller pieces/i);
 });
 
 test('application continuation retains Actor labels and root identity without tool replay', {timeout: 10000}, async () => {

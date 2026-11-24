@@ -25,10 +25,14 @@ export interface ToolLine {
   readonly bg?: string;
   /** A `⋯` row between hunks; the expander counts hunks when it cuts at one. */
   readonly separator?: boolean;
+  /** Draws the row from the frame and the hover state (an image thumbnail), instead of `segments`; the pieces must already fit `innerWidth`. */
+  readonly paint?: (context: {readonly innerWidth: number; readonly bg: string | undefined; readonly hovered: boolean}) => readonly SceneSegment[];
+  /** Makes the row one hover and click target (`foldId` names the hover state; `action` runs on a click). */
+  readonly target?: {readonly foldId: string; readonly action: SceneAction};
 }
 export interface ToolBody {
-  /** Always-visible rows above the lines (Shell: `$ command`). Not counted against the cap. */
-  readonly head?: readonly ToolLine[];
+  /** Always-visible rows above the lines (Shell: `$ command`; an image's preview, which depends on the width). Not counted against the cap. */
+  readonly head?: readonly ToolLine[] | ((width: number) => readonly ToolLine[]);
   /** The rendered view; a function receives the usable width (Markdown needs it). */
   readonly lines: readonly ToolLine[] | ((width: number) => readonly ToolLine[]);
   /** Italic faint line shown instead of the lines when there are none (`No output`, `No matches`). */
@@ -146,12 +150,23 @@ export function pushExpander(builder: ReturnType<typeof createBuilder>, id: stri
 
 function pushLine(builder: ReturnType<typeof createBuilder>, id: string, accent: string, frame: ToolFrame, line: ToolLine): void {
   if (line.prose !== undefined) {builder.pushProse(id, line.prose, accent, 'body', frame, undefined, line.color); return;}
-  builder.pushFramedLine(id, accent, clipSegments(line.segments ?? [], frame.innerWidth), frame, undefined, line.bg);
+  const target = line.target;
+  const segments = line.paint ? line.paint({innerWidth: frame.innerWidth, bg: frame.bg, hovered: Boolean(target && builder.hoveredFoldId === target.foldId)})
+    : clipSegments(line.segments ?? [], frame.innerWidth);
+  const first = builder.rows.length;
+  builder.pushFramedLine(id, accent, segments, frame, target?.action, line.bg);
+  if (!target) return;
+  for (let index = first; index < builder.rows.length; index++) {
+    const row = builder.rows[index]!;
+    const startCol = row.gutterCols, endCol = row.gutterCols + stringWidth(row.text.trimEnd());
+    builder.rows[index] = {...row, hover: {foldId: target.foldId, startCol, endCol}, hits: [{startCol, endCol, action: target.action}], ...(frame.surfaceColor ? {hoverColor: frame.surfaceColor} : {})};
+  }
 }
 
 /** Body rows for a view: head, the capped lines with their expander, or the empty-state line. */
 export function pushToolBody(builder: ReturnType<typeof createBuilder>, id: string, accent: string, frame: ToolFrame, body: ToolBody, expanded: boolean): void {
-  body.head?.forEach((line, index) => pushLine(builder, `${id}-head-${index}`, accent, frame, line));
+  const head = typeof body.head === 'function' ? body.head(frame.innerWidth) : body.head;
+  head?.forEach((line, index) => pushLine(builder, `${id}-head-${index}`, accent, frame, line));
   const lines = typeof body.lines === 'function' ? body.lines(frame.innerWidth) : body.lines;
   if (!lines.length) {
     if (body.empty) builder.pushFramedLine(`${id}-empty`, accent, [{text: body.empty, color: faintColor(), italic: true}], frame);

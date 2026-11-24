@@ -35,7 +35,7 @@ export interface ReadingInput {
 export function useReading({plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface, welcome, width, layout, contentSelection,
   hoveredFoldIdRef, view, selection, setAnchor, side, planOverlay = false}: ReadingInput) {
   const [, refreshReading] = useState(0);
-  const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || welcome;
+  const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || surface?.kind === 'image' || welcome;
   const presentReading = () => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
     if (plane && covered()) {plane.hide(); return;}

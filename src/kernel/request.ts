@@ -9,6 +9,7 @@ import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransien
 import {omitInternalToolPairs} from '../context/round-memory.js';
 import {askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {FINISH_ROUND_FOLLOW_UP} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {restoreBrokenReadStubs} from './read-reuse.js';
 import type {AgentAssembly, AgentRequestBase} from './agent.js';
 import type {AgentRun} from './run.js';
 
@@ -97,6 +98,9 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
     await appendUpdate(createRuntimeContextMessage('task-state', notice.text, {slot: 'wait-' + notice.id}));
     options.store.message(context.sessionId, context.ownerId, 'notice', notice.text, {activityId: context.activityId});
   }
+  // Files this actor had read or written that someone else changed: one compact note per request, before the budgeted projection.
+  const fileChanges = await options.tools.fileChanges?.(context.sessionId, context.ownerId);
+  if (fileChanges) await appendUpdate(createRuntimeContextMessage('task-state', fileChanges, {slot: 'file-changes'}));
   for (const ask of run.asks.owed(context.sessionId, context.ownerId)) {
     if (state.owedSeen(ask.id) === ASK_WORK_REMINDER_AFTER) await appendUpdate(createRuntimeContextMessage('reminder', askOwedWhileWorking(ask.from, ask.label), {slot: 'owed-' + ask.id}));
   }
@@ -121,7 +125,7 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
   // A task model whose vision mark is false never receives an image: each one becomes a line of text saying why. Resolved per request, so a model switch applies at once.
   const selected = taskModel?.selection();
   const blind = selected && options.tools.marks?.vision(selected.provider, selected.model) === false ? omitImages(projected.messages, selected.provider + '/' + selected.model, 'actor') : undefined;
-  const sendable = blind?.messages ?? projected.messages;
+  const sendable = await restoreBrokenReadStubs(blind?.messages ?? projected.messages, options.cwd);
   const sendsImages = visionEnabled && !blind;
   let request: ModelRequest = state.foreignSignatures.size ? {...projected, supportsVision: sendsImages, messages: sendable.map(message =>
     message.role === 'assistant' && message.signature && state.foreignSignatures.has(message.signature)

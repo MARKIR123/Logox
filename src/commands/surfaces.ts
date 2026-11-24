@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {basename} from 'node:path';
 import {applyTheme, palette, type ThemePalette} from '../config/theme-palette.js';
 import {immutable} from '../runtime/contracts.js';
 import type {TeamEvent} from '../runtime/team-events.js';
@@ -113,6 +114,13 @@ export class CommandSurfaces {
     this.assertIdle();
     const id = randomUUID();
     this.publish({id, kind: 'result', title, text, ...(lines ? {lines} : {}), ...(markdown ? {markdown: true as const} : {}), ...origin});
+    return id;
+  }
+  /** Opens the lightbox over an image file; Esc, the backdrop or its close control returns to the timeline. */
+  openImage(path: string): string {
+    this.assertIdle();
+    const id = randomUUID();
+    this.publish({id, kind: 'image', title: basename(path), path, ...this.origin?.()});
     return id;
   }
   updateResult(surfaceId: string, text: string, lines?: readonly ResultLine[]): void {
