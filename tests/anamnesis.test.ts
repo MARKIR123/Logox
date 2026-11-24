@@ -15,7 +15,7 @@ function rig(options: {run?: (context: RunContext) => Promise<RunOutcome>; auto?
       state.runs.push(context.kind);
       if (options.run) return options.run(context);
       context.report(context.kind === 'recap' ? 'Reading' : 'Thinking');
-      return context.kind === 'recap' ? {stage: 'Where it stands', detail: 'Done: x'} : {stage: 'Saved 1 memory record', detail: '+ project/x (project): d'};
+      return context.kind === 'recap' ? {stage: 'Where it stands', detail: 'Done: x'} : {stage: 'Saved 1 memory record', detail: "Remembered in this project's memory\n• x (about the project): d"};
     },
   };
   const service = new Anamnesis('s', store, driver, () => state.busy, {clock: () => state.now, wall: () => 1_000_000 + state.now, recapIdleMs: 5 * MIN, dreamIdleMs: 30 * MIN, auto: () => state.auto});
@@ -38,7 +38,7 @@ test('a recap runs after its idle time and a dream after its own; each leaves on
   assert.deepEqual(r.state.runs, ['recap', 'dream']);
   const [recap, dream] = r.cards();
   assert.deepEqual([recap!.status, recap!.stage, recap!.detail, recap!.title, recap!.ownerId], ['completed', 'Where it stands', 'Done: x', 'Anamnesis', 'anamnesis']);
-  assert.deepEqual([dream!.status, dream!.stage, dream!.detail], ['completed', 'Saved 1 memory record', '+ project/x (project): d']);
+  assert.deepEqual([dream!.status, dream!.stage, dream!.detail], ['completed', 'Saved 1 memory record', "Remembered in this project's memory\n• x (about the project): d"]);
   assert.ok(recap!.createdAt !== undefined && dream!.createdAt! > recap!.createdAt!, 'cards carry their creation time');
   r.state.material.dream = false;
   r.state.now = 300 * MIN; await r.tick();

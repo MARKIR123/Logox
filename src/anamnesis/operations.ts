@@ -86,8 +86,15 @@ export function dreamStage(result: DreamResult): string {
   if (removed) return 'Removed ' + plural(removed);
   return 'Nothing new to remember';
 }
-/** The card body of a finished dream: one line per operation. */
+const SCOPE_PLACE: Readonly<Record<MemoryScope, string>> = {user: 'your memory (all projects)', project: "this project's memory"};
+const TYPE_WORD: Readonly<Record<string, string>> = {user: 'about you', feedback: 'preference', project: 'about the project', reference: 'pointer'};
+/** The card body of a finished dream, written for the person: what was remembered and what was forgotten, grouped by where it lives, one bullet each. */
 export function dreamDetail(result: DreamResult): string {
-  return [...result.saved.map(item => '+ ' + item.scope + '/' + item.name + ' (' + item.type + '): ' + item.description),
-    ...result.deleted.map(item => '- ' + item.scope + '/' + item.name)].join('\n');
+  const sections: string[] = [];
+  for (const scope of ['user', 'project'] as const) {
+    const saved = result.saved.filter(item => item.scope === scope), removed = result.deleted.filter(item => item.scope === scope);
+    if (saved.length) sections.push([`Remembered in ${SCOPE_PLACE[scope]}`, ...saved.map(item => `• ${item.name} (${TYPE_WORD[item.type] ?? item.type}): ${item.description}`)].join('\n'));
+    if (removed.length) sections.push([`Forgotten from ${SCOPE_PLACE[scope]}`, ...removed.map(item => `• ${item.name}`)].join('\n'));
+  }
+  return sections.join('\n\n');
 }

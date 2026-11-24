@@ -12,7 +12,7 @@ import {createProvider, formatFailureDetail, isProviderInterruption, isProviderO
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {Resources} from '../src/resources/manager.js';
 import {RuntimeStore} from '../src/runtime/store.js';
-import {isOutageWake} from '../src/runtime/outage.js';
+import {isOutageWake, OUTAGE_ENDED_TEXT} from '../src/runtime/outage.js';
 import {Journal} from '../src/store/journal.js';
 import {loadConfig} from '../src/config/config.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
@@ -87,6 +87,30 @@ test('OutageBackoff waits 30 s, 2 min, then 5 min repeatedly, and reset or close
       '[Network] Waiting for antigravity · retry in 5m', '[Network] Waiting for antigravity · retry in 5m']);
     backoff.reset(); backoff.arm('p'); mock.timers.tick(30_000); assert.equal(fired.length, 5, 'reset restarts the schedule at 30 s');
     backoff.arm('p'); backoff.close(); mock.timers.tick(600_000); assert.equal(fired.length, 5, 'close drops the timer');
+  } finally {mock.timers.reset();}
+});
+
+test('outage wait notices leave the timeline once the outage ends and never show in a replayed session', () => {
+  const store = new RuntimeStore();
+  const wait = (id: string, replay = false) => store.system({id, sessionId: 's', ownerId: 'logox', text: '[Network] Waiting for antigravity · retry in 30s', time: Date.now(), presentation: 'timeline', kind: 'task_notice'}, replay);
+  const rows = () => buildStageRows(store.getSnapshot(), 's', 'logox', 99, {}, null).map(row => row.text).join('\n');
+  wait('00000000-0000-4000-8000-000000000001');
+  assert.match(rows(), /Waiting for antigravity/, 'live while waiting');
+  store.system({id: '00000000-0000-4000-8000-000000000003', sessionId: 's', ownerId: 'logox', text: OUTAGE_ENDED_TEXT, time: Date.now() + 1, presentation: 'silent', kind: 'task_notice'});
+  assert.ok(!/Waiting for/.test(rows()) && !rows().includes('Outage wait ended'), 'hidden once recovered');
+  wait('00000000-0000-4000-8000-000000000002', true);
+  assert.ok(!/Waiting for/.test(rows()), 'a replayed wait notice is never drawn');
+  assert.equal(store.getSnapshot().messages.filter(message => message.role === 'system').length, 3, 'the record keeps every event');
+});
+
+test('OutageBackoff reports the end of an announced outage once, and close stays silent', () => {
+  mock.timers.enable({apis: ['setTimeout']});
+  try {
+    let ended = 0;
+    const backoff = new OutageBackoff(() => {}, () => {}, [10], () => {ended++;});
+    backoff.reset(); assert.equal(ended, 0, 'nothing was announced');
+    backoff.arm('p'); backoff.reset(); backoff.reset(); assert.equal(ended, 1);
+    backoff.arm('p'); backoff.close(); assert.equal(ended, 1);
   } finally {mock.timers.reset();}
 });
 

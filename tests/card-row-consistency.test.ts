@@ -7,6 +7,7 @@ import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {hoveredCardAt, type SceneRow} from '../src/tui/timeline/scene.js';
 import {rowSegments} from '../src/tui/timeline/row-presentation.js';
 import {palette} from '../src/tui/appearance/theme.js';
+import {faintColor} from '../src/tui/appearance/colors.js';
 import {cast} from '../src/actors/ensemble.js';
 
 type Surface = 'kalon' | 'logox';
@@ -88,7 +89,7 @@ for (const surface of ['kalon', 'logox'] as const) {
         const now = after[index]!;
         if (!cell.ch.trim() && !cell.sep) return;
         if (cell.sep) {recolored++; return assert.equal(now.color, expected, 'separators take the owner color on hover');}
-        if (cell.color === palette.muted && cell.ch.trim()) {
+        if ((cell.color === palette.muted || cell.color === faintColor()) && cell.ch.trim()) {
           assert.equal(now.color, expected, `muted ${JSON.stringify(cell.ch)} (${cell.key}) takes the surface color`);
           recolored++;
         } else if (cell.color && cell.color !== expected) assert.equal(now.color, cell.color, `semantic color kept for ${cell.key}`);
@@ -114,4 +115,18 @@ test('an actor card header highlights in the actor color on the Logox timeline, 
     const status = rowSegments(row, true).find(s => /▾|▸/.test(s.text))!;
     assert.equal(status.color, cast.kalon!.color, 'the status text and arrow take the actor color when the row highlights');
   }
+});
+
+test('hovering a tool header recolors every quiet segment (summary words, elapsed time), not only the separators', () => {
+  const rowsFor = scene('logox', ({steps, advance}) => {
+    const id = steps.tool({id: 'edit1', name: 'Edit', arguments: JSON.stringify({file_path: 'index.html', old_string: 'a\nb\nc', new_string: 'x'})});
+    steps.start(id); advance(100); steps.finish(id, 'completed', 'Edit\nok');
+  });
+  const find = (rows: readonly SceneRow[]) => rows.find(r => /Edit\(index\.html\)/.test(r.displayText ?? r.text))!;
+  const row = find(rowsFor(null)), hovered = find(rowsFor(row.messageId));
+  const quiet = (segments: SceneRow['segments']) => (segments ?? []).filter(s => /^(added|removed) \d+$/.test(s.text.trim()));
+  assert.ok(quiet(row.segments).some(s => /^added/.test(s.text)) && quiet(row.segments).some(s => /^removed/.test(s.text)), row.text);
+  assert.ok(quiet(row.segments).every(s => s.color !== palette.accent), 'at rest they are not highlighted');
+  for (const s of quiet(hovered.segments)) assert.equal(s.color, palette.accent, 'hover recolors ' + JSON.stringify(s.text));
+  for (const s of (hovered.segments ?? []).filter(s => s.separator)) assert.equal(s.color, palette.accent);
 });

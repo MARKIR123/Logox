@@ -2,7 +2,7 @@ import {readFileSync, statSync} from 'node:fs';
 import {resolve} from 'node:path';
 import type {ToolUI} from '../ui-types.js';
 import {messageToolCall, createToolUI} from '../../tui/timeline/tool-ui.js';
-import {cardTitle, renderToolCard, summaryPiece, type ToolView} from '../../tui/timeline/tool-card.js';
+import {cardTitle, keyValueLines, renderToolCard, summaryPiece, type ToolLine, type ToolView} from '../../tui/timeline/tool-card.js';
 import {codeLines, markdownLines} from '../../tui/timeline/tool-code.js';
 import {callArgs, formatByteSize, isImageFile, stageText} from '../ui-format.js';
 import {imageSize} from './image-size.js';
@@ -21,13 +21,42 @@ function fileLines(path: string): number | undefined {
   } catch {return undefined;}
 }
 
+/** What is cheaply known about an image read: the path as resolved, the format, pixel size (from the file header) and byte size. */
+export interface ImageFacts {readonly path: string; readonly format: string; readonly width?: number; readonly height?: number; readonly bytes?: number}
+export function imageFacts(path: string, result: string): ImageFacts {
+  const full = resolve(process.cwd(), path);
+  const dimensions = imageSize(full);
+  const size = /size:\s*(\d+)\s*bytes/i.exec(result);
+  let bytes = size ? Number(size[1]) : undefined;
+  if (bytes === undefined) try {bytes = statSync(full).size;} catch {}
+  const format = /format:\s*image\/([\w.+-]+)/i.exec(result)?.[1] ?? (/\.(\w+)$/.exec(path)?.[1] ?? 'image');
+  return {path: full, format: format.toUpperCase().replace('JPG', 'JPEG'), ...(dimensions ?? {}), ...(bytes !== undefined ? {bytes} : {})};
+}
+
+/**
+ * An image Read: a summary after the title and an expandable detail (path, format, size in pixels and bytes). A terminal preview is a later
+ * feature: it would add its rows in front of `imageDetailLines()` (the body takes any `ToolLine`), nothing else here has to change.
+ */
+export function imageView(path: string, result: string): ToolView {
+  const facts = imageFacts(path, result);
+  return {
+    summary: [summaryPiece(['image', ...(facts.width && facts.height ? [`${facts.width} × ${facts.height}`] : []), ...(facts.bytes !== undefined ? [formatByteSize(facts.bytes)] : [])].join(' · '))],
+    body: {lines: imageDetailLines(facts)},
+  };
+}
+/** The detail rows of an image Read, one fact per row. */
+export function imageDetailLines(facts: ImageFacts): ToolLine[] {
+  return keyValueLines([
+    ['Path', facts.path],
+    ['Format', facts.format],
+    ...(facts.width && facts.height ? [['Dimensions', `${facts.width} × ${facts.height} pixels`] as const] : []),
+    ...(facts.bytes !== undefined ? [['Size', `${formatByteSize(facts.bytes)} (${facts.bytes.toLocaleString('en-US')} bytes)`] as const] : []),
+  ]);
+}
+
 /** Read card view: numbered, lightly colored excerpt (Markdown rendered), `lines A–B of N`, or one image row. */
 export function readView(path: string, offset: number, result: string): ToolView | undefined {
-  if (isImageFile(path, result)) {
-    const size = /size:\s*(\d+)\s*bytes/i.exec(result);
-    const dimensions = imageSize(resolve(process.cwd(), path));
-    return {fixed: true, summary: [summaryPiece(['image', ...(dimensions ? [`${dimensions.width} × ${dimensions.height}`] : []), ...(size ? [formatByteSize(Number(size[1]))] : [])].join(' · '))]};
-  }
+  if (isImageFile(path, result)) return imageView(path, result);
   const rows = result.split('\n');
   const truncated = rows.at(-1) === '(Remaining lines omitted)';
   if (truncated) rows.pop();

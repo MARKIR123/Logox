@@ -51,7 +51,7 @@ test('Read: Markdown files render through the Markdown layout, not as numbered s
   assert.ok(!all.some(row => /^1 {2}#/.test(row.text)), 'no line-number gutter');
 });
 
-test('Read: an image is one non-expandable row with its size', () => {
+test('Read: an image row carries its size in the summary (detail rows: plan-tool-view.test.ts)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'logox-test-'));
   try {
     const png = Buffer.alloc(64); Buffer.from('89504e470d0a1a0a', 'hex').copy(png); png.writeUInt32BE(13, 8); png.write('IHDR', 12, 'latin1'); png.writeUInt32BE(1280, 16); png.writeUInt32BE(720, 20);
@@ -59,9 +59,8 @@ test('Read: an image is one non-expandable row with its size', () => {
     const {id, rows} = toolFixture('Read', {file_path: file}, `[Image file: ${file}, size: 86016 bytes, format: image/png. Visual content presented to model.]`);
     const all = rows();
     const header = all.find(row => row.messageId === id)!;
-    assert.match(rowText(header), /^▮ Read\(.*p\.png\) · image · 1280 × 720 · 84\.0 KB/);
-    assert.equal(header.action, undefined); assert.equal(header.hits, undefined); assert.equal(header.hover, undefined);
-    assert.equal(all.filter(row => row.messageId.startsWith(id) && row.messageId !== id && !row.messageId.endsWith('-who')).length, 0, 'no body rows');
+    assert.match(rowText(header), /^[▮▾] Read\(.*p\.png\) · image · 1280 × 720 · 84\.0 KB/);
+    assert.ok(header.action, 'the image row can be opened');
   } finally {rmSync(dir, {recursive: true, force: true});}
 });
 

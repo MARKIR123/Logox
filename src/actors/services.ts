@@ -104,6 +104,8 @@ export interface ActorServicesOptions {
   notice?(text: string): void;
   /** One line per outage backoff step; `first` is true for the first step of an outage (shown in the timeline, later steps only flash). */
   outageNotice?(text: string, first: boolean): void;
+  /** The outage wait is over (recovered, a person wrote, or the Director was stopped): the host hides the wait notices it showed. */
+  outageEnded?(): void;
   /** Test hook: replaces the 30 s, 2 min, 5 min wake delays used while a provider is down. */
   outageDelaysMs?: readonly number[];
 }
@@ -193,7 +195,7 @@ export class ActorServices {
       const wake = () => {try {this.wakeDirector();} catch {options.notice?.('Coordination wake-up failed; pending reports remain saved.');}};
       // A wake-up that is still winding down must finish first, or its late bookkeeping would swallow this one.
       if (this.wakeTask) void this.wakeTask.done.then(wake, wake); else wake();
-    }, (text, first) => options.outageNotice?.(text, first), options.outageDelaysMs);
+    }, (text, first) => options.outageNotice?.(text, first), options.outageDelaysMs, () => options.outageEnded?.());
   }
   /** What the actor's definition is now: its profile text and bound model. Stored on the work it starts, compared when that work is resumed. */
   private fingerprintOf(ownerId: string): string | undefined {

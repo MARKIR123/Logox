@@ -116,7 +116,7 @@ test('operations: a user record always goes to the user folder, others to the st
     assert.deepEqual(result.deleted, [{scope: 'project', name: 'old-fact'}]);
     assert.deepEqual((await f.store.list()).map(record => record.scope + '/' + record.name), ['project/terse', 'user/dashboard', 'user/who-i-am']);
     assert.equal(dreamStage(result), 'Saved 3 memory records, removed 1');
-    assert.equal(dreamDetail(result), '+ user/who-i-am (user): The user is a data scientist\n+ user/dashboard (reference): Where the dashboard lives\n+ project/terse (feedback): Prefers terse answers\n- project/old-fact');
+    assert.equal(dreamDetail(result), "Remembered in your memory (all projects)\n• who-i-am (about you): The user is a data scientist\n• dashboard (pointer): Where the dashboard lives\n\nRemembered in this project's memory\n• terse (preference): Prefers terse answers\n\nForgotten from this project's memory\n• old-fact");
     assert.equal(dreamStage({saved: [result.saved[0]!], deleted: []}), 'Saved 1 memory record');
     assert.equal(dreamStage({saved: [], deleted: result.deleted}), 'Removed 1 memory record');
     assert.equal(dreamStage({saved: [], deleted: []}), 'Nothing new to remember');

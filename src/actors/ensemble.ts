@@ -653,15 +653,7 @@ export class EnsembleRuntime<Id extends string> {
       await settle('completed');
       this.controllers.delete(activityId);
       this.store.activities.update(this.sessionId, activityId, {status: 'completed', stage: 'Completed', stopReason: 'completed', ...(summary ? {summary, title: summary.title, detail: summary.report} : {})});
-      if (!isDirector(ownerId) && task.stopReason !== 'director_cancel') {
-        const member = this.options.member ? this.options.member(ownerId) : Object.hasOwn(cast, ownerId) ? cast[ownerId as ActorId] : undefined;
-        const roleName = member?.name ?? ownerId;
-        this.store.message(this.sessionId, DIRECTOR_ID, 'notice', `[Notice] ${roleName} (${ownerId}) completed activity ${activityId}.`, {
-          activityId,
-          source: ownerId,
-          inputKind: 'human',
-        });
-      }
+      // No "completed" notice: the Director gets the report through the handoff, and the card already shows the state (an activity id means nothing to the person).
     } catch (error) {
       const isUserCancel = (error instanceof UserCancelledError) ||
         (error instanceof Error && (error.name === 'UserCancelledError' || error.message.includes('User chose to stop'))) ||

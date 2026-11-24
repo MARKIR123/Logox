@@ -7,7 +7,7 @@
  */
 import {DIRECTOR_ID, isDirector} from './runtime/director-id.js';
 import {InputRejected} from './runtime/input-rejected.js';
-import {isOutageWake} from './runtime/outage.js';
+import {isOutageWake, OUTAGE_ENDED_TEXT} from './runtime/outage.js';
 import type {ResourceOptions} from './resources/manager.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
 import {ProjectExtensions, observeTasks, observeExtra} from './extensions/runtime.js';
@@ -195,6 +195,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     notice: text => notice(text, 'task_notice', DIRECTOR_ID),
     ...(options.outageDelaysMs ? {outageDelaysMs: options.outageDelaysMs} : {}),
     outageNotice: (text, first) => notice(text, 'task_notice', DIRECTOR_ID, undefined, {presentation: first ? 'timeline' : 'status'}),
+    // A live-only marker (never persisted): the timeline hides the wait notices before it, and a replayed session hides them all.
+    outageEnded: () => systems.emit(OUTAGE_ENDED_TEXT, 'task_notice', DIRECTOR_ID, undefined, false, {presentation: 'silent'}),
     requireIdle: () => requireIdle(),
     enqueue: (owner, prompt, source, origin) => ensemble.dispatch(owner, prompt, source, origin),
     getActiveTask: (owner) => ensemble.getActiveTask(owner),

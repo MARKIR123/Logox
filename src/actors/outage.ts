@@ -11,7 +11,7 @@ export class OutageBackoff {
   private level = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   constructor(private readonly fire: () => void, private readonly announce: (text: string, first: boolean) => void,
-    private readonly delays: readonly number[] = OUTAGE_DELAYS_MS) {}
+    private readonly delays: readonly number[] = OUTAGE_DELAYS_MS, private readonly ended?: () => void) {}
   /** True while a wake is scheduled; immediate wakes must wait for it. */
   get waiting(): boolean {return this.timer !== undefined;}
   arm(provider: string): void {
@@ -23,6 +23,12 @@ export class OutageBackoff {
     this.timer.unref?.();
     this.announce('[Network] Waiting for ' + provider + ' · retry in ' + outageDelayText(delay), first);
   }
-  reset(): void {clearTimeout(this.timer); this.timer = undefined; this.level = 0;}
-  close(): void {this.reset();}
+  /** Ends the outage and tells the host, so the wait notices it showed can go away. */
+  reset(): void {
+    const announced = this.level > 0;
+    this.drop();
+    if (announced) this.ended?.();
+  }
+  close(): void {this.drop();}
+  private drop(): void {clearTimeout(this.timer); this.timer = undefined; this.level = 0;}
 }

@@ -126,7 +126,7 @@ test('a dream reads only what is beyond its watermark, applies the answer, and a
     r.answer.text = '```json\n' + JSON.stringify({operations: [{op: 'save', scope: 'user', type: 'user', name: 'notebooks', description: 'The user works in Python notebooks', content: 'Quote: "I work in Python notebooks."'}]}) + '\n```';
     const outcome = await r.runner().run(r.context('dream'));
     assert.equal(outcome.stage, 'Saved 1 memory record');
-    assert.equal(outcome.detail, '+ user/notebooks (user): The user works in Python notebooks');
+    assert.equal(outcome.detail, "Remembered in your memory (all projects)\n• notebooks (about you): The user works in Python notebooks");
     assert.equal(outcome.empty, false);
     assert.deepEqual((await r.memory.list()).map(record => record.scope + '/' + record.name), ['user/notebooks']);
     const request = r.requests[0]!;
@@ -191,7 +191,7 @@ test('a recap covers the whole recent conversation, shows the first line as its 
     await r.journal.append(said('logox', 'Done in src/upload.ts.'));
     r.answer.text = '\nUploader retries are in place\n\nDone: added a retry in src/upload.ts\nOpen: nothing\nNext: run the tests';
     const outcome = await r.runner().run(r.context('recap'));
-    assert.deepEqual(outcome, {stage: 'Uploader retries are in place', detail: 'Done: added a retry in src/upload.ts\nOpen: nothing\nNext: run the tests'});
+    assert.deepEqual(outcome, {stage: 'Uploader retries are in place', detail: 'Done: added a retry in src/upload.ts\n\nOpen: nothing\n\nNext: run the tests'});
     const request = r.requests[0]!;
     assert.equal(request.system, RECAP_SYSTEM_PROMPT);
     assert.equal(request.maxTokens, 600);
@@ -204,6 +204,7 @@ test('a recap covers the whole recent conversation, shows the first line as its 
     await r.journal.append(said('logox', 'One more thing.'));
     await assert.rejects(r.runner().run(r.context('recap')), /empty note/);
     assert.deepEqual(splitRecap('⏵ Title\n\nBody one\nBody two'), {stage: 'Title', detail: 'Body one\nBody two'});
+    assert.equal(splitRecap('Title\n\nDone: a\nOpen: b\nNext: c').detail, 'Done: a\n\nOpen: b\n\nNext: c');
   } finally {await r.close();}
 });
 

@@ -464,7 +464,9 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
       });
       const tokenText = (opts.tokens ?? 0) > 0 ? opts.tokens + ' Tokens' : '';
       const waitingText = opts.step?.state === 'waiting' ? opts.step.waiting ?? 'Waiting' : '';
-      const hoverMuted = (color: string) => isHovered && color === palette.muted ? highlightColor : color;
+      // Quiet text is `palette.muted` or its faint mix (`faintColor()`: summary words such as `added 51`, the elapsed time); both take the hover color. Semantic colors (error red) stay.
+      const quiet = (color: string | undefined) => !color || color === palette.muted || color === faintColor();
+      const hoverMuted = (color: string) => isHovered && quiet(color) ? highlightColor : color;
       // One reason per card: the tool's own summary (the red failure reason included) or, when it has none, the fault word. Never both.
       const faultText = opts.faultLabel ?? fault;
       // A denial keeps its distinct word in front of the reason; an error is its reason alone.
@@ -473,14 +475,14 @@ export function createBuilder(width: number, hoveredFoldId: string | null, roles
         : faultText ? [{text: faultText, color: palette.error}] : [];
       // Tool summary: its own muted separator, then the caller's colored pieces (hover brightens the muted ones).
       const summaryPieces: SceneSegment[] = summarySource.length ? [separator(SEPARATOR, opts.id + ':summary_sep'),
-        ...summarySource.flatMap(splitSeparators).map((s, index) => ({...s, ...(isHovered && (!s.color || s.color === palette.muted) ? {color: highlightColor} : {}),
+        ...summarySource.flatMap(splitSeparators).map((s, index) => ({...s, ...(isHovered && quiet(s.color) ? {color: highlightColor} : {}),
           selectionKey: s.selectionKey ?? opts.id + ':summary:' + index, selectionOffset: s.selectionOffset ?? 0}))] : [];
       const lead: SceneSegment[] = opts.expandable ? [] : [{text: icon + ' ', color: opts.markColor ?? (fault ? palette.error : isHovered ? highlightColor : opts.open && !live ? palette.fg : thinking && opts.step && !terminal ? highlightColor : palette.muted), selectionKey: opts.id + ':icon', selectionOffset: 0}];
       // The elapsed time always follows the content inline and faint; the far right is reserved for run state (`■ Stop`).
       const tail: SceneSegment[] = [
         ...summaryPieces,
         ...(statusSepText ? [separator(statusSepText, opts.id + ':status_sep')] : []),
-        ...(statusText ? [{text: statusText, color: thinking ? hoverMuted(palette.muted) : faintColor(), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
+        ...(statusText ? [{text: statusText, color: hoverMuted(thinking ? palette.muted : faintColor()), ...italicProp, selectionKey: opts.id + ':status', selectionOffset: 0}] : []),
         ...(thinking && tokenText ? [separator(SEPARATOR, opts.id + ':tokens_sep'), {text: tokenText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':tokens', selectionOffset: 0}] : []),
         ...(thinking && waitingText ? [separator(SEPARATOR, opts.id + ':waiting_sep'), {text: waitingText, color: hoverMuted(palette.muted), selectionKey: opts.id + ':waiting', selectionOffset: 0}] : []),
       ];

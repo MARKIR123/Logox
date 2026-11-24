@@ -1,6 +1,6 @@
 import {DIRECTOR_ID, isDirector} from '../../runtime/director-id.js';
 import {type Interaction, type Message, type RuntimeSnapshot, type Step} from '../../runtime/contracts.js';
-import {isOutageWake} from '../../runtime/outage.js';
+import {hiddenOutageNotices, isOutageWake} from '../../runtime/outage.js';
 import {isTimelineMessage} from '../../runtime/system-events.js';
 import {choiceStyle, type QuestionDraft} from '../interactions/choice-style.js';
 import {ownerColor, ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
@@ -106,7 +106,9 @@ function projectMessages(snapshot: RuntimeSnapshot, sessionId: string, view: str
     isTimelineMessage(message) && isVisibleToolMessage(message) && !hiddenFromView(message, view) && !(isDirector(message.ownerId) && message.role === 'user' && inputKind(message) === 'actor'));
   const sessionActivities = new Map(snapshot.activities.filter(item => item.sessionId === sessionId).map(item => [item.activityId, item]));
   const {attached, labels: attempts} = retryAttachments(visible, sessionActivities);
-  const candidates = attached.size ? visible.filter(message => !attached.has(message.id)) : visible;
+  // Provider-outage wait lines are live state: gone once the outage ended (the ledger and events.json keep them).
+  const waits = hiddenOutageNotices(snapshot.messages.filter(message => message.sessionId === sessionId));
+  const candidates = attached.size || waits.size ? visible.filter(message => !attached.has(message.id) && !waits.has(message.id)) : visible;
   // Empty assistant messages are never drawn; a message that is only the model's `⏵` line is (as a step heading).
   const messages = candidates.filter(message => !(message.role === 'assistant' && !message.kind && !message.text.trim()));
   const activities = sessionActivities;

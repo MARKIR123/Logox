@@ -56,7 +56,7 @@ export function splitRecap(text: string): {stage: string; detail: string} {
   const lines = text.trim().split(/\r?\n/);
   const first = lines.findIndex(line => line.trim());
   if (first < 0) return {stage: '', detail: ''};
-  return {stage: lines[first]!.trim().replace(/^⏵\s*/u, '').slice(0, 160), detail: lines.slice(first + 1).join('\n').trim()};
+  return {stage: lines[first]!.trim().replace(/^⏵\s*/u, '').slice(0, 160), detail: lines.slice(first + 1).join('\n').trim().replace(/\n+(?=(?:Done|Open|Next):)/g, '\n\n')};
 }
 
 export class AnamnesisRunner implements AnamnesisDriver {

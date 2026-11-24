@@ -115,7 +115,7 @@ test('a manual dream reads the session, saves records in the right folders, char
     assert.equal(result.status, 'completed');
     const finished = app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis')!;
     assert.deepEqual([finished.status, finished.stage], ['completed', 'Saved 2 memory records']);
-    assert.equal(finished.detail, '+ project/prefers-tabs (feedback): The user wants tabs, not spaces\n+ user/role (user): The user is a staff engineer');
+    assert.equal(finished.detail, "Remembered in your memory (all projects)\n• role (about you): The user is a staff engineer\n\nRemembered in this project's memory\n• prefers-tabs (preference): The user wants tabs, not spaces");
     assert.deepEqual((await app.anamnesis.memories()).map(record => record.scope + '/' + record.name), ['project/prefers-tabs', 'user/role']);
     assert.match(await readFile(join(f.home, '.logox', 'memory', 'role.md'), 'utf8'), /type: user/);
     assert.equal(await readFile(join(f.cwd, '.logox', 'memory', 'MEMORY.md'), 'utf8'), '- [prefers-tabs](prefers-tabs.md) — The user wants tabs, not spaces\n');
@@ -199,7 +199,7 @@ test('the idle interval starts only when asked: an injected clock and interval r
     now = 1600;
     await waitFor(() => app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis'), card => card?.status === 'completed', {label: 'recap card'});
     const card = app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis')!;
-    assert.deepEqual([card.stage, card.detail], ['Uploader retries done', 'Done: retries\nOpen: nothing\nNext: ship']);
+    assert.deepEqual([card.stage, card.detail], ['Uploader retries done', 'Done: retries\n\nOpen: nothing\n\nNext: ship']);
     assert.equal(f.seen.filter(isAnamnesis).length, 1);
     now = 6000; await delay(30);
     await waitFor(() => app.anamnesis.memories(), records => records.length === 2, {label: 'the dream on its own clock'});
