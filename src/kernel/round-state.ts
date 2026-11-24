@@ -1,6 +1,6 @@
 import type {ModelMessage, TurnUsage} from '../runtime/messages.js';
 import type {ExecutionRecoveryKind} from './execution-recovery.js';
-import {EMPTY_REPLY_REMINDER} from '../prompts/runtime/recovery.js';
+import {FINISH_ROUND_NO_TEXT_NUDGE} from '../prompts/runtime/recovery.js';
 
 /** Times a finishing actor is told to answer before it may finish anyway; the asker is then told it ended without replying. */
 export const ASK_CLOSE_REMINDERS = 2;
@@ -18,7 +18,7 @@ export class RoundState {
   private note = '';
   private noteKind: ExecutionRecoveryKind | undefined;
   private recoveries = 0;
-  private emptyReplyReminded = false;
+  private textlessFinishes = 0;
   /** Set once the delivered text is in and the single closing follow-up is the next or current request. */
   private closingFollowUp = false;
   private answer = '';
@@ -71,12 +71,11 @@ export class RoundState {
   recovering(kind: ExecutionRecoveryKind, render: (repeated: boolean) => string): void {
     this.note = render(this.recoveries++ > 0); this.noteKind = kind;
   }
-  /** A round-memory close without delivered text gets one static reminder; false when it was already given. */
-  emptyReplyReminder(): boolean {
-    if (this.emptyReplyReminded) return false;
-    this.emptyReplyReminded = true;
-    this.note = EMPTY_REPLY_REMINDER; this.noteKind = 'no_delivery';
-    return true;
+  /** A `_FinishRound` reply without visible text: the first gets one precise nudge for the next request (`nudge`); a later one is `spent`. */
+  textlessFinish(): 'nudge' | 'spent' {
+    if (this.textlessFinishes++ > 0) return 'spent';
+    this.note = FINISH_ROUND_NO_TEXT_NUDGE; this.noteKind = 'no_delivery';
+    return 'nudge';
   }
   /** Signatures minted by the replaced model must not be replayed. */
   foreignModelSignatures(signatures: Iterable<string>): void {for (const signature of signatures) this.foreignSignatures.add(signature);}

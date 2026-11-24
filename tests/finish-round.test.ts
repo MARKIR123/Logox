@@ -16,6 +16,8 @@ import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import {createProvider} from '../src/providers/http.js';
 import {estimateText} from '../src/context/budget.js';
+import {ExecutionRecoveryError} from '../src/kernel/execution-recovery.js';
+import {FINISH_ROUND_NO_TEXT_NUDGE} from '../src/prompts/runtime/recovery.js';
 
 const metadata = {title: 'Delivered result', summary: 'Round outcome.'};
 const finish = (id = 'finish', args: unknown = metadata): ToolCall => ({id, name: '_FinishRound', arguments: typeof args === 'string' ? args : JSON.stringify(args)});
@@ -285,10 +287,41 @@ test('metadata without a delivered answer cannot complete a round', async () => 
     await task.done;
     assert.equal(f.store.activities.get('s', task.activityId)?.status, 'failed');
     assert.equal(f.requests.length, 2);
-    assert.ok(JSON.stringify(f.requests[1]!.messages).includes('Your previous reply was empty.'));
+    assert.ok(JSON.stringify(f.requests[1]!.messages).includes(FINISH_ROUND_NO_TEXT_NUDGE));
+    assert.ok(!JSON.stringify(f.requests[1]!.messages).includes('previous reply was empty'), 'the reply held a tool call, so it was not empty');
     assert.deepEqual(f.requests[1]!.tools, f.requests[0]!.tools);
     const entries = await f.journal.load('s', 'logox');
     assert.ok(entries.filter(entry => entry.message?.role === 'tool').every(entry => entry.message?.role === 'tool' && entry.message.isError));
+  } finally {await f.cleanup();}
+});
+
+test('a companion whose textless close gives up hands the failure to the Director instead of waiting for a human', async () => {
+  const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn('', [finish('no-text-' + index)]);});
+  try {
+    const task = f.ensemble.dispatch('techne', 'Explain', 'logox', {inputKind: 'director'});
+    await task.done;
+    assert.equal(f.store.activities.get('s', task.activityId)?.status, 'failed');
+    const error = f.handed.at(-1)?.error;
+    assert.ok(error instanceof ExecutionRecoveryError && error.disposition === 'handoff');
+  } finally {await f.cleanup();}
+});
+
+test('a textless _FinishRound with a substantive summary is nudged once, then accepted as the delivered report', async () => {
+  const summary = 'Built the page, ran the build and verified every route in the browser; nothing is left open.';
+  const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn('', [finish('no-text-' + index, {title: 'Page built', summary})]);});
+  try {
+    const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
+    await task.done;
+    assert.equal(f.store.activities.get('s', task.activityId)?.status, 'completed');
+    assert.equal(f.requests.length, 2);
+    assert.ok(JSON.stringify(f.requests[1]!.messages).includes(FINISH_ROUND_NO_TEXT_NUDGE));
+    assert.ok(!JSON.stringify(f.requests[1]!.messages).includes('previous reply was empty'));
+    const entries = await f.journal.load('s', 'logox');
+    const report = entries.findLast(entry => entry.message?.role === 'assistant' && entry.message.synthesizedReport);
+    assert.ok(report && report.message?.role === 'assistant' && report.message.text.includes(summary), 'the record marks the synthesized report');
+    const last = entries.filter(entry => entry.message?.role === 'tool').at(-1);
+    assert.ok(last?.message?.role === 'tool' && !last.message.isError, 'the second finalizer call receives the accepted receipt');
+    assert.ok(f.store.getSnapshot().messages.some(message => message.role === 'assistant' && message.text.includes(summary)));
   } finally {await f.cleanup();}
 });
 

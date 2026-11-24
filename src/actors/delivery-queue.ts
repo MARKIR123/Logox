@@ -35,12 +35,16 @@ export class DeliveryQueue {
     });
   }
   recoveryFor(activityId: string, rootActivityId: string, inherited?: TaskOriginData['recovery']): TaskOriginData['recovery'] {
+    // `at` is the drain that delivered what `current` came from (0 for the activity's own starting state).
     return this.records.filter(item => item.status === 'delivered' && item.recipientActivityId === activityId &&
-      item.rootActivityId === rootActivityId && item.recoveryGrantActivityId !== activityId).reduce<TaskOriginData['recovery']>((current, item) => {
+      item.rootActivityId === rootActivityId && item.recoveryGrantActivityId !== activityId).reduce<{value: TaskOriginData['recovery']; at: number}>((state, item) => {
+        const {value: current, at} = state;
+        // A successful result that reaches the activity in a later drain than the failure resolves it; reports delivered together with the failure (older siblings) never weaken it, and a later failure restricts again.
+        if (item.kind === 'report' && current && (item.deliveredAt ?? 0) > at) return {value: undefined, at: item.deliveredAt!};
         const next = item.origin?.recovery;
-        if (!next || current?.exhausted && !next.exhausted) return current;
-        return !current || next.exhausted || next.attempt >= current.attempt ? next : current;
-      }, inherited);
+        if (!next || current?.exhausted && !next.exhausted) return state;
+        return !current || next.exhausted || next.attempt >= current.attempt ? {value: next, at: item.deliveredAt ?? at} : state;
+      }, {value: inherited, at: 0}).value;
   }
   grantRecovery(rootActivityId: string, activityId: string): Promise<void> {
     return this.run(async () => {
@@ -105,7 +109,8 @@ export class DeliveryQueue {
         messages.push(inputMessage(modelText, {ownerId, source, inputKind: kind}));
       }
       const ids = new Set(selected.map(item => item.id));
-      await this.save(this.records.map(item => ids.has(item.id) ? {...item, status: 'delivered', recipientActivityId: activityId} : item));
+      const deliveredAt = Math.max(Date.now(), ...this.records.map(item => (item.deliveredAt ?? 0) + 1));
+      await this.save(this.records.map(item => ids.has(item.id) ? {...item, status: 'delivered', recipientActivityId: activityId, deliveredAt} : item));
       return {messages, humanInputs: selected.filter(item => item.kind === 'human_steer').map(item => item.text)};
     });
   }

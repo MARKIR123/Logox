@@ -21,6 +21,8 @@ export const deliverySchema = z.strictObject({
   /** A finished task's report waits here, hidden from every reader, until its root has no open work or something urgent reaches the same owner. */
   hold: z.literal('root').optional(),
   successorId: z.string().optional(), recoveryGrantActivityId: z.string().optional(),
+  /** Ordinal of the drain that delivered it (milliseconds, strictly increasing per drain): items delivered together share it, a later drain has a larger one. */
+  deliveredAt: z.number().optional(),
 });
 export type Delivery = z.infer<typeof deliverySchema>;
 export type DeliveryInput = Omit<Delivery, 'sessionId' | 'status' | 'time' | 'id'> & {id?: string; time?: number};

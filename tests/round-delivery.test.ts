@@ -35,7 +35,7 @@ async function fixture(respond: (request: ModelRequest, index: number, store: Ru
 }
 const visibleText = (store: RuntimeStore) => store.getSnapshot().messages.filter(message => message.role === 'assistant' && message.kind !== 'thinking').map(message => message.text);
 
-test('a textless close gets the empty-reply reminder, then the delivered text gets one follow-up with unchanged tools', async () => {
+test('a textless close gets the no-visible-text nudge, then the delivered text gets one follow-up with unchanged tools', async () => {
   const f = await fixture((request, index) => {
     if (index === 1) return turn('', [finish('early')]);
     if (index === 2) return turn('Here is the answer.');

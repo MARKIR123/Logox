@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DynamicEnsemble, type ActorContext, type ActorExecutor} from '../src/actors/ensemble.js';
 import {ActorServices} from '../src/actors/services.js';
+import {ExecutionRecoveryError} from '../src/kernel/execution-recovery.js';
 import {ActorRecovery} from '../src/actors/recovery.js';
 import {DeliveryQueue} from '../src/actors/delivery-queue.js';
 import {ActorCatalog} from '../src/actors/catalog.js';
@@ -507,5 +508,93 @@ test('empty recovery creates no files and legacy state defaults assigned reports
     await writeFile(path, JSON.stringify(old));
     const compatible = new ActorRecovery('s', path); await compatible.recover(new Set(['root']));
     assert.match(compatible.resume('receiver'), /报告/); await compatible.flush();
+  } finally {await rm(directory, {recursive: true, force: true});}
+});
+
+test('resumeTask with resumeBatch keeps the paused dependents queued and releases them when the resumed task completes', {timeout: 8000}, async () => {
+  let batchId = '', failed = '', kalonRuns = 0, kalonPrompt = '';
+  const f = await fixture(async (prompt, context, services) => {
+    if (prompt === '开始') {
+      const result = await services.execute({id: 'd', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
+        {ownerId: 'techne', prompt: '故障任务'}, {ownerId: 'kalon', prompt: '依赖任务', after: ['techne']}]})}, context);
+      assert.equal(result.isError, false);
+    } else if (prompt.startsWith('故障任务')) throw new Error('暂时工具故障');
+    else if (prompt === '用户允许继续') {
+      const result = await services.execute({id: 'resume', name: 'dispatch_role', arguments: JSON.stringify({
+        tasks: [{ownerId: 'techne', resumeTask: failed, prompt: '继续剩余工作'}], resumeBatch: batchId})}, context);
+      assert.equal(result.isError, false, result.text);
+    } else if (context.ownerId === 'kalon') {kalonRuns++; kalonPrompt = prompt; context.say('依赖任务完成');}
+    else context.say('完成');
+  });
+  try {
+    await f.ensemble.dispatch('logox', '开始', 'direct').done; await idle(f.ensemble);
+    const dependent = f.store.getSnapshot().activities.find(task => task.ownerId === 'kalon')!;
+    batchId = dependent.batchId!; failed = f.store.getSnapshot().activities.find(task => task.ownerId === 'techne')!.activityId;
+    assert.equal(dependent.status, 'paused');
+    const user = f.ensemble.dispatch('logox', '用户允许继续', 'direct');
+    f.services.resumeDirector(user.activityId);
+    await user.done; await idle(f.ensemble);
+    const activities = f.store.getSnapshot().activities;
+    assert.equal(activities.find(task => task.activityId === dependent.activityId)?.status, 'completed', activities.find(task => task.activityId === dependent.activityId)?.detail);
+    assert.equal(kalonRuns, 1);
+    const resumed = activities.filter(task => task.ownerId === 'techne').at(-1)!;
+    assert.notEqual(resumed.activityId, failed);
+    assert.match(kalonPrompt, /完成/, 'the dependent receives the resumed task report');
+  } finally {await f.close();}
+});
+
+test('a companion that delivered nothing wakes an idle Director under its own recovery key, never an inherited one', {timeout: 5000}, async () => {
+  let wake = '';
+  const f = await fixture(async (prompt, context) => {
+    if (context.ownerId === 'techne') throw new ExecutionRecoveryError('no_delivery', 'stop');
+    wake = prompt; context.say('已收到');
+  });
+  try {
+    await f.ensemble.dispatch('techne', '组装', 'logox', {inputKind: 'director', recovery: {key: 'provider:temporary:UND_ERR_SOCKET', attempt: 1}}).done; await idle(f.ensemble);
+    const failure = f.services.deliveries.snapshot().find(item => item.kind === 'failure')!;
+    assert.equal(failure.deferredUntilHuman, false, 'a companion failure is not held back until a human writes');
+    assert.equal(failure.origin?.recovery?.key, 'execution:no_delivery');
+    assert.equal(failure.status, 'delivered');
+    assert.match(wake, /delivered nothing|Runtime termination cause/);
+    assert.equal(f.store.getSnapshot().activities.filter(task => task.ownerId === 'logox').at(-1)?.status, 'completed');
+  } finally {await f.close();}
+});
+
+test('success reports and Director cancellations carry no recovery state and spend no budget', {timeout: 5000}, async () => {
+  const stale = {key: 'provider:temporary:UND_ERR_SOCKET', attempt: 2, exhausted: true as const};
+  const hold = barrier();
+  const f = await fixture(async (_prompt, context) => {
+    if (context.ownerId === 'kalon') {await hold.promise; context.signal.throwIfAborted();}
+    else context.say('done');
+  });
+  try {
+    await f.ensemble.dispatch('techne', '收尾', 'logox', {inputKind: 'director', recovery: stale}).done; await idle(f.ensemble);
+    const report = f.services.deliveries.snapshot().find(item => item.kind === 'report')!;
+    assert.equal(report.origin?.recovery, undefined, 'a success report resolves the failure instead of repeating it');
+    const kalon = f.ensemble.dispatch('kalon', '走查', 'logox', {inputKind: 'director', recovery: stale});
+    await waitFor(() => f.ensemble.getActiveTask('kalon'), task => !!task, {label: 'kalon running'});
+    assert.equal(f.ensemble.cancelActor('kalon', 'activity', undefined, 'not needed').success, true);
+    await kalon.done; hold.resolve(); await idle(f.ensemble);
+    const cancelled = f.services.deliveries.snapshot().find(item => item.kind === 'failure' && item.source === 'kalon')!;
+    assert.equal(cancelled.origin?.recovery, undefined, 'the Director\'s own cancel never counts as a repeated failure');
+    assert.notEqual(cancelled.deferredUntilHuman, true);
+  } finally {hold.resolve(); await f.close();}
+});
+
+test('new successful results lift an exhausted recovery for the activity that receives them', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'logox-recovery-lift-'));
+  try {
+    const queue = new DeliveryQueue('s', new Journal(join(directory, 'journal')));
+    const recovery = {key: 'stop:stalled', attempt: 2, exhausted: true as const};
+    const base = {ownerId: 'logox', inputKind: 'actor' as const, rootActivityId: 'root'};
+    await queue.enqueue({...base, id: 'failure', source: 'kalon', kind: 'failure', text: 'failed', origin: {recovery}});
+    await queue.drain('logox', 'director-1');
+    assert.equal(queue.recoveryFor('director-1', 'root', undefined)?.exhausted, true, 'the failure alone stays exhausted');
+    await queue.enqueue({...base, id: 'report', source: 'techne', kind: 'report', text: 'done', origin: {recovery}});
+    await queue.drain('logox', 'director-1');
+    assert.equal(queue.recoveryFor('director-1', 'root', recovery), undefined, 'a newer success report ends the restriction');
+    await queue.enqueue({...base, id: 'again', source: 'techne', kind: 'failure', text: 'failed again', origin: {recovery}});
+    await queue.drain('logox', 'director-1');
+    assert.equal(queue.recoveryFor('director-1', 'root', undefined)?.exhausted, true, 'a later identical failure restricts again');
   } finally {await rm(directory, {recursive: true, force: true});}
 });

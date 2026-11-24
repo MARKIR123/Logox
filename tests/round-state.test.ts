@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ASK_CLOSE_REMINDERS, REFUSED_BATCH_LIMIT, RoundState} from '../src/kernel/round-state.js';
-import {EMPTY_REPLY_REMINDER} from '../src/prompts/runtime/recovery.js';
+import {FINISH_ROUND_NO_TEXT_NUDGE} from '../src/prompts/runtime/recovery.js';
 
 /** A state with a delivered answer awaiting its closing call, a recovery note and one owed-reply reminder spent. */
 function busy(): RoundState {
@@ -72,12 +72,12 @@ test('recovering renders a repeated note from the second recovery on', () => {
   assert.equal(state.recoveringKind, 'truncated_text');
 });
 
-test('the empty-reply reminder is given once and does not count as a recovery', () => {
+test('the textless-finish nudge is given once and does not count as a recovery', () => {
   const state = new RoundState();
-  assert.equal(state.emptyReplyReminder(), true);
-  assert.equal(state.recovery, EMPTY_REPLY_REMINDER);
+  assert.equal(state.textlessFinish(), 'nudge');
+  assert.equal(state.recovery, FINISH_ROUND_NO_TEXT_NUDGE);
   assert.equal(state.recoveringKind, 'no_delivery');
-  assert.equal(state.emptyReplyReminder(), false);
+  assert.equal(state.textlessFinish(), 'spent');
   const seen: boolean[] = [];
   state.recovering('no_delivery', repeated => { seen.push(repeated); return 'x'; });
   assert.deepEqual(seen, [false]);

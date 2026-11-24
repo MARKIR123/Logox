@@ -1,7 +1,7 @@
 import type {ModelRequest, ModelTurn, Provider} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
 import type {Step} from '../runtime/contracts.js';
-import {ECHO_REMINDER, ECHO_STOP_ERROR, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
+import {ECHO_REMINDER, ECHO_STOP_ERROR, FINISH_ROUND_NO_TEXT_RESULT, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
 import {LOOP_STREAK} from './repeat-guard.js';
 import {isTextToolCall} from './turn-outcome.js';
 import type {ModelTurnResult} from './model-turn.js';
@@ -9,6 +9,7 @@ import {createRuntimeContextMessage} from '../runtime/context-updates.js';
 import {normalizeFinishRound} from '../context/round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_CLOSING_TOOL_RESULT} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {isDirector} from '../runtime/director-id.js';
 import {ExecutionRecoveryError} from './execution-recovery.js';
 import {runToolBatch, uniqueCallIds} from './tool-batch.js';
 import type {TurnOutcome} from './turn-outcome.js';
@@ -55,6 +56,12 @@ export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<Mod
   uniqueCallIds(turn.message.toolCalls ?? []);
   return {turn, thinkingStep};
 }
+
+/** A `_FinishRound` summary at least this long (characters) stands as the report when the model twice closed the round without visible text. */
+const SUBSTANTIVE_SUMMARY = 40;
+
+/** A companion's failed close is handed to the Director, who is woken by it; only the Director's own has no one to hand off to. */
+const closeDisposition = (ownerId: string): 'handoff' | 'stop' => isDirector(ownerId) ? 'stop' : 'handoff';
 
 /** What the loop does after a reply was handled: send another request, or the activity is complete. */
 export type Next = 'again' | 'done';
@@ -116,13 +123,23 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       if (finishCall && accepted) calls[calls.indexOf(finishCall)] = {...finishCall, arguments: JSON.stringify(accepted)};
       if (!closing && turn.message.text.trim()) state.answerDelivered(turn.message.text);
       const allowed = ready.base.tools.some(tool => isFinishRound(tool.name));
+      // A reply that is only a `_FinishRound` call with no visible text: one precise nudge, then a substantive summary stands as the delivered report instead of failing finished work.
+      let message = turn.message;
+      const textless = !!accepted && allowed && !closing && onlyFinalizer && !truncated && !state.finalText.trim() && !message.text.trim() && !directorWaiting();
+      const nudged = textless && state.textlessFinish() === 'nudge';
+      if (textless && !nudged && accepted.summary.length >= SUBSTANTIVE_SUMMARY) {
+        const report = accepted.title + '\n\n' + accepted.summary;
+        message = {...message, text: report, synthesizedReport: true as const};
+        state.answerDelivered(report);
+        options.store.message(run.context.sessionId, run.context.ownerId, 'assistant', report, {activityId: run.context.activityId});
+      }
       const valid = allowed && !!accepted && (closing || onlyFinalizer && !!state.finalText.trim());
       const error = !closing && !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
         : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
         : !allowed ? 'Terminal metadata is not available in this request.'
-        : !accepted ? 'Round memory needs a non-empty summary.' : 'Deliver the final answer or task report before submitting round memory.';
+        : !accepted ? 'Round memory needs a non-empty summary.' : FINISH_ROUND_NO_TEXT_RESULT;
       const reasoning = reasoningOf();
-      await persist(truncated ? {...turn.message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...turn.message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
+      await persist(truncated ? {...message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
       if (prepared) options.context?.observe(run.context, request, turn, prepared.model);
       const sent = calls.find(call => isFinishRound(call.name));
       try {
@@ -148,8 +165,8 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       if (state.finalText.trim()) {state.closingCallRequested(); return 'again';}
       // Nothing was ever delivered: the empty-reply recovery applies.
       if (!directorWaiting()) {
-        if (state.emptyReplyReminder()) return 'again';
-        throw new ExecutionRecoveryError('no_delivery', 'stop');
+        if (nudged) return 'again';
+        throw new ExecutionRecoveryError('no_delivery', closeDisposition(run.context.ownerId));
       }
       return 'done';
     }
@@ -167,7 +184,7 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       if (state.batchSettled(result.refused)) {
         if (await drainInbox(true)) return 'again';
         run.context.signal.throwIfAborted();
-        throw new ExecutionRecoveryError('no_delivery', 'stop');
+        throw new ExecutionRecoveryError('no_delivery', closeDisposition(run.context.ownerId));
       }
       return 'again';
     }

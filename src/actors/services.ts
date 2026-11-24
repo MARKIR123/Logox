@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {stripNarration} from '../runtime/narration.js';
 import {randomUUID} from 'node:crypto';
 import type {ActorContext, TaskHandle, TaskOrigin, TaskResult} from './ensemble.js';
-import {ActorRecovery, modelUnavailable} from './recovery.js';
+import {ActorRecovery, faultKey, modelUnavailable} from './recovery.js';
 import {formatFailureDetail, isProviderOutage, ProviderError} from '../providers/http.js';
 import {OutageBackoff} from './outage.js';
 import type {ActorCatalog} from './catalog.js';
@@ -660,12 +660,18 @@ export class ActorServices {
       const batchId = group?.batchId ?? origin.batchId;
       if (batchId) this.options.pauseBatch?.(batchId);
     }
-    const deferred = userStopped || this.recovery.stopped() || modelUnavailable(result.error) || executionError?.disposition === 'stop' ||
-      !!(origin.recovery?.exhausted && !origin.recovery.key.startsWith('execution:'));
-    const inheritedRecovery = origin.recovery ? {...origin.recovery} : undefined;
-    const recovery = deferred ? inheritedRecovery : failed ? executionError ? await this.recovery.directorClaim(rootActivityId, executionError.kind)
-      : await this.recovery.next(rootActivityId, result.error, origin.recovery, result.stop) : inheritedRecovery;
-    const noClaim = !!executionError && !recovery;
+    // Recovery state describes one failure: it follows the work only while the failure it names is the cause that ended it (never across a resume that failed differently).
+    const faultCause = executionError ? 'execution:' + (executionError.kind === 'no_delivery' ? 'no_delivery' : 'truncated') : faultKey(result.error, result.stop);
+    const sameFault = origin.recovery?.key === faultCause;
+    // A companion's execution failure always reaches the Director (its claim budget is the loop guard); only a Director's own 'stop' waits for a human.
+    const deferred = userStopped || this.recovery.stopped() || modelUnavailable(result.error) || (executionError?.disposition === 'stop' && isDirector(result.ownerId)) ||
+      !!(origin.recovery?.exhausted && sameFault && !origin.recovery.key.startsWith('execution:'));
+    const inheritedRecovery = origin.recovery && (sameFault || userStopped) ? {...origin.recovery} : undefined;
+    // A completed task resolves its failure and the Director's own cancel is not a fault: neither carries nor spends recovery state.
+    const recovery = !failed || result.stop === 'cancelled_by_director' ? undefined : deferred ? inheritedRecovery
+      : executionError ? await this.recovery.directorClaim(rootActivityId, executionError.kind)
+      : await this.recovery.next(rootActivityId, result.error, origin.recovery, result.stop);
+    const noClaim = !!executionError && !recovery && failed && result.stop !== 'cancelled_by_director';
     if (recovery) {
       const actorTask = !failed ? undefined : isDirector(result.ownerId) ? origin.recovery?.actorTask
         : isProviderOutage(result.error) ? {ownerId: result.ownerId, activityId: result.activityId} : undefined;

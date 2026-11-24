@@ -181,7 +181,11 @@ export class EnsembleRuntime<Id extends string> {
       }
       await this.checkpoint(task, paused ? 'paused' : 'queued');
     });
-    if (origin.resumeTaskId && this.interrupted.delete(origin.resumeTaskId)) this.remapAfter(origin.resumeTaskId, activityId);
+    // Work waiting on the task being resumed (interrupted by a restart, or ended failed or stopped) now waits on its continuation, so a resumed batch keeps its dependents instead of cancelling them.
+    if (origin.resumeTaskId) {
+      const restarted = this.interrupted.delete(origin.resumeTaskId);
+      if (restarted || (this.finished.get(origin.resumeTaskId)?.status ?? 'completed') !== 'completed') this.remapAfter(origin.resumeTaskId, activityId);
+    }
     return {activityId, done: task.done, cancel: () => {this.cancel(activityId);}};
   }
   /** Registers a task and queues it behind everything of equal or higher priority; `prepare` is its recorded start. */

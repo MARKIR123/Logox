@@ -168,8 +168,12 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           messages.push(...incoming);
           const humanInputs = run.context.humanInputs?.();
           if (humanInputs) userRequests.splice(0, userRequests.length, ...[...new Set(humanInputs)].slice(-8).map(text => ({role: 'user' as const, text})));
-          const inboundRecovery = run.context.inboundRecovery?.();
-          if (inboundRecovery) run.context = {...run.context, recovery: inboundRecovery};
+          // The delivery queue answers for the whole activity: new successful results end an earlier restriction (an undefined answer clears it), a later failure sets it again.
+          if (run.context.inboundRecovery) {
+            const {recovery: _earlier, ...rest} = run.context;
+            const inboundRecovery = run.context.inboundRecovery();
+            run.context = inboundRecovery ? {...rest, recovery: inboundRecovery} : rest;
+          }
           run.context.acceptRoundMemory?.(null);
           state.newInput();
           return true;
