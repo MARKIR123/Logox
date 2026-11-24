@@ -8,8 +8,9 @@ import {builtinActors} from '../src/actors/builtins.js';
 import {ActorCatalog} from '../src/actors/catalog.js';
 import {cast, type ActorId} from '../src/actors/ensemble.js';
 import {loadThemePresets, applyThemePreset} from '../src/config/theme-presets.js';
+import {contrastRatio, relativeLuminance, TEXT_CONTRAST} from '../src/config/theme-legibility.js';
 import {applyTheme, palette} from '../src/tui/appearance/theme.js';
-import {ownerColor, ownerSurface} from '../src/tui/appearance/actor-style.js';
+import {ownerColor, ownerSurface, type ActorStyles} from '../src/tui/appearance/actor-style.js';
 
 const ids: readonly ActorId[] = ['logox', 'aletheia', 'techne', 'kalon'];
 const shipped = new URL('../src/actors/profiles/', import.meta.url);
@@ -124,5 +125,52 @@ test('builtin and ensemble fallback modules contain no literal RGB colors', asyn
     const source = await readFile(new URL('../src/actors/' + file, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /#[\da-f]{6}\b/i, file);
     assert.doesNotMatch(source, /\brgba?\s*\(/i, file);
+  }
+});
+
+test('antigravity-light adapts dark actor cards and pastel identity colors while preserving explicit light surfaces and dark themes', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'logox-test-light-actor-'));
+  const previous = {...palette};
+  try {
+    loadThemePresets(home);
+    applyThemePreset('logox-dark');
+    const darkOwners = ['logox', 'techne', 'kalon', 'aletheia', 'anamnesis'] as const;
+    const darkSnapshot = darkOwners.map(id => ({
+      id,
+      color: ownerColor(id),
+      closed: ownerSurface(id, false),
+      open: ownerSurface(id, true),
+    }));
+
+    applyThemePreset('antigravity-light');
+    assert.ok(relativeLuminance(palette.bg) > 0.5);
+    for (const id of darkOwners) {
+      const closed = ownerSurface(id, false);
+      const open = ownerSurface(id, true);
+      assert.ok(closed && open, id + ' has surfaces');
+      assert.ok(relativeLuminance(closed) > 0.5, id + ' closed surface is light');
+      assert.ok(relativeLuminance(open) > 0.5, id + ' open surface is light');
+      assert.ok(contrastRatio(palette.fg, closed) >= TEXT_CONTRAST, id + ' fg on closed is legible');
+      assert.ok(contrastRatio(palette.fg, open) >= TEXT_CONTRAST, id + ' fg on open is legible');
+      const color = ownerColor(id);
+      assert.ok(contrastRatio(color, palette.bg) >= TEXT_CONTRAST, id + ' ownerColor is legible on light bg');
+    }
+
+    const customRoles: ActorStyles = {
+      custom: {symbol: '*', name: 'Custom', title: 'Custom', color: '#1A66E0', cardClosed: '#E8EEF8', cardOpen: '#DCE5F5'},
+    };
+    assert.equal(ownerSurface('custom', false, customRoles), '#E8EEF8');
+    assert.equal(ownerSurface('custom', true, customRoles), '#DCE5F5');
+
+    applyThemePreset('logox-dark');
+    for (const expected of darkSnapshot) {
+      assert.equal(ownerColor(expected.id), expected.color, expected.id + ' color restored');
+      assert.equal(ownerSurface(expected.id, false), expected.closed, expected.id + ' closed surface restored');
+      assert.equal(ownerSurface(expected.id, true), expected.open, expected.id + ' open surface restored');
+    }
+  } finally {
+    loadThemePresets(join(home, 'empty'));
+    applyTheme(previous);
+    await rm(home, {recursive: true, force: true});
   }
 });

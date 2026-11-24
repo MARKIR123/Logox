@@ -68,12 +68,18 @@ export const defaultPalette: Readonly<ThemePalette> = Object.freeze(resolveTheme
 /** Stable object identity lets both Ink and non-React renderers read live theme values. */
 export const palette: ThemePalette = {...defaultPalette};
 let revision = 0;
+let activeThemeName: string | undefined;
+export function activeTheme(): string | undefined {return activeThemeName;}
+export function setActiveTheme(name: string | undefined): void {activeThemeName = name;}
+const listeners = new Set<() => void>();
 export function themeRevision(): number {return revision;}
+export function subscribeTheme(listener: () => void): () => void {listeners.add(listener); return () => {listeners.delete(listener);};}
+function notify(): void {for (const listener of [...listeners]) listener();}
 /** Marks every cached layout stale without changing a colour (presentation settings change how rows are built). */
-export function invalidateTheme(): void {revision++;}
+export function invalidateTheme(): void {revision++; notify();}
 export function applyTheme(overrides?: ThemeOverrides): ThemePalette {
   // Resolve before mutating; invalid overlays cannot leave a half-applied palette.
   Object.assign(palette, resolveThemeColors(overrides));
-  revision++;
+  revision++; notify();
   return palette;
 }

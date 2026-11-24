@@ -1,6 +1,8 @@
 import {cast} from '../../actors/ensemble.js';
 import {deriveActorCardColors} from '../../actors/definitions.js';
+import {contrastRatio, relativeLuminance, TEXT_CONTRAST} from '../../config/theme-legibility.js';
 import {userLabel} from '../../config/user-profile.js';
+import {mixHex} from './colors.js';
 import {palette} from './theme.js';
 
 export interface ActivityVerbs {
@@ -32,16 +34,28 @@ export function ownerStyle(ownerId: string, roles: ActorStyles = cast): ActorSty
   return roles[ownerId] ?? (ownerId === 'anamnesis' ? anamnesisStyle() : undefined);
 }
 
+const isLightCanvas = (): boolean => relativeLuminance(palette.bg) > 0.5;
+const LIGHT_COLOR_MIX_STEPS: readonly number[] = [0.85, 0.72, 0.60, 0.48, 0.36];
+
 /** Read profile-owned identity/surfaces; never overwrite them with system theme data. */
 export function ownerSurface(ownerId: string, expanded: boolean, roles: ActorStyles = cast): string | undefined {
   const role = ownerStyle(ownerId, roles);
   if (!role) return undefined;
   const colors = deriveActorCardColors(role.color, role.cardClosed, role.cardOpen);
-  return expanded ? colors.open : colors.closed;
+  const surface = expanded ? colors.open : colors.closed;
+  if (isLightCanvas() && relativeLuminance(surface) < 0.5) {
+    return mixHex(role.color, palette.bg, expanded ? 0.14 : 0.08);
+  }
+  return surface;
 }
 export function ownerColor(ownerId: string, roles: ActorStyles = cast): string {
-  if (ownerId === 'user') return palette.user;
-  return ownerStyle(ownerId, roles)?.color ?? palette.accent;
+  const raw = ownerId === 'user' ? palette.user : ownerStyle(ownerId, roles)?.color ?? palette.accent;
+  if (!isLightCanvas() || contrastRatio(raw, palette.bg) >= TEXT_CONTRAST) return raw;
+  for (const share of LIGHT_COLOR_MIX_STEPS) {
+    const candidate = mixHex(raw, palette.strong, share);
+    if (contrastRatio(candidate, palette.bg) >= TEXT_CONTRAST) return candidate;
+  }
+  return mixHex(raw, palette.strong, 0.35);
 }
 export function ownerHeader(ownerId: string, roles: ActorStyles = cast): string {
   if (ownerId === 'user') return userLabel();

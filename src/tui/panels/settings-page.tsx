@@ -21,7 +21,7 @@ function Line({segs}: {segs: readonly Seg[]}) {
  * /settings: data-driven rows grouped on one page, values on the right, a description for the selected row, a search box and sub-pages.
  * Drafts stay in the page until Enter; the host receives only the changed values. Keyboard, mouse and the footer buttons all run the same commands.
  */
-export function SettingsPage({items, pages, width, height, y = 0, saving = false, error = '', notice = '', sub, theme, onSave, onPreview, onDiscard, onOpenPage, onCloseSub, onSubSave, onSubAction, onPreviewTheme, onChooseTheme, onCloseTheme}: {
+export function SettingsPage({items, pages, width, height, y = 0, saving = false, error = '', notice = '', sub, theme, onSave, onPreview, onDiscard, onOpenPage, onCloseSub, onSubSave, onSubAction, onPreviewTheme, onToggleThemeBackground, onChooseTheme, onCloseTheme}: {
   items: readonly SettingsItem[]; pages: readonly SettingsPageLink[]; width: number; height: number; /** Screen row of the page's top rule. */ y?: number;
   saving?: boolean; error?: string; notice?: string;
   /** The sub-page open over the settings; the settings keep their drafts underneath. */
@@ -29,6 +29,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
   /** The /theme page open over the settings (the Theme row); it previews, chooses and returns here. */
   theme?: ThemePageData | undefined;
   onPreviewTheme?(name: string): void;
+  onToggleThemeBackground?(name: string): void;
   onChooseTheme?(name: string): void;
   onCloseTheme?(): void;
   onSave(changes: Record<string, DraftValue>): void;
@@ -170,8 +171,8 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
     if (hit) run(hit.command);
   });
 
-  if (theme) return <ThemePage themes={theme.themes} current={theme.current} width={width} height={height} y={y} saving={theme.saving ?? false} error={theme.error ?? ''} notice={notice}
-    onPreview={name => onPreviewTheme?.(name)} onChoose={name => onChooseTheme?.(name)} onCancel={() => onCloseTheme?.()}/>;
+  if (theme) return <ThemePage themes={theme.themes} current={theme.current} backgrounds={theme.backgrounds} width={width} height={height} y={y} saving={theme.saving ?? false} error={theme.error ?? ''} notice={notice}
+    onPreview={name => onPreviewTheme?.(name)} onToggleBackground={name => onToggleThemeBackground?.(name)} onChoose={name => onChooseTheme?.(name)} onCancel={() => onCloseTheme?.()}/>;
   if (sub) return <TabbedPage key={sub.id} title={sub.title} tabs={sub.tabs} initialTab={sub.initialTab} width={width} height={height} y={y}
     onClose={onCloseSub} saving={sub.saving ?? false} error={sub.error ?? ''} notice={notice}
     {...(sub.confirm ? {confirm: sub.confirm} : {})} {...(onSubSave ? {onSave: onSubSave} : {})} {...(onSubAction ? {onAction: onSubAction} : {})}/>;

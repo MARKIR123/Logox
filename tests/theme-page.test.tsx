@@ -17,13 +17,14 @@ import {ThemePage} from '../src/tui/panels/theme-page.js';
 import {themeLayout, stepSelectable, normalizeSelection} from '../src/tui/panels/theme-layout.js';
 import {directRows, rowText, sampleRows, sampleScene} from '../src/tui/panels/theme-sample.js';
 import {sample} from '../src/tui/panels/theme-sample-data.js';
-import {expandedTint} from '../src/tui/appearance/colors.js';
+import {expandedTint, canvasBg} from '../src/tui/appearance/colors.js';
 import {CommandSurfaces} from '../src/commands/surfaces.js';
-import {applyTheme, palette} from '../src/config/theme-palette.js';
+import {activeTheme, applyTheme, palette, setActiveTheme} from '../src/config/theme-palette.js';
 import {applyThemePreset, listThemes, loadThemePresets, themeListing} from '../src/config/theme-presets.js';
-import {UiPreferences} from '../src/config/ui-settings.js';
+import {applyUiSettings, defaultUiSettings, UiPreferences, uiSettings} from '../src/config/ui-settings.js';
 import {commandCatalog, commandHelp} from '../src/commands.js';
 import type {CommandResult} from '../src/runtime/command-surface.js';
+import {waitFor} from './wait-for.js';
 
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true});
 class Input extends PassThrough {isTTY = true; setRawMode(): this {return this;} ref(): this {return this;} unref(): this {return this;}}
@@ -40,16 +41,19 @@ async function setup(options: {columns?: number; rows?: number; users?: Record<s
   for (const [name, content] of Object.entries(users)) await writeFile(join(root, '.logox', 'themes', name + '.json'), typeof content === 'string' ? content : JSON.stringify(content));
   loadThemePresets(root);
   const original = {...palette};
+  const originalTheme = activeTheme();
   const palettes: Record<string, Record<string, string>> = {};
   for (const theme of listThemes()) palettes[theme.name] = {...applyThemePreset(theme.name)};
+  setActiveTheme('logox-dark');
   applyTheme({...original});
+  applyUiSettings(defaultUiSettings);
   const ui = new UiPreferences(root); await ui.load();
   const prefsFile = join(root, '.logox', 'ui-preferences.json');
   const done: CommandResult[] = [];
   const surfaces = new CommandSurfaces(result => {done.push(result);});
-  const open = () => surfaces.openTheme({themes: themeListing(), current: ui.get().theme}, {
-    apply: name => {applyThemePreset(name);},
-    save: async name => {await ui.save({theme: name}); applyThemePreset(name);},
+  const open = () => surfaces.openTheme({themes: themeListing(), current: ui.get().theme, backgrounds: {...ui.get().themeBackgrounds}}, {
+    apply: (name, backgrounds) => {if (backgrounds) applyUiSettings({themeBackgrounds: backgrounds}); applyThemePreset(name);},
+    save: async (name, backgrounds) => {await ui.save({theme: name, themeBackgrounds: backgrounds}); applyThemePreset(name);},
   });
   const input = new Input(), output = new TerminalScreen(); output.columns = columns; output.rows = rows;
   const listeners = new Set<(event: SgrMouseEvent) => void>();
@@ -57,8 +61,8 @@ async function setup(options: {columns?: number; rows?: number; users?: Record<s
   function Host() {
     const surface = useSyncExternalStore(surfaces.subscribe, surfaces.getSnapshot);
     if (surface?.kind !== 'theme') return <Text>closed</Text>;
-    return <ThemePage key={surface.id} themes={surface.themes} current={surface.current} width={size.columns} height={size.rows} saving={surface.saving ?? false} error={surface.error ?? ''}
-      onPreview={name => surfaces.previewTheme(surface.id, name)} onChoose={name => {void surfaces.chooseTheme(surface.id, name);}} onCancel={() => surfaces.cancel()}/>;
+    return <ThemePage key={surface.id} themes={surface.themes} current={surface.current} backgrounds={surface.backgrounds} width={size.columns} height={size.rows} saving={surface.saving ?? false} error={surface.error ?? ''}
+      onPreview={name => surfaces.previewTheme(surface.id, name)} onToggleBackground={name => surfaces.toggleThemeBackground(surface.id, name)} onChoose={name => {void surfaces.chooseTheme(surface.id, name);}} onCancel={() => surfaces.cancel()}/>;
   }
   const element = (): ReactElement => <MouseHost subscribe={handler => {listeners.add(handler); return () => {listeners.delete(handler);};}} color={palette.accent}><Host/></MouseHost>;
   let instance!: ReturnType<typeof render>;
@@ -84,7 +88,7 @@ async function setup(options: {columns?: number; rows?: number; users?: Record<s
     resize: async (nextColumns: number, nextRows: number) => {size = {columns: nextColumns, rows: nextRows}; output.resize(nextColumns, nextRows); await act(async () => {instance.rerender(element());}); await flush();},
     close: async () => {
       await act(async () => {instance.unmount();}); await instance.waitUntilExit(); input.destroy(); output.destroy();
-      applyTheme({...original}); loadThemePresets(join(root, 'nowhere')); await rm(root, {recursive: true, force: true});
+      setActiveTheme(originalTheme); applyUiSettings(defaultUiSettings); applyTheme({...original}); loadThemePresets(join(root, 'nowhere')); await rm(root, {recursive: true, force: true});
     },
   };
 }
@@ -101,7 +105,7 @@ test('the list shows shipped themes first, then user themes marked · user, the 
     assert.ok(text.indexOf(shipped.at(-1)!) < text.indexOf('my-night') && text.indexOf('my-night') < text.indexOf('my-plain'));
     assert.match(f.output.lines[f.rowOf('my-night')]!, /my-night · user/); assert.doesNotMatch(f.output.lines[f.rowOf('nord-polar')]!, /user/);
     assert.match(f.output.lines[f.rowOf('logox-dark')]!, /^ {2}❯ logox-dark +✓ /, 'the saved theme is checked and holds the cursor');
-    assert.match(text, /Theme · current/); assert.match(text, /↑↓ preview · Enter use · Esc cancel/);
+    assert.match(text, /Theme · current/); assert.match(text, /↑↓ preview · b background: off · Enter use · Esc cancel/);
   } finally {await f.close();}
 });
 
@@ -141,7 +145,7 @@ test('Enter saves the highlighted theme through the preference file, keeps it ap
     await f.key('\x1b[B'); await f.key('\x1b[B');
     const chosen = names()[2]!;
     await f.key('\r');
-    await delay(30); await f.flush();
+    await waitFor(() => f.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'}); await f.flush();
     assert.equal(f.surfaces.getSnapshot(), null, 'the page closed');
     assert.equal(JSON.parse(await readFile(f.prefsFile, 'utf8')).theme, chosen);
     sameTokens(palette, f.palettes[chosen]!, 'the saved theme stays on the palette');
@@ -198,7 +202,8 @@ test('hovering a row previews it without choosing, and a click saves it', async 
     sameTokens(palette, f.palettes[target]!, 'the pointer over a row previews that theme'); assert.match(f.output.lines[f.rowOf(target)]!, /^ {2}❯ /, 'and the row holds the cursor');
     assert.equal(f.surfaces.getSnapshot()?.kind, 'theme'); await assert.rejects(readFile(f.prefsFile, 'utf8'), {code: 'ENOENT'});
     await f.move(8, f.rowOf(order[5]!)); sameTokens(palette, f.palettes[order[5]!]!, 'moving on previews the next one');
-    await f.click(8, f.rowOf(order[4]!)); await delay(30); await f.flush();
+    await f.click(8, f.rowOf(order[4]!));
+    await waitFor(() => f.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'}); await f.flush();
     assert.equal(f.surfaces.getSnapshot(), null, 'the click chose and closed');
     assert.equal(JSON.parse(await readFile(f.prefsFile, 'utf8')).theme, order[4]);
     sameTokens(palette, f.palettes[order[4]!]!, 'the clicked theme is applied');
@@ -215,8 +220,57 @@ test('the footer buttons run the keyboard commands: Esc cancel restores, Enter u
     await f.click(f.output.lines[footer]!.indexOf('Esc cancel') + 2, footer);
     assert.equal(f.surfaces.getSnapshot(), null); sameTokens(palette, f.original, 'Esc cancel restores');
     f.open(); await f.flush(); await f.key('\x1b[B');
-    await f.click(f.output.lines[footer]!.indexOf('Enter use') + 2, footer); await delay(30); await f.flush();
+    await f.click(f.output.lines[footer]!.indexOf('Enter use') + 2, footer);
+    await waitFor(() => f.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'}); await f.flush();
     assert.equal(JSON.parse(await readFile(f.prefsFile, 'utf8')).theme, names()[1]);
+  } finally {await f.close();}
+});
+
+test('per-theme background toggle: b key and footer button preview live, isolate per theme, save on Enter and restore on Esc', async () => {
+  const f = await setup();
+  try {
+    // Starts on logox-dark (dark theme -> background off by default)
+    assert.equal(canvasBg(), undefined);
+    assert.match(f.screen(), /b background: off/);
+
+    // Press 'b' on logox-dark: flips live to on
+    await f.key('b');
+    assert.match(f.screen(), /b background: on/);
+    assert.equal(canvasBg(), f.palettes['logox-dark']!.bg, 'toggling b turns dark background on live');
+
+    // Move to antigravity-light: still defaults to on independently
+    await f.move(8, f.rowOf('antigravity-light'));
+    assert.match(f.screen(), /b background: on/);
+    assert.equal(canvasBg(), f.palettes['antigravity-light']!.bg);
+
+    // Click the footer button 'b background: on' on antigravity-light: flips it off live
+    const footer = f.output.lines.findIndex(line => line.includes('b background: on'));
+    await f.click(f.output.lines[footer]!.indexOf('b background: on') + 2, footer);
+    assert.match(f.screen(), /b background: off/);
+    assert.equal(canvasBg(), undefined, 'clicking footer button turns light background off live');
+
+    // Move to a third dark theme (antigravity): unaffected by logox-dark or antigravity-light overrides
+    await f.move(8, f.rowOf('antigravity'));
+    assert.match(f.screen(), /b background: off/);
+    assert.equal(canvasBg(), undefined);
+
+    // Esc restores original palette, active theme and empty overrides
+    await f.key('\x1b');
+    assert.equal(f.surfaces.getSnapshot(), null);
+    assert.deepEqual(uiSettings().themeBackgrounds, {});
+    assert.equal(canvasBg(), undefined);
+    await assert.rejects(readFile(f.prefsFile, 'utf8'), {code: 'ENOENT'});
+
+    // Reopen, toggle logox-dark on, choose it with Enter -> persisted per theme
+    f.open(); await f.flush();
+    assert.match(f.screen(), /b background: off/);
+    await f.key('b');
+    assert.equal(canvasBg(), f.palettes['logox-dark']!.bg);
+    await f.key('\r');
+    await waitFor(() => f.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'}); await f.flush();
+    assert.equal(f.surfaces.getSnapshot(), null);
+    assert.deepEqual(JSON.parse(await readFile(f.prefsFile, 'utf8')).themeBackgrounds, {'logox-dark': true});
+    assert.equal(canvasBg(), f.palettes['logox-dark']!.bg);
   } finally {await f.close();}
 });
 
@@ -224,7 +278,7 @@ test('user themes from the home directory appear and preview', async () => {
   const f = await setup();
   try {
     await f.click(8, f.rowOf('my-night'));
-    await delay(30); await f.flush();
+    await waitFor(() => f.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'}); await f.flush();
     assert.equal(palette.accent, '#112233'); assert.equal(palette.bg, '#010203'); assert.equal(JSON.parse(await readFile(f.prefsFile, 'utf8')).theme, 'my-night');
     f.open(); await f.flush();
     assert.match(f.output.lines[f.rowOf('my-night')]!, /❯ my-night · user +✓/, 'reopening starts on the saved user theme');
@@ -238,10 +292,11 @@ test('the wheel scrolls a list longer than the viewport, one preview at a time',
     const layout = themeLayout({themes: themeListing(), current: 'logox-dark', view: {selected: 0, scroll: 0, sampleScroll: 0}, width: 120, height: 12, y: 0, saving: false, error: ''});
     assert.equal(layout.mode, 'list'); assert.ok(themeListing().length > layout.listRows, 'more themes than rows');
     assert.doesNotMatch(f.screen(), /zz-b/, 'the last theme starts below the viewport');
-    for (let step = 0; step < 13; step++) await f.wheel(30, 4, 1);
+    const steps = themeListing().length - 1;
+    for (let step = 0; step < steps; step++) await f.wheel(30, 4, 1);
     assert.match(f.screen(), /❯ zz-b/, 'wheel down scrolled to the last theme'); assert.doesNotMatch(f.screen(), /^ {2}(?:❯| ) logox-dark/m, 'and the first one scrolled out');
     sameTokens(palette, f.palettes['zz-b']!, 'each wheel step previewed its theme');
-    for (let step = 0; step < 13; step++) await f.wheel(30, 4, -1);
+    for (let step = 0; step < steps; step++) await f.wheel(30, 4, -1);
     assert.match(f.screen(), /^ {2}❯ logox-dark/m); assert.doesNotMatch(f.screen(), /zz-b/);
   } finally {await f.close();}
 });

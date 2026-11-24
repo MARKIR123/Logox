@@ -1,6 +1,8 @@
 import React, {useRef, useState, type ReactElement} from 'react';
 import {Box, Text, useInput} from 'ink';
 import type {ThemeRow} from '../../runtime/command-surface.js';
+import {themeBackgroundFor} from '../../config/theme-presets.js';
+import {themeBackgroundEnabled} from '../../config/ui-settings.js';
 import {palette} from '../appearance/theme.js';
 import {PanelFrame, footerParts, hitFooter, panelRows, type FooterAction} from '../components/panel-frame.js';
 import {inRegion, useMouse, usePointer} from '../terminal/mouse.js';
@@ -29,18 +31,25 @@ function nearestUsable(themes: readonly ThemeRow[], index: number): number {
  * (`onPreview`; nothing is written), Enter or a click chooses it (`onChoose`), and Esc leaves (`onCancel`). Putting the original theme back
  * is the host's job on every way out of the page, so it never depends on a key handler here.
  */
-export function ThemePage({themes, current, width, height, y = 0, saving = false, error = '', notice = '', onPreview, onChoose, onCancel}: {
+export function ThemePage({themes, current, backgrounds = {}, width, height, y = 0, saving = false, error = '', notice = '', onPreview, onToggleBackground, onChoose, onCancel}: {
   themes: readonly ThemeRow[]; /** The saved theme (marked in the list). */ current: string;
+  backgrounds?: Readonly<Record<string, boolean>> | undefined;
   width: number; height: number; /** Screen row of the page's top rule. */ y?: number;
   saving?: boolean; error?: string; notice?: string;
   onPreview(name: string): void;
+  onToggleBackground?(name: string): void;
   onChoose(name: string): void;
   onCancel(): void;
 }): ReactElement {
   const view = useRef<ThemeView>({selected: normalizeSelection(themes, -1, current), scroll: 0, sampleScroll: 0});
   const [, rerender] = useState(0);
   const pointer = usePointer();
-  const plan = themeLayout({themes, current, view: view.current, width, height, y, saving, error: error || notice});
+  const selectedIndex = normalizeSelection(themes, view.current.selected, current);
+  const selectedTheme = selectedIndex >= 0 ? themes[selectedIndex] : undefined;
+  const bgEnabled = selectedTheme && !selectedTheme.unavailable
+    ? themeBackgroundEnabled(selectedTheme.name, themeBackgroundFor(selectedTheme.name), backgrounds)
+    : false;
+  const plan = themeLayout({themes, current, background: bgEnabled, view: view.current, width, height, y, saving, error: error || notice});
   view.current = {selected: plan.selected, scroll: plan.scroll, sampleScroll: plan.sampleScroll};
   const latest = useRef(plan); latest.current = plan;
 
@@ -60,6 +69,11 @@ export function ThemePage({themes, current, width, height, y = 0, saving = false
       case 'page': highlight(nearestUsable(themes, at + command.delta * Math.max(1, latest.current.listRows - 1))); return;
       case 'edge': highlight(nearestUsable(themes, command.to === 'first' ? 0 : themes.length - 1)); return;
       case 'select': highlight(command.index < 0 ? at : command.index); return;
+      case 'toggle_bg': {
+        const theme = themes[at];
+        if (theme && !theme.unavailable) onToggleBackground?.(theme.name);
+        return;
+      }
       case 'choose': {
         const theme = themes[command.index < 0 ? at : command.index];
         if (theme && !theme.unavailable) {highlight(command.index < 0 ? at : command.index); onChoose(theme.name);}
@@ -77,6 +91,7 @@ export function ThemePage({themes, current, width, height, y = 0, saving = false
     if (key.downArrow || key.tab) {run({kind: 'move', delta: 1}); return;}
     if (key.pageUp || key.pageDown) {run({kind: 'page', delta: key.pageUp ? -1 : 1}); return;}
     if (key.home || key.end) {run({kind: 'edge', to: key.home ? 'first' : 'last'}); return;}
+    if (input === 'b' || input === 'B') {run({kind: 'toggle_bg'}); return;}
     if (key.return || input === ' ') run({kind: 'choose', index: -1});
   });
 

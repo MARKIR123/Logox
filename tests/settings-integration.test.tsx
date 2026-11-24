@@ -1,5 +1,6 @@
 import test, {afterEach} from 'node:test';
 import assert from 'node:assert/strict';
+import chalk from 'chalk';
 import {act} from 'react';
 import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -123,6 +124,7 @@ test('the Theme row opens /theme over the settings: it previews live, Esc restor
     await f.key('\r'); await f.key('\x1b[B'); const previewed = {...palette};
     await f.key('\r');
     const saved = await waitFor(() => f.app.surfaces.getSnapshot(), surface => surface?.kind === 'settings' && !surface.theme, {timeoutMs: 5000, label: 'choosing returns to the settings'});
+    await f.flush();
     assert.equal(saved?.kind, 'settings');
     assert.deepEqual({...palette}, previewed);
     const name = JSON.parse(await readFile(f.uiPath, 'utf8')).theme as string;
@@ -229,4 +231,34 @@ test('Enter key: the default still sends with Enter and breaks a line with Ctrl+
     await act(async () => {await delay(20);}); await f.flush();
     assert.deepEqual(sent(), ['a\nb']);
   } finally {await f.close();}
+});
+
+test('Theme background: live toggle in /theme paints the canvas, Esc restores transparency, Enter saves per-theme', async () => {
+  const previousLevel = chalk.level;
+  chalk.level = 3;
+  const f = await fixture();
+  try {
+    assert.equal(f.output.backgroundColors[0]?.[0], undefined, 'dark theme starts transparent');
+    await f.open('/theme');
+    assert.match(f.text(), /b background: off/);
+    await f.key('b');
+    assert.match(f.text(), /b background: on/);
+    assert.equal(f.output.backgroundColors[0]?.[0], palette.bg.toLowerCase(), 'toggling b on dark theme paints the canvas live');
+    await f.key('\x1b');
+    assert.equal(f.app.surfaces.getSnapshot(), null);
+    assert.equal(f.output.backgroundColors[0]?.[0], undefined, 'Esc restores the canvas back to transparent');
+    await assert.rejects(readFile(f.uiPath, 'utf8'), {code: 'ENOENT'}, 'Esc writes nothing');
+
+    await f.open('/theme');
+    assert.match(f.text(), /b background: off/, 'reopening reflects restored state');
+    await f.key('b');
+    assert.equal(f.output.backgroundColors[0]?.[0], palette.bg.toLowerCase());
+    await f.key('\r');
+    await waitFor(() => f.app.surfaces.getSnapshot(), value => value === null, {timeoutMs: 5000, label: 'the page closes after saving'});
+    assert.equal(f.output.backgroundColors[0]?.[0], palette.bg.toLowerCase(), 'saved background fill stays painted');
+    assert.deepEqual(JSON.parse(await readFile(f.uiPath, 'utf8')).themeBackgrounds, {'logox-dark': true});
+  } finally {
+    await f.close();
+    chalk.level = previousLevel;
+  }
 });

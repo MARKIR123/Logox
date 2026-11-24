@@ -4,12 +4,15 @@ import {structuredPatch} from 'diff';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {Steps} from '../src/runtime/steps.js';
 import {buildStageRows, stageFoldOpen} from '../src/tui/timeline/stage.js';
-import {expandedTint, mixHex, TINT_STEPS} from '../src/tui/appearance/colors.js';
+import {canvasBg, expandedTint, mixHex, TINT_STEPS} from '../src/tui/appearance/colors.js';
 import {diffIsCompact, diffLines} from '../src/tui/timeline/tool-code.js';
 import {EMBLEM_ETYMOLOGY, EMBLEM_TAGLINE, TAGLINES, splashLines, taglineFor} from '../src/tui/appearance/emblem.js';
 import {palette} from '../src/tui/appearance/theme.js';
-import {applyUiSettings, defaultUiSettings, uiSettings, uiSettingsRevision} from '../src/config/ui-settings.js';
-import {themeRevision} from '../src/config/theme-palette.js';
+import {applyUiSettings, defaultUiSettings, themeBackgroundDefault, themeBackgroundEnabled, uiSettings, uiSettingsRevision} from '../src/config/ui-settings.js';
+import {activeTheme, applyTheme, setActiveTheme, themeRevision} from '../src/config/theme-palette.js';
+import {applyThemePreset} from '../src/config/theme-presets.js';
+import {encodeRow, encodeSide, TerminalPlane} from '../src/tui/terminal/terminal-plane.js';
+import {createBuilder} from '../src/tui/timeline/scene.js';
 import {NOTIFY_AFTER_MS, RoundNotifier, notificationSequence} from '../src/tui/terminal/notify.js';
 import {consumeFocusReports, setTerminalFocus, terminalFocus} from '../src/tui/terminal/focus.js';
 import {footerHints} from '../src/tui/status/notification-line.js';
@@ -203,4 +206,74 @@ test('the shortcut and model pages are read-only data: grouped keys, per-provide
 
 test('/settings is in the command catalog with the new description', () => {
   assert.match(commandCatalog.find(command => command.name === 'settings')!.description, /Appearance.*shortcuts/);
+});
+
+test('Theme background: themeBackgroundEnabled, canvasBg, encodeRow, encodeSide and TerminalPlane respect per-theme overrides', () => {
+  const original = {...palette};
+  const previousTheme = activeTheme();
+  try {
+    const darkBg = applyThemePreset('antigravity').bg;
+    const lightBg = applyThemePreset('antigravity-light').bg;
+    assert.equal(themeBackgroundDefault(darkBg), false);
+    assert.equal(themeBackgroundDefault(lightBg), true);
+    assert.equal(themeBackgroundEnabled('antigravity', darkBg, {}), false);
+    assert.equal(themeBackgroundEnabled('antigravity-light', lightBg, {}), true);
+    assert.equal(themeBackgroundEnabled('antigravity', darkBg, {antigravity: true}), true, 'per-theme flip turns dark background on');
+    assert.equal(themeBackgroundEnabled('logox-dark', darkBg, {antigravity: true}), false, 'override is independent per theme');
+    assert.equal(themeBackgroundEnabled('antigravity-light', lightBg, {'antigravity-light': false}), false, 'per-theme flip turns light background off');
+
+    applyThemePreset('antigravity');
+    assert.deepEqual(uiSettings().themeBackgrounds, {});
+    assert.equal(canvasBg(), undefined, 'dark theme stays transparent by default');
+
+    applyThemePreset('antigravity-light');
+    assert.equal(canvasBg(), palette.bg, 'light theme paints palette.bg by default');
+
+    applyThemePreset('antigravity');
+    applyUiSettings({themeBackgrounds: {antigravity: true}});
+    assert.equal(canvasBg(), palette.bg, 'dark theme paints palette.bg when enabled per theme');
+    applyThemePreset('logox-dark');
+    assert.equal(canvasBg(), undefined, 'another dark theme stays transparent');
+
+    applyThemePreset('antigravity-light');
+    applyUiSettings({themeBackgrounds: {antigravity: true, 'antigravity-light': false}});
+    assert.equal(canvasBg(), undefined, 'light theme stays transparent when disabled per theme');
+
+    const builder = createBuilder(40, null);
+    builder.pushProse('m', 'canvas fill probe', palette.fg);
+    const row = {...builder.rows[0]!, bg: undefined};
+
+    applyThemePreset('antigravity-light');
+    applyUiSettings({themeBackgrounds: {}});
+    assert.match(encodeRow(row, 0, null), /\x1b\[48;2;246;248;252m/, 'encodeRow emits bg SGR for antigravity-light by default');
+    assert.match(encodeSide([{text: 'side'}], 0), /\x1b\[48;2;246;248;252m/, 'encodeSide emits bg SGR for antigravity-light by default');
+
+    applyUiSettings({themeBackgrounds: {'antigravity-light': false}});
+    assert.doesNotMatch(encodeRow(row, 0, null), /\x1b\[48;2;/, 'encodeRow omits bg SGR when disabled for light theme');
+    assert.doesNotMatch(encodeSide([{text: 'side'}], 0), /\x1b\[48;2;/, 'encodeSide omits bg SGR when disabled for light theme');
+
+    applyThemePreset('antigravity');
+    applyUiSettings({themeBackgrounds: {}});
+    assert.doesNotMatch(encodeRow(row, 0, null), /\x1b\[48;2;/, 'encodeRow omits bg SGR for dark theme by default');
+
+    // TerminalPlane repaints and fills the gap when switching to a light theme or toggling background beside a side column.
+    const writes: string[] = [];
+    const plane = new TerminalPlane(text => {writes.push(text);});
+    try {
+      plane.afterInkWrite('\x1b[?1049h');
+      const frame = {
+        rows: [row], start: 0, width: 20, height: 2, selection: null,
+        side: {x: 21, width: 10, lines: [[{text: '│ side    '}], [{text: '│         '}]]},
+      };
+      plane.present(frame);
+      plane.flush();
+      assert.doesNotMatch(writes.join(''), /\x1b\[48;2;/, 'transparent dark frame writes no bg SGR');
+      writes.length = 0;
+      applyThemePreset('antigravity-light');
+      plane.flush();
+      const painted = writes.join('');
+      assert.match(painted, /\x1b\[48;2;246;248;252m/, 'switching to light theme invalidates and paints bg SGR');
+      assert.match(painted, /\x1b\[0m\x1b\[48;2;246;248;252m +\x1b\[0m/, 'gap up to side.x is filled with clearBg');
+    } finally {plane.dispose();}
+  } finally {setActiveTheme(previousTheme); applyTheme(original);}
 });

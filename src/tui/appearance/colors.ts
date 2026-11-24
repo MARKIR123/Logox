@@ -1,6 +1,12 @@
 import {palette} from './theme.js';
-import {toolTintScale, uiSettings} from '../../config/ui-settings.js';
+import {activeTheme} from '../../config/theme-palette.js';
+import {themeBackgroundEnabled, toolTintScale, uiSettings} from '../../config/ui-settings.js';
 import {isDirector} from '../../runtime/director-id.js';
+
+/** Background colour painted across the terminal canvas, or `undefined` to leave the terminal transparent. */
+export function canvasBg(): string | undefined {
+  return themeBackgroundEnabled(activeTheme(), palette.bg) ? palette.bg : undefined;
+}
 
 export function windowAccent(ownerId: string, actorColor?: string): string {
   return isDirector(ownerId) ? palette.accent : actorColor ?? palette.accent;

@@ -3,7 +3,7 @@ import {homedir} from 'node:os';
 import {basename, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
-import {applyTheme, isRetiredThemeKey, isThemeColorKey, resolveThemeColors, themeColorValueSchema, type ThemeOverrides, type ThemePalette} from './theme-palette.js';
+import {applyTheme, defaultPalette, isRetiredThemeKey, isThemeColorKey, resolveThemeColors, setActiveTheme, themeColorValueSchema, type ThemeOverrides, type ThemePalette} from './theme-palette.js';
 
 /**
  * Theme palettes are data, not code: shipped JSON lives in `src/config/themes/`
@@ -171,8 +171,16 @@ function flatten(theme: ThemeFile, themes = registry!): ThemeOverrides {
   return merged as ThemeOverrides;
 }
 
+export function themeBackgroundFor(name: string): string {
+  const theme = resolveTheme(name);
+  if (!theme) return defaultPalette.bg;
+  try {return resolveThemeColors(flatten(theme)).bg;}
+  catch {return defaultPalette.bg;}
+}
+
 export function applyThemePreset(name: string): ThemePalette {
   const theme = resolveTheme(name);
+  setActiveTheme(theme?.name ?? DEFAULT_THEME);
   return theme ? applyTheme(flatten(theme)) : applyTheme();
 }
 

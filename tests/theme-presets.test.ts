@@ -30,7 +30,7 @@ const mergedPalette = {
   actorPillFg: '#ffffff', oauthSuccess: '#7ee7c4',
   composerFg: '#E8E6E0', composerBorder: '#636F83',
 };
-const builtinNames = ['logox-dark', 'abyss-lantern', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'copper-ink', 'marginalia', 'monokai-pro', 'nord-polar', 'tokyo-night'];
+const builtinNames = ['logox-dark', 'abyss-lantern', 'antigravity', 'antigravity-light', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'copper-ink', 'marginalia', 'monokai-pro', 'nord-polar', 'tokyo-night'];
 const legacyNames = ['mist-dark', 'Mist Dark', 'mist_dark'];
 
 function withThemeHome(run: (home: string) => void): void {
@@ -52,7 +52,7 @@ function userThemeDir(home: string): string {
   return dir;
 }
 
-test('all ten shipped themes load with logox-dark first and valid colors', () => withThemeHome(home => {
+test('all twelve shipped themes load with logox-dark first and valid colors', () => withThemeHome(home => {
   const themes = loadThemePresets(home);
   assert.equal(DEFAULT_THEME, 'logox-dark');
   assert.deepEqual(themes.map(theme => theme.name), builtinNames);

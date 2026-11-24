@@ -21,6 +21,8 @@ export type ThemeCommand =
   | {readonly kind: 'edge'; readonly to: 'first' | 'last'}
   /** Highlight (preview) a row; `index: -1` is the highlighted one. */
   | {readonly kind: 'select'; readonly index: number}
+  /** Toggle background fill for the highlighted theme. */
+  | {readonly kind: 'toggle_bg'}
   /** Save a row and close; `index: -1` is the highlighted one. */
   | {readonly kind: 'choose'; readonly index: number}
   | {readonly kind: 'cancel'};
@@ -84,10 +86,10 @@ export function legibilityRows(width: number): SampleRow[] {
 
 /** The plan: styled body rows, header, footer and every click region, in screen cells for a page whose top rule is at row `y`. */
 export function themeLayout(input: {
-  themes: readonly ThemeRow[]; current: string; view: ThemeView; width: number; height: number; y: number;
+  themes: readonly ThemeRow[]; current: string; background?: boolean; view: ThemeView; width: number; height: number; y: number;
   saving: boolean; error: string;
 }): ThemeLayout {
-  const {themes, current, view, width, height, y, saving, error} = input;
+  const {themes, current, background = false, view, width, height, y, saving, error} = input;
   const padding = panePadding(width), columns = Math.max(1, width - 2 * padding), frame = panelRows(height), body = frame.bodyHeight;
   const bodyY = y + frame.bodyY;
   const mode: ThemeMode = columns >= themeTiers.wideColumns && body >= themeTiers.wideRows ? 'wide'
@@ -175,7 +177,12 @@ export function themeLayout(input: {
   while (rows.length < body) rows.push(pad([], width));
   rows.length = Math.max(0, body);
 
-  const hints = [{label: '↑↓ preview', command: {kind: 'move', delta: 1} as ThemeCommand}, {label: 'Enter use', command: {kind: 'choose', index: -1} as ThemeCommand}, {label: 'Esc cancel', command: {kind: 'cancel'} as ThemeCommand}];
+  const hints = [
+    {label: '↑↓ preview', command: {kind: 'move', delta: 1} as ThemeCommand},
+    ...(selected >= 0 ? [{label: background ? 'b background: on' : 'b background: off', command: {kind: 'toggle_bg'} as ThemeCommand}] : []),
+    {label: 'Enter use', command: {kind: 'choose', index: -1} as ThemeCommand},
+    {label: 'Esc cancel', command: {kind: 'cancel'} as ThemeCommand},
+  ];
   const footerText = saving ? 'Saving…' : error || hints.map(hint => hint.label).join(' · ');
   const name = themes[selected]?.name;
   const header: Seg[] = [{text: 'Theme', color: palette.fg, bold: true}];

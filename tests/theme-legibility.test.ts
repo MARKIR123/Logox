@@ -100,7 +100,7 @@ test('every shipped theme can be reported (the table the page and the docs refer
 test('the validated shipped themes have no low-contrast pairs or confusable semantic colours', () => {
   const original = {...palette};
   try {
-    for (const name of ['logox-dark', 'abyss-lantern', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night', 'marginalia', 'copper-ink']) {
+    for (const name of ['logox-dark', 'abyss-lantern', 'antigravity', 'antigravity-light', 'catppuccin-mocha', 'celadon-pine', 'claude-warm', 'monokai-pro', 'nord-polar', 'tokyo-night', 'marginalia', 'copper-ink']) {
       const report = legibilityReport(applyThemePreset(name));
       const failing = report.pairs.filter(pair => !pair.ok).map(pair => pair.label + ' ' + pair.ratio.toFixed(2) + ' < ' + pair.threshold);
       assert.deepEqual(failing, [], name + ' pairs below threshold');

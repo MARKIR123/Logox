@@ -1,6 +1,7 @@
 import {join} from 'node:path';
 import {z} from 'zod';
 import {StateFile} from './model-preferences.js';
+import {relativeLuminance} from './theme-legibility.js';
 import {invalidateTheme} from './theme-palette.js';
 
 /** Presentation preferences that renderers read live; `/settings` edits them and `~/.logox/ui-preferences.json` keeps them. */
@@ -17,6 +18,7 @@ export const uiPreferencesSchema = z.object({
   theme: z.string().default('logox-dark'),
   cursor: z.string().default('Block █'),
   toolTint: z.enum(toolTintChoices).default('standard'),
+  themeBackgrounds: z.record(z.string(), z.boolean()).default({}),
   startPage: z.boolean().default(true),
   emblem: z.enum(emblemChoices).default('auto'),
   tagline: z.enum(taglineChoices).default('fixed'),
@@ -26,24 +28,48 @@ export const uiPreferencesSchema = z.object({
   enterKey: z.enum(enterKeyChoices).default('send'),
   /** The task sidebar's dragged width in columns; absent means the default (34% of the width). Re-clamped into the current range at use. */
   sidebarWidth: z.number().int().min(1).max(500).optional(),
+  /** The sidebar's open tabs (strip order) and the shown one (`src/tui/panels/sidebar-tabs.ts`); unknown ids are dropped when read. */
+  sidebarTabs: z.array(z.string()).max(16).optional(),
+  sidebarActive: z.string().optional(),
 });
 export type UiPreferencesData = z.infer<typeof uiPreferencesSchema>;
 /** The render-relevant part; theme and cursor are applied by the application. */
-export type UiSettings = Pick<UiPreferencesData, 'toolTint' | 'startPage' | 'emblem' | 'tagline' | 'thinkingDisplay' | 'diffLayout' | 'notify' | 'enterKey'>;
+export type UiSettings = Pick<UiPreferencesData, 'toolTint' | 'themeBackgrounds' | 'startPage' | 'emblem' | 'tagline' | 'thinkingDisplay' | 'diffLayout' | 'notify' | 'enterKey'>;
 export const defaultUiSettings: Readonly<UiSettings> = Object.freeze({
-  toolTint: 'standard', startPage: true, emblem: 'auto', tagline: 'fixed', thinkingDisplay: 'folded', diffLayout: 'auto', notify: 'off', enterKey: 'send',
+  toolTint: 'standard', themeBackgrounds: Object.freeze({}), startPage: true, emblem: 'auto', tagline: 'fixed', thinkingDisplay: 'folded', diffLayout: 'auto', notify: 'off', enterKey: 'send',
 });
 
 let live: Readonly<UiSettings> = defaultUiSettings;
 let revision = 0;
+function sameRecord(a: Readonly<Record<string, boolean>>, b: Readonly<Record<string, boolean>>): boolean {
+  if (a === b) return true;
+  const keysA = Object.keys(a), keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(key => Object.hasOwn(b, key) && a[key] === b[key]);
+}
 /** Live settings; renderers and key handlers read this, the application owns it. */
 export function uiSettings(): Readonly<UiSettings> {return live;}
 export function uiSettingsRevision(): number {return revision;}
 /** Replaces the live settings; every cached layout is invalidated through the theme revision. */
 export function applyUiSettings(next: Partial<UiSettings>): void {
-  const merged = {...live, ...next};
-  if ((Object.keys(merged) as (keyof UiSettings)[]).every(key => merged[key] === live[key])) return;
+  const merged: UiSettings = {
+    ...live,
+    ...next,
+    ...(next.themeBackgrounds !== undefined ? {themeBackgrounds: Object.freeze({...next.themeBackgrounds})} : {}),
+  };
+  if ((Object.keys(merged) as (keyof UiSettings)[]).every(key =>
+    key === 'themeBackgrounds' ? sameRecord(merged.themeBackgrounds, live.themeBackgrounds) : merged[key] === live[key]
+  )) return;
   live = Object.freeze(merged); revision++; invalidateTheme();
+}
+/** Default background fill for a theme with `bgHex`: light themes fill by default, dark themes stay transparent. */
+export function themeBackgroundDefault(bgHex: string): boolean {
+  return relativeLuminance(bgHex) > 0.5;
+}
+/** Whether background fill is enabled for `name`, checking per-theme overrides before falling back to luminance. */
+export function themeBackgroundEnabled(name: string | undefined, bgHex: string, overrides: Readonly<Record<string, boolean>> = uiSettings().themeBackgrounds): boolean {
+  if (name !== undefined && Object.hasOwn(overrides, name)) return overrides[name]!;
+  return themeBackgroundDefault(bgHex);
 }
 /** Fraction of the stock expanded-card tint each choice keeps. */
 export const toolTintScale: Readonly<Record<UiSettings['toolTint'], number>> = {none: 0, subtle: 0.5, standard: 1};
@@ -76,7 +102,7 @@ export class UiPreferences {
     this.apply();
   }
   private apply(): void {
-    const {toolTint, startPage, emblem, tagline, thinkingDisplay, diffLayout, notify, enterKey} = this.data;
-    applyUiSettings({toolTint, startPage, emblem, tagline, thinkingDisplay, diffLayout, notify, enterKey});
+    const {toolTint, themeBackgrounds, startPage, emblem, tagline, thinkingDisplay, diffLayout, notify, enterKey} = this.data;
+    applyUiSettings({toolTint, themeBackgrounds, startPage, emblem, tagline, thinkingDisplay, diffLayout, notify, enterKey});
   }
 }

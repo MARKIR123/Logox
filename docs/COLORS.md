@@ -18,7 +18,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 
 `~` 表示用户主目录。项目角色层仍遵循[角色模块](modules/actors.md)的优先级。仓库默认值不一定等于个人已安装的值；构建不会同步覆盖用户目录。
 
-内置主题有 `logox-dark`（默认，完整基准）、`abyss-lantern`、`catppuccin-mocha`、`celadon-pine`、`claude-warm`、`copper-ink`、`marginalia`、`monokai-pro`、`nord-polar`、`tokyo-night`。除默认主题外都通过 `base` 继承 `logox-dark`，只写差异；别名在继承与覆盖合并之后解析，所以继承来的 `$muted`、`$fg` 会自动跟随子主题改过的颜色。`abyss-lantern` 是深海灯笼配色：墨绿黑打底、生物荧光青绿标记焦点、灯笼橙留给用户；`catppuccin-mocha` 采用 Catppuccin Mocha 暗调粉彩（深紫灰底、锦葵紫焦点、蜜桃橙用户轨）；`celadon-pine` 以松烟墨绿打底，青瓷釉色标记焦点，柿木暖橙用于用户轨；`copper-ink` 以暖石墨色打底，琥珀铜色标记焦点，青蓝色用于链接。
+内置主题有 `logox-dark`（默认，完整基准）、`abyss-lantern`、`antigravity`、`antigravity-light`、`catppuccin-mocha`、`celadon-pine`、`claude-warm`、`copper-ink`、`marginalia`、`monokai-pro`、`nord-polar`、`tokyo-night`。除默认主题外都通过 `base` 继承 `logox-dark`，只写差异；别名在继承与覆盖合并之后解析，所以继承来的 `$muted`、`$fg` 会自动跟随子主题改过的颜色。`abyss-lantern` 是深海灯笼配色：墨绿黑打底、生物荧光青绿标记焦点、灯笼橙留给用户；`antigravity` 以深空曜石蓝黑打底，Gemini 星芒蓝标记焦点，星云兰粉用于用户轨，星云紫与轨道青承担提问与链接，呼应 Antigravity / Gemini 的星芒光谱；`antigravity-light` 是对应的浅色版本，以云瓷浅底搭配宝石蓝焦点、兰粉用户轨与星云紫提问色，并自动将深色角色卡片转为浅色柔雾底以保持可读；`catppuccin-mocha` 采用 Catppuccin Mocha 暗调粉彩（深紫灰底、锦葵紫焦点、蜜桃橙用户轨）；`celadon-pine` 以松烟墨绿打底，青瓷釉色标记焦点，柿木暖橙用于用户轨；`copper-ink` 以暖石墨色打底，琥珀铜色标记焦点，青蓝色用于链接。
 
 `claude-warm`、`monokai-pro`、`nord-polar`、`tokyo-night` 是四套各自带完整底色家族的系统主题（不再沿用 `logox-dark` 的石板蓝），连同 `logox-dark`、`marginalia` 与 `abyss-lantern` 都通过可读性检查（没有低于阈值的项，也没有易混淆的语义色对）。配色取自各自的公开调色板，对比度或色相不够处按“可读性优先于还原度”调整：
 
@@ -81,6 +81,8 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 |---|---|---|
 | `logox-dark` | 无 | 无 |
 | `abyss-lantern` | 无（`border` 3.87） | 无 |
+| `antigravity` | 无 | 无 |
+| `antigravity-light` | 无 | 无 |
 | `catppuccin-mocha` | 无 | 无 |
 | `celadon-pine` | 无 | 无 |
 | `claude-warm` | 无 | 无 |
@@ -114,7 +116,7 @@ Logox 的系统颜色来自主题 JSON，角色身份色与卡片底色来自角
 | 状态 | `success`、`warning`、`error` | 成功、警告、失败 |
 | 文本选区 | `selectionBg`、`selectionFg` | 拖选背景与文字，独立于焦点和勾选 |
 
-`bg` 不会重设终端的整屏背景。未绘制区域、终端原生光标和 emoji 字形仍由终端控制，主题只管 Logox 实际绘制的颜色。
+默认情况下，深色主题保持终端背景透明（`bg` 仅作混色基准和对比度计算依据），浅色主题则将 `bg` 铺满整个画布，使浅色主题在深色半透明终端上依然清晰；可在 `/theme` 中按 `b`（或点击页脚 `b background: on` / `off`）逐主题切换是否绘制背景，按主题保存在 `~/.logox/ui-preferences.json` 的 `themeBackgrounds` 中。终端原生光标和 emoji 字形仍由终端控制。
 
 ## 专用语义色
 
