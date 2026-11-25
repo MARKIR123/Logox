@@ -352,7 +352,7 @@ test('application auto-compaction and manual compaction share policy and restore
     requests.push(request);
     return {message: {role: 'assistant', text: '完成'.repeat(3200) + '\n【轮次摘要】\n标题：已完成核对\n报告：保留确认决定与结果，尚未执行额外验证。'}, stop: 'complete'};
   }};
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 16384}, context: {keep_recent_rounds: 0, keep_recent_tools: 0}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 17408}, context: {keep_recent_rounds: 0, keep_recent_tools: 0}}, {}, cwd, cwd);
   let app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'context-app', config, provider, env: {}, authPath: join(cwd, 'auth.json')});
   try {
     for (let index = 0; index < 3; index++) await app.ensemble.dispatch('logox', '目标' + index).done;

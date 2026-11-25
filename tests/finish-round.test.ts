@@ -306,8 +306,9 @@ test('a companion whose textless close gives up hands the failure to the Directo
   } finally {await f.cleanup();}
 });
 
-test('a textless _FinishRound with a substantive summary is nudged once, then accepted as the delivered report', async () => {
-  const summary = 'Built the page, ran the build and verified every route in the browser; nothing is left open.';
+test('a textless _FinishRound with a substantive summary is nudged once, then accepted as the delivered report, uncut', async () => {
+  // Longer than the round-memory cap: the delivered report keeps all of it (the call keeps the capped form), ending with the last words.
+  const summary = 'Built the page, ran the build and verified every route in the browser; nothing is left open. '.repeat(30) + 'Screenshots saved under shots/final.png.';
   const f = await fixture((_request, index) => {assert.ok(index <= 2); return turn('', [finish('no-text-' + index, {title: 'Page built', summary})]);});
   try {
     const task = f.ensemble.dispatch('logox', 'Explain', 'direct');
@@ -319,6 +320,9 @@ test('a textless _FinishRound with a substantive summary is nudged once, then ac
     const entries = await f.journal.load('s', 'logox');
     const report = entries.findLast(entry => entry.message?.role === 'assistant' && entry.message.synthesizedReport);
     assert.ok(report && report.message?.role === 'assistant' && report.message.text.includes(summary), 'the record marks the synthesized report');
+    assert.ok(report?.message?.role === 'assistant' && report.message.text.endsWith('shots/final.png.'), 'the report is not cut to the round-memory cap');
+    const stored = report?.message?.role === 'assistant' ? JSON.parse(report.message.toolCalls![0]!.arguments) as {summary: string} : undefined;
+    assert.ok(stored && stored.summary.length < summary.length, 'round memory keeps the capped summary');
     const last = entries.filter(entry => entry.message?.role === 'tool').at(-1);
     assert.ok(last?.message?.role === 'tool' && !last.message.isError, 'the second finalizer call receives the accepted receipt');
     assert.ok(f.store.getSnapshot().messages.some(message => message.role === 'assistant' && message.text.includes(summary)));

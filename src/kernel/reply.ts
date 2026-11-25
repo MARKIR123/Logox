@@ -6,7 +6,7 @@ import {LOOP_STREAK} from './repeat-guard.js';
 import {isTextToolCall} from './turn-outcome.js';
 import type {ModelTurnResult} from './model-turn.js';
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
-import {normalizeFinishRound} from '../context/round-memory.js';
+import {normalizeFinishRound, readFinishRound} from '../context/round-memory.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {FINISH_ROUND_CLOSING_TOOL_RESULT} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {isDirector} from '../runtime/director-id.js';
@@ -128,7 +128,9 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       const textless = !!accepted && allowed && !closing && onlyFinalizer && !truncated && !state.finalText.trim() && !message.text.trim() && !directorWaiting();
       const nudged = textless && state.textlessFinish() === 'nudge';
       if (textless && !nudged && accepted.summary.length >= SUBSTANTIVE_SUMMARY) {
-        const report = accepted.title + '\n\n' + accepted.summary;
+        // The report is built from the arguments as written: the token caps shape round memory only (the call keeps the capped form), never the delivered text.
+        const written = readFinishRound(finishCall!.arguments, narration.latest ?? run.context.taskTitle ?? '') ?? accepted;
+        const report = written.title + '\n\n' + written.summary;
         message = {...message, text: report, synthesizedReport: true as const};
         state.answerDelivered(report);
         options.store.message(run.context.sessionId, run.context.ownerId, 'assistant', report, {activityId: run.context.activityId});

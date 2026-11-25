@@ -868,15 +868,15 @@ test('Unfinished jobs are marked interrupted on restart and never replayed', asy
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
-test('Finish is validated: blocked needs its question, a question belongs to blocked only, and the worker retries with the fix', async () => {
+test('Finish is validated: blocked needs its question, a question beside any other status is dropped, and the worker retries with the fix', async () => {
   const valid = (args: object) => parseFinish(JSON.stringify(args));
   assert.equal(valid({status: 'done', summary: 'ok'}).ok, true);
   assert.equal(valid({status: 'blocked', summary: 'stuck', question: 'Which port?'}).ok, true);
   const noQuestion = valid({status: 'blocked', summary: 'stuck'});
   assert.ok(!noQuestion.ok && /`question` is required when status is "blocked"/.test(noQuestion.text) && /Fix the call and send Finish again/.test(noQuestion.text), JSON.stringify(noQuestion));
-  const stray = valid({status: 'done', summary: 'ok', question: 'why?'});
-  assert.ok(!stray.ok && /`question` is only for status "blocked": remove it/.test(stray.text));
-  assert.equal(valid({status: 'failed', summary: 'x', question: 'q'}).ok, false);
+  const stray = valid({status: 'done', summary: 'ok', question: 'placeholder'});
+  assert.ok(stray.ok && stray.value.question === undefined, 'a filler question is dropped, not refused');
+  assert.deepEqual(valid({status: 'failed', summary: 'x', question: 'q'}), {ok: true, value: {status: 'failed', summary: 'x'}});
   for (const bad of [{status: 'done', summary: ''}, {status: 'done', summary: 'x'.repeat(601)}, {status: 'maybe', summary: 'x'}, {status: 'done', summary: 'x', evidence: Array.from({length: 21}, () => 'e')},
     {status: 'done', summary: 'x', evidence: ['e'.repeat(301)]}, {status: 'done', summary: 'x', notVerified: Array.from({length: 13}, () => 'n')}, {status: 'blocked', summary: 'x', question: 'q'.repeat(601)},
     {status: 'done', summary: 'x', extra: 1}]) assert.equal(valid(bad).ok, false, JSON.stringify(bad).slice(0, 80));
@@ -885,7 +885,7 @@ test('Finish is validated: blocked needs its question, a question belongs to blo
   const {tools, done} = await project();
   try {
     const requests: Parameters<typeof workers>[1] = [];
-    tools.setAutomaEnvironment(environment(workers({Ask: [['Finish', {status: 'blocked', summary: 'Cannot pick a port.'}], ['Finish', {status: 'done', summary: 'x', question: 'q'}],
+    tools.setAutomaEnvironment(environment(workers({Ask: [['Finish', {status: 'blocked', summary: 'Cannot pick a port.'}], ['Finish', {status: 'done', summary: ''}],
       ['Finish', {status: 'blocked', summary: 'Cannot pick a port.', question: 'Which port should the server use?', evidence: ['config.ts:3'], notVerified: ['the second server']}]]}, requests)));
     const result = await tools.execute(dispatch({jobs: [job('Ask')]}), principal());
     assert.equal(requests.length, 3, 'two refusals, then the accepted call');

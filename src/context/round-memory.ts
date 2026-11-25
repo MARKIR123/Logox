@@ -86,6 +86,12 @@ export function runtimeRoundSummary(messages: readonly ModelMessage[], status: R
  * `outcome`, `verification` and `carry_forward` fields are joined into `summary` when it is absent.
  */
 export function normalizeFinishRound(raw: string, fallbackTitle = ''): FinishRoundArgs | undefined {
+  const read = readFinishRound(raw, fallbackTitle);
+  return read && {title: truncateToTokens(read.title, FINISH_ROUND_TITLE_TOKENS), summary: truncateToTokens(read.summary, FINISH_ROUND_SUMMARY_TOKENS)};
+}
+
+/** The arguments as the model wrote them, without the token caps: what a report synthesized from a textless close is built from, so the runtime never cuts what the model delivered. */
+export function readFinishRound(raw: string, fallbackTitle = ''): FinishRoundArgs | undefined {
   let value: unknown;
   try {value = JSON.parse(raw);} catch {return undefined;}
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -94,8 +100,7 @@ export function normalizeFinishRound(raw: string, fallbackTitle = ''): FinishRou
   let summary = text(args.summary);
   if (!summary) summary = [args.outcome, args.verification, ...Array.isArray(args.carry_forward) ? args.carry_forward : []].map(text).filter(Boolean).join('; ');
   if (!summary) return undefined;
-  const title = text(args.title) || text(fallbackTitle) || 'Round';
-  return {title: truncateToTokens(title, FINISH_ROUND_TITLE_TOKENS), summary: truncateToTokens(summary, FINISH_ROUND_SUMMARY_TOKENS)};
+  return {title: text(args.title) || text(fallbackTitle) || 'Round', summary};
 }
 
 export function omitInternalToolPairs(messages: readonly ModelMessage[]): ModelMessage[] {
