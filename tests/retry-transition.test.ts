@@ -19,6 +19,7 @@ import {loadConfig} from '../src/config/config.js';
 import {createProvider} from '../src/providers/http.js';
 import {createHttpTransport} from '../src/providers/transport.js';
 import {createTestApplication as createApplication, waitForSnapshot} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const cut = () => new ProviderError('[Network] Stream interrupted: Connection closed (UND_ERR_SOCKET)\nTransport: elapsed 194.0s; idle since progress 194.0s; idle since data 194.0s; 0 bytes received.',
   true, 'temporary', {phase: 'stream', code: 'UND_ERR_SOCKET', elapsedMs: 194_008, progressIdleMs: 194_008, transportIdleMs: 194_008, receivedBytes: 0});
@@ -27,7 +28,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 test('a dropped attempt ends in the same moment its retry is announced, waits as Reconnecting with its own clock, and a fresh Thinking starts from zero', {timeout: 15_000}, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'logox-retry-transition-'));
   const store = new RuntimeStore();
-  const finish: ModelTurn = {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'};
+  const finish: ModelTurn = {message: {role: 'assistant', text: 'Done.' + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'};
   let calls = 0;
   const provider: Provider = {async respond(_request, delta) {
     calls++;

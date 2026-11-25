@@ -432,7 +432,7 @@ test('真实 Agent 有界只读并发、模型序落账、写工具边界与整�
 
     assert.equal(maximum, 2); assert.deepEqual(execution, ['r1', 'r2', 'r3', 'w', 'r4']);
 
-    assert.deepEqual(f.messages.filter(m => m.role === 'tool' && m.name !== '_FinishRound').map(m => m.role === 'tool' ? m.callId : ''), execution);
+    assert.deepEqual(f.messages.filter(m => m.role === 'tool').map(m => m.role === 'tool' ? m.callId : ''), execution);
 
     turns.push({stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('write', {file_path: 'bad', content: 'x'}), call('read', {file_path: 'a', limit: -1})]}}, {stop: 'complete', message: {role: 'assistant', text: '已修正'}});
 

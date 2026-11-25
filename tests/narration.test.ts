@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {extractNarration, stripNarration} from '../src/runtime/narration.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {createApplication as productionApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
@@ -141,7 +142,7 @@ test('a reply that is only the ⏵ line keeps its words as visible text; with a 
       return {message: {role: 'assistant', text: '⏵ Wrapping up the review'}, stop: 'complete'};
     },
   };
-  const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 's', config, provider});
+  const app = await productionApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 's', config, provider});
   try {
     const task = app.ensemble.dispatch('logox', 'review', 'direct');
     await task.done;

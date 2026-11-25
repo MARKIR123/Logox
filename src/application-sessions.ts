@@ -84,7 +84,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
   const turns = async () => {
     const ledgers = await Promise.all((await owners(current.sessionId)).map(async owner => ({owner, entries: await journal.load(current.sessionId, owner)})));
     const entries = ledgers.flatMap(ledger => ledger.entries);
-    // The round's own _FinishRound title and outcome name it better than the first input does.
+    // The round's own synopsis title and summary name it better than the first input does.
     const memories = new Map<string, {title: string; summary?: string | undefined}>();
     for (const ledger of ledgers) {
       try {

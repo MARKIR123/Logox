@@ -14,10 +14,11 @@ import {retainRuntimeContext} from '../src/context/continuity.js';
 import {modelMessageSchema, type ModelMessage, type ModelRequest, type ModelTurn, type Provider} from '../src/runtime/messages.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const glob = (id: string, pattern = '*'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern})}]}, stop: 'tools'});
 const reply = (text: string, calls: NonNullable<ModelTurn['message']['toolCalls']> = []): ModelTurn => ({message: {role: 'assistant', text, ...(calls.length ? {toolCalls: calls} : {})}, stop: calls.length ? 'tools' : 'complete'});
-const finish = {id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})};
+const closed = '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'});
 
 async function run(turns: ModelTurn[], opts: {companion?: boolean; appendOnly?: boolean} = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-transient-'));
@@ -27,7 +28,7 @@ async function run(turns: ModelTurn[], opts: {companion?: boolean; appendOnly?: 
   const provider: Provider = {...opts.appendOnly ? {capabilities: {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true}} : {},
     async respond(request, delta) {
       requests.push(structuredClone(request));
-      const value = turns[requests.length - 1] ?? reply('Done.', [finish]);
+      const value = turns[requests.length - 1] ?? reply('Done.' + closed);
       if (value.message.text) delta({kind: 'text', text: value.message.text});
       return value;
     }};
@@ -45,7 +46,7 @@ const prefixOf = (before: ModelRequest, after: ModelRequest) => before.messages.
 
 test('a recovery note reaches the request that follows it and is gone once the model answered', async () => {
   // An empty first reply makes the runtime ask again; the note rides on the second request only.
-  const f = await run([reply(''), glob('g1', 'a'), glob('g2', 'b'), reply('Done.', [finish])], {companion: false});
+  const f = await run([reply(''), glob('g1', 'a'), glob('g2', 'b'), reply('Done.' + closed)], {companion: false});
   try {
     assert.equal(f.activity?.status, 'completed', f.activity?.detail);
     assert.equal(f.requests.length, 4);
@@ -60,7 +61,7 @@ test('a recovery note reaches the request that follows it and is gone once the m
 });
 
 test('on an append-only protocol recovery notes stay in history', async () => {
-  const f = await run([reply(''), glob('g1', 'a'), glob('g2', 'b'), reply('Done.', [finish])], {companion: false, appendOnly: true});
+  const f = await run([reply(''), glob('g1', 'a'), glob('g2', 'b'), reply('Done.' + closed)], {companion: false, appendOnly: true});
   try {
     assert.equal(f.requests.length, 4);
     assert.equal(notes(f.requests[1]!).length, 1);
@@ -71,7 +72,7 @@ test('on an append-only protocol recovery notes stay in history', async () => {
 
 test('the Automa reminder is a request-only context note after the results, once per run, never while the Director waits', async () => {
   const streak = Array.from({length: AUTOMA_STREAK + 3}, (_, index) => glob('r' + index, 'p' + index));
-  const free = await run([...streak, reply('Done.', [finish])], {companion: false});
+  const free = await run([...streak, reply('Done.' + closed)], {companion: false});
   try {
     assert.equal(free.activity?.status, 'completed', free.activity?.detail);
     const first = free.requests.findIndex(request => notes(request, AUTOMA_STREAK_NOTE).length > 0);
@@ -85,7 +86,7 @@ test('the Automa reminder is a request-only context note after the results, once
     assert.ok(prefixOf(free.requests[first + 1]!, free.requests[first + 2]!));
     assert.ok(prefixOf(free.requests[first + 2]!, free.requests[first + 3]!));
   } finally { await free.cleanup(); }
-  const waiting = await run([...streak, reply('Done.', [finish])], {companion: true});
+  const waiting = await run([...streak, reply('Done.' + closed)], {companion: true});
   try {
     for (const request of waiting.requests) assert.equal(notes(request, AUTOMA_STREAK_NOTE).length, 0, 'a waiting Director is never reminded');
   } finally { await waiting.cleanup(); }

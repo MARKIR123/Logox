@@ -15,7 +15,7 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     memoryOnly: z.literal(true).optional(),
     /** The text is a tool call the provider returned as plain text: it executed nothing and is never a delivery (kept in history so the model can reissue it). */
     textToolCall: z.literal(true).optional(),
-    /** The text was written by the runtime from an accepted `_FinishRound` title and summary after the model twice closed the round with no visible text; it stands as the delivered report. */
+    /** Legacy, read only: the runtime wrote this text from a retired `_FinishRound` call's title and summary; it stands as the delivered report. */
     synthesizedReport: z.literal(true).optional(),
     /** The `⏵` status line this turn began with (observability only; the ledger text keeps no status line, except a reply that was only that line). Older ledgers carry it too. */
     stage: z.string().optional(),

@@ -40,7 +40,7 @@ export interface ModelCapacity {
   /** Most images one request may carry; unset when the provider documents no limit and none is configured. */
   maxImages?: number;
 }
-import {ROUND_SUMMARY_CONTRACT as summaryInstruction} from '../prompts/charter.js';
+import {ROUND_SYNOPSIS_CONTRACT as summaryInstruction} from '../prompts/charter.js';
 import {HISTORY_MEMO_INSTRUCTION} from '../prompts/compaction.js';
 import {parseSynopsis} from './synopsis.js';
 export {summaryInstruction, HISTORY_MEMO_INSTRUCTION};

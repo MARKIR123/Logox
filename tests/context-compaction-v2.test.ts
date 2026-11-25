@@ -9,6 +9,7 @@ import {watermarks} from '../src/context/budget.js';
 import {contextPolicySchema, loadConfig} from '../src/config/config.js';
 import type {ModelMessage, ModelRequest, Provider} from '../src/runtime/messages.js';
 import {createTestApplication} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 test('the high watermark is the larger of window minus reserve and a share of the window', () => {
   const policy = contextPolicySchema.parse({});
@@ -18,8 +19,8 @@ test('the high watermark is the larger of window minus reserve and a share of th
 });
 
 const ROUNDS = 16;
-const finish = (index: number) => ({id: 'finish-' + index, name: '_FinishRound', arguments: JSON.stringify({
-  title: 'Round ' + index + ' work', summary: 'Outcome of round ' + index + ' '.padEnd(560, 'o')})});
+const closed = (index: number) => 'Done ' + index + String.fromCharCode(10, 10) + synopsisBlock({
+  title: 'Round ' + index + ' work', summary: 'Outcome of round ' + index + ' '.padEnd(560, 'o')});
 
 async function history() {
   const root = await mkdtemp(join(tmpdir(), 'logox-compaction-v2-'));
@@ -29,8 +30,7 @@ async function history() {
   for (let index = 1; index <= ROUNDS; index++) {
     const activityId = 'round-' + index;
     await journal.append({...id(activityId), role: 'user', inputKind: 'human', text: 'Task ' + index});
-    await put(activityId, {role: 'assistant', text: 'Done ' + index, toolCalls: [finish(index)]});
-    await put(activityId, {role: 'tool', callId: 'finish-' + index, name: '_FinishRound', text: '', isError: false});
+    await put(activityId, {role: 'assistant', text: closed(index)});
     await journal.finishRecord('s', 'techne', activityId, 'completed');
   }
   await journal.append({...id('open'), role: 'user', inputKind: 'human', text: 'Current task'});
@@ -87,7 +87,7 @@ test('thinking from before a compaction is not sent again; thinking produced aft
   } finally { await rm(f.root, {recursive: true, force: true}); }
 });
 
-test('/rewind names each round by its _FinishRound title and summary', async () => {
+test('/rewind names each round by its synopsis title and summary', async () => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), 'logox-rewind-title-')));
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}}, {}, cwd, cwd);
   const app = await createTestApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, env: {}, authPath: join(cwd, 'auth.json'), sessionId: 'first', config,
@@ -96,9 +96,8 @@ test('/rewind names each round by its _FinishRound title and summary', async () 
     const add = async (activityId: string, text: string, memory?: {title: string; summary: string}) => {
       const id = {version: 1 as const, sessionId: 'first', ownerId: 'logox', activityId};
       await app.journal.append({...id, role: 'user', inputKind: 'human', text, time: Date.now(), message: {role: 'user', text}});
-      const call = memory ? [{id: 'f-' + activityId, name: '_FinishRound', arguments: JSON.stringify(memory)}] : undefined;
-      await app.journal.append({...id, role: 'assistant', text: 'answer', message: {role: 'assistant', text: 'answer', ...(call ? {toolCalls: call} : {})}});
-      if (call) await app.journal.append({...id, role: 'tool', text: '', message: {role: 'tool', callId: call[0]!.id, name: '_FinishRound', text: '', isError: false}});
+      const answer = memory ? 'answer' + String.fromCharCode(10, 10) + synopsisBlock(memory) : 'answer';
+      await app.journal.append({...id, role: 'assistant', text: answer, message: {role: 'assistant', text: answer}});
       await app.journal.finishRecord('first', 'logox', activityId, 'completed');
     };
     await add('titled', '帮我看看这个缓存为什么不命中，顺便', {title: 'Explained the cache miss', summary: 'Snapshot moved behind the cache boundary'});

@@ -9,12 +9,13 @@ import {AUTOMA_STREAK, ToolPacing} from '../src/kernel/tool-pacing.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 
 const glob = (id: string, pattern = '*'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern})}]}, stop: 'tools'});
 const reply = (text: string, calls: NonNullable<ModelTurn['message']['toolCalls']> = []): ModelTurn => ({message: {role: 'assistant', text, ...(calls.length ? {toolCalls: calls} : {})}, stop: calls.length ? 'tools' : 'complete'});
-const finish = {id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Waiting', summary: 'Round outcome.'})};
+const closed = '\n\n' + synopsisBlock({title: 'Waiting', summary: 'Round outcome.'});
 
 async function director(respond: (request: ModelRequest, index: number) => ModelTurn, opts: {companion?: boolean; refuseTools?: string} = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-pacing-'));
@@ -43,7 +44,7 @@ const polls = 9;
 const untouched = (request: ModelRequest) => !request.messages.some(message => message.role === 'context' && message.kind === 'reminder');
 
 test('a Director that keeps re-reading while a companion runs is left alone: tools run, no note is injected', async () => {
-  const f = await director((_request, index) => index <= polls ? glob('poll-' + index) : reply('Waiting on Techne.', [finish]));
+  const f = await director((_request, index) => index <= polls ? glob('poll-' + index) : reply('Waiting on Techne.' + closed));
   try {
     assert.equal(f.activity?.status, 'completed', f.activity?.detail);
     assert.equal(f.requests.length, polls + 1, 'every look is answered, then the round closes');
@@ -57,7 +58,7 @@ test('a Director that keeps re-reading while a companion runs is left alone: too
 });
 
 test('a restricted request keeps its tool list, refuses the call, and a second refused batch fails the round', async () => {
-  const obeys = await director((_request, index) => index === 1 ? glob('once') : reply('Recovery is exhausted.', [finish]), {companion: false, refuseTools: 'Not executed: restricted.'});
+  const obeys = await director((_request, index) => index === 1 ? glob('once') : reply('Recovery is exhausted.' + closed), {companion: false, refuseTools: 'Not executed: restricted.'});
   try {
     assert.equal(obeys.activity?.status, 'completed', obeys.activity?.detail);
     assert.deepEqual(toolTexts(obeys.requests[1]!), ['Not executed: restricted.']);
@@ -79,7 +80,7 @@ test('a Director that says nothing while a companion runs ends its round instead
 });
 
 test('with no companion running, repeated calls and an empty reply keep their old behavior', async () => {
-  const f = await director((_request, index) => index <= 6 ? glob('same-' + index) : reply('Done.', [finish]), {companion: false});
+  const f = await director((_request, index) => index <= 6 ? glob('same-' + index) : reply('Done.' + closed), {companion: false});
   try {
     assert.equal(f.activity?.status, 'completed', f.activity?.detail);
     assert.equal(f.requests.length, 7);

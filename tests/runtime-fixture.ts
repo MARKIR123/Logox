@@ -3,18 +3,18 @@ import type {RuntimeStore} from '../src/runtime/store.js';
 import {createApplication as productionApplication} from '../src/application.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
 import {summarizeRound} from '../src/context/contracts.js';
+import {parseSynopsis, synopsisBlock} from '../src/context/synopsis.js';
 import {realpath} from 'node:fs/promises';
 import {projectDataDir} from '../src/config/project-data.js';
 
-/** Adapt legacy successful fixtures to the new terminal protocol, never recovery/error turns. */
+/** Adapt plain successful fixtures to the round-memory protocol: a complete text reply without calls ends with a synopsis, so the round closes without the follow-up that asks for one. Recovery and error turns are left alone. */
 export function finalizingProvider(provider: Provider): Provider {
-  let ordinal = 0;
   return {async respond(request, delta, signal) {
     const turn = await provider.respond(request, delta, signal);
-    if (!request.tools.some(tool => tool.name === '_FinishRound') || turn.stop !== 'complete' || !turn.message.text.trim() || turn.message.toolCalls?.length) return turn;
+    if (!request.tools.length) return turn; // summaries and Anamnesis runs offer no tools and never close a round
+    if (turn.stop !== 'complete' || !turn.message.text.trim() || turn.message.toolCalls?.length || parseSynopsis(turn.message.text).synopsis) return turn;
     const summary = summarizeRound([turn.message], 'completed');
-    return {...turn, stop: 'tools', message: {...turn.message, toolCalls: [{id: 'fixture-finish-' + ++ordinal, name: '_FinishRound',
-      arguments: JSON.stringify({title: summary.title.slice(0, 120), summary: summary.report.slice(0, 200) || 'Round outcome.'})}]}} satisfies ModelTurn;
+    return {...turn, message: {...turn.message, text: turn.message.text + '\n\n' + synopsisBlock({title: summary.title.slice(0, 120), summary: summary.report.slice(0, 200) || 'Round outcome.'})}} satisfies ModelTurn;
   }};
 }
 /** The project data folder (`<home>/.logox/projects/<key>`) an application started on `cwd` with `resourceOptions.home = home` uses; `home` defaults to `cwd`, the usual test isolation. */

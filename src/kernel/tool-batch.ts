@@ -14,7 +14,6 @@ import {sendMessageSchema} from '../tools/coordination/SendMessageTool/SendMessa
 import {AUTOMA_TOOL_NAME} from '../tools/orchestration/AutomaTool/prompt.js';
 import {settleToolResults} from './scratchpad.js';
 import {TOOL_CANCELLED_TEXT, DIRECTOR_INTERRUPTED_TOOL_TEXT, USER_INTERRUPTED_TOOL_TEXT} from '../prompts/runtime/interruption.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {readUnchangedStub} from '../prompts/runtime/file-changes.js';
 import {earlierIdenticalRead, readDigest} from './read-reuse.js';
 import type {Prepared, ReadyRequest} from './request.js';
@@ -66,7 +65,6 @@ async function validateBatch(run: AgentRun, ready: ReadyRequest, calls: readonly
   const schemaErrors = new Map<string, string>();
   const current = options.requestBase ? await options.requestBase(run.context, {capabilities: ready.assembly.capabilities, history: run.messages}) : ready.instruction;
   for (const call of calls) {
-    if (isFinishRound(call.name)) continue; // answered with a normal result when it runs
     const canonical = canonicalToolName(call.name);
     const eligible = current.pool?.some(item => item.definition.name.toLowerCase() === (canonical ?? call.name).toLowerCase()) ?? true;
     const callableNow = current.tools.some(tool => tool.name.toLowerCase() === (canonical ?? call.name).toLowerCase());
@@ -132,8 +130,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
   const parentTurn = {request, message: stored, provider, model: prepared ? modelKey(prepared.model.identity) : ''};
   if (prepared) options.context?.observe(run.context, request, truncated ? {...turn, stop: 'other'} : turn, prepared.model);
   // The same conditions `execute` below answers with an error before running anything; marks the stored result for the request projection.
-  const neverRan = (call: ToolCall) => isFinishRound(call.name) ? truncated || voidBatch
-    : truncated || !!refusal || schemaErrors.has(call.id) || voidBatch;
+  const neverRan = (call: ToolCall) => truncated || !!refusal || schemaErrors.has(call.id) || voidBatch;
   const completed = new Set<string>();
   let automaNote: string | undefined, loopNote: string | undefined;
   const toolIds = new Map(calls.map(call => [call.id, steps.tool(call,
@@ -141,7 +138,6 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
   try {
     const execute = async (call: ToolCall): Promise<ToolResult> => {
       const context = run.context;
-      if (isFinishRound(call.name) && !truncated) return {text: '', isError: false};
       if (refusal && !truncated) return {text: refusal, isError: true, disposition: 'error'};
       if (truncated) return {text: NOT_EXECUTED_TEXT, isError: true};
       const invalid = schemaErrors.get(call.id);

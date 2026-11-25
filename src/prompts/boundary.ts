@@ -1,10 +1,7 @@
-import {ROUND_SUMMARY_CONTRACT, ROUND_SYNOPSIS_CONTRACT, SHARED_EXECUTION_RULES} from './charter.js';
+import {ROUND_SYNOPSIS_CONTRACT, SHARED_EXECUTION_RULES} from './charter.js';
 import {collaborationFor} from './collaboration/index.js';
 import {workingDirectory} from './runtime/environment.js';
 import {getScratchpadPromptSection} from './runtime/scratchpad.js';
-
-/** How a round's memory is written (`src/config/config.ts:contextPolicySchema`, `round_memory`). */
-export type RoundMemoryMode = 'tool' | 'synopsis';
 
 /** Separates the fixed part of the system prompt from what can change. Providers split on it or remove it; models never see it. */
 export const PROMPT_CACHE_BOUNDARY = '<!-- __LOGOX_PROMPT_CACHE_BOUNDARY__ -->';
@@ -31,8 +28,6 @@ export interface ActorSystemPromptInput {
   skillsIndex: string;
   environmentBaseline: string;
   includeSummary?: boolean | undefined;
-  /** Which round-memory contract the summary section carries (`[context] round_memory`); absent means `synopsis`. */
-  roundMemory?: RoundMemoryMode | undefined;
 }
 export interface BasePromptOptions {
   cwd: string;
@@ -49,7 +44,6 @@ export interface BasePromptOptions {
   skillsIndex?: string | undefined;
   environmentBaseline?: string | undefined;
   includeSummary?: boolean | undefined;
-  roundMemory?: RoundMemoryMode | undefined;
   scratchpadDir?: string | undefined;
 }
 const nested = (text: string) => text.trim().replace(/^# /gm, '## ');
@@ -69,7 +63,7 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   };
   add('persona', 'persona', 'role', input.persona);
   add('shared_execution', 'execution', 'shared', SHARED_EXECUTION_RULES);
-  if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', input.roundMemory === 'tool' ? ROUND_SUMMARY_CONTRACT : ROUND_SYNOPSIS_CONTRACT);
+  if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', ROUND_SYNOPSIS_CONTRACT);
   if (input.memoryFocus?.trim()) {
     const focus = input.memoryFocus.trim();
     add('memory_focus', 'execution', 'role', /^#{1,6}\s/.test(focus) ? focus : '## Role Memory Focus\n' + focus);
@@ -104,5 +98,5 @@ export function composeBaseSystemPrompt(options: BasePromptOptions): {system: st
     guidelines: options.guidelines ?? (options.rulesContext ? [{path: 'request', text: options.rulesContext}] : []),
     memory: options.memory,
     toolsIndex: options.toolsIndex ?? '', skillsIndex: options.skillsIndex ?? '', environmentBaseline: environment,
-    includeSummary: options.includeSummary, roundMemory: options.roundMemory});
+    includeSummary: options.includeSummary});
 }

@@ -69,8 +69,6 @@ export const toolAliases = {
   Plan: 'Plan',
   automa: 'Automa',
   Automa: 'Automa',
-  _FinishRound: '_FinishRound',
-  _finishround: '_FinishRound',
   _GitStatus: '_GitStatus',
   _git_status: '_GitStatus',
   _gitstatus: '_GitStatus',

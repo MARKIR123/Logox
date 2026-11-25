@@ -15,7 +15,7 @@ export const READ_MEMORY_LIMIT = 64;
  * the coordination and protocol tools. External MCP tools (`mcp`, `mcp__<server>__<tool>`) are exempt as well: a page or service
  * they observe changes outside the model's view (see `exempt()`).
  */
-export const LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set(['ShellJob', 'ReadActor', 'ListActors', 'SendMessage', 'AskUserQuestion', 'LoadTools', '_FinishRound']);
+export const LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set(['ShellJob', 'ReadActor', 'ListActors', 'SendMessage', 'AskUserQuestion', 'LoadTools']);
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write']);
 
 function exempt(call: ToolCall): boolean {

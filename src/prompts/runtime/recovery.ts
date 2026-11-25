@@ -37,10 +37,14 @@ export const ECHO_STOP_ERROR = 'The model kept repeating runtime text instead of
 /** Sent once per run when the model returns only thinking or an empty reply, before the runtime counts it as a failure. */
 export const EMPTY_REPLY_REMINDER = 'Your previous reply was empty. Continue the task: call a tool or give your answer.';
 
-/** Request-only note after a reply that closed the round with `_FinishRound` but carried no visible text (the reply was not empty: it held a tool call). */
-export const FINISH_ROUND_NO_TEXT_NUDGE = 'Your reply had no visible text. Write the report or answer in the text channel in the same reply as _FinishRound.';
-/** Tool result for a `_FinishRound` call that came without any delivered text. */
-export const FINISH_ROUND_NO_TEXT_RESULT = 'Deliver the final answer or task report as visible text in the same reply before submitting round memory.';
+/** Request-only note for the single closing follow-up: the reply that closed the round was delivered without a synopsis (`src/context/synopsis.ts`). */
+export const SYNOPSIS_FOLLOW_UP = `# Round closure
+Your answer is delivered, but it did not end with a synopsis. Reply with only the synopsis block for this round and nothing else: do not repeat the answer or call tools.
+<synopsis title="a short title for the round">
+what you concluded or changed, the files involved, what you verified, and what remains
+</synopsis>`;
+/** Result for a call that arrived in the closing follow-up and was therefore not executed. */
+export const SYNOPSIS_CLOSING_TOOL_RESULT = 'The round is closing, so this call was not executed.';
 
 /** Request-only note sent once per run after a long streak of read-only results. */
 export const AUTOMA_STREAK_NOTE = 'That is several read-only calls in a row. If more are coming and you only need the conclusion, hand the rest to `Automa` so the raw output stays out of your context. If you must understand this material yourself, carry on.';

@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createProvider, openaiMessages} from '../src/providers/http.js';
 import {createApplication} from '../src/application.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig, type ModelSettings} from '../src/config/config.js';
 import type {ModelMessage} from '../src/runtime/messages.js';
 
@@ -12,7 +13,7 @@ import type {ModelMessage} from '../src/runtime/messages.js';
 const settings = {kind: 'openai_compat', baseUrl: 'https://fixture.invalid/v1', model: 'chosen-model', key: 'sk-fixture',
   temperature: 0.2, maxTokens: 1024, timeoutMs: 1000, toolDiscovery: 'openai-responses'} as ModelSettings;
 const search = {type: 'tool_search_call', id: 'item-search', execution: 'client', call_id: 'call-search', status: 'completed', arguments: {names: ['_GitStatus', 'ListActors']}};
-const final = {type: 'function_call', call_id: 'call-finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Loaded contracts', summary: 'Round outcome.'})};
+const closed = '\n\n' + synopsisBlock({title: 'Loaded contracts', summary: 'Round outcome.'});
 const sse = (frames: unknown[]) => new Response(frames.map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
 
 test('client tool-search calls decode from non-stream Responses without model substitution or invented IDs', async () => {
@@ -56,8 +57,8 @@ test('SSE client search outputs contain full selected definitions and original I
       {type: 'response.output_item.done', output_index: 1, item: {type: 'function_call', call_id: 'call-read', name: 'Read', arguments: '{"file_path":"evidence.txt"}'}},
       {type: 'response.completed', response: {status: 'completed', usage: {input_tokens: 100, output_tokens: 10, input_tokens_details: {cached_tokens: 20}}}},
     ]);
-    return sse([{type: 'response.output_text.delta', delta: 'Loaded contracts; evidence preserved.'},
-      {type: 'response.output_item.done', output_index: 1, item: {...final, call_id: 'finish-' + requests.length}}, {type: 'response.completed', response: {status: 'completed'}}]);
+    return sse([{type: 'response.output_text.delta', delta: 'Loaded contracts; evidence preserved.' + closed},
+      {type: 'response.completed', response: {status: 'completed'}}]);
   });
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
@@ -121,8 +122,8 @@ test('incomplete native discovery batches execute no writes or schema discoverie
     {type: 'response.output_item.done', output_index: 0, item: search},
     {type: 'response.output_item.done', output_index: 1, item: {type: 'function_call', call_id: 'write', name: 'Write', arguments: '{"file_path":"never.txt","content":"bad"}'}},
     {type: 'response.incomplete', response: {status: 'incomplete'}},
-  ]) : sse([{type: 'response.output_text.delta', delta: 'Incomplete batch was not executed.'},
-    {type: 'response.output_item.done', output_index: 0, item: final}, {type: 'response.completed', response: {status: 'completed'}}]));
+  ]) : sse([{type: 'response.output_text.delta', delta: 'Incomplete batch was not executed.' + closed},
+    {type: 'response.completed', response: {status: 'completed'}}]));
   const config = await loadConfig(cwd, {provider: {model: 'fixture', context_window: 131072}, permissions: {mode: 'creative'}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
@@ -130,7 +131,7 @@ test('incomplete native discovery batches execute no writes or schema discoverie
     assert.equal(app.store.activities.get('s', task.activityId)?.status, 'completed');
     assert.equal(count, 2);
     await assert.rejects(readFile(join(cwd, 'never.txt')), {code: 'ENOENT'});
-    const results = (await app.journal.load('s', 'logox')).flatMap(entry => entry.message?.role === 'tool' && entry.message.name !== '_FinishRound' ? [entry.message] : []);
+    const results = (await app.journal.load('s', 'logox')).flatMap(entry => entry.message?.role === 'tool' ? [entry.message] : []);
     assert.equal(results.length, 2); assert.ok(results.every(result => result.isError && !result.discoveredTools));
   } finally {await app.close(); await rm(cwd, {recursive: true, force: true});}
 });

@@ -28,8 +28,6 @@ import {composeBaseSystemPrompt} from '../prompts/index.js';
 import type {CacheKeeper} from './cache-keepalive.js';
 import {isDirector} from './director.js';
 import {RoundState} from './round-state.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
-import type {RoundMemoryMode} from '../prompts/boundary.js';
 import {classifyTurn} from './turn-outcome.js';
 import {prepareRequest, type RequestInstruction} from './request.js';
 import {requestTurn} from './model-turn.js';
@@ -84,16 +82,14 @@ export interface AgentOptions {
 }
 export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly (ToolDefinition | ToolRegistration)[] = [], resources?: Resources,
   role?: {prompt: string; execution?: string | undefined; collaboration?: string | undefined; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string, environmentBaseline?: string,
-  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}, memory?: string, roundMemory: RoundMemoryMode = 'synopsis'): Promise<AgentRequestBase> {
+  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}, memory?: string): Promise<AgentRequestBase> {
   const extras = extraTools.map(item => {
     if ('metadata' in item) return item;
     const metadata = registry.getMetadata(item.name);
     if (!metadata) throw new Error('Extension metadata is required: ' + item.name);
     return {metadata, definition: item};
   });
-  // A synopsis closes the round inside the reply text, so `_FinishRound` is not offered at all (a call to it is answered as unavailable).
-  const resolved = registry.resolveForActor(ownerId, extras);
-  const pool = roundMemory === 'synopsis' ? resolved.filter(tool => !isFinishRound(tool.metadata.name)) : resolved;
+  const pool = registry.resolveForActor(ownerId, extras);
   const protocol = resolveExposureProtocol(pool, assembly.capabilities.toolDiscovery);
   const catalog = planToolCatalog(registry, pool, protocol, assembly.history);
   const effective = resources ?? new Resources(cwd);
@@ -113,7 +109,6 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     skillsIndex: rules.skills,
     toolsIndex: catalog.catalog,
     includeSummary,
-    roundMemory,
     scratchpadDir,
     environmentBaseline,
   });
@@ -131,7 +126,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('Read-only concurrency must be 1-8');
   return async (prompt, context) => {
     if (context.coordinationWake && context.hasPendingInbox?.() === false) return;
-    const narration: {latest?: string | undefined} = {latest: context.progress && 'label' in context.progress ? context.progress.label : undefined};
     const steps = new Steps(options.store, context);
     const root = context.rootActivityId ?? context.activityId;
     let localRecovery = localRecoveries.get(context.sessionId);
@@ -156,7 +150,7 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
       const wait = new PeerWait({store: options.store, sessionId: context.sessionId, activityId: context.activityId, ownerId: context.ownerId,
         signal: context.signal, hasPendingInbox: () => run.context.hasPendingInbox?.() ?? false, background: options.tools.background});
       const run: AgentRun = {
-        options, messages, steps, state, narration, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(), repeat: new RepeatGuard(options.cwd),
+        options, messages, steps, state, asks, wait, taskModel, approvalHandled, concurrency, pacing: new ToolPacing(), repeat: new RepeatGuard(options.cwd),
         context: {...context, reviewMessages: () => [...userRequests, ...messages.filter(message => message.role === 'assistant')]},
         persist: async (message, step) => {
           const usage = state.takeUsage(message);
@@ -179,7 +173,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
             const inboundRecovery = run.context.inboundRecovery();
             run.context = inboundRecovery ? {...rest, recovery: inboundRecovery} : rest;
           }
-          run.context.acceptRoundMemory?.(null);
           state.newInput();
           return true;
         },
@@ -189,7 +182,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         holdClose: async () => {
           if (run.owesReply()) {
             state.replyOwed(askOwedAtClose(asks.owed(run.context.sessionId, run.context.ownerId)));
-            run.context.acceptRoundMemory?.(null);
             return true;
           }
           if (!wait.pending) return false;
@@ -212,7 +204,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
           state.recovering(kind, repeated => executionRecoveryInstruction(kind, context.ownerId, repeated));
         },
       };
-      run.context.acceptRoundMemory?.(null);
       const buildInstruction = (assembly: AgentAssembly): Promise<RequestInstruction> => options.requestBase ? options.requestBase(run.context, assembly)
         : agentRequestBase(options.cwd, run.context.ownerId, options.extraRegistrations ?? options.extraTools, options.resources,
           undefined, true, undefined, undefined, undefined, assembly);
@@ -223,7 +214,6 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const waitNotices = wait.take();
         if (waitNotices.length) {
           state.waitEnded();
-          run.context.acceptRoundMemory?.(null);
         }
         const ready = await prepareRequest(run, buildInstruction, waitNotices);
         if (ready.kind === 'rebuild') continue;
@@ -236,10 +226,8 @@ export function createAgent(options: AgentOptions): ActorExecutor<string> {
         const {turn, thinkingStep} = presentTurn(run, ready, got);
         const {request, thinkingId} = got;
         const {prepared} = ready;
-        // Where this activity does not close a round, round memory is not asked for and a `_FinishRound` call is answered normally and otherwise ignored.
-        const closes = state.closing || run.effect() === 'closes';
-        const kind = classifyTurn(turn, {closing: state.closing, closes, peerPending: wait.pending || run.owesReply(), directorWaiting: directorWaiting(), offered: ready.definitions});
-        if (kind.kind !== 'finish_round_outside_round' && kind.kind !== 'finish_round' && kind.kind !== 'tools' && prepared && !run.context.signal.aborted) {
+        const kind = classifyTurn(turn, {closing: state.closing, peerPending: wait.pending || run.owesReply(), directorWaiting: directorWaiting(), offered: ready.definitions});
+        if (kind.kind !== 'closing_with_calls' && kind.kind !== 'tools' && prepared && !run.context.signal.aborted) {
           options.context?.observe(run.context, request, turn, prepared.model);
         }
         if (await settleReply(run, kind, {ready, request, turn, thinkingId, thinkingStep, usedProvider: got.usedProvider}) === 'done') {outcome = 'completed'; return;}

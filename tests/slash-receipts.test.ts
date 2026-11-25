@@ -5,6 +5,7 @@ import {mkdtemp, mkdir, readFile, realpath, rm, writeFile} from 'node:fs/promise
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApplication} from '../src/application.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig} from '../src/config/config.js';
 import type {Message} from '../src/runtime/contracts.js';
 import type {ModelRequest} from '../src/runtime/messages.js';
@@ -44,15 +45,13 @@ async function createFixture() {
       }
       throw new Error('Unexpected mock network URL: ' + url);
     };
-    const config = await loadConfig(cwd, {context: {round_memory: 'tool'}}, {}, home, cwd);
+    const config = await loadConfig(cwd, {}, {}, home, cwd);
     const options = {cwd, config, env: {}, resourceOptions: {home, boundary: cwd},
       authPath: join(home, '.logox', 'auth.json'), statusbarPath: join(home, '.logox', 'statusbar.json'), fetcher,
       provider: {async respond(request: ModelRequest) {
         requests.push(request);
-        assert.ok(request.tools.some(tool => tool.name === '_FinishRound'), 'Use the real production finalizer contract.');
-        return {message: {role: 'assistant' as const, text: 'Task complete',
-          toolCalls: [{id: 'receipt-finish-' + requests.length, name: '_FinishRound',
-            arguments: JSON.stringify({title: 'Receipt fixture complete', summary: 'Round outcome.'})}]}, stop: 'tools' as const};
+        assert.ok(!request.tools.some(tool => tool.name === '_FinishRound'), 'The round closes through the reply synopsis, not a tool.');
+        return {message: {role: 'assistant' as const, text: 'Task complete\n\n' + synopsisBlock({title: 'Receipt fixture complete', summary: 'Round outcome.'})}, stop: 'complete' as const};
       }}};
     const app = await createApplication(options);
     return {root, cwd, home, app, options, requests, network};

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {ToolRegistry} from '../src/tools/registry.js';
 import {toolMetadataSchema} from '../src/tools/metadata.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, ToolDefinition} from '../src/runtime/messages.js';
 
@@ -14,7 +14,7 @@ test('loading defaults are independent from role and terminal presentation', () 
   assert.equal(Reflect.get(toolMetadataSchema.parse(input), 'loading'), 'deferred');
   assert.equal(Reflect.get(toolMetadataSchema.parse({...input, category: 'core'}), 'loading'), 'eager');
   const registry = new ToolRegistry();
-  assert.equal(Reflect.get(registry.getMetadata('_FinishRound')!, 'loading'), 'eager');
+  assert.equal(registry.getMetadata('_FinishRound'), undefined, 'the retired round tool is not registered');
   assert.equal(registry.getTerminalVisibility('_GitStatus'), 'silent');
   assert.ok(registry.getToolsForActor('logox').some(tool => tool.name === 'SendMessage'));
   assert.ok(!registry.getToolsForActor('new-scout').some(tool => tool.name === 'UpdateTaskProgress'));
@@ -74,8 +74,7 @@ test('application startup and reload apply tool overrides without global state o
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd},
     provider: {async respond(request) {
       seen.push(request);
-      return {stop: 'tools', message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'done-' + seen.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}};
+      return {stop: 'complete', message: {role: 'assistant', text: 'Done.'}};
     }}});
   try {
     await app.ensemble.dispatch('logox', 'Inspect the catalog.', 'direct', {inputKind: 'human'}).done;

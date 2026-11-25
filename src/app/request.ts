@@ -135,8 +135,7 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
       ...(language ? {language} : {}), ...(state.userName ? {userName: state.userName} : {})}, history);
     const base = await agentRequestBase(cwd, context.ownerId, mcpRegistrations(extensions.mcp),
       resources, {prompt: role.prompt, execution: role.execution, collaboration: role.collaboration,
-        compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history}, memoryPrompt(),
-      actorServices.policy(context.ownerId).round_memory ?? 'synopsis');
+        compression: role.compression, visibility: policy}, true, actorScratchpad, formatEnvironment(effective.baseline), toolRegistry, {...assembly, history}, memoryPrompt());
     const contextUpdates: RuntimeContextMessage[] = [...effective.updates, ...base.contextUpdates ?? []];
     const restriction = context.recovery?.exhausted && !context.recovery.key.startsWith('execution:') ? REVOCATION_RESTRICTION : '';
     const pending = directorReports.get(context.activityId);

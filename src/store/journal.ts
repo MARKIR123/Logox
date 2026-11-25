@@ -12,9 +12,8 @@ import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
-import {extractRoundMemory, runtimeRoundSummary, synopsisRoundMemory, type RoundMemory} from '../context/round-memory.js';
+import {runtimeRoundSummary, synopsisRoundMemory, type RoundMemory} from '../context/round-memory.js';
 import {parseSynopsis} from '../context/synopsis.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
 const entrySchema = z.strictObject({
@@ -64,7 +63,7 @@ export interface HistoryStore {
   load(sessionId: string, ownerId: string): Promise<readonly HistoryEntry[]>;
   append(entry: HistoryEntry): Promise<void>;
   finish?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus): Promise<RoundSummary>;
-  finishRecord?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null, placement?: RoundPlacement): Promise<RoundRecord>;
+  finishRecord?(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, placement?: RoundPlacement): Promise<RoundRecord>;
   /** The round a new Director activity continues: the one opened earlier whose last activity ended while dispatched work was still open. */
   openRound?(sessionId: string, ownerId: string): Promise<string | undefined>;
   /** The actor's latest closed round, when nothing but tool results follow it. */
@@ -343,7 +342,7 @@ export class Journal implements HistoryStore {
     const last = (await this.rounds(sessionId, ownerId, entries)).at(-1);
     return last && entries.slice(last.end).every(entry => entry.role === 'tool') ? last : undefined;
   }
-  async finishRecord(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, finalizerCallId?: string | null, placement: RoundPlacement = {kind: 'round'}): Promise<RoundRecord> {
+  async finishRecord(sessionId: string, ownerId: string, activityId: string, status: RoundStatus, placement: RoundPlacement = {kind: 'round'}): Promise<RoundRecord> {
     const entries = await this.load(sessionId, ownerId);
     const own = entries.findIndex(entry => entry.activityId === activityId && entry.role === 'user');
     if (own < 0) throw new Error('Round input was not recorded.');
@@ -370,17 +369,16 @@ export class Journal implements HistoryStore {
     const delivering = closing && stripNarration(answerOf(closing)).trim() ? closing
       : replies.findLast(message => message !== closing && stripNarration(answerOf(message)).trim());
     const final = stripLeadingActionLines(delivering ? answerOf(delivering) : '');
-    // A `_FinishRound` call names the round's memory; otherwise a synopsis ending the closing reply does (`[context] round_memory = "synopsis"`).
-    const accepted = status === 'completed' && !reply ? extractRoundMemory(messages, finalizerCallId) ?? (closing ? synopsisRoundMemory(closing.text, legacy.title) : undefined) : undefined;
-    const modernClosure = reply || finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
-      (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
+    // The round's memory is the last synopsis written in it: ending the closing reply, or the closing follow-up's (`memoryOnly`) when that reply had none.
+    const written = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.textToolCall && synopsisRoundMemory(message.text));
+    const accepted = status === 'completed' && !reply && written ? synopsisRoundMemory(written.text, legacy.title) : undefined;
     const replyTitle = placement.title?.trim() || (legacy.source === 'model' ? legacy.title : legacy.title && legacy.title !== 'Completed' ? legacy.title : 'Reply');
     const memory: RoundMemory = accepted ?? {
-      title: reply && status === 'completed' ? replyTitle : legacy.source === 'model' ? legacy.title : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
-      summary: modernClosure || status !== 'completed' ? runtimeRoundSummary(messages, status, reply) : (legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'),
-      source: modernClosure ? 'runtime' : 'legacy',
+      title: reply && status === 'completed' ? replyTitle : status === 'completed' ? 'Round completed without structured memory' : status === 'cancelled' ? deliberateStopLabel(messages) ?? 'Execution cancelled' : 'Execution failed',
+      summary: runtimeRoundSummary(messages, status, reply),
+      source: 'runtime',
     };
-    // The `_FinishRound` title names the round; only a stage line or a parenthetical aside falls back to the text-derived one.
+    // The synopsis title names the round; only a stage line or a parenthetical aside falls back to the text-derived one.
     const modelTitle = accepted?.title.trim();
     const summary: RoundSummary = accepted ? {title: modelTitle && !isActionLine(modelTitle) ? modelTitle : legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
     // A record rewritten for the same round keeps its ordinal; a new round takes the next number after the highest one saved and after every round the ledger opened before it (old records counted activities).

@@ -10,7 +10,7 @@ interface Score {
   session: {label: string; others: {id: string}[]; wallMs: number | null};
   roots: {finalReports: number; wakes: number; lateWakes: number; lateWakeReports: number; wallMs: number | null; usage: {input: number} | null}[];
   stages: Record<string, {turns: number; withStage: number; share: number | null; distinct: number | null}>;
-  roundClosing: Record<string, {rounds: number; same: number; separate: number; silent: number; never: number}>;
+  roundClosing: Record<string, {rounds: number; inline: number; followUp: number; missing: number; legacy: number}>;
   roundSummaries: Record<string, {rounds: number; model: number; runtime: number; failed: number; interrupted: number; reply: number; modelShare: number | null}>;
   failures: {failedTasks: number; emptyReplyFailures: number; modelErrorEvents: number};
   writes: {refusals: number; savedRecorded: number};
@@ -43,6 +43,7 @@ const tool = (ownerId: string, activityId: string, name: string, text: string, i
 const human = (text: string) => ({ownerId: 'logox', role: 'user', text, time: tick(), activityId: ROOT, inputKind: 'human', message: {role: 'user', text}});
 const jsonl = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
 const REPORT = 'Done. **Open [index.html](./index.html)** to watch the animation; everything is inline and works offline.';
+const SYNOPSIS = '<synopsis title="Page">\nBuilt index.html; nothing open.\n</synopsis>';
 
 /** Writes the smallest session the scorer reads: one root, one Director dispatch, two wakes (the second one late), one failed Kalon task. */
 async function writeSession(dir: string, withUsage = false): Promise<void> {
@@ -58,7 +59,7 @@ async function writeSession(dir: string, withUsage = false): Promise<void> {
       call('SendMessage', {to: 'techne', type: 'inform', message: 'hi'}),
       call('mcp', {server: 'playwright', action: 'call', tool: 'browser_navigate', arguments: {url: 'file:///x/index.html'}}),
       call('Automa', {jobs: [{brief: 'check', keep: true, continue: '/'}], release: ['/']})]),
-    assistant('logox', ROOT, 'Waiting for the team.', [call('_FinishRound', {title: 'wait'})]),
+    assistant('logox', ROOT, 'Waiting for the team.'),
   ];
   const techne = [
     assistant('techne', 'tech', '', [call('Shell', {command: 'python -m http.server 8765'})], 'Build the page'),
@@ -68,9 +69,9 @@ async function writeSession(dir: string, withUsage = false): Promise<void> {
       join(tmpdir(), 'nope', 'rejected-writes', '1-a.html'), true),
     assistant('techne', 'tech', '', [call('SendMessage', {to: 'logox', type: 'reply', message: 'ok'})]),
     assistant('techne', 'tech', 'Finished the page.'),
-    assistant('techne', 'tech', '', [call('_FinishRound', {title: 'done'})]),
+    {...assistant('techne', 'tech', SYNOPSIS), message: {role: 'assistant', text: SYNOPSIS, memoryOnly: true}},
   ];
-  const kalon = [assistant('kalon', 'kal', 'Drawing.', [call('_FinishRound', {title: 'x'})], 'Draw the scene')];
+  const kalon = [assistant('kalon', 'kal', 'Drawing.\n\n' + SYNOPSIS, [], 'Draw the scene')];
   const wake1 = [assistant('logox', 'wake1', REPORT), assistant('logox', 'wake1', '', [call('_FinishRound', {title: 'final'})])];
   const wake2 = [assistant('logox', 'wake2', REPORT)];
   await writeFile(join(dir, 'director.jsonl'), jsonl(priced([...director, ...wake1, ...wake2])));
@@ -105,9 +106,9 @@ test('scoreSession computes the workflow metrics of a synthetic session', async 
     assert.deepEqual(score.stages['logox'], {turns: 6, withStage: 1, share: 1 / 6, distinct: 1});
     assert.equal(score.stages['techne']?.withStage, 1);
     assert.equal(score.stages['techne']?.distinct, 2, 'stage history from tasks.json joins the ledger stage');
-    assert.deepEqual(score.roundClosing['techne'], {rounds: 1, same: 0, separate: 1, silent: 0, never: 0});
-    assert.deepEqual(score.roundClosing['kalon'], {rounds: 1, same: 1, separate: 0, silent: 0, never: 0});
-    assert.deepEqual(score.roundClosing['logox'], {rounds: 3, same: 1, separate: 1, silent: 0, never: 1});
+    assert.deepEqual(score.roundClosing['techne'], {rounds: 1, inline: 0, followUp: 1, missing: 0, legacy: 0});
+    assert.deepEqual(score.roundClosing['kalon'], {rounds: 1, inline: 1, followUp: 0, missing: 0, legacy: 0});
+    assert.deepEqual(score.roundClosing['logox'], {rounds: 3, inline: 0, followUp: 0, missing: 2, legacy: 1}, 'wake1 closed through the retired _FinishRound');
     assert.deepEqual(score.roundSummaries['logox'], {rounds: 3, model: 1, runtime: 1, failed: 0, interrupted: 0, reply: 1, modelShare: 1 / 3});
     assert.deepEqual(score.roundSummaries['techne'], {rounds: 3, model: 1, runtime: 0, failed: 1, interrupted: 1, reply: 0, modelShare: 1 / 3});
     assert.deepEqual(score.roundSummaries['total'], {rounds: 6, model: 2, runtime: 1, failed: 1, interrupted: 1, reply: 1, modelShare: 1 / 3});

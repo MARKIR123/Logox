@@ -16,6 +16,7 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
 import {ownerHeader} from '../src/tui/appearance/actor-style.js';
 import type {ModelRequest} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const baseEnv: ExecutionEnvironment = {model: 'p/m', effort: 'auto', permission: 'default', directory: '/w', scratchpad: '/s', rules: 'abc', services: []};
 const answering = (answer: WizardAnswer) => async (_question: WizardQuestion) => answer;
@@ -122,8 +123,7 @@ test('/name sets, shows and resets the name; the next model request carries it',
     authPath: join(home, '.logox', 'auth.json'), statusbarPath: join(home, '.logox', 'statusbar.json'),
     provider: {async respond(request: ModelRequest) {
       requests.push(request);
-      return {message: {role: 'assistant' as const, text: 'Done', toolCalls: [{id: 'f' + requests.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', summary: 'ok'})}]}, stop: 'tools' as const};
+      return {message: {role: 'assistant' as const, text: 'Done' + '\n\n' + synopsisBlock({title: 'Done', summary: 'ok'})}, stop: 'complete' as const};
     }}});
   const lastNotice = () => app.store.getSnapshot().messages.filter(message => message.role === 'system').at(-1)?.text;
   try {

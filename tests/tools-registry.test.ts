@@ -15,13 +15,13 @@ test('ToolRegistry filters tools for director vs worker vs custom actor', () => 
   assert.ok(logoxNames.includes('Read'));
   assert.ok(logoxNames.includes('Actor'));
   assert.ok(logoxNames.includes('CancelActor'));
-  assert.ok(logoxNames.includes('_FinishRound'));
+  assert.equal(logoxNames.includes('_FinishRound'), false, 'the retired round tool is not offered');
 
   // Worker (techne) has access to core and protocol, but NEVER orchestration (Actor, CancelActor)
   const techneTools = registry.getToolsForActor('techne');
   const techneNames = techneTools.map((t: ToolDefinition) => t.name);
   assert.ok(techneNames.includes('Read'));
-  assert.ok(techneNames.includes('_FinishRound'));
+  assert.equal(techneNames.includes('_FinishRound'), false);
   assert.equal(techneNames.includes('Actor'), false);
   assert.equal(techneNames.includes('CancelActor'), false);
 
@@ -30,15 +30,15 @@ test('ToolRegistry filters tools for director vs worker vs custom actor', () => 
   const dynamicNames = dynamicTools.map((t: ToolDefinition) => t.name);
   assert.ok(dynamicNames.includes('Read'));
   assert.ok(dynamicNames.includes('Grep'));
-  assert.ok(dynamicNames.includes('_FinishRound'));
+  assert.equal(dynamicNames.includes('_FinishRound'), false);
   assert.equal(dynamicNames.includes('Actor'), false);
 });
 
-test('ToolRegistry reports terminalVisibility correctly (silent for _FinishRound)', () => {
+test('ToolRegistry reports terminalVisibility correctly (silent for _GitStatus)', () => {
   const registry = new ToolRegistry();
   assert.equal(registry.getTerminalVisibility('Read'), 'card');
   assert.equal(registry.getTerminalVisibility('Shell'), 'card');
-  assert.equal(registry.getTerminalVisibility('_FinishRound'), 'silent');
+  assert.equal(registry.getTerminalVisibility('_GitStatus'), 'silent');
 });
 
 test('ToolRegistry loads and applies user overrides from .logox/tools.json', async () => {

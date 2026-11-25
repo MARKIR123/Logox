@@ -21,8 +21,6 @@ export interface AgentRun {
   readonly messages: ModelMessage[];
   readonly steps: Steps;
   readonly state: RoundState;
-  /** The latest `⏵` line the actor wrote; only a fallback title for `_FinishRound` (the card never reads it). */
-  readonly narration: {latest?: string | undefined};
   readonly asks: AskBoard;
   readonly wait: PeerWait;
   readonly pacing: ToolPacing;

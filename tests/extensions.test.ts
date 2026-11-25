@@ -12,6 +12,7 @@ import {observeTasks, ProjectExtensions} from '../src/extensions/runtime.js';
 import type {ActorContext} from '../src/actors/ensemble.js';
 import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {waitForSnapshot} from './runtime-fixture.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 
@@ -123,9 +124,7 @@ test('MCP images reach the next model request through the application', async ()
       assert.equal(result.images?.length, 1);
       assert.equal(result.images[0]!.mimeType, 'image/png');
       assert.equal(Buffer.from(result.images[0]!.data, 'base64').subarray(1, 4).toString(), 'PNG');
-      return {stop: 'tools', message: {role: 'assistant', text: 'Screenshot received.', toolCalls: [{
-        id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Screenshot verified', summary: 'Round outcome.'}),
-      }]}};
+      return {stop: 'complete', message: {role: 'assistant', text: 'Screenshot received.\n\n' + synopsisBlock({title: 'Screenshot verified', summary: 'Round outcome.'})}};
     }}});
   try {
     const handle = app.ensemble.dispatch('logox', 'Inspect the screenshot.');

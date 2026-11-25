@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {createApplication as productionApplication} from '../src/application.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, ModelTurn, Provider, ToolDefinition} from '../src/runtime/messages.js';
 import {recoverTextCalls} from '../src/kernel/text-recovery.js';
@@ -123,13 +124,13 @@ const assistant = (text: string): ModelTurn => ({message: {role: 'assistant', te
 const call = (name: string, args: unknown, id = 'c'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name, arguments: JSON.stringify(args)}]}, stop: 'tools'});
 async function rawFixture(provider: Provider) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-text-recovery-'));
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}}, {}, cwd, cwd);
   const probe = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   await probe.close();
   const app = await productionApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
-const closing = () => call('_FinishRound', {title: 'Searched', summary: 'Searched.'}, 'fin');
+const closed = '\n\n' + synopsisBlock({title: 'Searched', summary: 'Searched.'});
 const reminders = (req: ModelRequest) => req.messages.filter(message => message.role === 'context' && message.kind === 'reminder').map(message => message.text);
 
 test('an actor runs a call written as text, drops the call text from the reply, and is reminded once', async () => {
@@ -137,15 +138,14 @@ test('an actor runs a call written as text, drops the call text from the reply, 
   const watch = (turn: ModelTurn) => (req: ModelRequest) => {seen.push(req); return turn;};
   const f = await rawFixture(scripted([
     watch(assistant('Searching.\n```json\n{"name":"Glob","arguments":{"pattern":"*.nothing"}}\n```')),
-    watch(assistant('Nothing found.')),
-    watch(closing()),
+    watch(assistant('Nothing found.' + closed)),
   ]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'search');
     await handle.done;
     assert.equal(f.app.store.activities.get('test', handle.activityId)?.status, 'completed');
     assert.deepEqual(reminders(seen[1]!), [TEXT_CALL_RECOVERED_NOTE]);
-    assert.deepEqual(reminders(seen[2]!), [], 'answered, so no longer sent');
+    assert.equal(seen.length, 2, 'the reply carries its synopsis: no follow-up request');
     const assistantTurn = seen[1]!.messages.find(message => message.role === 'assistant' && message.toolCalls?.length);
     assert.ok(assistantTurn && assistantTurn.role === 'assistant');
     assert.equal(assistantTurn.toolCalls?.[0]?.name, 'Glob');
@@ -161,8 +161,7 @@ test('recovered arguments still go through schema validation: invalid ones give 
   const seen: ModelRequest[] = [];
   const f = await rawFixture(scripted([
     assistant('{"name":"Glob","arguments":{"patern":"oops"}}'),
-    (req: ModelRequest) => {seen.push(req); return assistant('Fixed.');},
-    closing(),
+    (req: ModelRequest) => {seen.push(req); return assistant('Fixed.' + closed);},
   ]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'search');
@@ -173,7 +172,7 @@ test('recovered arguments still go through schema validation: invalid ones give 
 });
 
 test('a call to a tool that was not offered stays an ordinary reply', async () => {
-  const f = await rawFixture(scripted([assistant('{"name":"Teleport","arguments":{"to":"moon"}}'), closing()]));
+  const f = await rawFixture(scripted([assistant('{"name":"Teleport","arguments":{"to":"moon"}}' + closed)]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'explain');
     await handle.done;

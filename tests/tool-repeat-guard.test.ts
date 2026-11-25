@@ -7,6 +7,7 @@ import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {LOOP_EXEMPT_TOOLS, LOOP_STREAK, READ_MEMORY_LIMIT, RepeatGuard} from '../src/kernel/repeat-guard.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {ModelRequest, ModelTurn, Provider, ToolCall} from '../src/runtime/messages.js';
 import {Journal} from '../src/store/journal.js';
@@ -75,7 +76,7 @@ test('a changed result, changed arguments or a failure-to-success change break t
 });
 
 test('polling tools, coordination and MCP calls are exempt, and a waiting Director is left alone', () => {
-  assert.deepEqual([...LOOP_EXEMPT_TOOLS].sort(), ['AskUserQuestion', 'ListActors', 'LoadTools', 'ReadActor', 'SendMessage', 'ShellJob', '_FinishRound']);
+  assert.deepEqual([...LOOP_EXEMPT_TOOLS].sort(), ['AskUserQuestion', 'ListActors', 'LoadTools', 'ReadActor', 'SendMessage', 'ShellJob']);
   for (const polled of [call('ShellJob', {job_id: 'j1'}), call('ReadActor', {actor: 'techne'}), call('ListActors', {}), call('mcp__playwright__browser_snapshot', {}), call('mcp', {server: 'x'})]) {
     const guard = new RepeatGuard(CWD);
     for (let index = 0; index < LOOP_STREAK * 3; index++) assert.equal(guard.loopNote(polled, ok('still running'), false), undefined, polled.name);
@@ -86,7 +87,7 @@ test('polling tools, coordination and MCP calls are exempt, and a waiting Direct
 
 // The whole path: a model that repeats itself gets the facts and the reminder in its next requests.
 const reply = (text: string, calls: ToolCall[] = []): ModelTurn => ({message: {role: 'assistant', text, ...(calls.length ? {toolCalls: calls} : {})}, stop: calls.length ? 'tools' : 'complete'});
-const finish = call('_FinishRound', {title: 'Done', summary: 'Round outcome.'}, 'finish');
+const closed = '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'});
 
 async function run(script: (index: number, cwd: string) => ModelTurn | Promise<ModelTurn>) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-repeat-'));
@@ -113,7 +114,7 @@ const reminders = (request: ModelRequest) => request.messages.flatMap(message =>
 test('an agent that re-reads an unchanged range is told so in the result, and not after the file changed', async () => {
   const f = await run(async (index, cwd) => {
     if (index === 3) await writeFile(join(cwd, 'notes.txt'), 'alpha\ngamma\n');
-    return index <= 4 ? reply('', [call('Read', {file_path: 'notes.txt'}, 'r' + index)]) : reply('Done.', [finish]);
+    return index <= 4 ? reply('', [call('Read', {file_path: 'notes.txt'}, 'r' + index)]) : reply('Done.' + closed);
   });
   try {
     assert.equal(f.status, 'completed');
@@ -127,7 +128,7 @@ test('an agent that re-reads an unchanged range is told so in the result, and no
 });
 
 test('an agent that repeats an identical call with an identical result gets one reminder, after the third', async () => {
-  const f = await run(index => index <= 5 ? reply('', [call('Glob', {pattern: '*.txt'}, 'g' + index)]) : reply('Done.', [finish]));
+  const f = await run(index => index <= 5 ? reply('', [call('Glob', {pattern: '*.txt'}, 'g' + index)]) : reply('Done.' + closed));
   try {
     assert.equal(f.status, 'completed');
     assert.deepEqual(f.requests.map(request => reminders(request).length), [0, 0, 0, 1, 0, 0], 'present only in the request that follows the third call, gone once answered');

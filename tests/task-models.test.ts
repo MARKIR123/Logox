@@ -17,10 +17,11 @@ import {Tools} from '../src/tools/tools.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import {waitForSnapshot} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 function complete(response: ServerResponse, content = '完成') {
   response.writeHead(200, {'content-type': 'text/event-stream'});
-  response.end('data: ' + JSON.stringify({choices: [{delta: {content}, finish_reason: 'stop'}]}) + '\n\n' +
+  response.end('data: ' + JSON.stringify({choices: [{delta: {content: content + String.fromCharCode(10, 10) + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, finish_reason: 'stop'}]}) + '\n\n' +
     'data: ' + JSON.stringify({choices: [], usage: {prompt_tokens: 50, completion_tokens: 4}}) + '\n\n');
 }
 async function fixture(handle: (body: Record<string, unknown>, response: ServerResponse) => void, configured = true, retries = 0,

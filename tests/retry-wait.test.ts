@@ -13,6 +13,7 @@ import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 import type {ModelTurn, Provider} from '../src/runtime/messages.js';
 import {waitForSnapshot} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const temporary = (retryAfterMs?: number, status = 503) =>
   new ProviderError('Model service temporarily unavailable', true, 'temporary', {status, ...(retryAfterMs !== undefined ? {retryAfterMs} : {})});
@@ -61,7 +62,7 @@ async function loop(failures: readonly ProviderError[], retries = 3) {
   const directory = await mkdtemp(join(tmpdir(), 'logox-retry-wait-'));
   const store = new RuntimeStore();
   const sent: number[] = [];
-  const finish: ModelTurn = {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'};
+  const finish: ModelTurn = {message: {role: 'assistant', text: 'Done.' + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'};
   const provider: Provider = {async respond(_request, delta) {
     sent.push(Date.now());
     const failure = failures[sent.length - 1];

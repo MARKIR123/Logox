@@ -10,6 +10,7 @@ import {RuntimeStore} from '../src/runtime/store.js';
 import {withoutAnsweredUnexecuted, type ModelMessage, type ModelRequest, type ModelTurn, type Provider} from '../src/runtime/messages.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 type Tool = Extract<ModelMessage, {role: 'tool'}>;
 const call = (id: string, name = 'Glob') => ({id, name, arguments: '{}'});
@@ -58,7 +59,7 @@ test('a mixed turn is only judged by its own results and the projection is idemp
 });
 
 const reply = (text: string, calls: NonNullable<ModelTurn['message']['toolCalls']> = []): ModelTurn => ({message: {role: 'assistant', text, ...(calls.length ? {toolCalls: calls} : {})}, stop: calls.length ? 'tools' : 'complete'});
-const finish = {id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})};
+const closed = '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'});
 
 async function run(turns: ModelTurn[], appendOnly = false) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-unexecuted-'));
@@ -67,7 +68,7 @@ async function run(turns: ModelTurn[], appendOnly = false) {
   const provider: Provider = {...appendOnly ? {capabilities: {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true}} : {},
     async respond(request, delta) {
       requests.push(structuredClone(request));
-      const value = turns[requests.length - 1] ?? reply('Done.', [finish]);
+      const value = turns[requests.length - 1] ?? reply('Done.' + closed);
       if (value.message.text) delta({kind: 'text', text: value.message.text});
       return value;
     }};
@@ -83,7 +84,7 @@ const calls = (request: ModelRequest) => request.messages.flatMap(message => mes
 const turns = () => [
   reply('', [{id: 'bad', name: 'NoSuchTool', arguments: '{}'}]),
   reply('', [{id: 'good', name: 'Glob', arguments: JSON.stringify({pattern: '*'})}]),
-  reply('Done.', [finish]),
+  reply('Done.' + closed),
 ];
 
 test('a request after recovery no longer carries the failed call while the ledger keeps it', async () => {

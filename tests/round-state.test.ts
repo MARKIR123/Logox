@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ASK_CLOSE_REMINDERS, REFUSED_BATCH_LIMIT, RoundState} from '../src/kernel/round-state.js';
-import {FINISH_ROUND_NO_TEXT_NUDGE} from '../src/prompts/runtime/recovery.js';
 
-/** A state with a delivered answer awaiting its closing call, a recovery note and one owed-reply reminder spent. */
+/** A state awaiting its synopsis follow-up, a recovery note and one owed-reply reminder spent. */
 function busy(): RoundState {
   const state = new RoundState();
   state.replyOwed('owed');
-  state.answerDelivered('answer');
-  state.closingCallRequested();
+  state.synopsisRequested();
   state.recovering('no_delivery', repeated => 'note ' + repeated);
   return state;
 }
@@ -18,7 +16,6 @@ test('newInput withdraws the close and drops the recovery note and kind', () => 
   assert.equal(state.closing, true);
   state.newInput();
   assert.equal(state.closing, false);
-  assert.equal(state.finalText, '');
   assert.equal(state.recovery, '');
   assert.equal(state.recoveringKind, undefined);
 });
@@ -35,7 +32,6 @@ test('waitEnded does what newInput does', () => {
   const state = busy();
   state.waitEnded();
   assert.equal(state.closing, false);
-  assert.equal(state.finalText, '');
   assert.equal(state.recovery, '');
   assert.equal(state.recoveringKind, undefined);
   assert.equal(state.mayRemindOwed, true);
@@ -47,17 +43,14 @@ test('replyOwed counts a reminder, replaces the note, clears the kind and withdr
   assert.equal(state.recovery, 'you owe a reply');
   assert.equal(state.recoveringKind, undefined);
   assert.equal(state.closing, false);
-  assert.equal(state.finalText, '');
   assert.equal(state.mayRemindOwed, false);
 });
 
-test('closingCallRequested keeps the answer, starts the follow-up and clears the recovery note', () => {
+test('synopsisRequested starts the follow-up and clears the recovery note', () => {
   const state = new RoundState();
   state.recovering('no_delivery', () => 'note');
-  state.answerDelivered('the answer');
-  state.closingCallRequested();
+  state.synopsisRequested();
   assert.equal(state.closing, true);
-  assert.equal(state.finalText, 'the answer');
   assert.equal(state.recovery, '');
   assert.equal(state.recoveringKind, undefined);
 });
@@ -70,17 +63,6 @@ test('recovering renders a repeated note from the second recovery on', () => {
   assert.deepEqual(seen, [false, true]);
   assert.equal(state.recovery, 'two');
   assert.equal(state.recoveringKind, 'truncated_text');
-});
-
-test('the textless-finish nudge is given once and does not count as a recovery', () => {
-  const state = new RoundState();
-  assert.equal(state.textlessFinish(), 'nudge');
-  assert.equal(state.recovery, FINISH_ROUND_NO_TEXT_NUDGE);
-  assert.equal(state.recoveringKind, 'no_delivery');
-  assert.equal(state.textlessFinish(), 'spent');
-  const seen: boolean[] = [];
-  state.recovering('no_delivery', repeated => { seen.push(repeated); return 'x'; });
-  assert.deepEqual(seen, [false]);
 });
 
 test('a task model change replaces the note but keeps the recovery kind, and remembers foreign signatures', () => {
@@ -99,7 +81,6 @@ test('batchRan clears the recovery note and kind only', () => {
   assert.equal(state.recovery, '');
   assert.equal(state.recoveringKind, undefined);
   assert.equal(state.closing, true);
-  assert.equal(state.finalText, 'answer');
 });
 
 test('refused batches end the exchange on the limit-th in a row and the count restarts', () => {
@@ -121,7 +102,7 @@ test('the iteration budget ignores the closing follow-up and can be extended', (
   assert.equal(state.iterationsSpent(3), false);
   state.iterationsExtended();
   assert.equal(state.iteration, 0);
-  state.answerDelivered('a'); state.closingCallRequested();
+  state.synopsisRequested();
   state.requestSent();
   assert.equal(state.iteration, 0);
   assert.equal(state.iterationsSpent(1), false);

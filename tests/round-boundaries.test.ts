@@ -7,12 +7,14 @@ import {composeBaseSystemPrompt} from '../src/prompts/boundary.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {EnsembleRuntime, type TaskHandle} from '../src/actors/ensemble.js';
 import {RuntimeStore} from '../src/runtime/store.js';
-import type {ModelRequest, ModelTurn, Provider, ToolCall} from '../src/runtime/messages.js';
+import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 
-const finish = (id: string, title = 'Closed', summary = 'Model memory.'): ToolCall => ({id, name: '_FinishRound', arguments: JSON.stringify({title, summary})});
-const turn = (text: string, calls?: ToolCall[]): ModelTurn => ({message: {role: 'assistant', text, ...(calls ? {toolCalls: calls} : {})}, stop: calls ? 'tools' : 'complete'});
+const turn = (text: string): ModelTurn => ({message: {role: 'assistant', text}, stop: 'complete'});
+/** A reply that closes its round: the text followed by the synopsis block that becomes the round memory. */
+const closing = (text: string, title = 'Closed', summary = 'Model memory.'): ModelTurn => turn(text + '\n\n' + synopsisBlock({title, summary}));
 type Script = (request: ModelRequest, index: number, signal: AbortSignal) => ModelTurn | Promise<ModelTurn>;
 
 async function fixture(directorScript: Script, companionScript: Script, existing?: {cwd: string}) {
@@ -40,19 +42,19 @@ async function fixture(directorScript: Script, companionScript: Script, existing
 const gate = () => {let open!: () => void; const wait = new Promise<void>(resolve => {open = resolve;}); return {wait, open};};
 const records = async (f: {journal: Journal}, owner = 'logox') => f.journal.rounds('s', owner, await f.journal.load('s', owner));
 
-test('a Director round spans dispatch, wait and acceptance: one record, one closing follow-up', async () => {
+test('a Director round spans dispatch, wait and acceptance: one record, no follow-up', async () => {
   let techne: TaskHandle | undefined;
   const f = await fixture((_request, index) => {
     if (index === 1) {techne = f.ensemble.dispatch('techne', 'Build it', 'logox', {inputKind: 'director'}); return turn('Dispatched, waiting.');}
-    return index === 2 ? turn('Accepted and verified.') : turn('', [finish('close', 'Feature accepted', 'Techne built it; accepted.')]);
-  }, () => turn('Built.', [finish('t')]));
+    return closing('Accepted and verified.', 'Feature accepted', 'Techne built it; accepted.');
+  }, () => closing('Built.'));
   try {
     const first = f.ensemble.dispatch('logox', 'Build a feature', 'direct'); await first.done;
-    assert.equal(f.requests.logox.length, 1, 'no closing follow-up while work is open');
+    assert.equal(f.requests.logox.length, 1, 'no follow-up while work is open');
     assert.equal((await records(f)).length, 0, 'a suspended round writes no record');
     await techne!.done;
     const wake = f.ensemble.dispatch('logox', 'Reports arrived', 'techne', {inputKind: 'actor'}); await wake.done;
-    assert.equal(f.requests.logox.length, 3, 'exactly one closing follow-up in all');
+    assert.equal(f.requests.logox.length, 2, 'the accepting reply carries its synopsis: no follow-up');
     const entries = await f.journal.load('s', 'logox');
     const found = await records(f);
     assert.equal(found.length, 1);
@@ -64,30 +66,14 @@ test('a Director round spans dispatch, wait and acceptance: one record, one clos
   } finally {await f.cleanup();}
 });
 
-test('a _FinishRound call while dispatched work is open gets a normal result and closes nothing', async () => {
-  const hold = gate();
-  const f = await fixture((_request, index) => {
-    if (index === 1) {f.ensemble.dispatch('techne', 'Build it', 'logox', {inputKind: 'director'}); return turn('Waiting for Techne.', [finish('early')]);}
-    return turn('unexpected');
-  }, async () => {await hold.wait; return turn('Built.', [finish('t')]);});
-  try {
-    const first = f.ensemble.dispatch('logox', 'Go', 'direct'); await first.done;
-    assert.equal(f.store.activities.get('s', first.activityId)?.status, 'completed');
-    assert.equal(f.requests.logox.length, 1);
-    const receipt = (await f.journal.load('s', 'logox')).find(entry => entry.message?.role === 'tool' && entry.message.name === '_FinishRound');
-    assert.equal(receipt?.message?.role === 'tool' && receipt.message.isError, false);
-    assert.equal((await records(f)).length, 0);
-  } finally {hold.open(); await f.cleanup();}
-});
-
 test('a human message while work is open joins the same round', async () => {
   const hold = gate();
   let techne: TaskHandle | undefined;
   const f = await fixture((_request, index) => {
     if (index === 1) {techne = f.ensemble.dispatch('techne', 'Build it', 'logox', {inputKind: 'director'}); return turn('Waiting.');}
     if (index === 2) return turn('Still running; I will report when it lands.');
-    return index === 3 ? turn('All done.') : turn('', [finish('close', 'Joined round', 'Both messages handled.')]);
-  }, async () => {await hold.wait; return turn('Built.', [finish('t')]);});
+    return closing('All done.', 'Joined round', 'Both messages handled.');
+  }, async () => {await hold.wait; return closing('Built.');});
   try {
     const first = f.ensemble.dispatch('logox', 'Build', 'direct'); await first.done;
     const second = f.ensemble.dispatch('logox', 'How is it going?', 'direct'); await second.done;
@@ -146,8 +132,8 @@ test('ordinals stay unique when an old-style record set is extended and a rewrit
 
 test('an idle companion woken by a same-root teammate message is absorbed; a different root gets a [reply] record', async () => {
   const f = await fixture(() => turn('unused'), (_request, index) => {
-    if (index === 1) return turn('Built.', [finish('t1', 'Built the page', 'Wrote index.html.')]);
-    return turn('Fine by me.', [finish('t' + index, 'IGNORED', 'IGNORED')]);
+    if (index === 1) return closing('Built.', 'Built the page', 'Wrote index.html.');
+    return turn('Fine by me.');
   });
   try {
     await f.ensemble.dispatch('techne', 'Build', 'logox', {inputKind: 'director', rootActivityId: 'root-1'}).done;
@@ -159,8 +145,6 @@ test('an idle companion woken by a same-root teammate message is absorbed; a dif
     assert.equal(found.length, 1);
     assert.equal(found[0]!.end, entries.length); assert.ok(found[0]!.end > before.end);
     assert.deepEqual(found[0]!.memory, before.memory); assert.equal(found[0]!.ordinal, before.ordinal);
-    const receipt = entries.findLast(entry => entry.message?.role === 'tool' && entry.message.name === '_FinishRound');
-    assert.equal(receipt?.message?.role === 'tool' && receipt.message.isError, false);
 
     await f.ensemble.dispatch('techne', '[Message from kalon · Other topic]\nQuestion.', 'kalon', {inputKind: 'collaboration', rootActivityId: 'root-2'}).done;
     entries = await f.journal.load('s', 'techne'); found = await records(f, 'techne');
@@ -181,7 +165,7 @@ test('an open suspended round survives a restart and is closed by the next Direc
   try {
     const opened = first.ensemble.dispatch('logox', 'Build', 'direct'); await opened.done;
     await first.close();
-    second = await fixture((_request, index) => index === 1 ? turn('Resumed answer.') : turn('', [finish('close', 'After restart', 'Closed after restart.')]), () => turn('unused'), {cwd: first.cwd});
+    second = await fixture((_request, index) => closing('Resumed answer.', 'After restart', 'Closed after restart.'), () => turn('unused'), {cwd: first.cwd});
     assert.equal(await second.journal.openRound('s', 'logox'), opened.activityId);
     await second.ensemble.dispatch('logox', 'Reports arrived', 'techne', {inputKind: 'actor'}).done;
     const found = await records(second), entries = await second.journal.load('s', 'logox');

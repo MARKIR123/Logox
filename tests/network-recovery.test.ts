@@ -59,7 +59,7 @@ test('真实 SSE 断流两次后恢复，已执行写入一次，失败输出保
     assert.equal(await readFile(join(f.cwd, 'ready.txt'), 'utf8'), 'one-write');
     await assert.rejects(readFile(join(f.cwd, 'broken.txt')));
     const history = await f.app.journal.load('network', 'logox');
-    assert.equal(history.filter(e => e.role === 'tool' && e.message?.role === 'tool' && e.message.name !== '_FinishRound').length, 1);
+    assert.equal(history.filter(e => e.role === 'tool' && e.message?.role === 'tool').length, 1);
     assert.equal(history.filter(e => e.message?.role === 'assistant' && e.message.contextExcluded).length, 2);
     for (const request of f.requests.slice(2)) assert.ok(!JSON.stringify(request).includes('discarded-partial'));
     await f.app.ensemble.dispatch('logox', '下一轮').done;

@@ -9,34 +9,24 @@ import {createAgent} from '../src/kernel/agent.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {EnsembleRuntime} from '../src/actors/ensemble.js';
 import {Journal} from '../src/store/journal.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {Tools} from '../src/tools/index.js';
 import {toolMetadataSchema} from '../src/tools/metadata.js';
 import {createProvider} from '../src/providers/http.js';
 
-test('mandatory finalization cannot be hidden or deferred by configuration', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'logox-finalizer-config-'));
-  try {
-    await mkdir(join(cwd, '.logox'));
-    for (const override of [{roles: []}, {roles: ['logox']}, {loading: 'deferred'}]) {
-      await writeFile(join(cwd, '.logox', 'tools.json'), JSON.stringify({_FinishRound: override}));
-      await assert.rejects(new ToolRegistry(cwd, cwd).reloadUserConfigs(), /mandatory.*_FinishRound/i);
-    }
-  } finally {await rm(cwd, {recursive: true, force: true});}
-});
-
 test('a business tool revoked during the producing request cannot execute through an extension adapter', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-current-pool-'));
   const registry = new ToolRegistry(cwd, cwd), store = new RuntimeStore(), journal = new Journal(cwd);
-  const finish = registry.resolveForActor('logox').find(item => item.definition.name === '_FinishRound')!;
+  const read = registry.resolveForActor('logox').find(item => item.definition.name === 'Read')!;
   const probe = {name: 'Probe', description: 'Fixture operation', parameters: {type: 'object', additionalProperties: false}};
   const metadata = toolMetadataSchema.parse({name: 'Probe', category: 'extensions', roles: 'all', terminalVisibility: 'card'});
   let legal = true, count = 0, turns = 0;
   const provider: Provider = {async respond() {
     if (++turns === 1) {legal = false; return {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'probe', name: 'Probe', arguments: '{}'}]}};}
-    return {stop: 'tools', message: {role: 'assistant', text: 'Finished.', toolCalls: [{id: 'finish', name: '_FinishRound', arguments: JSON.stringify({title: 'Finished', summary: 'Round outcome.'})}]}};
+    return {stop: 'complete', message: {role: 'assistant', text: 'Finished.\n\n' + synopsisBlock({title: 'Finished', summary: 'Round outcome.'})}};
   }};
   const run = createAgent({cwd, store, tools: new Tools(cwd, undefined, undefined, {home: cwd}), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => {const pool = legal ? [finish, {metadata, definition: probe}] : [finish]; return {system: 'Rules', pool, tools: pool.map(item => item.definition)};},
+    requestBase: async () => {const pool = legal ? [read, {metadata, definition: probe}] : [read]; return {system: 'Rules', pool, tools: pool.map(item => item.definition)};},
     extraTools: [probe], extraApprovalHandled: ['Probe'], async executeExtra() {count++; return {text: 'Executed', isError: false};}});
   const ensemble = new EnsembleRuntime<string>('s', store, journal, run);
   try {
@@ -69,7 +59,7 @@ test('native exposure adds only discovered deferred definitions and falls back c
   assert.equal(module.resolveExposureProtocol(pool, 'anthropic'), 'anthropic');
   const initial = module.buildToolExposure(pool, new Set(), 'anthropic');
   assert.ok(initial.some((tool: {name: string}) => tool.name === 'LoadTools'));
-  assert.ok(initial.some((tool: {name: string}) => tool.name === '_FinishRound'));
+  assert.ok(initial.some((tool: {name: string}) => tool.name === 'Read'));
   assert.ok(!initial.some((tool: {name: string}) => tool.name === '_GitStatus'));
   const expanded = module.buildToolExposure(pool, new Set(['_GitStatus']), 'anthropic');
   assert.equal(expanded.find((tool: {name: string}) => tool.name === '_GitStatus').deferLoading, true);

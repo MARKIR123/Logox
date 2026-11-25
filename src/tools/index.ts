@@ -54,8 +54,6 @@ import {normalizeToolInput} from './normalize.js';
 import {PLAN_DESCRIPTION, PLAN_TOOL_NAME} from './coordination/PlanTool/prompt.js';
 import {loadToolsSchema} from './protocol/LoadToolsTool/LoadToolsTool.js';
 import {LOAD_TOOLS_DESCRIPTION} from './protocol/LoadToolsTool/prompt.js';
-import {finishRoundSchema} from './protocol/_FinishRoundTool/_FinishRoundTool.js';
-import {FINISH_ROUND_DESCRIPTION} from './protocol/_FinishRoundTool/prompt.js';
 import {projectRulesSection} from '../prompts/boundary.js';
 import {planUnknownLinkNode} from '../prompts/runtime/plan.js';
 import {workerPromptHash, workerSystem, automaSchema, executeAutomaDispatch, startAutomaDispatch, normalizeAutomaInput, TRUST_LINE, type AutomaArgs, type DispatchOptions, type DispatchRun, type ResolvedAutomaModel} from './orchestration/AutomaTool/AutomaTool.js';
@@ -142,7 +140,6 @@ export const schemas = {
   CancelActor: cancelActorSchema,
   Plan: planSchema,
   Automa: automaSchema,
-  _FinishRound: finishRoundSchema,
   _GitStatus: gitStatusSchema,
 } as const;
 
@@ -166,12 +163,11 @@ export const descriptions: Record<ToolName, string> = {
   CancelActor: CANCEL_ACTOR_DESCRIPTION,
   Plan: PLAN_DESCRIPTION,
   Automa: AUTOMA_DESCRIPTION,
-  _FinishRound: FINISH_ROUND_DESCRIPTION,
   _GitStatus: GIT_STATUS_DESCRIPTION,
 };
 
 export const toolDefinitions: readonly ToolDefinition[] = (
-  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'ShellJob', 'AskUserQuestion', 'WebFetch', 'Automa', '_FinishRound'] as const
+  ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'ShellJob', 'AskUserQuestion', 'WebFetch', 'Automa'] as const
 ).map(name => ({
   name,
   description: descriptions[name],

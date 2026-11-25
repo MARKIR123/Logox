@@ -9,8 +9,7 @@ import {digest, estimateMessage, estimateRequest, estimateText, TokenMeter, wate
 import {supersededReads} from './supersession.js';
 import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
 import {PROGRESS_FORK_INSTRUCTION, supersededReadText} from '../prompts/compaction.js';
-import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs} from './round-memory.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs, isLegacyFinishRound} from './round-memory.js';
 import {canonicalToolName} from '../tools/types.js';
 import {retainDiscoveryPairs, extractDiscoveredToolNames} from '../tools/discovery.js';
 import {contextSnapshot, retainRuntimeContext} from './continuity.js';
@@ -89,9 +88,9 @@ function toolPairs(entries: readonly HistoryEntry[]): Pair[] {
   entries.forEach((entry, index) => {
     const value = message(entry);
     if (value.role === 'assistant' && !value.contextExcluded && !value.toolsExcluded) for (const call of value.toolCalls ?? []) {
-      if (!isFinishRound(call.name)) pending.set(call.id, {callIndex: index, call});
+      if (!isLegacyFinishRound(call.name)) pending.set(call.id, {callIndex: index, call});
     }
-    if (value.role === 'tool' && !isFinishRound(value.name)) {
+    if (value.role === 'tool' && !isLegacyFinishRound(value.name)) {
       const pair = pending.get(value.callId);
       if (pair) {pairs.push({...pair, resultIndex: index}); pending.delete(value.callId);}
     }

@@ -5,7 +5,7 @@
 import {stripNarration} from '../runtime/narration.js';
 import {inputKind} from '../runtime/provenance.js';
 import type {HistoryEntry} from '../store/journal.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {isLegacyFinishRound} from '../context/round-memory.js';
 import {parseSynopsis} from '../context/synopsis.js';
 
 export const MESSAGE_CAP = 2000;
@@ -53,13 +53,13 @@ function entryLines(owner: string, entry: HistoryEntry): string[] {
     const message = entry.message?.role === 'assistant' ? entry.message : undefined;
     if (isConversation(entry)) lines.push('[' + owner + ' · assistant] ' + clip(stripNarration(parseSynopsis(entry.text).answer).trim(), MESSAGE_CAP));
     for (const call of message?.toolCalls ?? []) {
-      if (isFinishRound(call.name)) continue;
+      if (isLegacyFinishRound(call.name)) continue;
       const summary = argumentSummary(call.arguments);
       lines.push('[' + owner + ' · tool] ' + call.name + (summary ? ' ' + summary : ''));
     }
   } else if (entry.role === 'tool') {
     const message = entry.message?.role === 'tool' ? entry.message : undefined;
-    if (message?.isError && !message.unexecuted && !isFinishRound(message.name)) lines.push('[' + owner + ' · tool error] ' + clip(flat(entry.text), ERROR_CAP, '…'));
+    if (message?.isError && !message.unexecuted && !isLegacyFinishRound(message.name)) lines.push('[' + owner + ' · tool error] ' + clip(flat(entry.text), ERROR_CAP, '…'));
   }
   return lines;
 }

@@ -34,8 +34,7 @@ export class ToolRegistry {
     const name = this.canonical(toolName), base = this.registrations.get(name)?.metadata;
     if (!base) return undefined;
     const metadata = toolMetadataSchema.parse({...base, ...this.userOverrides.get(name)});
-    // Terminal round closure is an internal protocol, never a user-disableable business capability.
-    return name === '_FinishRound' ? {...metadata, roles: 'all', loading: 'eager', terminalVisibility: 'silent'} : metadata;
+    return metadata;
   }
   getTerminalVisibility(name: string): ToolTerminalVisibility {return this.getMetadata(name)?.terminalVisibility ?? 'card';}
   resolveForActor(actorId: string, extras: readonly ToolRegistration[] = []): readonly ResolvedTool[] {
@@ -89,8 +88,6 @@ export class ToolRegistry {
           const parsed = userToolConfigSchema.safeParse(config);
           if (parsed.success) {
             const name = this.canonical(key);
-            if (name === '_FinishRound' && (parsed.data.loading === 'deferred' ||
-              parsed.data.roles !== undefined && parsed.data.roles !== 'all')) throw new Error('The mandatory _FinishRound tool cannot be disabled or deferred.');
             overrides.set(name, {...overrides.get(name), ...parsed.data});
           }
         }

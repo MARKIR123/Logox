@@ -18,6 +18,7 @@ import {inputKind} from '../runtime/provenance.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import type {Journal} from '../store/journal.js';
 import type {Notice} from './state.js';
+import {parseSynopsis, synopsisBlock} from '../context/synopsis.js';
 
 export interface RecoverDeps {
   session: string; journal: Journal; actors: ActorCatalog; actorServices: ActorServices;
@@ -97,7 +98,12 @@ export async function replaySession(deps: ReplayDeps) {
         ...(savedModel ? {taskModel: {initial: savedModel.initial, actual: savedModel.actual, inherited: savedModel.inherited,
           switched: savedModel.switched, phase: savedModel.phase}} : {})});
     }
-    if (entry.message?.role === 'assistant' && entry.message.memoryOnly) continue;
+    if (entry.message?.role === 'assistant' && entry.message.memoryOnly) {
+      // A closing follow-up is never shown, except the synopsis it brought, which folds under the answer as it did live.
+      const {synopsis} = parseSynopsis(entry.message.text);
+      if (synopsis) store.message(session, entry.ownerId, 'assistant', synopsisBlock(synopsis), origin);
+      continue;
+    }
     if (entry.message?.role === 'assistant' && entry.message.textToolCall) {
       if (entry.message.reasoning) store.message(session, entry.ownerId, 'assistant', entry.message.reasoning, {...origin, kind: 'thinking'});
       store.message(session, entry.ownerId, 'notice', TEXT_TOOL_CALL_NOTE, origin);

@@ -14,6 +14,7 @@ import {runWorker, type WorkerRun} from '../src/kernel/worker-run.js';
 import {supersededReadText} from '../src/prompts/compaction.js';
 import {ECHO_REMINDER, ECHO_STOP_ERROR} from '../src/prompts/runtime/recovery.js';
 import {persistedIndex} from '../src/kernel/scratchpad.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const reminderText = runtimeContextText(createRuntimeContextMessage('reminder', 'Do not repeat the same read; try another path.'));
 const tombstone = supersededReadText('lines 1-40');
@@ -88,13 +89,13 @@ const assistant = (text: string): ModelTurn => ({message: {role: 'assistant', te
 const call = (name: string, args: unknown, id = 'c'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name, arguments: JSON.stringify(args)}]}, stop: 'tools'});
 async function rawFixture(provider: Provider) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-echo-guard-'));
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}}, {}, cwd, cwd);
   const probe = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   await probe.close();
   const app = await productionApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
-const closing = () => call('_FinishRound', {title: 'Answered', summary: 'Answered.'}, 'fin');
+const closed = '\n\n' + synopsisBlock({title: 'Answered', summary: 'Answered.'});
 const reminders = (req: ModelRequest) => req.messages.filter(message => message.role === 'context' && message.kind === 'reminder').map(message => message.text);
 const shownText = (f: Awaited<ReturnType<typeof rawFixture>>, activityId: string) =>
   f.app.store.getSnapshot().messages.filter(message => message.activityId === activityId && message.role !== 'user').map(message => message.text).join('\n');
@@ -102,7 +103,7 @@ const shownText = (f: Awaited<ReturnType<typeof rawFixture>>, activityId: string
 test('a pure echo is not delivered: a reminder follows and the loop continues to the real reply', async () => {
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (req: ModelRequest) => {seen.push(req); return turn;};
-  const f = await rawFixture(scripted([watch(assistant(tombstone)), watch(assistant('The real answer.')), watch(closing())]));
+  const f = await rawFixture(scripted([watch(assistant(tombstone)), watch(assistant('The real answer.' + closed))]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'answer');
     await handle.done;
@@ -115,7 +116,7 @@ test('a pure echo is not delivered: a reminder follows and the loop continues to
 });
 
 test('an echo with real prose delivers the prose with the markers stripped', async () => {
-  const f = await rawFixture(scripted([assistant('The answer is 42, as the logs show.\n\n' + tombstone), closing()]));
+  const f = await rawFixture(scripted([assistant('The answer is 42, as the logs show.\n\n' + tombstone + closed)]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'answer');
     await handle.done;
@@ -127,7 +128,7 @@ test('an echo with real prose delivers the prose with the markers stripped', asy
 });
 
 test('a normal reply that mentions the word Superseded is delivered untouched', async () => {
-  const f = await rawFixture(scripted([assistant('The earlier plan was Superseded by the new one.'), closing()]));
+  const f = await rawFixture(scripted([assistant('The earlier plan was Superseded by the new one.' + closed)]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'answer');
     await handle.done;

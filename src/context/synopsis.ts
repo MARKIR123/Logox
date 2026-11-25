@@ -1,6 +1,6 @@
 /**
- * The synopsis: the round-memory block a model writes at the very end of its final reply (`[context] round_memory = "synopsis"`),
- * and the reply text without it.
+ * The synopsis: the round-memory block a model writes at the very end of its final reply, and the reply text without it.
+ * A reply that closes a round without one gets a single follow-up asking only for it (`src/kernel/reply.ts`).
  *
  * ```
  * <synopsis title="Short title">
@@ -122,3 +122,7 @@ export function visibleWhileStreaming(text: string): string {
   // Trailing blank space is held too: it may turn out to be the gap before a block, which the answer drops.
   return (growing ? text.slice(0, last.start) : text).trimEnd();
 }
+
+/** A synopsis written back as the block alone, for the timeline to fold (a closing follow-up's synopsis, live and restored). */
+export const synopsisBlock = (synopsis: Synopsis): string =>
+  `<synopsis title="${synopsis.title.replace(/"/g, "'")}">\n${synopsis.summary}\n</synopsis>`;

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {detectConversationLanguage, sessionLanguage} from '../src/context/language.js';
 import {EnvironmentState, formatEnvironment} from '../src/context/environment.js';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest, Provider} from '../src/runtime/messages.js';
 
@@ -43,8 +43,7 @@ test('human input drives the language for Director and actor requests; tool outp
   const requests: ModelRequest[] = [];
   const provider: Provider = {async respond(request) {
     requests.push(structuredClone(request));
-    return {stop: 'tools', message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'done' + requests.length, name: '_FinishRound',
-      arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}};
+    return {stop: 'complete', message: {role: 'assistant', text: 'Done.'}};
   }};
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});

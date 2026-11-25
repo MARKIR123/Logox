@@ -1,12 +1,11 @@
 import type {ModelMessage} from '../runtime/messages.js';
 import {UNEXECUTED_CALL_TEXT} from '../runtime/messages.js';
-import {AUTOMA_STREAK_NOTE, ECHO_REMINDER, EMPTY_REPLY_REMINDER, FINISH_ROUND_NO_TEXT_NUDGE, FINISH_ROUND_NO_TEXT_RESULT, TEXT_CALL_RECOVERED_NOTE} from '../prompts/runtime/recovery.js';
+import {AUTOMA_STREAK_NOTE, ECHO_REMINDER, EMPTY_REPLY_REMINDER, SYNOPSIS_CLOSING_TOOL_RESULT, SYNOPSIS_FOLLOW_UP, TEXT_CALL_RECOVERED_NOTE} from '../prompts/runtime/recovery.js';
 import {DIRECTOR_INTERRUPTED_TOOL_TEXT, USER_INTERRUPTED_TOOL_TEXT, USER_STEER_NOTICE} from '../prompts/runtime/interruption.js';
 import {TOOLS_RESTRICTED_RESULT} from '../prompts/runtime/environment.js';
 import {HEADLESS_ANSWER, HEADLESS_DENIAL} from '../prompts/runtime/headless.js';
 import {IMAGE_OMITTED_ACTOR_HINT, IMAGE_OMITTED_WORKER_HINT} from '../providers/vision-fallback.js';
 import {READ_UNCHANGED_NOTE} from '../tools/ReadTool/prompt.js';
-import {FINISH_ROUND_FOLLOW_UP} from '../tools/protocol/_FinishRoundTool/prompt.js';
 
 /**
  * Text the runtime itself inserts into model-visible content. A model sometimes repeats such text as its own reply; this module recognises it so the
@@ -62,12 +61,11 @@ export const FIXED_MARKER_TEXTS: readonly {readonly source: string; readonly tex
   {source: 'src/prompts/runtime/headless.ts:HEADLESS_DENIAL', text: HEADLESS_DENIAL},
   {source: 'src/prompts/runtime/headless.ts:HEADLESS_ANSWER', text: HEADLESS_ANSWER},
   {source: 'src/prompts/runtime/recovery.ts:EMPTY_REPLY_REMINDER', text: EMPTY_REPLY_REMINDER},
-  {source: 'src/prompts/runtime/recovery.ts:FINISH_ROUND_NO_TEXT_NUDGE', text: FINISH_ROUND_NO_TEXT_NUDGE},
-  {source: 'src/prompts/runtime/recovery.ts:FINISH_ROUND_NO_TEXT_RESULT', text: FINISH_ROUND_NO_TEXT_RESULT},
+  {source: 'src/prompts/runtime/recovery.ts:SYNOPSIS_CLOSING_TOOL_RESULT', text: SYNOPSIS_CLOSING_TOOL_RESULT},
   {source: 'src/prompts/runtime/recovery.ts:AUTOMA_STREAK_NOTE', text: AUTOMA_STREAK_NOTE},
   {source: 'src/prompts/runtime/recovery.ts:TEXT_CALL_RECOVERED_NOTE', text: TEXT_CALL_RECOVERED_NOTE},
   {source: 'src/prompts/runtime/recovery.ts:ECHO_REMINDER', text: ECHO_REMINDER},
-  {source: 'src/tools/protocol/_FinishRoundTool/prompt.ts:FINISH_ROUND_FOLLOW_UP', text: FINISH_ROUND_FOLLOW_UP},
+  {source: 'src/prompts/runtime/recovery.ts:SYNOPSIS_FOLLOW_UP', text: SYNOPSIS_FOLLOW_UP},
   {source: 'src/prompts/runtime/ (image hints)', text: IMAGE_OMITTED_WORKER_HINT},
   {source: 'src/prompts/runtime/ (image hints)', text: IMAGE_OMITTED_ACTOR_HINT},
 ];

@@ -1,5 +1,4 @@
 import type {ModelTurn} from '../runtime/messages.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {textToolCallName} from './text-tool-call.js';
 
 /** The part of a model turn the classification reads. */
@@ -11,10 +10,8 @@ export interface TurnShape {
 }
 
 export interface TurnFacts {
-  /** This request was the closing follow-up. */
+  /** This request was the closing follow-up, which asks only for the round's synopsis. */
   readonly closing: boolean;
-  /** Ending this activity closes a round (`roundEffect`), or this is the closing follow-up. */
-  readonly closes: boolean;
   /** A peer reply is awaited, this actor still owes a reply, or results of its background Automa jobs are outstanding (`PeerWait.pending`). */
   readonly peerPending: boolean;
   /** A Director with dispatched work still open. */
@@ -25,12 +22,11 @@ export interface TurnFacts {
 
 /**
  * What one model turn is, in the order the loop tests it (earlier kinds win):
- * - `finish_round_outside_round`: only `_FinishRound` calls where the activity closes no round.
- * - `finish_round`: the closing follow-up came back with calls, or a round-closing activity called `_FinishRound` (alone or with others).
+ * - `closing_with_calls`: the closing follow-up came back with calls; none runs. `truncated` as for `tools`.
  * - `tools`: a business tool batch; `truncated` when the stop was not `tools` or an argument is not JSON.
  * - `text_tool_call`: a call written as plain text; nothing ran.
  * - `echo`: the reply only repeated runtime text; nothing is delivered and the loop continues with a reminder.
- * - `closing_without_call`: the closing follow-up came back without a call.
+ * - `closing_reply`: the closing follow-up came back without calls (with or without the synopsis).
  * - `empty_awaiting_peer`: empty reply while a peer wait is pending or a reply is owed.
  * - `empty_director_waiting`: empty reply from a Director waiting on companions.
  * - `no_delivery`: empty reply otherwise (stop `complete` or `length`).
@@ -39,12 +35,11 @@ export interface TurnFacts {
  * - `abnormal_stop`: stop `tools` without calls, or `other`.
  */
 export type TurnOutcome =
-  | {readonly kind: 'finish_round_outside_round'}
-  | {readonly kind: 'finish_round'; readonly truncated: boolean; readonly only: boolean}
+  | {readonly kind: 'closing_with_calls'; readonly truncated: boolean}
   | {readonly kind: 'tools'; readonly truncated: boolean}
   | {readonly kind: 'text_tool_call'}
   | {readonly kind: 'echo'}
-  | {readonly kind: 'closing_without_call'}
+  | {readonly kind: 'closing_reply'}
   | {readonly kind: 'empty_awaiting_peer'}
   | {readonly kind: 'empty_director_waiting'}
   | {readonly kind: 'no_delivery'}
@@ -63,15 +58,12 @@ const unparsable = (call: {readonly arguments: string}): boolean => {
 
 export function classifyTurn(turn: TurnShape, facts: TurnFacts): TurnOutcome {
   const calls = turn.message.toolCalls ?? [];
-  if (!facts.closes && turn.stop === 'tools' && calls.length && calls.every(call => isFinishRound(call.name))) return {kind: 'finish_round_outside_round'};
   const truncated = turn.stop !== 'tools' || calls.some(unparsable);
-  if (facts.closing ? calls.length > 0 : facts.closes && calls.some(call => isFinishRound(call.name))) {
-    return {kind: 'finish_round', truncated, only: calls.length === 1 && isFinishRound(calls[0]!.name)};
-  }
+  if (facts.closing && calls.length) return {kind: 'closing_with_calls', truncated};
   if (calls.length) return {kind: 'tools', truncated};
   if (isTextToolCall(turn, facts.closing, facts.offered)) return {kind: 'text_tool_call'};
   if (turn.echo && !facts.closing) return {kind: 'echo'};
-  if (facts.closing) return {kind: 'closing_without_call'};
+  if (facts.closing) return {kind: 'closing_reply'};
   const empty = !turn.message.text.trim();
   if (turn.stop === 'complete' && empty && facts.peerPending) return {kind: 'empty_awaiting_peer'};
   if (turn.stop === 'complete' && empty && facts.directorWaiting) return {kind: 'empty_director_waiting'};

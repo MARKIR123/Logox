@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {createApplication as productionApplication} from '../src/application.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig} from '../src/config/config.js';
 import {answerEnvelope} from '../src/runtime/interactions.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
@@ -24,7 +25,7 @@ function call(name: string, args: unknown, id = 'c'): ModelTurn {
 }
 async function fixture(provider: Provider, iterations = 50) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-agent-'));
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}, 'antigravity/local-fixture': {context_window: 131072}}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: iterations}, models: {'deepseek/cloud-fixture': {context_window: 131072}, 'antigravity/local-fixture': {context_window: 131072}}}, {}, cwd, cwd);
   const app = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   return {cwd, config, app, async cleanup() {await app.close(); await rm(cwd, {recursive: true, force: true});}};
 }
@@ -79,12 +80,12 @@ test('真实 HTTP 流 → 写入审批 → 文件 → 工具结果 → 回复 �
     assert.equal(second.messages.at(-1)?.role, 'tool');
     assert.match(second.messages.at(-1)!.content, /(?:Updated|已修改)/);
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
+    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant', 'tool', 'assistant']);
     assert.equal(entries.find(entry => entry.role === 'assistant')?.message?.role, 'assistant');
     await f.app.close();
     const restored = await createApplication({cwd: f.cwd, resourceOptions: {home: f.cwd, boundary: f.cwd}, sessionId: 'test', config: f.config, provider});
     try {
-      assert.ok(restored.store.getSnapshot().messages.some(message => message.text === '文件已写入。'));
+      assert.ok(restored.store.getSnapshot().messages.some(message => message.text.startsWith('文件已写入。')));
       await restored.submit('/undo');
       await assert.rejects(readFile(join(f.cwd, 'hello.ts')));
       assert.equal(requests.length, 2, '恢复不会重放模型或工具');
@@ -253,7 +254,7 @@ test('Director 派发后角色串行执行，结果自动返回且上下文隔�
     await f.app.submit('处理任务');
     await waitForSnapshot(f.app.store, snapshot => snapshot.activities.length === 4 && snapshot.activities.every(a => a.status === 'completed'));
     assert.equal(round, 5);
-    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant', 'tool']);
+    assert.deepEqual((await f.app.journal.load('test', 'aletheia')).filter(entry => entry.role !== 'context').map(entry => entry.role), ['user', 'assistant']);
     const rows = buildStageRows(f.app.store.getSnapshot(), 'test', 'logox', 80, {}, null);
     assert.ok(rows.some(row => row.text.includes('侦察结果')), '完成卡片复用成果摘要标题');
     assert.ok(!rows.some(row => row.text.includes('保留项目内容')), '真实场景不含 portfolio 演示正文');
@@ -335,7 +336,7 @@ test('进程退出前留下的未配对调用恢复为失败结果，下一轮�
       message: {role: 'assistant', text: '', toolCalls: [{id: 'orphan', name: 'write', arguments: '{"file_path":"orphan.txt","content":"bad"}'}]}});
     await f.app.ensemble.dispatch('techne', '继续').done;
     const entries = await f.app.journal.load('test', 'techne');
-    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant', 'tool']);
+    assert.deepEqual(entries.filter(entry => entry.role !== 'context').map(entry => entry.role), ['assistant', 'tool', 'user', 'assistant']);
     await assert.rejects(readFile(join(f.cwd, 'orphan.txt')));
   } finally {await f.cleanup();}
 });
@@ -523,17 +524,15 @@ test('a tool call that came out as plain text is not a delivery: it is recovered
   const dump = '### Overwriting the page\ncall:default_api:Write{content:<!DOCTYPE html>' + 'x'.repeat(3000) + ',file_path:page.html,overwrite:true}';
   const seen: ModelRequest[] = [];
   const watch = (turn: ModelTurn) => (request: ModelRequest) => {seen.push(request); return turn;};
-  const closing = call('_FinishRound', {title: 'Built the page', summary: 'Page written.'}, 'fin');
   const f = await rawFixture(scripted([
     watch(assistant(dump)),
     watch(call('glob', {pattern: '*.nothing'}, 'g1')),
-    watch(assistant('Page is ready.')),
-    watch(closing),
+    watch(assistant('Page is ready.\n\n' + synopsisBlock({title: 'Built the page', summary: 'Page written.'}))),
   ]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'build');
     await handle.done;
-    assert.equal(seen.length, 4);
+    assert.equal(seen.length, 3);
     const noteOf = (request: ModelRequest) => request.messages.filter(message => message.role === 'context' && message.kind === 'reminder').map(message => message.text);
     assert.deepEqual(noteOf(seen[0]!), []);
     assert.equal(noteOf(seen[1]!).length, 1);
@@ -553,7 +552,7 @@ test('a tool call that came out as plain text is not a delivery: it is recovered
 });
 
 test('prose that mentions a call pattern for an unknown tool is an ordinary reply', async () => {
-  const f = await rawFixture(scripted([assistant('The log shows call:default_api:NotATool{x:1} being parsed.'), call('_FinishRound', {title: 'Explained the log', summary: 'Explained.'}, 'fin')]));
+  const f = await rawFixture(scripted([assistant('The log shows call:default_api:NotATool{x:1} being parsed.\n\n' + synopsisBlock({title: 'Explained the log', summary: 'Explained.'}))]));
   try {
     const handle = f.app.ensemble.dispatch('techne', 'explain');
     await handle.done;

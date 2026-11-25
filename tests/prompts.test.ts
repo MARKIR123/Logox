@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   composeBaseSystemPrompt,
   SHARED_EXECUTION_RULES,
-  ROUND_SUMMARY_CONTRACT,
+  ROUND_SYNOPSIS_CONTRACT,
   collaborationFor,
 } from '../src/prompts/index.js';
 import {readFileSync} from 'node:fs';
@@ -132,15 +132,16 @@ test('Director sets after for dependent work and accepts reports against the run
   const director = profile('logox', 'collaboration.md');
   assert.ok(director.includes('The wake already carries the full reports.'));
   assert.ok(director.includes('Read the account against the record'));
-  assert.ok(director.includes('you close the round once, when you accept the reports'));
+  assert.ok(director.includes('you close the round once, with a synopsis, when you accept the reports'));
   assert.match(ACTOR_DESCRIPTION, /set `after` to that actor id or activity id: the runtime starts it only when that work has ended and hands it the report/);
 });
 
-test('peer replies use type reply, help is for decisions, and the answer and _FinishRound share one reply', () => {
+test('peer replies use type reply, help is for decisions, and the synopsis ends the answer itself', () => {
   assert.match(collaborationFor('logox'), /Answer an ask with type "reply", never "inform"/);
   assert.match(collaborationFor('techne'), /wakes it at once; your task report waits until your teammates' reports are in/);
   assert.match(collaborationFor('techne'), /found something urgent that changes the plan, never for status/);
-  assert.match(ROUND_SUMMARY_CONTRACT, /write that answer text and call _FinishRound in the same reply/);
+  assert.match(ROUND_SYNOPSIS_CONTRACT, /End the reply that finishes your work with a synopsis block/);
+  assert.doesNotMatch(ROUND_SYNOPSIS_CONTRACT, /_FinishRound/);
 });
 
 test('browser guidance opens static pages with file:// and keeps any HTTP server private to the task', () => {

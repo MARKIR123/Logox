@@ -12,6 +12,7 @@ import {ProviderRegistry} from '../src/providers/registry.js';
 import {AuthStorage} from '../src/providers/auth.js';
 import type {ModelMessage, ModelRequest, Provider} from '../src/runtime/messages.js';
 import {createTestApplication as createApplication} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 // Chinese fixtures cover legacy round-summary parsing and multilingual token estimation.
 const identity = {sessionId: 's', ownerId: 'logox'};
@@ -38,6 +39,10 @@ function assertPairs(messages: readonly ModelMessage[]) {
   }
   assert.equal(pending.size, 0, 'Every tool call has a matching result');
 }
+/** A closing reply: a short answer followed by the synopsis block that becomes the round memory. */
+/** Enough closed rounds that their index lines alone outgrow a 4096-token window (each line is capped at the synopsis limits). */
+const OLD_ROUNDS = 40;
+const closing = (title: string, summary: string) => '完成。\n\n' + synopsisBlock({title, summary});
 const final = (name: string): ModelMessage => ({role: 'assistant', text: name.repeat(1000) + '\n【轮次摘要】\n标题：完成' + name + '\n报告：保留' + name + '的结果，未做额外验证。'});
 
 test('compaction retains recent rounds, current input and paired recent tools across batches', async () => {
@@ -262,9 +267,9 @@ test('oversized closed history uses bounded summarization without tools, thinkin
     return {message: {role: 'assistant', text: '确认目标及旧历史结果，保留来源；后续核对验证。'}, stop: 'complete'};
   }});
   try {
-    for (let n = 0; n < 4; n++) {
+    for (let n = 0; n < OLD_ROUNDS; n++) {
       await f.append('old-' + n, {role: 'user', text: '历史要求'.repeat(2200)});
-      await f.append('old-' + n, {role: 'assistant', text: '[Round Summary]\nTitle: Historical decisions\nReport: ' + '保留要求'.repeat(400)});
+      await f.append('old-' + n, {role: 'assistant', text: closing('Historical decisions', '保留要求'.repeat(400))});
       await f.journal.finish('s', 'logox', 'old-' + n, 'completed');
     }
     await f.append('current', {role: 'user', text: 'CURRENT_ONLY'});
@@ -275,7 +280,7 @@ test('oversized closed history uses bounded summarization without tools, thinkin
     assert.match(result.request.messages[0]!.text, /Historical working overview/);
     assert.equal(result.request.messages.filter(message => message.role !== 'context').at(-1)?.text, 'CURRENT_ONLY');
     const state = await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox'));
-    assert.equal(state?.memo?.end, 8);
+    assert.ok(state?.memo && state.memo.end > 0 && state.memo.end <= 2 * OLD_ROUNDS && state.memo.end % 2 === 0, 'the memo covers whole closed rounds, oldest first');
   } finally {await f.cleanup();}
 });
 
@@ -287,9 +292,9 @@ test('ineffective or cancelled summaries preserve history and prevent over-budge
       return {message: {role: 'assistant', text: request.messages[0]!.text}, stop: 'complete'};
     }});
     try {
-      for (let n = 0; n < 4; n++) {
+      for (let n = 0; n < OLD_ROUNDS; n++) {
         await f.append('old-' + n, {role: 'user', text: '历史'.repeat(5000)});
-        await f.append('old-' + n, {role: 'assistant', text: '[Round Summary]\nTitle: Historical decisions\nReport: ' + '保留要求'.repeat(400)});
+        await f.append('old-' + n, {role: 'assistant', text: closing('Historical decisions', '保留要求'.repeat(400))});
         await f.journal.finish('s', 'logox', 'old-' + n, 'completed');
       }
       await f.append('current', {role: 'user', text: '继续'});
@@ -386,11 +391,11 @@ test('memo compaction clears overlapping working ranges and restores without rep
     await f.append('work', {role: 'tool', callId: 'two', name: 'read', isError: false, text: '证据二'});
     await f.contexts.prepare(identity, base, signal);
     assert.ok((await f.journal.loadContext('s', 'logox', await f.journal.load('s', 'logox')))?.working);
-    await f.append('work', {role: 'assistant', text: '【轮次摘要】\n标题：已核对\n报告：保留两个证据，验证待续。'});
+    await f.append('work', {role: 'assistant', text: closing('已核对', '保留两个证据，验证待续。')});
     await f.journal.finish('s', 'logox', 'work', 'completed');
-    for (let n = 0; n < 4; n++) {
+    for (let n = 0; n < OLD_ROUNDS; n++) {
       await f.append('next-' + n, {role: 'user', text: '历史要求'.repeat(1500)});
-      await f.append('next-' + n, {role: 'assistant', text: '【轮次摘要】\n标题：已确认\n报告：' + '保留确认要求'.repeat(300)});
+      await f.append('next-' + n, {role: 'assistant', text: closing('已确认', '保留确认要求'.repeat(300))});
       await f.journal.finish('s', 'logox', 'next-' + n, 'completed');
     }
     await f.append('current', {role: 'user', text: '当前目标'});

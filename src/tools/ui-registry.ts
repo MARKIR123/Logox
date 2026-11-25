@@ -18,17 +18,20 @@ import {UI as ReadActor} from './orchestration/ReadActorTool/UI.js';
 import {UI as ListActors} from './coordination/ListActorsTool/UI.js';
 import {UI as CancelActor} from './orchestration/CancelActorTool/UI.js';
 import {UI as SendMessage} from './coordination/SendMessageTool/UI.js';
-import {UI as FinishRound} from './protocol/_FinishRoundTool/UI.js';
 import {UI as LoadTools} from './protocol/LoadToolsTool/UI.js';
 import {UI as GitStatus} from './protocol/_GitStatusTool/UI.js';
 import {UI as Automa} from './orchestration/AutomaTool/UI.js';
 import {UI as Plan} from './coordination/PlanTool/UI.js';
 import {UI as Mcp} from '../extensions/UI.js';
+import {callLabel, hiddenToolUI} from '../tui/timeline/tool-ui.js';
+import {LEGACY_FINISH_ROUND} from '../context/round-memory.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
   Read, Write, Edit, Glob, Grep, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
   ListActors, CancelActor, SendMessage, Plan, Automa,
-  _FinishRound: FinishRound, _GitStatus: GitStatus, LoadTools, mcp: Mcp,
+  _GitStatus: GitStatus, LoadTools, mcp: Mcp,
+  // Old ledgers still hold calls to the retired `_FinishRound`: restored, they stay as hidden as they always were.
+  [LEGACY_FINISH_ROUND]: hiddenToolUI({visibility: 'hidden', title: () => ''}, callLabel(LEGACY_FINISH_ROUND, [])),
 };
 const lowercase = new Map(Object.entries(toolUIs).map(([name, ui]) => [name.toLowerCase(), ui]));
 const fallback = createToolUI();

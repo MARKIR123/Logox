@@ -4,6 +4,7 @@ import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApplication} from '../src/application.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig} from '../src/config/config.js';
 import {builtinActors} from '../src/actors/builtins.js';
 import {buildStageRows} from '../src/tui/timeline/stage.js';
@@ -12,7 +13,7 @@ import {reloadResources} from '../src/resources/reload.js';
 import type {Provider, ModelRequest, ToolDiscoveryProtocol} from '../src/runtime/messages.js';
 
 const headings = ['# Persona', '# Execution Rules', '# Team Collaboration', '# Project Guidelines', '# Tools & Skills', '# Current Environment'];
-const finish = (id: string) => ({id, name: '_FinishRound', arguments: JSON.stringify({title: 'Verified fixture', summary: 'Round outcome.'})});
+const closed = '\n\n' + synopsisBlock({title: 'Verified fixture', summary: 'Round outcome.'});
 
 for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisfies readonly ToolDiscoveryProtocol[]) {
   test('real application composes five owned topics for shipped and custom roles with ' + protocol, async () => {
@@ -24,9 +25,9 @@ for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisf
     for (const [file, text] of [['persona.md', 'Custom identity.'], ['compression.md', 'Custom evidence focus.'], ['execution.md', 'Custom execution method.'], ['collaboration.md', 'Custom collaboration boundary.']]) await writeFile(join(profile, file!), text!);
     const provider: Provider = {capabilities: {toolDiscovery: protocol, runtimeInstructions: 'meta-user', caching: 'none'}, async respond(request) {
       seen.push(request);
-      return {stop: 'tools', message: {role: 'assistant', text: 'Verified fixture response.', toolCalls: [finish('finish-' + seen.length)]}};
+      return {stop: 'complete', message: {role: 'assistant', text: 'Verified fixture response.' + closed}};
     }};
-    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
     const app = await createApplication({cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
     try {
       for (const id of [...builtinActors.map(actor => actor.id), 'custom-specialist']) {
@@ -46,7 +47,7 @@ for (const protocol of ['anthropic', 'openai-responses', 'none'] as const satisf
         assert.ok(!request.system.split('# Current Environment')[1]!.match(/Tools:|Skills:|Available/));
         assert.equal(request.toolDiscovery, protocol === 'none' ? undefined : protocol);
         assert.equal(new Set(request.tools.map(tool => tool.name)).size, request.tools.length);
-        assert.ok(request.tools.some(tool => tool.name === '_FinishRound'));
+        assert.ok(!request.tools.some(tool => tool.name === '_FinishRound'));
         if (protocol === 'none') {
           assert.ok(request.tools.some(tool => tool.name === '_GitStatus'));
           assert.ok(!request.tools.some(tool => tool.name === 'LoadTools'));
@@ -92,8 +93,8 @@ test('application-owned terminal visibility overrides do not leak into a second 
       if (silent) await writeFile(join(cwd, '.logox', 'tools.json'), JSON.stringify({Read: {terminalVisibility: 'silent'}}));
       let calls = 0;
       const provider: Provider = {async respond() {return ++calls === 1 ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [{id: 'read', name: 'Read', arguments: '{"file_path":"evidence.txt"}'}]}} :
-        {stop: 'tools', message: {role: 'assistant', text: 'Read completed.', toolCalls: [finish('finish')]}};}};
-      const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+        {stop: 'complete', message: {role: 'assistant', text: 'Read completed.' + closed}};}};
+      const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
       const options = {cwd, sessionId: 's', config, provider, env: {}, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}};
       let app = await createApplication(options);
       try {
@@ -116,12 +117,11 @@ test('stored OAuth capabilities are resolved before the first production request
   const authPath = join(cwd, 'auth.json');
   await writeFile(authPath, JSON.stringify({openai: {type: 'oauth', access_token: 'oauth-fixture'}}));
   const bodies: Array<Record<string, any>> = [];
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-5.4', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'openai', model: 'gpt-5.4', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, authPath, resourceOptions: {home: cwd, boundary: cwd}, fetcher: async (url, init) => {
     assert.ok(String(url).endsWith('/responses'), 'No capability probe or model catalog request');
     bodies.push(JSON.parse(String(init?.body)));
-    return new Response('data: ' + JSON.stringify({type: 'response.output_text.delta', delta: 'Resolved without a probe.'}) + '\n\n' +
-      'data: ' + JSON.stringify({type: 'response.output_item.done', output_index: 0, item: {type: 'function_call', call_id: 'finish', name: '_FinishRound', arguments: finish('unused').arguments}}) + '\n\n' +
+    return new Response('data: ' + JSON.stringify({type: 'response.output_text.delta', delta: 'Resolved without a probe.' + closed}) + '\n\n' +
       'data: ' + JSON.stringify({type: 'response.completed', response: {status: 'completed'}}) + '\n\n', {headers: {'content-type': 'text/event-stream'}});
   }});
   try {

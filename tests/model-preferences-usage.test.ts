@@ -11,6 +11,7 @@ import {preferenceSchema, StateFile} from '../src/config/model-preferences.js';
 import {createProvider} from '../src/providers/http.js';
 import {ProviderRegistry} from '../src/providers/registry.js';
 import {AuthStorage} from '../src/providers/auth.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {TokenMeter} from '../src/context/budget.js';
 import {UsageLedger, usageLines} from '../src/context/usage.js';
 
@@ -149,7 +150,7 @@ test('正式应用真实HTTP用量重启保留，模型切换不改旧归属，�
     for await (const _chunk of request) {}
     requests++;
     response.setHeader('content-type', 'text/event-stream');
-    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'synthetic complete', tool_calls: [{index: 0, id: 'finish', function: {name: '_FinishRound', arguments: JSON.stringify({title: 'Completed fixture', summary: 'Round outcome.'})}}]}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: {cached_tokens: 4}}}) + '\n\n');
+    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'synthetic complete\n\n' + synopsisBlock({title: 'Completed fixture', summary: 'Round outcome.'})}, finish_reason: 'stop'}], usage: {prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: {cached_tokens: 4}}}) + '\n\n');
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert.ok(address && typeof address === 'object');

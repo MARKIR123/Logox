@@ -1,6 +1,5 @@
 import type {ModelMessage, TurnUsage} from '../runtime/messages.js';
 import type {ExecutionRecoveryKind} from './execution-recovery.js';
-import {FINISH_ROUND_NO_TEXT_NUDGE} from '../prompts/runtime/recovery.js';
 
 /** Times a finishing actor is told to answer before it may finish anyway; the asker is then told it ended without replying. */
 export const ASK_CLOSE_REMINDERS = 2;
@@ -18,10 +17,8 @@ export class RoundState {
   private note = '';
   private noteKind: ExecutionRecoveryKind | undefined;
   private recoveries = 0;
-  private textlessFinishes = 0;
-  /** Set once the delivered text is in and the single closing follow-up is the next or current request. */
+  /** Set once the delivered text is in and the single closing follow-up (asking only for the synopsis) is the next or current request. */
   private closingFollowUp = false;
-  private answer = '';
   private ownedReminders = 0;
   private refused = 0;
   private imagesRetried = false;
@@ -34,7 +31,6 @@ export class RoundState {
 
   get iteration(): number {return this.requests;}
   get closing(): boolean {return this.closingFollowUp;}
-  get finalText(): string {return this.answer;}
   get recovery(): string {return this.note;}
   get recoveringKind(): ExecutionRecoveryKind | undefined {return this.noteKind;}
   /** Whether a finishing actor may still be told to answer what it owes. */
@@ -50,32 +46,24 @@ export class RoundState {
   /** New input was taken into history: owed-reply reminders restart, a pending close is withdrawn, and the reminder about the previous step is dropped because the input supersedes it. */
   newInput(): void {
     this.ownedReminders = 0;
-    this.closingFollowUp = false; this.answer = ''; this.note = ''; this.noteKind = undefined;
+    this.closingFollowUp = false; this.note = ''; this.noteKind = undefined;
   }
   /** A wait ended: the same reset as new input. */
   waitEnded(): void {this.newInput();}
   /** The actor still owes a reply: that note replaces any recovery note, the reminder count grows and the close is withdrawn. */
   replyOwed(note: string): void {
     this.ownedReminders++;
-    this.note = note; this.noteKind = undefined; this.closingFollowUp = false; this.answer = '';
+    this.note = note; this.noteKind = undefined; this.closingFollowUp = false;
   }
 
-  /** Plain text was delivered (kept as the final text). */
-  answerDelivered(text: string): void {this.answer = text;}
-  /** The next request is the single closing follow-up. */
-  closingCallRequested(): void {
+  /** The next request is the single closing follow-up, asking only for the synopsis the delivered reply left out. */
+  synopsisRequested(): void {
     this.closingFollowUp = true; this.note = ''; this.noteKind = undefined;
   }
 
   /** The reply needs a fresh request with this note. `render` receives whether an earlier recovery already happened in this run. */
   recovering(kind: ExecutionRecoveryKind, render: (repeated: boolean) => string): void {
     this.note = render(this.recoveries++ > 0); this.noteKind = kind;
-  }
-  /** A `_FinishRound` reply without visible text: the first gets one precise nudge for the next request (`nudge`); a later one is `spent`. */
-  textlessFinish(): 'nudge' | 'spent' {
-    if (this.textlessFinishes++ > 0) return 'spent';
-    this.note = FINISH_ROUND_NO_TEXT_NUDGE; this.noteKind = 'no_delivery';
-    return 'nudge';
   }
   /** Signatures minted by the replaced model must not be replayed. */
   foreignModelSignatures(signatures: Iterable<string>): void {for (const signature of signatures) this.foreignSignatures.add(signature);}

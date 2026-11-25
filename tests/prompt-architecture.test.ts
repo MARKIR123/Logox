@@ -33,7 +33,7 @@ test('prompt tree keeps rules separated and composed by category indexes', () =>
     }
   }
   const charter = readFileSync(join(promptDir, 'charter.ts'), 'utf8');
-  for (const name of ['SHARED_EXECUTION_RULES', 'ROUND_SUMMARY_CONTRACT']) {
+  for (const name of ['SHARED_EXECUTION_RULES', 'ROUND_SYNOPSIS_CONTRACT']) {
     assert.match(charter, new RegExp('export const ' + name));
   }
   const collaboration = files(join(promptDir, 'collaboration'));
@@ -41,7 +41,7 @@ test('prompt tree keeps rules separated and composed by category indexes', () =>
     assert.ok(collaboration.some(file => file.endsWith(name)), name);
   }
   const all = sources.map(file => readFileSync(file, 'utf8')).join('\n');
-  assert.equal(all.split('ROUND_SUMMARY_CONTRACT =').length - 1, 1, 'round summary contract must have one source');
+  assert.equal(all.split('ROUND_SYNOPSIS_CONTRACT =').length - 1, 1, 'round synopsis contract must have one source');
   assert.equal(all.split('TASK_REPORT_CONTRACT =').length - 1, 1, 'task report contract must have one source');
   assert.equal(all.split('HISTORY_MEMO_INSTRUCTION =').length - 1, 1, 'compaction memo must have one source');
 });

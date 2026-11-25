@@ -24,6 +24,7 @@ import {builtinToolRegistrations} from '../src/tools/catalog.js';
 import {canonicalToolName} from '../src/tools/types.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 import type {ModelRequest, ModelTurn, Provider} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 function activity(store: RuntimeStore, id: string, owner: string, status: 'running' | 'waiting_input' | 'queued' | 'paused' | 'completed', formal = true) {
   store.activities.create({sessionId: 's', activityId: id, ownerId: owner, kind: owner === 'logox' ? 'director' : 'actor',
@@ -315,7 +316,7 @@ test('no request carries an ensemble snapshot, and copies stored by older sessio
   const turns: ModelTurn[] = [
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g1', name: 'Glob', arguments: '{"pattern":"a*"}'}]}, stop: 'tools'},
     {message: {role: 'assistant', text: '', toolCalls: [{id: 'g2', name: 'Glob', arguments: '{"pattern":"b*"}'}]}, stop: 'tools'},
-    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'},
+    {message: {role: 'assistant', text: 'Done.' + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'},
   ];
   const provider: Provider = {async respond(request, delta) {
     requests.push(structuredClone(request));
@@ -345,8 +346,8 @@ test('where the API binds thinking to history, requests carry no snapshot and no
   const requests: ModelRequest[] = [];
   const turn = (id: string): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern: id})}]}, stop: 'tools'});
   const turns = [turn('g1'), turn('g2'), turn('g3'),
-    {message: {role: 'assistant' as const, text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools' as const},
-    {message: {role: 'assistant' as const, text: 'Again.', toolCalls: [{id: 'f2', name: '_FinishRound', arguments: JSON.stringify({title: 'Again', summary: 'Round outcome.'})}]}, stop: 'tools' as const}];
+    {message: {role: 'assistant' as const, text: 'Done.' + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete' as const},
+    {message: {role: 'assistant' as const, text: 'Again.' + '\n\n' + synopsisBlock({title: 'Again', summary: 'Round outcome.'})}, stop: 'complete' as const}];
   const provider: Provider = {capabilities: {toolDiscovery: 'none', runtimeInstructions: 'meta-user', caching: 'anthropic', appendOnlyHistory: true},
     async respond(request, delta) {
       requests.push(structuredClone(request));
@@ -365,8 +366,8 @@ test('where the API binds thinking to history, requests carry no snapshot and no
     assert.ok(!requests.some(request => request.messages.some(message => message.role === 'context' && message.kind === 'snapshot')));
     await ensemble.dispatch('logox', 'Again', 'direct').done;
     assert.equal(requests.length, 5);
-    assert.ok(requests[4]!.messages.some(message => message.role === 'assistant' && message.toolCalls?.some(call => call.name === '_FinishRound')),
-      'the closed round keeps its _FinishRound call when the next round starts');
+    assert.ok(requests[4]!.messages.some(message => message.role === 'assistant' && message.text.includes('Done.')),
+      'the closed round stays in history when the next round starts (append-only history keeps its synopsis too)');
     for (let index = 1; index < requests.length; index++) {
       const before = requests[index - 1]!.messages, after = requests[index]!.messages;
       // Key order inside a stored record is not part of the wire format; the provider rebuilds each block in a fixed shape.
@@ -445,7 +446,7 @@ async function snapshotRun(capabilities: Provider['capabilities'],
   const requests: ModelRequest[] = [];
   const glob = (id: string): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name: 'Glob', arguments: JSON.stringify({pattern: id})}]}, stop: 'tools'});
   const turns: ModelTurn[] = [glob('g1'), glob('g2'), glob('g3'), glob('g4'),
-    {message: {role: 'assistant', text: 'Done.', toolCalls: [{id: 'f', name: '_FinishRound', arguments: JSON.stringify({title: 'Done', summary: 'Round outcome.'})}]}, stop: 'tools'}];
+    {message: {role: 'assistant', text: 'Done.' + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'}];
   const provider: Provider = {...capabilities ? {capabilities} : {}, async respond(request, delta) {
     requests.push(structuredClone(request));
     const value = turns[requests.length - 1]!;

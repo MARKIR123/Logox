@@ -23,6 +23,7 @@ import {DIRECTOR_STOP_DEFAULT_REASON, USER_INTERRUPT_MARKER, directorStopMarker,
 import {diagnosticOf, stopReasonFor, type StopReasonCode} from '../runtime/stop-reason.js';
 
 import {builtinActors} from './builtins.js';
+import {parseSynopsis} from '../context/synopsis.js';
 
 // Fallback roles share the shipped profile colors with builtinActors. Runtime
 // prefers the loaded catalog; keep this compatibility shape without card surfaces.
@@ -73,7 +74,6 @@ export interface ActorContext<Id extends string = string> extends TaskOrigin {
   hasPendingInbox?(): boolean;
   inboundRecovery?(): TaskOrigin['recovery'];
   closeInbox?(): Promise<readonly ModelMessage[]>;
-  acceptRoundMemory?(callId: string | null): void;
   readonly sessionId: string;
   readonly activityId: string;
   readonly ownerId: Id;
@@ -513,7 +513,6 @@ export class EnsembleRuntime<Id extends string> {
       await this.checkpoint(task, status, error);
     };
     let delivery: TaskDelivery | undefined;
-    let acceptedFinalizer: string | null | undefined;
     const kind = inputKind({ownerId, source, ...origin});
     /** This activity's own entries as a summary; also what a suspended or absorbed activity shows on its card, since it writes no record of its own. */
     const ownSummary = async (status: RoundStatus, forDelivery = false) => {
@@ -521,7 +520,7 @@ export class EnsembleRuntime<Id extends string> {
       const messages: ModelMessage[] = entries.map(storedMessage);
       const summary = summarizeRound(messages.filter(message => message.role !== 'assistant' || !message.memoryOnly && !message.textToolCall), status);
       const text = messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text;
-      if (forDelivery && !isDirector(ownerId) && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(text)};
+      if (forDelivery && !isDirector(ownerId) && origin.inputKind === 'director' && text) delivery = {title: summary.title, text: stripNarration(parseSynopsis(text).answer)};
       return summary;
     };
     /** The round this activity continues (Director) or joins (absorbed aside); decided once, when its input is recorded. */
@@ -532,10 +531,10 @@ export class EnsembleRuntime<Id extends string> {
       try {
         if (!this.history.finishRecord) return await this.history.finish?.(this.sessionId, ownerId, activityId, status);
         const effect = roundEffect(this.store.getSnapshot().activities, this.sessionId, ownerId, kind);
-        // A Director activity that ends while its dispatched work is open only suspends the round, unless the model's closing memory was already accepted.
-        if (status === 'completed' && effect === 'suspends' && typeof acceptedFinalizer !== 'string') return await ownSummary(status);
+        // A Director activity that ends while its dispatched work is open only suspends the round.
+        if (status === 'completed' && effect === 'suspends') return await ownSummary(status);
         const placement: RoundPlacement = effect !== 'aside' ? {kind: 'round'} : joined ? {kind: 'absorb'} : {kind: 'reply', title: asideTitle(prompt, origin)};
-        const record = await this.history.finishRecord(this.sessionId, ownerId, activityId, status, acceptedFinalizer, placement);
+        const record = await this.history.finishRecord(this.sessionId, ownerId, activityId, status, placement);
         if (placement.kind === 'absorb') return await ownSummary(status);
         delivery = record.delivery;
         return record.summary;
@@ -602,7 +601,6 @@ export class EnsembleRuntime<Id extends string> {
           if (incoming.length) inbox.sealed = false;
           return incoming;
         },
-        acceptRoundMemory: callId => {acceptedFinalizer = callId;},
         stopReason: () => task.stopReason,
         ...(task.progress ? {progress: task.progress} : {}),
         saveProgress: async progress => {

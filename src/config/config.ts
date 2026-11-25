@@ -38,7 +38,7 @@ export const catalogSchema = z.object({
   subscription: z.boolean().optional(),
 }).strict();
 /** Context keys of earlier versions. Config files and actor profiles that still carry them load unchanged: the keys are accepted and ignored. */
-export const RETIRED_CONTEXT_KEYS = ['keep_index_lines', 'task_end_floor_ratio', 'compact_accept_ratio'] as const;
+export const RETIRED_CONTEXT_KEYS = ['keep_index_lines', 'task_end_floor_ratio', 'compact_accept_ratio', 'round_memory'] as const;
 export const contextPolicySchema = z.object({
   keep_recent_rounds: z.number().int().nonnegative().default(2),
   keep_recent_tools: z.number().int().nonnegative().default(2),
@@ -49,8 +49,6 @@ export const contextPolicySchema = z.object({
   target_budget_tokens: z.number().int().positive().optional(),
   summary_provider: z.string().min(1).optional(),
   summary_model: z.string().min(1).optional(),
-  /** How a round's memory is written: `tool`, a hidden `_FinishRound` call beside the final reply; `synopsis`, a `<synopsis>` block ending the final reply (`src/context/synopsis.ts`), with no extra request. Absent means `synopsis`. */
-  round_memory: z.enum(['tool', 'synopsis']).optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
 export type ContextPolicy = z.infer<typeof contextPolicySchema>;

@@ -16,7 +16,7 @@
 //
 // Metric definitions (also repeated next to the code that computes each one):
 //   Root task      A human request (activity whose rootActivityId is itself, inputKind `human`) and every activity that has it as root.
-//   Report-like    A Director assistant message that carries no tool call except `_FinishRound` and whose trimmed text is at least
+//   Report-like    A Director assistant message that carries no tool call (old sessions: none but `_FinishRound`) and whose trimmed text is at least
 //                  60 characters with markdown structure (bold, link, list item, heading) or at least 400 characters. Plain status
 //                  narration ("the team is still working") and messages that also dispatch or message teammates are not report-like.
 //   Final reports  Report-like Director messages per root task (ideal 1).
@@ -24,9 +24,9 @@
 //                  coordinationWake). Late wake: a wake whose first ledger record (task time when it has none)
 //                  is after the first final report of that root.
 //   Status line share    Assistant turns of an actor that began with a status line (since the per-reply contract this is a compliance rate; earlier builds asked for two to four per task): a stage (`message.stage` or a `⏵` line in the text) divided by all its assistant turns.
-//   Round closing  Per actor activity (round) that has assistant turns: `same` = the `_FinishRound` message itself carries answer
-//                  text; `separate` = answer text sits in another text-only turn (before or after); `silent` = `_FinishRound` with no
-//                  answer text anywhere in the activity; `never` = no `_FinishRound` call.
+//   Round closing  Per actor activity (round) that has assistant turns: `inline` = a delivered reply ends with a `<synopsis>` block;
+//                  `followUp` = only the closing follow-up (`memoryOnly`) brought one; `missing` = no synopsis at all (the runtime wrote the
+//                  record); `legacy` = an old session that closed through the retired `_FinishRound` call.
 //   Round summary  Per actor, from `director.rounds.json` and `subagents/<actor>.rounds.json`: how each closed round's summary was written.
 //                  A report opening with `[runtime]`, `[failed]`, `[interrupted]` or `[reply]` was written by the runtime (counted by that
 //                  marker); any other report was written by the model. Model share = model-written / all rounds, also in total.
@@ -111,7 +111,7 @@ function loadLedgers(dir) {
       const message = raw.message ?? {};
       const text = message.text ?? raw.text;
       records.push({actor: raw.ownerId ?? name, role: raw.role ?? message.role, activityId: raw.activityId, time: raw.time,
-        text: typeof text === 'string' ? text : '', toolCalls: Array.isArray(message.toolCalls) ? message.toolCalls : [],
+        text: typeof text === 'string' ? text : '', toolCalls: Array.isArray(message.toolCalls) ? message.toolCalls : [], memoryOnly: message.memoryOnly === true,
         stage: typeof message.stage === 'string' ? message.stage : undefined, name: message.name, isError: message.isError === true,
         usage: raw.usage ?? message.usage, inputKind: raw.inputKind});
     }
@@ -119,7 +119,10 @@ function loadLedgers(dir) {
   return records;
 }
 
+/** No business call: none at all, or (old sessions) only the retired `_FinishRound`. */
 const onlyFinish = message => message.toolCalls.every(call => call.name === '_FinishRound');
+/** A `<synopsis>` block opening a line and ending the text (the runtime's rule, `src/context/synopsis.ts`, without its fence handling). */
+const endsWithSynopsis = text => /(?:^|\n)[ \t]*<synopsis\b[^>\n]*>(?:(?!<\/synopsis\s*>)[\s\S])*(?:<\/synopsis\s*>\s*)?$/i.test(text);
 const reportLike = message => {
   if (!onlyFinish(message)) return false;
   const text = message.text.trim();
@@ -193,13 +196,12 @@ export function scoreSession(dir, {others = []} = {}) {
     rounds.get(key).messages.push(message);
   }
   for (const {actor, messages} of rounds.values()) {
-    const entry = closing[actor] ??= {rounds: 0, same: 0, separate: 0, silent: 0, never: 0};
+    const entry = closing[actor] ??= {rounds: 0, inline: 0, followUp: 0, missing: 0, legacy: 0};
     entry.rounds++;
-    const finish = messages.find(message => message.toolCalls.some(call => call.name === '_FinishRound'));
-    if (!finish) entry.never++;
-    else if (finish.text.trim()) entry.same++;
-    else if (messages.some(message => message !== finish && message.text.trim() && message.toolCalls.length === 0)) entry.separate++;
-    else entry.silent++;
+    if (messages.some(message => message.toolCalls.some(call => call.name === '_FinishRound'))) entry.legacy++;
+    else if (messages.some(message => !message.memoryOnly && endsWithSynopsis(message.text))) entry.inline++;
+    else if (messages.some(message => message.memoryOnly && endsWithSynopsis(message.text))) entry.followUp++;
+    else entry.missing++;
   }
 
   // 3b. Who wrote each closed round's summary: the model, or the runtime (leading marker of the report).
@@ -382,7 +384,7 @@ export function flatten(score) {
     add('Status lines', actor + ' distinct lines', num(entry.distinct));
   }
   for (const [actor, entry] of Object.entries(score.roundClosing)) {
-    add('Round closing', actor + ' same/separate/silent/never', [entry.same, entry.separate, entry.silent, entry.never].join('/') + ' of ' + entry.rounds);
+    add('Round closing', actor + ' inline/followUp/missing/legacy', [entry.inline, entry.followUp, entry.missing, entry.legacy].join('/') + ' of ' + entry.rounds);
   }
   for (const [actor, entry] of Object.entries(score.roundSummaries)) {
     add('Round summaries', actor + ' model/runtime/failed/interrupted/reply', [entry.model, entry.runtime, entry.failed, entry.interrupted, entry.reply].join('/') + ' of ' + entry.rounds);

@@ -7,6 +7,7 @@ import {createApplication} from '../src/application.js';
 import {loadConfig} from '../src/config/config.js';
 import type {ModelRequest} from '../src/runtime/messages.js';
 import {waitForSnapshot} from './runtime-fixture.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 async function fixture(sessionId?: string, shared?: {root: string}) {
   const root = shared?.root ?? await realpath(await mkdtemp(join(tmpdir(), 'logox-status-live-')));
@@ -17,8 +18,7 @@ async function fixture(sessionId?: string, shared?: {root: string}) {
     authPath: join(home, '.logox', 'auth.json'), statusbarPath: join(home, '.logox', 'statusbar.json'),
     fetcher: async () => {throw new Error('offline');},
     provider: {async respond(request: ModelRequest) {
-      return {message: {role: 'assistant' as const, text: 'done', toolCalls: [{id: 'finish-' + request.messages.length, name: '_FinishRound',
-        arguments: JSON.stringify({title: 'Done', summary: 'ok'})}]}, stop: 'tools' as const,
+      return {message: {role: 'assistant' as const, text: 'done' + '\n\n' + synopsisBlock({title: 'Done', summary: 'ok'})}, stop: 'complete' as const,
         usage: {input: 700, output: 50, cacheRead: 200}};
     }}});
   return {root, app};

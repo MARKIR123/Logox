@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApplication} from '../src/application.js';
 import {createProvider} from '../src/providers/http.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {loadConfig, type ModelSettings} from '../src/config/config.js';
 
 test('loading cannot authorize a deferred write in its producing batch', async () => {
@@ -18,7 +19,7 @@ test('loading cannot authorize a deferred write in its producing batch', async (
     const calls = bodies.length === 1 ? [
       {type: 'tool_use', id: 'load', name: 'LoadTools', input: {names: ['Write']}},
       {type: 'tool_use', id: 'write', name: 'Write', input: {file_path: 'never.txt', content: 'must not write'}},
-    ] : [{type: 'text', text: 'No write was executed.'}, {type: 'tool_use', id: 'done', name: '_FinishRound', input: {title: 'Protected write', summary: 'Round outcome.'}}];
+    ] : [{type: 'text', text: 'No write was executed.\n\n' + synopsisBlock({title: 'Protected write', summary: 'Round outcome.'})}];
     return new Response([...calls.map((content_block, index) => ({type: 'content_block_start', index, content_block})),
       {type: 'message_delta', delta: {stop_reason: 'tool_use'}}, {type: 'message_stop'}].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
   });
@@ -40,12 +41,10 @@ test('native Anthropic loading carries actual references while eager tools and s
   const provider = createProvider(settings, async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
     const loading = bodies.length === 1;
-    const call = {type: 'tool_use', id: loading ? 'load-real' : 'finish-real', name: loading ? 'LoadTools' : '_FinishRound',
-      input: loading ? {names: ['_GitStatus']} : {title: 'Loaded tool', summary: 'Round outcome.'}};
+    const call = {type: 'tool_use', id: 'load-real', name: 'LoadTools', input: {names: ['_GitStatus']}};
     const frames = [{type: 'message_start', message: {usage: {input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 30}}},
-      ...(!loading ? [{type: 'content_block_start', index: 0, content_block: {type: 'text', text: 'Loaded, without running Git.'}}] : []),
-      {type: 'content_block_start', index: 1, content_block: call},
-      {type: 'message_delta', delta: {stop_reason: 'tool_use'}, usage: {output_tokens: 5}}, {type: 'message_stop'}];
+      ...(!loading ? [{type: 'content_block_start', index: 0, content_block: {type: 'text', text: 'Loaded, without running Git.\n\n' + synopsisBlock({title: 'Loaded tool', summary: 'Round outcome.'})}}] : [{type: 'content_block_start', index: 1, content_block: call}]),
+      {type: 'message_delta', delta: {stop_reason: loading ? 'tool_use' : 'end_turn'}, usage: {output_tokens: 5}}, {type: 'message_stop'}];
     return new Response(frames.map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join(''), {headers: {'content-type': 'text/event-stream'}});
   });
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);

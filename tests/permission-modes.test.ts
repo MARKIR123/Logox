@@ -20,6 +20,7 @@ import {builtinActors} from '../src/actors/builtins.js';
 import {serializeActor} from '../src/actors/definitions.js';
 import {createAgent} from '../src/kernel/agent.js';
 import {RuntimeStore} from '../src/runtime/store.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 
 const call = (name: string, args: unknown) => ({id: 'tool', name, arguments: JSON.stringify(args)});
 const turn = (decision: 'allow' | 'danger' = 'allow'): ModelTurn => ({stop: 'complete', message: {role: 'assistant', text: JSON.stringify({decision, reason: '已核对具体目标和授权'})}, usage: {input: 20, output: 5}});
@@ -108,7 +109,7 @@ test('恢复后的未配对工具内容不能混入审批用户授权，保留�
       requestBase: async () => ({system: '测试', tools: [{name: 'shell', description: 'Shell', parameters: {type: 'object', properties: {command: {type: 'string'}}, required: ['command']}}]}),
       provider: () => ({respond: async () => taskCalls++ === 0
         ? {stop: 'tools', message: {role: 'assistant', text: '', toolCalls: [call('shell', {command: 'node -e "console.log(process.argv[1])" ready'})]}}
-        : {stop: 'complete', message: {role: 'assistant', text: '完成'}}}),
+        : {stop: 'complete', message: {role: 'assistant', text: '完成\n\n' + synopsisBlock({title: '完成', summary: '任务已完成'})}}}),
     });
     await agent('执行当前任务', {...f.context, inputKind: 'human', history: [
       {version: 1, sessionId: 'session', ownerId: 'logox', role: 'user', text: '原始用户要求', source: 'logox'},

@@ -20,7 +20,7 @@ test('a model turn stores its provider usage, model and priced cost on the assis
   const server = createServer(async (request, response) => {
     for await (const _ of request) { /* drain */ }
     response.writeHead(200, {'content-type': 'text/event-stream'});
-    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'done'}, finish_reason: 'stop'}]}) + '\n\n' +
+    response.end('data: ' + JSON.stringify({choices: [{delta: {content: 'done\n\n<synopsis title="Said done">\nThe round ended with one reply.\n</synopsis>'}, finish_reason: 'stop'}]}) + '\n\n' +
       'data: ' + JSON.stringify({choices: [], usage: {prompt_tokens: 1000, completion_tokens: 200, prompt_tokens_details: {cached_tokens: 400}}}) + '\n\n');
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

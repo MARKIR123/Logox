@@ -3,9 +3,19 @@ import {parseSynopsis} from './synopsis.js';
 import type {ModelMessage} from '../runtime/messages.js';
 import type {RoundStatus} from './contracts.js';
 import {truncateToTokens} from './budget.js';
-import {FINISH_ROUND_SUMMARY_TOKENS, FINISH_ROUND_TITLE_TOKENS, isFinishRound, type FinishRoundArgs} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {canonicalToolName} from '../tools/types.js';
 import {stripNarration} from '../runtime/narration.js';
+
+/** Estimated-token caps (`budget.ts:estimateText`) on a round's memory; over-long values are truncated, never rejected. */
+export const ROUND_TITLE_TOKENS = 30;
+export const ROUND_SUMMARY_TOKENS = 200;
+
+/**
+ * Sessions written before the synopsis closed rounds with a hidden `_FinishRound` call. The tool is gone, but those ledgers still hold
+ * its calls and empty results: readers recognise them by this name and keep them out of requests, the timeline and transcripts.
+ */
+export const LEGACY_FINISH_ROUND = '_FinishRound';
+export const isLegacyFinishRound = (name: string): boolean => name.toLowerCase() === LEGACY_FINISH_ROUND.toLowerCase();
 
 const memoryBody = z.strictObject({
   title: z.string().min(1),
@@ -32,7 +42,7 @@ export function formatRoundIndex(input: {ordinal: number; title: string; summary
   return `T${input.ordinal}|${field(input.title)}|${field(input.summary)}|${input.start}-${input.end}`;
 }
 
-/** The bracket marker that opens a runtime-written summary: stopped by user or Director, failed, completed without a usable `_FinishRound`, or a teammate-started activity that was no round of its own. */
+/** The bracket marker that opens a runtime-written summary: stopped by user or Director, failed, completed without a synopsis, or a teammate-started activity that was no round of its own. */
 export const ROUND_MARKERS = Object.freeze({cancelled: '[interrupted]', failed: '[failed]', completed: '[runtime]', reply: '[reply]'} as const);
 const MARKER_PHRASES = Object.freeze({
   cancelled: 'Stopped before finishing.',
@@ -78,37 +88,15 @@ export function runtimeRoundSummary(messages: readonly ModelMessage[], status: R
   const answer = kind === 'completed' ? messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly &&
     !message.textToolCall && stripNarration(message.text).trim()) : undefined;
   if (answer) facts.push('Answer began: ' + stripNarration(answer.text).replace(/\s+/g, ' ').trim());
-  return truncateToTokens(ROUND_MARKERS[kind] + ' ' + (facts.length ? facts.join(' ') : MARKER_PHRASES[kind]), FINISH_ROUND_SUMMARY_TOKENS);
+  return truncateToTokens(ROUND_MARKERS[kind] + ' ' + (facts.length ? facts.join(' ') : MARKER_PHRASES[kind]), ROUND_SUMMARY_TOKENS);
 }
 
-/**
- * The accepted form of `_FinishRound` arguments, or undefined when no usable summary exists. Lenient by design:
- * unknown fields are ignored, over-long values are truncated, a missing title is filled with `fallbackTitle`, and the legacy
- * `outcome`, `verification` and `carry_forward` fields are joined into `summary` when it is absent.
- */
-export function normalizeFinishRound(raw: string, fallbackTitle = ''): FinishRoundArgs | undefined {
-  const read = readFinishRound(raw, fallbackTitle);
-  return read && {title: truncateToTokens(read.title, FINISH_ROUND_TITLE_TOKENS), summary: truncateToTokens(read.summary, FINISH_ROUND_SUMMARY_TOKENS)};
-}
-
-/** The arguments as the model wrote them, without the token caps: what a report synthesized from a textless close is built from, so the runtime never cuts what the model delivered. */
-export function readFinishRound(raw: string, fallbackTitle = ''): FinishRoundArgs | undefined {
-  let value: unknown;
-  try {value = JSON.parse(raw);} catch {return undefined;}
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const args = value as Record<string, unknown>;
-  const text = (item: unknown): string => typeof item === 'string' ? item.trim() : '';
-  let summary = text(args.summary);
-  if (!summary) summary = [args.outcome, args.verification, ...Array.isArray(args.carry_forward) ? args.carry_forward : []].map(text).filter(Boolean).join('; ');
-  if (!summary) return undefined;
-  return {title: text(args.title) || text(fallbackTitle) || 'Round', summary};
-}
-
-/** The round memory a `<synopsis>` ending this reply carries, under the same caps and title fallback as `_FinishRound` arguments. */
+/** The round memory a `<synopsis>` ending this reply carries, capped; a missing title takes `fallbackTitle`, then `Round`. */
 export function synopsisRoundMemory(text: string, fallbackTitle = ''): RoundMemory | undefined {
   const {synopsis} = parseSynopsis(text);
-  const parsed = synopsis && normalizeFinishRound(JSON.stringify(synopsis), fallbackTitle);
-  return parsed ? {...parsed, source: 'model'} : undefined;
+  if (!synopsis) return undefined;
+  const title = synopsis.title.trim() || fallbackTitle.trim() || 'Round';
+  return {title: truncateToTokens(title, ROUND_TITLE_TOKENS), summary: truncateToTokens(synopsis.summary, ROUND_SUMMARY_TOKENS), source: 'model'};
 }
 
 /** Assistant text without a synopsis ending it: the block repeats the round, so no later request carries it. A reply left with nothing is dropped. */
@@ -121,12 +109,13 @@ export function withoutSynopses(messages: readonly ModelMessage[]): ModelMessage
   });
 }
 
+/** Legacy `_FinishRound` calls, their results and the closing follow-ups of old sessions (`memoryOnly`) never reach a request. */
 export function omitInternalToolPairs(messages: readonly ModelMessage[]): ModelMessage[] {
   const omitted = new Set(messages.flatMap(message => message.role === 'assistant'
-    ? (message.toolCalls ?? []).filter(call => isFinishRound(call.name)).map(call => call.id) : []));
+    ? (message.toolCalls ?? []).filter(call => isLegacyFinishRound(call.name)).map(call => call.id) : []));
   const projected: ModelMessage[] = [];
   for (const message of messages) {
-    if (message.role === 'tool' && (omitted.has(message.callId) || isFinishRound(message.name))) continue;
+    if (message.role === 'tool' && (omitted.has(message.callId) || isLegacyFinishRound(message.name))) continue;
     if (message.role !== 'assistant') {projected.push(message); continue;}
     if (!message.memoryOnly && !message.toolCalls?.some(call => omitted.has(call.id))) {projected.push(message); continue;}
     const {toolCalls, memoryOnly, ...body} = message;
@@ -138,20 +127,3 @@ export function omitInternalToolPairs(messages: readonly ModelMessage[]): ModelM
   return projected;
 }
 
-export function extractRoundMemory(messages: readonly ModelMessage[], finalizerCallId?: string | null): RoundMemory | undefined {
-  if (finalizerCallId === null) return undefined;
-  // Modern closures name the accepted call; only legacy callers infer it from journal order.
-  const lastInput = finalizerCallId === undefined ? messages.findLastIndex(message => message.role === 'user') : -1;
-  for (let index = messages.length - 1; index > lastInput; index--) {
-    const message = messages[index]!;
-    if (message.role !== 'assistant' || message.contextExcluded || message.toolsExcluded) continue;
-    for (const call of [...message.toolCalls ?? []].reverse()) {
-      if (!isFinishRound(call.name) || finalizerCallId !== undefined && call.id !== finalizerCallId) continue;
-      const receipt = messages.slice(index + 1).find(item => item.role === 'tool' && item.callId === call.id);
-      if (receipt?.role !== 'tool' || receipt.isError || !isFinishRound(receipt.name)) continue;
-      const parsed = normalizeFinishRound(call.arguments);
-      if (parsed) return {...parsed, source: 'model'};
-    }
-  }
-  return undefined;
-}

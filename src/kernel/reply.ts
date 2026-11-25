@@ -1,14 +1,12 @@
 import type {ModelRequest, ModelTurn, Provider} from '../runtime/messages.js';
 import {extractNarration} from '../runtime/narration.js';
 import type {Step} from '../runtime/contracts.js';
-import {ECHO_REMINDER, ECHO_STOP_ERROR, FINISH_ROUND_NO_TEXT_RESULT, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
+import {ECHO_REMINDER, ECHO_STOP_ERROR, SYNOPSIS_CLOSING_TOOL_RESULT, TEXT_CALL_RECOVERED_NOTE, TEXT_TOOL_CALL_NOTE} from '../prompts/runtime/recovery.js';
 import {LOOP_STREAK} from './repeat-guard.js';
 import {isTextToolCall} from './turn-outcome.js';
 import type {ModelTurnResult} from './model-turn.js';
 import {createRuntimeContextMessage} from '../runtime/context-updates.js';
-import {normalizeFinishRound, readFinishRound} from '../context/round-memory.js';
-import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
-import {FINISH_ROUND_CLOSING_TOOL_RESULT} from '../tools/protocol/_FinishRoundTool/prompt.js';
+import {parseSynopsis, synopsisBlock} from '../context/synopsis.js';
 import {isDirector} from '../runtime/director-id.js';
 import {ExecutionRecoveryError} from './execution-recovery.js';
 import {runToolBatch, uniqueCallIds} from './tool-batch.js';
@@ -18,7 +16,7 @@ import type {AgentRun} from './run.js';
 
 /** Shows a received turn in the timeline and bookkeeping (usage, keep-alive, status line, text-call note), ending its thinking step. Returns the turn as the ledger will hold it. */
 export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<ModelTurnResult, {kind: 'turn'}>): {turn: ModelTurn; thinkingStep: Step} {
-  const {options, state, steps, narration} = run;
+  const {options, state, steps} = run;
   const {request, thinkingId, textId, usedProvider, requestedAt} = got;
   const {prepared} = ready;
   let turn = got.turn;
@@ -28,21 +26,25 @@ export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<Mod
   if (prepared && usedProvider) void options.keepAlive?.arm(run.context, {request, provider: usedProvider, model: prepared.model.identity, startedAt: requestedAt, usage: turn.usage});
   const extracted = extractNarration(turn.message.text);
   if (extracted) {
-    // A reply that is only the status line (no business tool call, no other text; a closing `_FinishRound` does not count as work) is the answer itself:
-    // it keeps the line's words as its visible text instead of reading as empty. Otherwise the ledger text drops the line and the `stage` field keeps it for later audits.
-    const onlyLine = !extracted.cleanText.trim() && (turn.message.toolCalls ?? []).every(call => isFinishRound(call.name));
-    const text = onlyLine ? extracted.narration : extracted.cleanText;
+    // A reply that is only the status line (no tool call, no other text but a synopsis) is the answer itself: it keeps the line's words as its
+    // visible text, with the synopsis after them, instead of reading as empty. Otherwise the ledger text drops the line and the `stage` field keeps it.
+    const onlyLine = !parseSynopsis(extracted.cleanText).answer.trim() && !turn.message.toolCalls?.length;
+    const text = onlyLine ? extracted.narration + (extracted.cleanText.trim() ? '\n\n' + extracted.cleanText.trim() : '') : extracted.cleanText;
     turn = {...turn, message: {...turn.message, text, stage: extracted.narration}};
     if (onlyLine) {
       storedText = text;
       if (textId) options.store.updateMessage(textId, {text});
     }
-    narration.latest = extracted.narration;
     const next = {label: extracted.narration};
     void run.context.saveProgress?.(next);
     options.store.activities.update(run.context.sessionId, run.context.activityId, {progress: next});
   }
-  if (state.closing) turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
+  if (state.closing) {
+    turn = {...turn, message: {...turn.message, memoryOnly: true as const}};
+    // The follow-up's synopsis folds under the answer like one written in place; anything else it repeated is never shown.
+    const {synopsis} = parseSynopsis(turn.message.text);
+    if (synopsis) options.store.message(run.context.sessionId, run.context.ownerId, 'assistant', synopsisBlock(synopsis), {activityId: run.context.activityId});
+  }
   // A call serialized as plain text executed nothing: it is not a delivery, and the card shows a short note instead of the dump.
   const textCall = isTextToolCall(turn, state.closing, ready.definitions);
   if (textCall && textId) options.store.updateMessage(textId, {text: TEXT_TOOL_CALL_NOTE, role: 'notice'});
@@ -56,9 +58,6 @@ export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<Mod
   uniqueCallIds(turn.message.toolCalls ?? []);
   return {turn, thinkingStep};
 }
-
-/** A `_FinishRound` summary at least this long (characters) stands as the report when the model twice closed the round without visible text. */
-const SUBSTANTIVE_SUMMARY = 40;
 
 /** A companion's failed close is handed to the Director, who is woken by it; only the Director's own has no one to hand off to. */
 const closeDisposition = (ownerId: string): 'handoff' | 'stop' => isDirector(ownerId) ? 'stop' : 'handoff';
@@ -79,7 +78,7 @@ export interface Reply {
 
 /** Handles one classified reply. Statement order is part of the contract: ledger writes, store updates and requests happen in this order. */
 export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply): Promise<Next> {
-  const {options, state, steps, narration, persist, drainInbox, holdClose, recoverOutput, directorWaiting} = run;
+  const {options, state, steps, persist, drainInbox, holdClose, recoverOutput} = run;
   const {ready, request, turn, thinkingId, thinkingStep, usedProvider} = reply;
   const {prepared} = ready;
   const reasoningOf = () => turn.message.reasoning || options.store.getSnapshot().messages.find(message => message.id === thinkingId)?.text;
@@ -102,77 +101,15 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       await ready.appendUpdate(createRuntimeContextMessage('reminder', ECHO_REMINDER, {slot: 'echo'}));
       return 'again';
     }
-    case 'finish_round_outside_round': {
-      // Where this activity does not close a round, round memory is not asked for and a `_FinishRound` call is answered normally and otherwise ignored.
-      const calls = turn.message.toolCalls ?? [];
+    case 'closing_with_calls': {
+      // The closing follow-up asks only for a synopsis: its calls are answered unexecuted and the round ends with what was delivered.
+      // Cut-off calls never reach a later request (`toolsExcluded`), as in a truncated batch.
       const reasoning = reasoningOf();
-      await persist({...turn.message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
+      await persist({...turn.message, ...(kind.truncated ? {toolsExcluded: true as const} : {}), ...(reasoning ? {reasoning} : {})}, thinkingStep);
       if (prepared) options.context?.observe(run.context, request, turn, prepared.model);
-      for (const call of calls) await persist({role: 'tool', callId: call.id, name: call.name, text: '', isError: false});
+      for (const call of turn.message.toolCalls ?? []) await persist({role: 'tool', callId: call.id, name: call.name, text: SYNOPSIS_CLOSING_TOOL_RESULT, isError: true});
       run.context.signal.throwIfAborted();
       return finishAsOutcome();
-    }
-    case 'finish_round': {
-      const calls = turn.message.toolCalls ?? [];
-      const {closing} = state;
-      const {truncated} = kind;
-      const onlyFinalizer = kind.only;
-      // Arguments are accepted leniently in one place; the call is rewritten to the accepted form so the ledger holds what the runtime used.
-      const finishCall = calls.find(call => isFinishRound(call.name));
-      const accepted = finishCall && !truncated ? normalizeFinishRound(finishCall.arguments, narration.latest ?? run.context.taskTitle ?? '') : undefined;
-      if (finishCall && accepted) calls[calls.indexOf(finishCall)] = {...finishCall, arguments: JSON.stringify(accepted)};
-      if (!closing && turn.message.text.trim()) state.answerDelivered(turn.message.text);
-      const allowed = ready.base.tools.some(tool => isFinishRound(tool.name));
-      // A reply that is only a `_FinishRound` call with no visible text: one precise nudge, then a substantive summary stands as the delivered report instead of failing finished work.
-      let message = turn.message;
-      const textless = !!accepted && allowed && !closing && onlyFinalizer && !truncated && !state.finalText.trim() && !message.text.trim() && !directorWaiting();
-      const nudged = textless && state.textlessFinish() === 'nudge';
-      if (textless && !nudged && accepted.summary.length >= SUBSTANTIVE_SUMMARY) {
-        // The report is built from the arguments as written: the token caps shape round memory only (the call keeps the capped form), never the delivered text.
-        const written = readFinishRound(finishCall!.arguments, narration.latest ?? run.context.taskTitle ?? '') ?? accepted;
-        const report = written.title + '\n\n' + written.summary;
-        message = {...message, text: report, synthesizedReport: true as const};
-        state.answerDelivered(report);
-        options.store.message(run.context.sessionId, run.context.ownerId, 'assistant', report, {activityId: run.context.activityId});
-      }
-      const valid = allowed && !!accepted && (closing || onlyFinalizer && !!state.finalText.trim());
-      // Where `_FinishRound` is not offered (`[context] round_memory = "synopsis"`), a call to it out of habit beside delivered text ends the round as that text would: no follow-up asks for a tool that does not exist.
-      const settled = valid || closing || !allowed && !!state.finalText.trim();
-      const error = !closing && !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
-        : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
-        : !allowed ? 'Terminal metadata is not available in this request.'
-        : !accepted ? 'Round memory needs a non-empty summary.' : FINISH_ROUND_NO_TEXT_RESULT;
-      const reasoning = reasoningOf();
-      await persist(truncated ? {...message, toolsExcluded: true, ...(reasoning ? {reasoning} : {})} : {...message, ...(reasoning ? {reasoning} : {})}, thinkingStep);
-      if (prepared) options.context?.observe(run.context, request, turn, prepared.model);
-      const sent = calls.find(call => isFinishRound(call.name));
-      try {
-        for (const call of calls) {
-          const ok = valid && call === sent;
-          await persist({role: 'tool', callId: call.id, name: call.name, text: ok ? '' : closing && call !== sent ? FINISH_ROUND_CLOSING_TOOL_RESULT : error, isError: !ok});
-        }
-      } catch (error) {
-        run.context.signal.throwIfAborted();
-        if (!state.finalText) throw error;
-        if (await drainInbox(true)) return 'again';
-        run.context.signal.throwIfAborted();
-        options.store.message(run.context.sessionId, run.context.ownerId, 'notice', 'The response is preserved; round memory could not be recorded.', {activityId: run.context.activityId});
-        return 'done';
-      }
-      run.context.signal.throwIfAborted();
-      if (settled && await holdClose()) return 'again';
-      if (await drainInbox(settled)) return 'again';
-      run.context.signal.throwIfAborted();
-      // The follow-up is asked once: whatever it held besides a usable call, the runtime writes the record and the round ends.
-      if (valid) run.context.acceptRoundMemory?.(sent!.id);
-      if (settled) return 'done';
-      if (state.finalText.trim()) {state.closingCallRequested(); return 'again';}
-      // Nothing was ever delivered: the empty-reply recovery applies.
-      if (!directorWaiting()) {
-        if (nudged) return 'again';
-        throw new ExecutionRecoveryError('no_delivery', closeDisposition(run.context.ownerId));
-      }
-      return 'done';
     }
     case 'tools': {
       const {truncated} = kind;
@@ -197,8 +134,8 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       try {await recoverOutput('text_tool_call', thinkingId);}
       finally {await persist({...turn.message, textToolCall: true as const}, thinkingStep);}
       return 'again';
-    case 'closing_without_call':
-      // The follow-up came back without a call: the delivered text stands and the runtime writes the record.
+    case 'closing_reply':
+      // The follow-up's reply holds the synopsis, or it does not and the runtime writes the record; the delivered text stands either way.
       await persist(turn.message, thinkingStep);
       run.context.signal.throwIfAborted();
       return finishAsOutcome();
@@ -219,15 +156,12 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
       return 'again';
     case 'delivered': {
       await persist(turn.message, thinkingStep);
-      const needsMemory = ready.base.tools.some(tool => isFinishRound(tool.name)) && run.effect() === 'closes';
+      // A reply that closes the round without ending in a synopsis gets one follow-up asking only for it; whatever that brings, the round then ends.
+      const needsSynopsis = run.effect() === 'closes' && !parseSynopsis(turn.message.text).synopsis;
       if (await holdClose()) return 'again';
-      if (await drainInbox(!needsMemory)) return 'again';
+      if (await drainInbox(!needsSynopsis)) return 'again';
       run.context.signal.throwIfAborted();
-      if (needsMemory) {
-        state.answerDelivered(turn.message.text);
-        state.closingCallRequested();
-        return 'again';
-      }
+      if (needsSynopsis) {state.synopsisRequested(); return 'again';}
       return 'done';
     }
     case 'abnormal_stop':

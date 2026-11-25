@@ -12,6 +12,7 @@ import {settleStep, type Message, type Step} from '../src/runtime/contracts.js';
 import {stepElapsed} from '../src/runtime/steps.js';
 import {asksFor} from '../src/runtime/asks.js';
 import type {ModelRequest, ModelTurn, Provider, ToolCall} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 import {sendMessageTool} from '../src/tools/coordination/SendMessageTool/SendMessageTool.js';
@@ -21,7 +22,7 @@ import {loadConfig} from '../src/config/config.js';
 
 const call = (id: string, name: string, args: unknown): ToolCall => ({id, name, arguments: JSON.stringify(args)});
 const tools = (...calls: ToolCall[]): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: calls}, stop: 'tools'});
-const closing = (text: string): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call('finish', '_FinishRound', {title: 'Done', summary: 'Round outcome.'})]}, stop: 'tools'});
+const closing = (text: string): ModelTurn => ({message: {role: 'assistant', text: text + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'});
 
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn, ownerId: string) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-send-step-'));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, readFile, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../src/application.js';
+import {createTestApplication as createApplication} from './runtime-fixture.js';
 import {loadConfig} from '../src/config/config.js';
 import {ActorCatalog} from '../src/actors/catalog.js';
 import {builtinActors} from '../src/actors/builtins.js';
@@ -24,9 +24,9 @@ test('each actual role request receives one common memory contract and one resid
   const seen: ModelRequest[] = [];
   const provider: Provider = {async respond(request) {
     seen.push(request);
-    return {stop: 'tools', message: {role: 'assistant', text: 'Normal response', toolCalls: [{id: 'finish-' + seen.length, name: '_FinishRound', arguments: JSON.stringify({title: 'Answered request', summary: 'Round outcome.'})}]}};
+    return {stop: 'complete', message: {role: 'assistant', text: 'Normal response'}};
   }};
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
   const app = await createApplication({cwd, sessionId: 's', config, env: {}, provider, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
   try {
     for (const role of builtinActors) {
@@ -34,7 +34,7 @@ test('each actual role request receives one common memory contract and one resid
       const request = seen.at(-1)!;
       assert.equal(request.system.split(grammar).length - 1, 1, role.id);
       assert.equal(request.system.split(role.compression).length - 1, 1, role.id);
-      assert.ok(request.tools.some(tool => tool.name === '_FinishRound'));
+      assert.ok(!request.tools.some(tool => tool.name === '_FinishRound'));
       assert.ok(!request.system.includes('[Round Summary]') && !request.system.includes('250 words') && !request.system.includes('Exports & Changes'));
       assert.doesNotMatch(request.system, /When you finish this assignment/, 'the report contract arrives with a formal assignment, not in the system prompt');
       assert.ok(!role.compression.includes('_FinishRound') && !role.compression.includes(grammar));

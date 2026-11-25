@@ -12,6 +12,7 @@ import {Collaboration} from '../src/actors/collaboration.js';
 import {RuntimeStore} from '../src/runtime/store.js';
 import {AskBoard, asksFor} from '../src/runtime/asks.js';
 import type {ModelRequest, ModelTurn, Provider, ToolCall} from '../src/runtime/messages.js';
+import {synopsisBlock} from '../src/context/synopsis.js';
 import {Journal} from '../src/store/journal.js';
 import {Tools, toolDefinitions} from '../src/tools/index.js';
 import {sendMessageTool} from '../src/tools/coordination/SendMessageTool/SendMessageTool.js';
@@ -19,7 +20,7 @@ import type {ActorContext} from '../src/actors/ensemble.js';
 
 const call = (id: string, name: string, args: unknown): ToolCall => ({id, name, arguments: JSON.stringify(args)});
 const tools = (...calls: ToolCall[]): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: calls}, stop: 'tools'});
-const closing = (text: string, id = 'finish-' + Math.random()): ModelTurn => ({message: {role: 'assistant', text, toolCalls: [call(id, '_FinishRound', {title: 'Done', summary: 'Round outcome.'})]}, stop: 'tools'});
+const closing = (text: string): ModelTurn => ({message: {role: 'assistant', text: text + '\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete'});
 const send = (id: string, to: string, type: string, message = 'text') => call(id, 'SendMessage', {to, type, message});
 
 async function fixture(respond: (request: ModelRequest, index: number) => ModelTurn, ownerId = 'techne') {

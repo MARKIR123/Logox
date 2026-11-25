@@ -224,7 +224,7 @@ node scripts/cache-report.mjs <会话目录 | 项目目录 | 项目数据目录 
 tool_discovery = "none" # 保守使用普通工具集
 ```
 
-`.logox/tools.json` 可按角色设置工具的 `roles`、`loading` 和 `terminalVisibility`，项目级覆盖用户级。`_FinishRound` 是必备的内部工具，不能被禁用。协议编码、渐进披露和缓存相关的细节见[上下文模块](modules/context.md#系统提示与工具披露)。
+`.logox/tools.json` 可按角色设置工具的 `roles`、`loading` 和 `terminalVisibility`，项目级覆盖用户级。协议编码、渐进披露和缓存相关的细节见[上下文模块](modules/context.md#系统提示与工具披露)。
 
 ## 提交任务与角色
 
@@ -387,19 +387,9 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 
 `/undo` 与 `/rewind` **不会回滚 Shell、MCP 或其他外部系统的副作用**。多文件恢复也不是操作系统事务，部分失败时需要按提示处理。上下文整理与存储边界见[上下文模块](modules/context.md)。
 
-### 轮次记忆的写法
+### 轮次记忆
 
-每一轮正常结束时，角色都会留下一条轮次记忆，供压缩、`/rewind`、`/resume` 和团队页使用。`[context]` 下的 `round_memory` 决定它怎么写，也可以在角色配置的 `context` 里单独覆盖：
-
-| 取值 | 写法 |
-|---|---|
-| `synopsis`（默认） | 最终回复以一个 `<synopsis title="…">…</synopsis>` 块结尾，不需要任何额外请求。时间线把它折叠成一行 `▸ Synopsis · 标题`，点击展开；Logox 收到的报告、无界面模式的最终回复和模型之后的上下文都不包含它。模型没写时由运行时根据记录写一条 |
-| `tool`（旧方式，暂时保留） | 最终回复的同一条消息里调用隐藏工具 `_FinishRound`；模型没有调用时，运行时再追加一次请求要它补上 |
-
-```toml
-[context]
-round_memory = "tool"   # 切回旧方式
-```
+每一轮正常结束时，角色在最终回复末尾写一个 `<synopsis title="…">…</synopsis>` 块，作为这一轮的记忆，供压缩、`/rewind`、`/resume` 和团队页使用。时间线把它折叠成一行 `▸ Synopsis · 标题`，点击展开；Logox 收到的报告、无界面模式的最终回复和模型之后的上下文都不包含它。模型漏写时，运行时追加一次请求只要它补写摘要块；仍然没有，就由运行时根据记录写一条。旧版本的 `[context] round_memory` 设置已退役，写了也会被忽略。
 
 ## 权限
 
@@ -704,7 +694,7 @@ logox -p "整理 README" --verbose --timeout 30 2> progress.log
 
 `delegations` 列出本次运行里的每一次委派（与节目单读同一份投影）：角色任务（`kind` 为 `actor`，`id` 是活动 id）和 Automa 工人（`kind` 为 `automa`，`id` 是 `T1` 这样的工人 id，`parentId` 是派遣它的活动）。`status` 是活动状态或工人状态，`stopReason` 取上文“结束原因”表里的值（没结束时为 `null`），`durationMs` 未知时为 `null`，`costUsd` 来自账本里已定价的 USD 轮次（工人和没有价格的记录为 `null`），`blockedBy` 是还没结束的 `after` 依赖，`result` 在结束后有 `summary` 与 `notVerified`，否则为 `null`；工人另有 `route` 和 `model`。没有委派时是 `[]`。
 
-`status` 为 `completed`、`failed`、`cancelled`（SIGINT）或 `timeout`。`actors` 里每个角色的 `tasks` 是本次运行里它启动的任务数，`toolCalls` 是它的工具调用数（不含内部的 `_FinishRound`）。`usage` 只统计本次运行新增的记录（`inputTokens` 含缓存读写，与 `/usage` 一致，Automa 与摘要、审批调用计入派发者或所属角色）；价格未知或不是 USD 时 `costUsd` 为 `null`。`changedFiles` 是 Write、Edit（含 Automa 工人）改动的文件，相对当前目录；Shell 命令造成的改动不在其中。
+`status` 为 `completed`、`failed`、`cancelled`（SIGINT）或 `timeout`。`actors` 里每个角色的 `tasks` 是本次运行里它启动的任务数，`toolCalls` 是它的工具调用数。`usage` 只统计本次运行新增的记录（`inputTokens` 含缓存读写，与 `/usage` 一致，Automa 与摘要、审批调用计入派发者或所属角色）；价格未知或不是 USD 时 `costUsd` 为 `null`。`changedFiles` 是 Write、Edit（含 Automa 工人）改动的文件，相对当前目录；Shell 命令造成的改动不在其中。
 
 ## 数据位置与构建
 

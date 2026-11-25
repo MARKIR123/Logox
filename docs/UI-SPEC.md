@@ -35,7 +35,7 @@ Logox 使用 React/Ink 的全屏界面。正式模式需要 stdin 和 stdout 都
 - 其他 MCP 工具与未知工具：标题 `mcp · 服务 › 工具`；正文先是对齐的 `键  值` 参数行（键淡色、值正常前景，嵌套对象为单行紧凑 JSON），再是渲染后的结果（像 Markdown 时按 Markdown 渲染），同样受 12 行上限约束，空结果为 `No output`。敏感字段遮蔽只作用于显示，原始账本不变。
 - SendMessage：`SendMessage to <符号 名字>`（名字用目标角色色）加摘要 `ask · awaiting reply` / `ask · answered` / `inform` / `reply`；展开为 `Q  问题`、`A  回答`（标签淡色）。对方回复后，提问方的卡片更新为 `answered` 并显示 Q 与 A；回复方的卡片总是先显示原问题 Q 再显示自己的 A，不会只剩一个孤立的回答。角色之间的对话不出现在 Logox 主时间线，除非发送方或接收方是 Logox；各角色自己的窗口仍显示自己发出的消息。
 - AskUserQuestion：回答之后是一份记录：摘要 `answered`（或 `cancelled`），每个问题一行 `Q  问题`，所选答案 `A  答案` 以用户色加粗，备注用次要色。交互选择面板本身不变。
-- 隐藏工具（Actor、ListActors、ReadActor、LoadTools、_FinishRound、_GitStatus）成功时什么都不画，也不会出现在工具组摘要里；失败时只有一行：红色 `▮`、次要色标题（如 `Actor(kalon)`）、` · `、红色原因，耗时紧随其后。浏览器与 MCP 的失败也走同一个失败视图：原因是一行干净文字（不显示 `### Error` 之类的 Markdown 标题）。角色卡本身不受影响。CancelActor 是不可展开的一行 `■ Stopped <符号 名字>`，用该角色的颜色。
+- 隐藏工具（Actor、ListActors、ReadActor、LoadTools、_GitStatus；旧会话里的 _FinishRound 也一样）成功时什么都不画，也不会出现在工具组摘要里；失败时只有一行：红色 `▮`、次要色标题（如 `Actor(kalon)`）、` · `、红色原因，耗时紧随其后。浏览器与 MCP 的失败也走同一个失败视图：原因是一行干净文字（不显示 `### Error` 之类的 Markdown 标题）。角色卡本身不受影响。CancelActor 是不可展开的一行 `■ Stopped <符号 名字>`，用该角色的颜色。
 - Automa 的任务行使用同样的正文结构：12 行上限、同一个 `… N more lines` 展开行、同一种空状态。
 
 点击卡片折叠或展开，双击角色卡进入其窗口。拖选优先于点击，选择文字不会停止任务。停止按钮只作用于对应任务，停止 Logox 不会连带取消所有角色。
