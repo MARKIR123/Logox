@@ -27,6 +27,7 @@ import type {RoundStatus} from '../context/contracts.js';
 import {ExecutionRecoveryError} from '../kernel/execution-recovery.js';
 import {
   actorSchema,
+  type TaskSpec,
   ACTOR_DESCRIPTION,
   craftActorSchema,
   CRAFT_ACTOR_DESCRIPTION,
@@ -60,20 +61,8 @@ import {deliveryPriority, deliverySchema, type Delivery} from '../runtime/delive
 import {inputKind} from '../runtime/provenance.js';
 import {normalizeStopReason} from '../runtime/stop-reason.js';
 import {definitionChangeNote, definitionChanges, definitionFingerprint} from '../runtime/definition-fingerprint.js';
+import {dispatchGraph} from './dispatch-graph.js';
 
-/** Orders per-owner groups so an owner dispatched `after` another owner of the same call comes later; rejects cycles. */
-function orderByDependency<T extends {after: ReadonlySet<string>}>(grouped: ReadonlyMap<string, T>): [string, T][] {
-  const ordered: [string, T][] = [], visiting = new Set<string>(), done = new Set<string>();
-  const visit = (owner: string) => {
-    if (done.has(owner)) return;
-    if (visiting.has(owner)) throw new Error('Circular `after` dependency involving ' + owner);
-    visiting.add(owner);
-    for (const ref of grouped.get(owner)!.after) if (grouped.has(ref)) visit(ref);
-    visiting.delete(owner); done.add(owner); ordered.push([owner, grouped.get(owner)!]);
-  };
-  for (const owner of grouped.keys()) visit(owner);
-  return ordered;
-}
 const serviceTools = new Set(['Actor', 'CancelActor', 'ListActors', 'CraftActor', 'ReadActor', 'SendMessage', 'Plan']);
 
 export interface ActorServicesOptions {
@@ -326,22 +315,12 @@ export class ActorServices {
         }
         // Two or more new tasks with no plan to hang them on: the receipt says so once (advice, never a refusal).
         const planAdvice = isDirector(context.ownerId) && !!this.options.plans && tasks.filter(task => !task.resumeTask).length >= 2 && !this.options.plans.active();
-        const grouped = new Map<string, {prompts: string[]; files: Set<string>; acceptance: string[]; after: Set<string>; nodes: string[]; resumeTaskId?: string; taskTitle?: string}>();
-        for (const task of tasks) {
-          const group = grouped.get(task.ownerId) ?? {prompts: [], files: new Set<string>(), acceptance: [], after: new Set<string>(), nodes: [], ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {})};
-          if (task.resumeTask && group.resumeTaskId && task.resumeTask !== group.resumeTaskId) throw new Error('An actor can resume only one original activity at a time; different checkpoints cannot be merged');
-          if (task.resumeTask) group.resumeTaskId = task.resumeTask;
-          if (!group.taskTitle && task.title) group.taskTitle = task.title;
-          const brief = renderBrief(task);
-          // A task on a plan node is told where its node sits: the path from the root and its own subtree, after the brief.
-          const planBlock = task.node ? this.options.plans?.contextFor(task.node) : undefined;
-          group.prompts.push((brief ? task.prompt + '\n\n' + brief : task.prompt) + (planBlock ? '\n\n' + planBlock : ''));
-          if (task.node && !group.nodes.includes(task.node)) group.nodes.push(task.node);
-          for (const file of task.owns ?? []) group.files.add(file);
-          for (const item of task.acceptance ?? []) if (!group.acceptance.includes(item)) group.acceptance.push(item);
-          for (const ref of task.after ?? []) group.after.add(ref);
-          grouped.set(task.ownerId, group);
-        }
+        // Every task is its own activity; `after` names tasks (an `id` of this call, `#n`, or an earlier activity id). All of it is checked before anything starts.
+        const known = this.options.getSnapshot?.().activities.filter(activity => activity.sessionId === this.options.sessionId) ?? [];
+        const graph = dispatchGraph(tasks, ref => {
+          const activity = known.find(item => item.activityId === ref);
+          return activity ? (['queued', 'running', 'waiting_input', 'paused'].includes(activity.status) ? 'open' : 'ended') : undefined;
+        }, ref => !!this.options.catalog.find(ref));
         // The batch resumes after the new tasks exist, so a resumed blocker can take over its waiting dependents first.
         let applyBatch: (() => void) | undefined;
         if (resumeBatch) {
@@ -355,7 +334,7 @@ export class ActorServices {
           if (!tasks.length) {applyBatch?.(); return {text: applyBatch ? resumedBatchResult(resumeBatch) : endedBatchResult(resumeBatch), isError: false};}
         }
         // The deterministic gate comes first and is never skipped: tasks that may run at the same time cannot both own a file.
-        const conflicts = ownsConflicts(tasks, this.options.projectDir ?? process.cwd());
+        const conflicts = ownsConflicts(tasks, this.options.projectDir ?? process.cwd(), graph);
         if (conflicts.length) return {text: ownsConflictRefusal(conflicts), isError: true};
         // A larger dispatch is read by a read-only check first: gaps return to the Director with nothing started; a failed check never blocks.
         let briefLine: string | undefined = briefCheck === 'skip' ? BRIEF_CHECK_SKIPPED : undefined;
@@ -381,28 +360,32 @@ export class ActorServices {
         const nextDepth = baseDepth + (tasks.every(task => task.resumeTask) ? 0 : 1);
         const group = {remaining: new Set<string>(), depth: nextDepth, batchId: randomUUID(), origin, paused: false};
         const dispatched = new Map<string, string>();
-        const titleOf = (task: {prompts: string[]; taskTitle?: string}) => task.taskTitle ?? task.prompts[0]!.split('\n', 1)[0]!.slice(0, 80);
-        const batch = [...grouped].map(([ownerId, task]) => ({ownerId, title: titleOf(task), owns: [...task.files]}));
+        const titleOf = (task: TaskSpec) => task.title ?? task.prompt.split('\n', 1)[0]!.slice(0, 80);
+        const batch = graph.ordered.map(({key, task}) => ({key, ownerId: task.ownerId, title: titleOf(task), owns: task.owns ?? []}));
         const snapshot = this.options.getSnapshot?.();
         const receipt: DispatchedTask[] = [];
-        orderByDependency(grouped).forEach(([owner, task]) => {
-          const after = this.resolveAfter(owner, task.after, dispatched);
+        for (const {key, task, inCall, external} of graph.ordered) {
+          const owner = task.ownerId;
+          const after = [...inCall.map(ref => dispatched.get(ref)!), ...external];
           const fingerprint = this.fingerprintOf(owner);
-          const childOrigin = {...origin, batchId: group.batchId, ...(fingerprint ? {fingerprint} : {}), ...(task.resumeTaskId ? {resumeTaskId: task.resumeTaskId} : {}), ...(task.taskTitle ? {taskTitle: task.taskTitle} : {}),
-            ...(task.files.size ? {ownedFiles: [...task.files]} : {}), ...(task.acceptance.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {}),
-            ...(task.nodes.length ? {planNode: task.nodes[0]!} : {})};
-          const ownerOf = (id: string) => [...dispatched].find(([, activity]) => activity === id)?.[0] ?? snapshot?.activities.find(activity => activity.activityId === id)?.ownerId;
-          const finished = new Set(after.map(ownerOf).filter((who): who is string => !!who));
-          const teammates = teammatesBlock(owner, batch, snapshot, rootActivityId, finished);
-          const prompt = task.prompts.join('\n\n') + (teammates ? '\n\n' + teammates : '');
+          const childOrigin = {...origin, batchId: group.batchId, ...(fingerprint ? {fingerprint} : {}), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {}),
+            ...(task.owns?.length ? {ownedFiles: [...new Set(task.owns)]} : {}), ...(task.acceptance?.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {}),
+            ...(task.node ? {planNode: task.node} : {})};
+          // Teammates are the other tasks of the call it does not wait for, and live work on the same root it does not wait for.
+          const earlier = graph.ancestors(key);
+          const teammates = teammatesBlock(owner, batch.filter(mate => mate.key !== key && !earlier.has(mate.key)), snapshot, rootActivityId, new Set(external));
+          const brief = renderBrief(task);
+          // A task on a plan node is told where its node sits: the path from the root and its own subtree, after the brief.
+          const planBlock = task.node ? this.options.plans?.contextFor(task.node) : undefined;
+          const prompt = (brief ? task.prompt + '\n\n' + brief : task.prompt) + (planBlock ? '\n\n' + planBlock : '') + (teammates ? '\n\n' + teammates : '');
           const handle = this.options.enqueue(owner, prompt, DIRECTOR_ID, childOrigin);
           this.origins.set(handle.activityId, childOrigin);
-          for (const node of task.nodes) this.options.plans?.link(node, {activityId: handle.activityId});
+          if (task.node) this.options.plans?.link(task.node, {activityId: handle.activityId});
           this.depths.set(handle.activityId, nextDepth);
           group.remaining.add(handle.activityId); this.groups.set(handle.activityId, group);
-          dispatched.set(owner, handle.activityId);
-          receipt.push({activityId: handle.activityId, ownerId: owner, title: titleOf(task), owns: [...task.files], after});
-        });
+          dispatched.set(key, handle.activityId);
+          receipt.push({activityId: handle.activityId, ownerId: owner, title: titleOf(task), owns: [...new Set(task.owns ?? [])], after, ...(task.id ? {id: task.id} : {})});
+        }
         applyBatch?.();
         for (const activityId of resumed) {
           this.continuedTasks.add(activityId); this.restartInterrupted.delete(activityId);
@@ -487,22 +470,6 @@ export class ActorServices {
     });
   }
   /** Resolves `after` references (activity ids or actor ids) to unfinished activity ids; finished or unknown activity ids are dropped, unknown actors are rejected. */
-  private resolveAfter(owner: string, refs: ReadonlySet<string>, dispatched: ReadonlyMap<string, string>): string[] {
-    const activities = this.options.getSnapshot?.().activities.filter(activity => activity.sessionId === this.options.sessionId) ?? [];
-    const open = (status: string) => ['queued', 'running', 'waiting_input', 'paused'].includes(status);
-    const ids = new Set<string>();
-    for (const ref of refs) {
-      if (ref === owner) throw new Error('A task cannot run after itself: ' + ref);
-      const sameCall = dispatched.get(ref);
-      if (sameCall) {ids.add(sameCall); continue;}
-      const byId = activities.find(activity => activity.activityId === ref);
-      if (byId) {if (open(byId.status)) ids.add(byId.activityId); continue;}
-      if (!this.options.catalog.find(ref)) throw new Error('Unknown `after` reference (not an actor id or activity id): ' + ref);
-      const latest = activities.filter(activity => activity.ownerId === ref && open(activity.status)).at(-1);
-      if (latest) ids.add(latest.activityId);
-    }
-    return [...ids];
-  }
   async grantExecution(context: ActorContext): Promise<void> {
     if (context.inputKind !== 'human' || !context.grantExecution) return;
     const root = context.rootActivityId ?? context.activityId;

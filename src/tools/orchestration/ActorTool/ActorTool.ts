@@ -1,12 +1,13 @@
 import {z} from 'zod';
 
 export const taskSpecSchema = z.strictObject({
+  id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, 'lowercase letters, digits and hyphens, at most 32').optional().describe('Short handle other tasks of this call name in `after` (e.g. "draw-assets"); only needed when one does'),
   ownerId: z.string().describe('Target actor ID (e.g. techne, kalon, aletheia)'),
   title: z.string().trim().min(1).max(120).optional().describe('3-8 word main task title for the actor card and roster'),
   prompt: z.string().trim().min(1).describe('The briefing for a colleague who has not seen your conversation'),
   owns: z.array(z.string().trim().min(1)).max(32).optional().describe('Paths or globs (relative to the project) this task may change; other actors editing them get a coordination note'),
   acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional().describe('Checks that define done'),
-  after: z.array(z.string().trim().min(1)).max(8).optional().describe('Actor ids or activity ids to wait for'),
+  after: z.array(z.string().trim().min(1)).max(8).optional().describe('Tasks to wait for: an `id` of this call, or the activity id of an earlier task. Never an actor name'),
   node: z.string().trim().min(1).max(40).optional().describe('Plan node id this task carries out (see Plan): the node\'s status then follows this work'),
   resumeTask: z.string().optional(),
 });

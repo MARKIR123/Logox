@@ -42,8 +42,8 @@ test('the Actor result is a receipt: one line per task with activity id, owner, 
   const f = await fixture(async (_prompt, context, services) => {
     if (context.ownerId === 'logox') {
       receipt = (await services.execute(dispatch([
-        {ownerId: 'techne', title: 'Build the parser', prompt: 'Build it.', owns: ['src/parser.ts', 'src/lexer.ts']},
-        {ownerId: 'kalon', title: 'Style the panel', prompt: 'Style it.', after: ['techne']},
+        {id: 'parser', ownerId: 'techne', title: 'Build the parser', prompt: 'Build it.', owns: ['src/parser.ts', 'src/lexer.ts']},
+        {ownerId: 'kalon', title: 'Style the panel', prompt: 'Style it.', after: ['parser']},
         {ownerId: 'aletheia', prompt: 'Review it.\nSecond line.'}]), context)).text;
       return;
     }
@@ -54,7 +54,7 @@ test('the Actor result is a receipt: one line per task with activity id, owner, 
     const id = (owner: string) => f.store.activities.list().find(activity => activity.ownerId === owner)!.activityId;
     const lines = receipt.split('\n');
     assert.match(lines[0]!, /^Dispatched to techne, kalon, aletheia \(Batch [^)]+\):$/);
-    assert.ok(lines.includes('- ' + id('techne') + ' techne: Build the parser | owns: src/parser.ts, src/lexer.ts'), receipt);
+    assert.ok(lines.includes('- ' + id('techne') + ' techne (parser): Build the parser | owns: src/parser.ts, src/lexer.ts'), receipt);
     assert.ok(lines.includes('- ' + id('kalon') + ' kalon: Style the panel | after: ' + id('techne')), receipt);
     assert.ok(lines.includes('- ' + id('aletheia') + ' aletheia: Review it.'), receipt);
     assert.match(receipt, /They work in the background/);

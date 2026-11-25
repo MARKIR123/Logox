@@ -516,7 +516,7 @@ test('resumeTask with resumeBatch keeps the paused dependents queued and release
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === '开始') {
       const result = await services.execute({id: 'd', name: 'dispatch_role', arguments: JSON.stringify({tasks: [
-        {ownerId: 'techne', prompt: '故障任务'}, {ownerId: 'kalon', prompt: '依赖任务', after: ['techne']}]})}, context);
+        {id: 'broken', ownerId: 'techne', prompt: '故障任务'}, {ownerId: 'kalon', prompt: '依赖任务', after: ['broken']}]})}, context);
       assert.equal(result.isError, false);
     } else if (prompt.startsWith('故障任务')) throw new Error('暂时工具故障');
     else if (prompt === '用户允许继续') {

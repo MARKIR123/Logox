@@ -133,7 +133,8 @@ test('Director sets after for dependent work and accepts reports against the run
   assert.ok(director.includes('The wake already carries the full reports.'));
   assert.ok(director.includes('Read the account against the record'));
   assert.ok(director.includes('you close the round once, with a synopsis, when you accept the reports'));
-  assert.match(ACTOR_DESCRIPTION, /set `after` to that actor id or activity id: the runtime starts it only when that work has ended and hands it the report/);
+  assert.match(ACTOR_DESCRIPTION, /give that task an `id` and set `after` to it \(or to the activity id of an earlier task\): the runtime starts it only when that work has ended and hands it the report/);
+  assert.match(ACTOR_DESCRIPTION, /One actor may have several tasks in a call, as waves of one pipeline/);
 });
 
 test('peer replies use type reply, help is for decisions, and the synopsis ends the answer itself', () => {

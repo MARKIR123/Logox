@@ -195,7 +195,7 @@ test('Logox cancelling a companion wakes it at once with the held reports', {tim
 });
 
 test('an after pipeline reports once, in one batch, when its last task ends', {timeout: 10000}, async () => {
-  const e = await ensembleOf({busy: false, tasks: [{ownerId: 'aletheia', prompt: 'review'}, {ownerId: 'kalon', prompt: 'fix', after: ['aletheia']}]});
+  const e = await ensembleOf({busy: false, tasks: [{id: 'review', ownerId: 'aletheia', prompt: 'review'}, {ownerId: 'kalon', prompt: 'fix', after: ['review']}]});
   try {
     await e.f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
     e.release.aletheia.resolve(); await done(e.f, 'aletheia');

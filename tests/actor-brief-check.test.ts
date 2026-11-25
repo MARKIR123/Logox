@@ -96,13 +96,13 @@ test('two tasks are checked once with all fields; clear dispatches them and the 
   const seen: BriefCheckInput[] = [];
   const f = await fixture(async input => {seen.push(input); return {status: 'clear'};});
   try {
-    const result = await f.dispatch({tasks: [short('techne', {owns: ['src/a.ts'], acceptance: ['it builds']}), short('kalon', {after: ['techne']})]});
+    const result = await f.dispatch({tasks: [short('techne', {id: 'build', owns: ['src/a.ts'], acceptance: ['it builds']}), short('kalon', {after: ['build']})]});
     assert.equal(result.isError, false);
     assert.equal(seen.length, 1);
     assert.deepEqual([...seen[0]!.companions].sort(), ['Kalon', 'Techne']);
     const techne = seen[0]!.tasks.find(task => task.ownerId === 'techne')!;
     assert.deepEqual([techne.title, techne.prompt, techne.owns, techne.acceptance, techne.after], ['Task for techne', 'Do the techne part.', ['src/a.ts'], ['it builds'], []]);
-    assert.deepEqual(seen[0]!.tasks.find(task => task.ownerId === 'kalon')!.after, ['techne']);
+    assert.deepEqual(seen[0]!.tasks.find(task => task.ownerId === 'kalon')!.after, ['build']);
     assert.match(result.text, /^Brief check: clear\.$/m);
     assert.deepEqual(f.started(), ['kalon', 'techne']);
   } finally {await f.close();}
@@ -152,7 +152,7 @@ test('the owns gate runs before any check and is never skipped: tasks that may r
       assert.deepEqual(f.started(), []);
     }
     assert.equal(calls, 0, 'the brief check never ran');
-    const ordered = await f.dispatch({tasks: [short('techne', {owns: ['src/a.ts']}), short('kalon', {owns: ['src/'], after: ['techne']})]});
+    const ordered = await f.dispatch({tasks: [short('techne', {id: 'first', owns: ['src/a.ts']}), short('kalon', {owns: ['src/'], after: ['first']})]});
     assert.equal(ordered.isError, false, 'ordered with after: dispatched');
   } finally {await f.close();}
 });

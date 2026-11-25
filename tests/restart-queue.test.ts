@@ -63,7 +63,7 @@ const activity = (l: Lifetime, owner: string) => l.store.activities.list().find(
 async function interruptedChain(root: string, how: 'quit' | 'crash') {
   await mkdir(join(root, 'one'));
   const first = await lifetime(join(root, 'one'), async (prompt, context, services) => {
-    if (prompt === 'start') await services.execute(call([{ownerId: 'kalon', prompt: 'A work', title: 'A'}, {ownerId: 'techne', prompt: 'B work', title: 'B', after: ['kalon']}]), context);
+    if (prompt === 'start') await services.execute(call([{id: 'a', ownerId: 'kalon', prompt: 'A work', title: 'A'}, {ownerId: 'techne', prompt: 'B work', title: 'B', after: ['a']}]), context);
     else if (context.ownerId === 'kalon') await hang(context);
   });
   await first.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
@@ -189,7 +189,7 @@ test('after a restart with open dispatched work the Director gets one ensemble r
   const cwd = await mkdtemp(join(tmpdir(), 'logox-test-record-'));
   try {
     // Process 1: the Director dispatches kalon (hangs) and techne (after kalon, never starts), then the process quits.
-    const dispatched = JSON.stringify({tasks: [{ownerId: 'kalon', prompt: 'A work', title: 'Task A'}, {ownerId: 'techne', prompt: 'B work', title: 'Task B', after: ['kalon']}]});
+    const dispatched = JSON.stringify({tasks: [{id: 'a', ownerId: 'kalon', prompt: 'A work', title: 'Task A'}, {ownerId: 'techne', prompt: 'B work', title: 'Task B', after: ['a']}]});
     const first = await open(cwd, async (request, _delta, signal) => {
       const prompt = request.messages.find(message => message.role === 'user')?.text ?? '';
       if (prompt.includes('A work')) {await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve())); signal.throwIfAborted(); return done();}

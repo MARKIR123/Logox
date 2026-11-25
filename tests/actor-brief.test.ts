@@ -79,8 +79,8 @@ test('after holds the dependent task as waiting and releases it with the depende
   const prompts: Record<string, string> = {};
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === 'start') await services.execute(call([
-      {ownerId: 'techne', prompt: 'Wire the animation', after: ['kalon']},
-      {ownerId: 'kalon', prompt: 'Draw the wheel'}]), context);
+      {ownerId: 'techne', prompt: 'Wire the animation', after: ['wheel']},
+      {id: 'wheel', ownerId: 'kalon', prompt: 'Draw the wheel'}]), context);
     else {
       prompts[context.ownerId] = prompt;
       if (context.ownerId === 'kalon') {await kalonRelease.promise; context.say('Wheel drawn with ids #wheel and #crank.');} else context.say('Wired.');
@@ -102,10 +102,47 @@ test('after holds the dependent task as waiting and releases it with the depende
   } finally {kalonRelease.resolve(); await f.close();}
 });
 
+test('one call holds the waves of a pipeline: an actor may have several tasks, each its own activity, ordered by task ids', {timeout: 10000}, async () => {
+  const started: string[] = [];
+  const prompts: Record<string, string> = {};
+  let receipt = '';
+  const f = await fixture(async (prompt, context, services) => {
+    if (prompt === 'start') {
+      receipt = (await services.execute(call([
+        {id: 'assets', ownerId: 'kalon', title: 'Draw the assets', prompt: 'DRAW', owns: ['art/']},
+        {id: 'engine', ownerId: 'techne', title: 'Write the engine', prompt: 'ENGINE', owns: ['src/engine.js']},
+        {id: 'build', ownerId: 'techne', title: 'Assemble the page', prompt: 'ASSEMBLE', owns: ['index.html'], after: ['assets', 'engine']},
+        {ownerId: 'kalon', title: 'Review the screenshots', prompt: 'REVIEW', after: ['build']},
+        {ownerId: 'aletheia', title: 'Check the edges', prompt: 'CHECK', after: ['build']}]), context)).text;
+      return;
+    }
+    const word = /\b(DRAW|ENGINE|ASSEMBLE|REVIEW|CHECK)$/m.exec(prompt)?.[1] ?? prompt;
+    started.push(word); prompts[word] = prompt;
+    context.say(word + ' finished.');
+  });
+  try {
+    await f.ensemble.dispatch('logox', 'start', 'logox', {inputKind: 'human'}).done;
+    await waitForSnapshot(f.store, snapshot => snapshot.activities.filter(activity => activity.ownerId !== 'logox' && activity.status === 'completed').length === 5);
+    const mine = f.store.activities.list().filter(activity => activity.ownerId !== 'logox');
+    assert.equal(mine.length, 5, 'five tasks, five activities: no merging by actor');
+    assert.deepEqual(mine.filter(activity => activity.ownerId === 'techne').map(activity => activity.taskTitle), ['Write the engine', 'Assemble the page']);
+    assert.deepEqual(mine.find(activity => activity.taskTitle === 'Assemble the page')?.ownedFiles, ['index.html'], 'each task keeps its own owns');
+    assert.equal(new Set(mine.map(activity => activity.batchId)).size, 1, 'one batch: the Director is woken once, when the last task ends');
+    // The assembly starts after both first-wave tasks and gets both reports; the reviews start after the assembly.
+    const at = (word: string) => started.indexOf(word);
+    assert.ok(at('ASSEMBLE') > at('DRAW') && at('ASSEMBLE') > at('ENGINE') && at('REVIEW') > at('ASSEMBLE') && at('CHECK') > at('ASSEMBLE'), started.join(' '));
+    assert.match(prompts.ASSEMBLE!, /DRAW finished\./);
+    assert.match(prompts.ASSEMBLE!, /ENGINE finished\./);
+    assert.match(prompts.REVIEW!, /ASSEMBLE finished\./);
+    assert.match(receipt, / techne \(engine\): Write the engine/);
+    assert.match(receipt, / techne \(build\): Assemble the page \| owns: index\.html \| after: \S+, \S+/);
+  } finally {await f.close();}
+});
+
 test('a task whose dependency fails never starts: the failed batch pauses it and a resume cancels it', {timeout: 8000}, async () => {
   const ran: string[] = [];
   const f = await fixture(async (prompt, context, services) => {
-    if (prompt === 'start') await services.execute(call([{ownerId: 'kalon', prompt: 'Draw'}, {ownerId: 'techne', prompt: 'Wire', after: ['kalon']}]), context);
+    if (prompt === 'start') await services.execute(call([{id: 'draw', ownerId: 'kalon', prompt: 'Draw'}, {ownerId: 'techne', prompt: 'Wire', after: ['draw']}]), context);
     else {ran.push(context.ownerId); if (context.ownerId === 'kalon') throw new Error('boom');}
   });
   try {
@@ -125,8 +162,13 @@ test('after rejects unknown references, self references and cycles', {timeout: 8
       async ask() {return {status: 'cancelled' as const, reason: 'test'};}, async permission() {return true;}} as unknown as ActorContext;
     const run = (tasks: unknown[]) => f.services.execute(call(tasks), ctx);
     assert.equal((await run([{ownerId: 'techne', prompt: 'x', after: ['nobody']}])).isError, true);
-    assert.equal((await run([{ownerId: 'techne', prompt: 'x', after: ['techne']}])).isError, true);
-    const cycle = await run([{ownerId: 'techne', prompt: 'x', after: ['kalon']}, {ownerId: 'kalon', prompt: 'y', after: ['techne']}]);
+    assert.equal((await run([{id: 'x', ownerId: 'techne', prompt: 'x', after: ['x']}])).isError, true);
+    const byName = await run([{ownerId: 'kalon', prompt: 'y'}, {ownerId: 'techne', prompt: 'x', after: ['kalon']}]);
+    assert.equal(byName.isError, true);
+    assert.match(byName.text, /`after` takes task ids, not actor names: "kalon"/);
+    assert.equal((await run([{id: 'techne', ownerId: 'techne', prompt: 'x'}])).isError, true, 'a task id cannot be an actor id');
+    assert.equal((await run([{id: 'a', ownerId: 'techne', prompt: 'x'}, {id: 'a', ownerId: 'kalon', prompt: 'y'}])).isError, true, 'ids are unique');
+    const cycle = await run([{id: 'a', ownerId: 'techne', prompt: 'x', after: ['b']}, {id: 'b', ownerId: 'kalon', prompt: 'y', after: ['a']}]);
     assert.equal(cycle.isError, true); assert.match(cycle.text, /Circular/);
     assert.equal(f.store.activities.list().length, 0);
   } finally {await f.close();}
@@ -137,7 +179,7 @@ test('a peer message for an actor whose dispatched task is still held folds into
   const prompts: Record<string, string[]> = {};
   const f = await fixture(async (prompt, context, services) => {
     if (prompt === 'start') await services.execute(call([
-      {ownerId: 'techne', prompt: 'Review the result', after: ['kalon']}, {ownerId: 'kalon', prompt: 'Draw'}]), context);
+      {ownerId: 'techne', prompt: 'Review the result', after: ['draw']}, {id: 'draw', ownerId: 'kalon', prompt: 'Draw'}]), context);
     else {
       (prompts[context.ownerId] ??= []).push(prompt);
       if (context.ownerId === 'kalon') {await kalonRelease.promise; context.say('Drawn.');} else context.say('Reviewed.');

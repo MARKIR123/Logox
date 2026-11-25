@@ -19,12 +19,16 @@ test('owners that may run at the same time and share a path, a directory prefix 
   assert.deepEqual(ownsConflicts([task('techne', {owns: ['a.ts'], resumeTask: 'r1'}), task('kalon', {owns: ['a.ts']})], cwd), [], 'a resumed task is not new work');
 });
 
-test('an after relation in either direction, also through another owner of the call, orders the tasks: no conflict', () => {
-  for (const [first, second] of [[{after: ['techne']}, {}], [{}, {after: ['kalon']}]]) {
-    assert.deepEqual(ownsConflicts([task('techne', {owns: ['src'], ...second}), task('kalon', {owns: ['src'], ...first})], cwd), []);
+test('an after relation in either direction, also through another task of the call, orders the tasks: no conflict', () => {
+  for (const [first, second] of [[{after: ['t']}, {}], [{}, {after: ['k']}]]) {
+    assert.deepEqual(ownsConflicts([task('techne', {id: 't', owns: ['src'], ...second}), task('kalon', {id: 'k', owns: ['src'], ...first})], cwd), []);
   }
-  const chain = [task('techne', {owns: ['src']}), task('aletheia', {after: ['techne']}), task('kalon', {owns: ['src'], after: ['aletheia']})];
+  const chain = [task('techne', {id: 't', owns: ['src']}), task('aletheia', {id: 'a', after: ['t']}), task('kalon', {owns: ['src'], after: ['a']})];
   assert.deepEqual(ownsConflicts(chain, cwd), [], 'kalon runs after aletheia, which runs after techne');
+  const waves = [task('kalon', {id: 'assets', owns: ['art/']}), task('techne', {id: 'engine', owns: ['src/']}), task('techne', {id: 'build', owns: ['index.html', 'art/'], after: ['assets', 'engine']}),
+    task('kalon', {id: 'review', owns: ['art/'], after: ['build']})];
+  assert.deepEqual(ownsConflicts(waves, cwd), [], 'waves of one pipeline never conflict');
+  assert.deepEqual(ownsConflicts([task('kalon', {id: 'assets', owns: ['art/']}), task('techne', {id: 'build', owns: ['art/logo.svg']})], cwd), [{a: 'kalon (assets)', b: 'techne (build)', path: 'art/'}]);
 });
 
 test('a new task that owns what another actor\'s active task owns gets a note, unless it runs after that task', () => {
@@ -44,9 +48,10 @@ test('missing owns is noted only beside other owners and missing acceptance only
     ['Note: techne has no `acceptance`, so its report comes back without checks to read it against.']);
 });
 
-test('resume tasks are ignored and tasks of one owner are grouped', () => {
+test('resume tasks are ignored and each task of one owner is noted on its own', () => {
   assert.deepEqual(dispatchNotes([task('techne', {resumeTask: 'a1'}), task('kalon', {resumeTask: 'a2'})], cwd), []);
-  assert.deepEqual(dispatchNotes([task('techne', {owns: ['a.ts']}), task('techne', {acceptance: ['ok']})], cwd), []);
+  assert.deepEqual(dispatchNotes([task('techne', {owns: ['a.ts']}), task('techne', {acceptance: ['ok']})], cwd),
+    ['Note: techne (#1) has no `acceptance`, so its report comes back without checks to read it against.']);
 });
 
 test('notes follow the dispatch result on their own lines', () => {

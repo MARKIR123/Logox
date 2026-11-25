@@ -77,16 +77,16 @@ export function activeEnsembleRoster(
  * It is delivered once with the assignment; teammates dispatched later are not announced.
  */
 export function teammatesBlock(owner: string, batch: readonly {ownerId: string; title: string; owns: readonly string[]}[],
-  snapshot: RuntimeSnapshot | undefined, root: string, finished: ReadonlySet<string> = new Set()): string {
-  const mates = new Map<string, {title: string; owns: readonly string[]}>();
-  for (const task of batch) if (task.ownerId !== owner && !finished.has(task.ownerId)) mates.set(task.ownerId, {title: task.title, owns: task.owns});
+  snapshot: RuntimeSnapshot | undefined, root: string, waitedFor: ReadonlySet<string> = new Set()): string {
+  // One line per task: the other tasks of the call the caller passes (those this task does not wait for), then live work on the same root it does not wait for.
+  const mates: [string, {title: string; owns: readonly string[]}][] = batch.filter(task => task.ownerId !== owner).map(task => [task.ownerId, {title: task.title, owns: task.owns}]);
   for (const activity of snapshot?.activities ?? []) {
-    if (isDirector(activity.ownerId) || activity.ownerId === owner || mates.has(activity.ownerId) || finished.has(activity.ownerId) || activity.activityId === root ||
+    if (isDirector(activity.ownerId) || activity.ownerId === owner || waitedFor.has(activity.activityId) || activity.activityId === root ||
       (activity.rootActivityId ?? activity.activityId) !== root || !['queued', 'running', 'waiting_input'].includes(activity.status)) continue;
-    mates.set(activity.ownerId, {title: (activity.taskTitle ?? activity.title).trim(), owns: activity.ownedFiles ?? []});
+    mates.push([activity.ownerId, {title: (activity.taskTitle ?? activity.title).trim(), owns: activity.ownedFiles ?? []}]);
   }
-  if (!mates.size) return '';
-  const lines = [...mates].slice(0, 8).map(([id, mate]) => `- ${id}: ${mate.title}` +
+  if (!mates.length) return '';
+  const lines = mates.slice(0, 8).map(([id, mate]) => `- ${id}: ${mate.title}` +
     (mate.owns.length ? ` | owns: ${mate.owns.slice(0, 4).join(', ')}${mate.owns.length > 4 ? ', ...' : ''}` : ''));
   return TEAMMATES_HEADER + '\n' + lines.join('\n') + '\n' + TEAMMATES_FOOTER;
 }
