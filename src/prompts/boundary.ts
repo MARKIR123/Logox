@@ -31,7 +31,7 @@ export interface ActorSystemPromptInput {
   skillsIndex: string;
   environmentBaseline: string;
   includeSummary?: boolean | undefined;
-  /** Which round-memory contract the summary section carries (`[context] round_memory`); absent means `tool`. */
+  /** Which round-memory contract the summary section carries (`[context] round_memory`); absent means `synopsis`. */
   roundMemory?: RoundMemoryMode | undefined;
 }
 export interface BasePromptOptions {
@@ -69,7 +69,7 @@ export function composeActorSystemPrompt(input: ActorSystemPromptInput): {system
   };
   add('persona', 'persona', 'role', input.persona);
   add('shared_execution', 'execution', 'shared', SHARED_EXECUTION_RULES);
-  if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', input.roundMemory === 'synopsis' ? ROUND_SYNOPSIS_CONTRACT : ROUND_SUMMARY_CONTRACT);
+  if (input.includeSummary !== false) add('round_memory', 'execution', 'shared', input.roundMemory === 'tool' ? ROUND_SUMMARY_CONTRACT : ROUND_SYNOPSIS_CONTRACT);
   if (input.memoryFocus?.trim()) {
     const focus = input.memoryFocus.trim();
     add('memory_focus', 'execution', 'role', /^#{1,6}\s/.test(focus) ? focus : '## Role Memory Focus\n' + focus);

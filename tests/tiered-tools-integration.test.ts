@@ -19,7 +19,7 @@ test('agentRequestBase applies tool registry scoping for director, worker, and n
     assert.ok(logoxToolNames.includes('Actor'));
     assert.ok(logoxToolNames.includes('CancelActor'));
     assert.ok(logoxToolNames.includes('_GitStatus'));
-    assert.ok(logoxToolNames.includes('_FinishRound'));
+    assert.equal(logoxToolNames.includes('_FinishRound'), false, 'synopsis is the default round memory: _FinishRound is not offered');
 
     // 2. Worker actor (techne)
     const techneBase = await agentRequestBase(cwd, 'techne');
@@ -27,7 +27,7 @@ test('agentRequestBase applies tool registry scoping for director, worker, and n
     assert.ok(techneToolNames.includes('Read'));
     assert.ok(techneToolNames.includes('SendMessage'));
     assert.ok(techneToolNames.includes('_GitStatus'));
-    assert.ok(techneToolNames.includes('_FinishRound'));
+    assert.equal(techneToolNames.includes('_FinishRound'), false, 'synopsis is the default round memory: _FinishRound is not offered');
     assert.equal(techneToolNames.includes('Actor'), false);
     assert.equal(techneToolNames.includes('CancelActor'), false);
 
@@ -46,7 +46,7 @@ test('agentRequestBase applies tool registry scoping for director, worker, and n
     assert.ok(dynamicToolNames.includes('Read'));
     assert.ok(dynamicToolNames.includes('SendMessage'));
     assert.ok(dynamicToolNames.includes('_GitStatus'));
-    assert.ok(dynamicToolNames.includes('_FinishRound'));
+    assert.equal(dynamicToolNames.includes('_FinishRound'), false, 'synopsis is the default round memory: _FinishRound is not offered');
     assert.equal(dynamicToolNames.includes('Actor'), false);
     assert.equal(dynamicToolNames.includes('CancelActor'), false);
   } finally {

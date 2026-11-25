@@ -44,7 +44,7 @@ async function createFixture() {
       }
       throw new Error('Unexpected mock network URL: ' + url);
     };
-    const config = await loadConfig(cwd, {}, {}, home, cwd);
+    const config = await loadConfig(cwd, {context: {round_memory: 'tool'}}, {}, home, cwd);
     const options = {cwd, config, env: {}, resourceOptions: {home, boundary: cwd},
       authPath: join(home, '.logox', 'auth.json'), statusbarPath: join(home, '.logox', 'statusbar.json'), fetcher,
       provider: {async respond(request: ModelRequest) {

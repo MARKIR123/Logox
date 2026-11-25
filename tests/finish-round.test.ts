@@ -42,7 +42,7 @@ async function fixture(respond: (request: ModelRequest, index: number) => ModelT
     return value;
   }};
   const execute = createAgent({cwd, store, tools: new Tools(cwd), provider: () => provider, iterations: 0, retries: 0,
-    requestBase: async () => ({...composeBaseSystemPrompt({cwd, ownerId: 'techne', builtinPrompt: 'Test execution'}), tools: toolDefinitions})});
+    requestBase: async () => ({...composeBaseSystemPrompt({cwd, ownerId: 'techne', builtinPrompt: 'Test execution', roundMemory: 'tool'}), tools: toolDefinitions})});
   const ensemble = new EnsembleRuntime<string>('s', store, journal, execute, {handoff: async result => {handed.push(result);}});
   return {cwd, journal, store, requests, handed, ensemble,
     async cleanup() {await ensemble.close(); unsubscribe(); await rm(cwd, {recursive: true, force: true});}};
@@ -65,7 +65,7 @@ test('native provider serializers accept the finalizer and replay only paired bu
       ] : [{choices: [{delta: {content: read ? '' : 'Native answer', tool_calls: [{index: 0, id: call.id, function: {name: call.name, arguments: call.arguments}}]}, finish_reason: 'tool_calls'}], usage: {prompt_tokens: 20, completion_tokens: 8}}];
       return new Response(frames.map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + (kind === 'openai_compat' ? 'data: [DONE]\n\n' : ''), {headers: {'content-type': 'text/event-stream'}});
     });
-    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+    const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
     const app = await createApplication({cwd, sessionId: 's', config, env: {}, provider, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}});
     try {
       await writeFile(join(cwd, 'sample.txt'), 'Source evidence');
@@ -128,7 +128,7 @@ test('internal repair text and memory metadata stay invisible across actor views
     if (calls === 1) return turn('Normal answer');
     return turn(calls === 2 ? 'PRIVATE_REPAIR_TEXT' : 'Next answer', [finish('finish-' + calls, {...metadata, title: 'PRIVATE_MEMORY_TITLE'})]);
   }};
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
   const options = {cwd, sessionId: 's', config, env: {}, provider, authPath: join(cwd, 'auth.json'), resourceOptions: {home: cwd, boundary: cwd}};
   let app = await createApplication(options);
   try {

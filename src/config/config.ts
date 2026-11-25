@@ -49,7 +49,7 @@ export const contextPolicySchema = z.object({
   target_budget_tokens: z.number().int().positive().optional(),
   summary_provider: z.string().min(1).optional(),
   summary_model: z.string().min(1).optional(),
-  /** How a round's memory is written: `tool`, a hidden `_FinishRound` call beside the final reply; `synopsis`, a `<synopsis>` block ending the final reply (`src/context/synopsis.ts`), with no extra request. Absent means `tool`. */
+  /** How a round's memory is written: `tool`, a hidden `_FinishRound` call beside the final reply; `synopsis`, a `<synopsis>` block ending the final reply (`src/context/synopsis.ts`), with no extra request. Absent means `synopsis`. */
   round_memory: z.enum(['tool', 'synopsis']).optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');

@@ -110,12 +110,12 @@ test('history projection drops synopses and a reply left empty, keeping tool cal
   ]);
 });
 
-test('the round-memory mode chooses the contract and whether _FinishRound is offered', async () => {
-  const tool = await agentRequestBase('.', 'techne');
-  assert.ok(tool.system.includes(ROUND_SUMMARY_CONTRACT.trim()) && tool.tools.some(item => item.name === '_FinishRound'));
-  const synopsis = await agentRequestBase('.', 'techne', [], undefined, undefined, true, undefined, undefined, undefined, undefined, undefined, 'synopsis');
-  assert.ok(synopsis.system.includes(ROUND_SYNOPSIS_CONTRACT.trim()) && !synopsis.tools.some(item => item.name === '_FinishRound'));
+test('the round-memory mode (synopsis by default) chooses the contract and whether _FinishRound is offered', async () => {
+  const synopsis = await agentRequestBase('.', 'techne');
+  assert.ok(synopsis.system.includes(ROUND_SYNOPSIS_CONTRACT.trim()) && !synopsis.tools.some(item => item.name === '_FinishRound'), 'synopsis is the default');
   assert.ok(!synopsis.system.includes('call _FinishRound'));
+  const tool = await agentRequestBase('.', 'techne', [], undefined, undefined, true, undefined, undefined, undefined, undefined, undefined, 'tool');
+  assert.ok(tool.system.includes(ROUND_SUMMARY_CONTRACT.trim()) && tool.tools.some(item => item.name === '_FinishRound'));
 });
 
 test('the timeline folds a synopsis under the reply and opens it on demand', () => {

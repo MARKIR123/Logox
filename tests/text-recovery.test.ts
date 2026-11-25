@@ -123,7 +123,7 @@ const assistant = (text: string): ModelTurn => ({message: {role: 'assistant', te
 const call = (name: string, args: unknown, id = 'c'): ModelTurn => ({message: {role: 'assistant', text: '', toolCalls: [{id, name, arguments: JSON.stringify(args)}]}, stop: 'tools'});
 async function rawFixture(provider: Provider) {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-text-recovery-'));
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}}, {}, cwd, cwd);
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'test', context_window: 131072}, kernel: {max_iterations: 50}, context: {round_memory: 'tool'}}, {}, cwd, cwd);
   const probe = await createApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});
   await probe.close();
   const app = await productionApplication({cwd, resourceOptions: {home: cwd, boundary: cwd}, sessionId: 'test', config, provider});

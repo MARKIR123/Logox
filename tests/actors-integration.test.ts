@@ -54,7 +54,7 @@ async function fixture(respond: Provider['respond'], defaultModel = false) {
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {name: 'local', model: 'main'},
     providers: {local: {base_url: 'http://127.0.0.1:7777/v1'}},
     models: {'local/main': {context_window: 131072}, 'local/special': {context_window: 131072}},
-    context: {reserve_tokens: 20000}}, {}, cwd, cwd);
+    context: {reserve_tokens: 20000, round_memory: 'tool'}}, {}, cwd, cwd);
   const options = {cwd, sessionId: 'actors', config, env: {}, authPath: join(cwd, 'auth.json'),
     resourceOptions: {home: cwd, boundary: cwd}, provider: {respond}};
   const app = await createApplication(options);
