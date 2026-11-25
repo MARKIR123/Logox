@@ -10,6 +10,8 @@ export interface ToolResult {
   disposition?: 'denied' | 'error' | undefined;
   discoveredTools?: readonly string[] | undefined;
   images?: ImageBlock[] | undefined;
+  /** Workspace files a foreground Shell command changed (`ShellTool/workspace-diff.ts`), workspace-relative with `/`. */
+  changedFiles?: readonly string[] | undefined;
 }
 
 export const toolAliases = {

@@ -23,3 +23,9 @@ Read later output or stop it with ShellJob({id: "${job.id}"}); it also ends with
 Initial output:
 ${initial || '(none yet)'}`;
 }
+
+/** Files shown in the changed-files line of a Shell result before the rest is counted. */
+export const SHELL_CHANGED_SHOWN = 8;
+/** Appended to a foreground Shell result when the command changed workspace files (`workspace-diff.ts`). */
+export const shellChangedFilesLine = (files: readonly string[]): string =>
+  'Files changed: ' + files.slice(0, SHELL_CHANGED_SHOWN).join(', ') + (files.length > SHELL_CHANGED_SHOWN ? ` (+${files.length - SHELL_CHANGED_SHOWN} more)` : '');

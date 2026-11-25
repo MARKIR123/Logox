@@ -241,6 +241,7 @@ export async function runToolBatch(run: AgentRun, batch: ToolBatch): Promise<Too
             role: 'tool', callId: call.id, name: call.name,
             text, isError: result.isError,
             ...(result.discoveredTools ? {discoveredTools: result.discoveredTools} : {}),
+            ...(result.changedFiles?.length ? {changedFiles: result.changedFiles} : {}),
             ...(output.images ? {images: output.images} : {}),
             ...(neverRan(call) ? {unexecuted: true as const} : {}),
           };

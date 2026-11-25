@@ -22,6 +22,8 @@ export const modelMessageSchema = z.discriminatedUnion('role', [
     signature: z.string().optional(), toolCalls: z.array(toolCallSchema).optional()}),
   z.object({role: z.literal('tool'), text: z.string(), callId: z.string(), name: z.string(), isError: z.boolean(),
     discoveredTools: z.array(z.string()).readonly().optional(), images: z.array(imageBlockSchema).optional(),
+    /** Workspace files a foreground Shell command changed, as the runtime saw them (`src/tools/ShellTool/workspace-diff.ts`); ledger only, never sent. */
+    changedFiles: z.array(z.string()).readonly().optional(),
     /** The call failed before it could run (invalid arguments, voided batch, truncated arguments, unknown tool, restricted tools). Ledger and projection only; never sent to a provider. */
     unexecuted: z.literal(true).optional()}),
 ]);

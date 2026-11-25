@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import type {ToolResult} from '../types.js';
-import {ProcessStoppedError, runProcess, startBackgroundProcess} from '../process.js';
+import {ProcessStoppedError, runProcess, startBackgroundProcess, type StopSource} from '../process.js';
 import {SHELL_CUT_SHORT_LINE, SHELL_STOPPED_BY_USER, backgroundStartedText, shellStoppedByDirector} from './prompt.js';
 
 export const shellSchema = z.preprocess(
@@ -22,6 +22,12 @@ export const shellSchema = z.preprocess(
 export type ShellArgs = z.infer<typeof shellSchema>;
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** The result of a command stopped while the workspace audit ran, before it started: worded like any stopped command, with no output. */
+export function stoppedBeforeStart(by: StopSource, reason: string): ToolResult {
+  if (by === 'system') return {text: reason, isError: true};
+  return {text: (by === 'user' ? SHELL_STOPPED_BY_USER : shellStoppedByDirector(reason)) + '\n\n' + SHELL_CUT_SHORT_LINE + '\n', isError: true};
+}
 
 export async function executeShell(
   args: ShellArgs,

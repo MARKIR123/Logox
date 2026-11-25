@@ -52,7 +52,7 @@ const MARKER_PHRASES = Object.freeze({
 } as const);
 const COMMAND_TOKENS = 40, MAX_FILES = 6;
 
-/** What the ledger shows a closed stretch of work did: files changed by successful `Edit`/`Write` calls (first-touch order) and every foreground `Shell` run that reported an exit code. Shared by the round summary and the Director's runtime record. */
+/** What the ledger shows a closed stretch of work did: files changed by successful `Edit`/`Write` calls and by foreground `Shell` commands (first-touch order), and every foreground `Shell` run that reported an exit code. Shared by the round summary and the Director's runtime record. */
 export function ledgerFacts(messages: readonly ModelMessage[]): {files: string[]; commands: Array<{text: string; exit: string}>} {
   const files: string[] = [];
   const commands: Array<{text: string; exit: string}> = [];
@@ -66,6 +66,8 @@ export function ledgerFacts(messages: readonly ModelMessage[]): {files: string[]
       let args: Record<string, unknown>;
       try {args = JSON.parse(call.arguments) as Record<string, unknown>;} catch {continue;}
       if ((name === 'Edit' || name === 'Write') && typeof args.file_path === 'string' && !files.includes(args.file_path)) files.push(args.file_path);
+      // A foreground command's own changes, as the runtime saw them on disk (`src/tools/ShellTool/workspace-diff.ts`).
+      if (name === 'Shell') for (const path of result.changedFiles ?? []) if (!files.includes(path)) files.push(path);
       if (name === 'Shell' && typeof args.command === 'string' && args.run_in_background !== true) {
         const exit = /^Exit code:\s*(-?\d+)/i.exec(result.text)?.[1];
         if (exit !== undefined) commands.push({text: truncateToTokens(args.command.replace(/\s+/g, ' '), COMMAND_TOKENS), exit});

@@ -33,7 +33,7 @@ function shown(path: string, cwd: string): string {
   return slashed(rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path);
 }
 
-/** The runtime's own account of an activity, built from its ledger alone (no model call, no disk diff). */
+/** The runtime's own account of an activity, built from its ledger alone (no model call): Edit/Write targets and the files foreground Shell commands changed (`changedFiles`, `src/tools/ShellTool/workspace-diff.ts`). */
 export function buildRuntimeRecord(input: RuntimeRecordInput): string {
   const {files, commands} = ledgerFacts(input.messages);
   const names = files.map(file => shown(file, input.cwd));

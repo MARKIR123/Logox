@@ -298,10 +298,10 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
   // The plans this run touched (changed during it, or holding work it started): derived, as the hub and the task sidebar read them.
   const plans = app.plans.plans().filter(plan => plan.updatedAt >= started || plan.nodes.some(node => node.links.some(link => ids.has((link.activityId ?? link.automaJob ?? '').split('/')[0]!))));
   const cwd = await realpath(io.cwd).catch(() => io.cwd);
-  const changedFiles = (await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {
+  const changedFiles = [...new Set([...(await app.tools.snapshots.changedPaths([...ids]).catch(() => [])).map(path => {
     const inside = relative(cwd, path);
     return (inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : path).split(sep).join('/');
-  });
+  }), ...app.tools.shellChangedPaths([...ids])])];
   return {
     exit: setupError ? HEADLESS_EXIT.setup : status === 'completed' ? HEADLESS_EXIT.completed : status === 'failed' ? HEADLESS_EXIT.failed : HEADLESS_EXIT.interrupted,
     setupError, final,

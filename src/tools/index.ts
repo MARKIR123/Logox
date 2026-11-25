@@ -30,7 +30,7 @@ import {globSchema, executeGlob} from './GlobTool/GlobTool.js';
 import {GLOB_DESCRIPTION} from './GlobTool/prompt.js';
 import {grepSchema, executeGrep} from './GrepTool/GrepTool.js';
 import {GREP_DESCRIPTION} from './GrepTool/prompt.js';
-import {shellSchema, executeShell} from './ShellTool/ShellTool.js';
+import {shellSchema, executeShell, stoppedBeforeStart} from './ShellTool/ShellTool.js';
 import {SHELL_DESCRIPTION} from './ShellTool/prompt.js';
 import {shellJobSchema, executeShellJob} from './ShellJobTool/ShellJobTool.js';
 import {SHELL_JOB_DESCRIPTION} from './ShellJobTool/prompt.js';
@@ -72,6 +72,9 @@ import {FALLBACK_CAPABILITIES} from '../providers/capabilities.js';
 import {gitStatusSchema, executeGitStatus, type GitStatusArgs} from './protocol/_GitStatusTool/_GitStatusTool.js';
 import {GIT_STATUS_DESCRIPTION, GIT_STATUS_TOOL_NAME} from './protocol/_GitStatusTool/prompt.js';
 import {TOOL_CANCELLED_TEXT} from '../prompts/runtime/interruption.js';
+import {changedBetween, workspaceState} from './ShellTool/workspace-diff.js';
+import {shellChangedFilesLine} from './ShellTool/prompt.js';
+import {registerActiveProcess, type StopSource} from './process.js';
 
 export {
   pathArg,
@@ -342,6 +345,19 @@ export class Tools {
   private activities: (() => readonly Activity[]) | undefined;
   private readonly activitiesBySession = new Map<string, () => readonly Activity[]>();
   private readonly overreachNotified = new Set<string>();
+  /** When each workspace file was last written through Write or Edit, so a Shell audit never claims a teammate's edit that fell in its window. */
+  private readonly toolWrites = new Map<string, number>();
+  /** Workspace files foreground Shell commands changed, per activity (headless `changedFiles`). */
+  private readonly shellChanges = new Map<string, Set<string>>();
+  /** Workspace-relative paths foreground Shell commands of these activities changed. */
+  shellChangedPaths(activityIds: readonly string[]): string[] {
+    return [...new Set(activityIds.flatMap(id => [...this.shellChanges.get(id) ?? []]))].sort();
+  }
+  /** A path as the Shell audit names it: relative to the real workspace path (a short 8.3 path or a link would not match git's paths). */
+  private workspaceKey(path: string, root: string): string {
+    const key = relative(root, path).replaceAll('\\', '/');
+    return process.platform === 'win32' ? key.toLowerCase() : key;
+  }
   /** Supplies the live activity list so Edit/Write can note edits on files another actor's active assignment owns. */
   setActivityProbe(probe: () => readonly Activity[], sessionId?: string): void {
     if (sessionId === undefined) this.activities = probe; else this.activitiesBySession.set(sessionId, probe);
@@ -352,13 +368,55 @@ export class Tools {
     const probe = this.activitiesFor(context.sessionId);
     const owner = probe ? overreach(probe().filter(activity => activity.sessionId === context.sessionId), context.ownerId, path, root) : undefined;
     const result = await run();
+    if (!result.isError) this.toolWrites.set(this.workspaceKey(path, root), Date.now());
     if (!owner || result.isError) return result;
+    const note = this.overreachOnce(path, owner, context, root);
+    return note ? {...result, text: result.text + '\n' + note} : result;
+  }
+  /** The overreach note for one (editor, file, owning activity), the first time only. */
+  private overreachOnce(path: string, owner: NonNullable<ReturnType<typeof overreach>>, context: ActorContext, root: string): string | undefined {
     const key = [context.sessionId, context.ownerId, path, owner.activityId].join('\0');
-    if (this.overreachNotified.has(key)) return result;
+    if (this.overreachNotified.has(key)) return undefined;
     this.overreachNotified.add(key);
     const file = relative(root, path).replaceAll('\\', '/') || path;
     const actor = owner.ownerId.charAt(0).toUpperCase() + owner.ownerId.slice(1);
-    return {...result, text: result.text + '\n' + overreachNote(file, owner, actor)};
+    return overreachNote(file, owner, actor);
+  }
+  /**
+   * Runs a foreground Shell command between two workspace states and records what it changed: on the result (`changedFiles`, which the runtime
+   * record reads), as a line the model sees, and as overreach notes for files another actor's active assignment owns. Files written through
+   * Write or Edit during the command are someone else's and are left out; another actor's command running at the same time cannot be told apart.
+   */
+  private async withShellAudit(context: ActorContext, toolId: string, run: () => Promise<ToolResult>): Promise<ToolResult> {
+    const started = Date.now();
+    // The step already shows as running while the state is taken: a Stop in that window is held here and the command never starts.
+    let stopped: {by: StopSource; reason: string} | undefined;
+    const release = registerActiveProcess(toolId, {pid: 0, activityId: context.activityId, toolId, sessionId: context.sessionId,
+      kill: (reason = 'Terminated', by = 'system') => {stopped = {by, reason};}});
+    let before: Awaited<ReturnType<typeof workspaceState>>;
+    let root: string;
+    try {
+      root = await realpath(this.cwd);
+      before = await workspaceState(root).catch(() => undefined);
+    } finally {release();}
+    if (stopped) return stoppedBeforeStart(stopped.by, stopped.reason);
+    const result = await run();
+    if (!before || context.signal.aborted) return result;
+    const after = await workspaceState(root).catch(() => undefined);
+    if (!after) return result;
+    const changed = changedBetween(before, after).filter(path => (this.toolWrites.get(process.platform === 'win32' ? path.toLowerCase() : path) ?? 0) < started);
+    if (!changed.length) return result;
+    const recorded = this.shellChanges.get(context.activityId) ?? new Set<string>();
+    for (const path of changed) recorded.add(path);
+    this.shellChanges.set(context.activityId, recorded);
+    const probe = this.activitiesFor(context.sessionId);
+    const live = probe ? probe().filter(activity => activity.sessionId === context.sessionId) : [];
+    const notes = changed.flatMap(path => {
+      const owner = overreach(live, context.ownerId, join(root, path), root);
+      const note = owner ? this.overreachOnce(join(root, path), owner, context, root) : undefined;
+      return note ? [note] : [];
+    });
+    return {...result, changedFiles: changed, text: [result.text, shellChangedFilesLine(changed), ...notes].join('\n')};
   }
   private readonly guards = new Map<string, PermissionGuard>();
   private readonly disposedGuards = new WeakSet<PermissionGuard>();
@@ -882,7 +940,9 @@ export class Tools {
       if (name === 'Shell') {
         const args = schemas.Shell.parse(parsed);
         const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id, sessionId: context.sessionId});
-        return await (context.via && isExclusiveCommand(context.via.grant, args.command) ? this.snapshots.withLock('automa-exclusive-command', run) : run());
+        const exec = () => context.via && isExclusiveCommand(context.via.grant, args.command) ? this.snapshots.withLock('automa-exclusive-command', run) : run();
+        // A background command has no end to compare against; only a foreground one is audited.
+        return await (args.run_in_background ? exec() : this.withShellAudit(context, call.id, exec));
       }
       throw new Error('Unhandled tool: ' + name);
     } catch (error) {

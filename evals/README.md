@@ -121,7 +121,7 @@ node evals/run.mjs --compare automa-v2 automa-v3
 - **无界面故障退避提前退出**：无界面模式（headless）下，若服务商处于故障退避期，运行可能被误判为已结束而提前退出（Logox 本体待修，当前评测器如实记录 `status` 与退出码）。
 - **`--output json` 标准输出带终端控制符**：实测 Logox headless `--output json` 会在 JSON 行前输出 `\x1B[2 q`（光标复位转义序列），导致严格 `JSON.parse` 失败（2026-11-17 基线跑测中已暴露；`evals/run.mjs` 已增加 ANSI 剥离兼容，建议在 Logox 本体中修复无界面模式不要写终端转义序列）。
 - **工作区写入 `.logox/bulletin.md`**：主创协作时 Logox 会在目标工作区写入 `.logox/bulletin.md`，未忽略 `.logox/` 的临时仓库会被 `git status` 检出（`t1` 与 `t3` 的 `check.mjs` 已过滤 `.logox/`）。
-- **`changedFiles` 遗漏 Shell 改动**：`headless.json` 中的 `changedFiles` 来自工具快照，不包含 Shell 命令造成的文件修改；因此所有文件变更与只读检查统一以 `git status --porcelain` 为准。
+- **`changedFiles` 遗漏 Shell 改动**（2026-11-25 已修复）：前台 Shell 命令的改动现在由运行时审计并计入 `changedFiles`（见 `docs/USAGE.md` 的 Shell 写盘审计）；后台命令仍不计入，检查脚本继续以 `git status --porcelain` 为准。
 - **T3 最终回复仅含阶段提示**：2026-11-17 基线跑测中，Logox 在 `t3` 最终轮把调查结论写进了 `_FinishRound.summary`，而面向用户的 `text` 仅输出了 22 字的阶段线（`汇总配置来源、覆盖顺序和请求调用链的精确行号`），导致无界面 `final` 缺少正文结论。
 - **Automa `Finish` 可选字段拒绝循环（T6 暴露）**：2026-11-17 `t6` 实跑中，导演派出的只读验收 Automa worker（`L1`）在 `gpt-6.1-sol` 下连续 20+ 次调用 `Finish(status="done")` 时被迫/习惯性附带 `"question": "占位"`，被 `finish.ts` 的 `superRefine` 拒绝并循环重试长达 12.5 分钟（额外消耗 `991,860` token / `\$0.4713`）直至触发 20 分钟超时取消。
 - **导演频繁主动传递 `briefCheck: "skip"`**：在 `t1`～`t6` 全部实跑中，导演模型均在 `Actor` 工具调用中显式传入 `"briefCheck": "skip"`，导致多任务派工时 Brief 审查未实际生效。
