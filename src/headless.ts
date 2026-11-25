@@ -31,6 +31,7 @@ import type {Activity, Message} from './runtime/contracts.js';
 
 // The two answers are model-visible runtime text, so they live with the other prompt constants (`src/kernel/echo-guard.ts` recognises them).
 import {HEADLESS_ANSWER, HEADLESS_DENIAL} from './prompts/runtime/headless.js';
+import {parseSynopsis} from './context/synopsis.js';
 export {HEADLESS_ANSWER, HEADLESS_DENIAL};
 export const HEADLESS_NO_MODEL = 'No usable model: run logox interactively and /login first.';
 
@@ -263,7 +264,8 @@ async function drive(app: App, task: string, args: HeadlessArgs, config: Config,
   const entries = (await app.journal.load(session, DIRECTOR_ID)).slice(baselineLength);
   const finalEntry = entries.findLast(entry => entry.role === 'assistant' && entry.message?.role === 'assistant' && !entry.message.contextExcluded &&
     !entry.message.memoryOnly && !entry.message.textToolCall && stripNarration(entry.text).trim());
-  const final = finalEntry ? stripLeadingActionLines(finalEntry.text).trim() : '';
+  // The final reply as a program reads it: a synopsis ending it is round memory, not part of the answer.
+  const final = finalEntry ? stripLeadingActionLines(parseSynopsis(finalEntry.text).answer).trim() : '';
   for (const activity of activities) if (activity.status === 'failed') errors.push(nameOf(activity.ownerId) + ': ' + activity.detail);
   if (!lastDirector && !errors.length) errors.push('The task started no work.');
   if (activities.some(activity => activity.status === 'failed' && /not logged in|No model configured/i.test(activity.detail))) setupError ??= HEADLESS_NO_MODEL;

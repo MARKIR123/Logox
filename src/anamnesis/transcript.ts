@@ -6,6 +6,7 @@ import {stripNarration} from '../runtime/narration.js';
 import {inputKind} from '../runtime/provenance.js';
 import type {HistoryEntry} from '../store/journal.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import {parseSynopsis} from '../context/synopsis.js';
 
 export const MESSAGE_CAP = 2000;
 export const ARGUMENT_CAP = 120;
@@ -50,7 +51,7 @@ function entryLines(owner: string, entry: HistoryEntry): string[] {
     if (inputKind(entry) === 'human' && entry.text.trim()) lines.push('[' + owner + ' · user] ' + clip(entry.text.trim(), MESSAGE_CAP));
   } else if (entry.role === 'assistant') {
     const message = entry.message?.role === 'assistant' ? entry.message : undefined;
-    if (isConversation(entry)) lines.push('[' + owner + ' · assistant] ' + clip(stripNarration(entry.text).trim(), MESSAGE_CAP));
+    if (isConversation(entry)) lines.push('[' + owner + ' · assistant] ' + clip(stripNarration(parseSynopsis(entry.text).answer).trim(), MESSAGE_CAP));
     for (const call of message?.toolCalls ?? []) {
       if (isFinishRound(call.name)) continue;
       const summary = argumentSummary(call.arguments);

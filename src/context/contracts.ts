@@ -42,6 +42,7 @@ export interface ModelCapacity {
 }
 import {ROUND_SUMMARY_CONTRACT as summaryInstruction} from '../prompts/charter.js';
 import {HISTORY_MEMO_INSTRUCTION} from '../prompts/compaction.js';
+import {parseSynopsis} from './synopsis.js';
 export {summaryInstruction, HISTORY_MEMO_INSTRUCTION};
 
 export function memoryFocusInstruction(contract?: string): string {
@@ -95,7 +96,7 @@ export function clampText(text: string, max: number): string {
 
 export function summarizeRound(messages: readonly ModelMessage[], status: RoundStatus): RoundSummary {
   messages = messages.filter(message => message.role !== 'assistant' || !message.contextExcluded && !message.memoryOnly && !message.textToolCall);
-  const final = messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '';
+  const final = parseSynopsis(messages.findLast(message => message.role === 'assistant' && message.text.trim())?.text ?? '').answer;
   const match = /(?:【轮次摘要】|\[Round Summary\])\s*(?:标题|Title)[：:]\s*([^\n]+)\s*(?:报告|Report)[：:]\s*([\s\S]+)$/i.exec(final);
   const parsed = match
     ? summarySchema.safeParse({

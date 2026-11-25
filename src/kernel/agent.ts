@@ -28,6 +28,8 @@ import {composeBaseSystemPrompt} from '../prompts/index.js';
 import type {CacheKeeper} from './cache-keepalive.js';
 import {isDirector} from './director.js';
 import {RoundState} from './round-state.js';
+import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
+import type {RoundMemoryMode} from '../prompts/boundary.js';
 import {classifyTurn} from './turn-outcome.js';
 import {prepareRequest, type RequestInstruction} from './request.js';
 import {requestTurn} from './model-turn.js';
@@ -82,14 +84,16 @@ export interface AgentOptions {
 }
 export async function agentRequestBase(cwd: string, ownerId: string, extraTools: readonly (ToolDefinition | ToolRegistration)[] = [], resources?: Resources,
   role?: {prompt: string; execution?: string | undefined; collaboration?: string | undefined; compression?: string; visibility: SkillVisibility}, includeSummary = true, scratchpadDir?: string, environmentBaseline?: string,
-  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}, memory?: string): Promise<AgentRequestBase> {
+  registry = new ToolRegistry(cwd), assembly: AgentAssembly = {capabilities: FALLBACK_CAPABILITIES, history: []}, memory?: string, roundMemory: RoundMemoryMode = 'tool'): Promise<AgentRequestBase> {
   const extras = extraTools.map(item => {
     if ('metadata' in item) return item;
     const metadata = registry.getMetadata(item.name);
     if (!metadata) throw new Error('Extension metadata is required: ' + item.name);
     return {metadata, definition: item};
   });
-  const pool = registry.resolveForActor(ownerId, extras);
+  // A synopsis closes the round inside the reply text, so `_FinishRound` is not offered at all (a call to it is answered as unavailable).
+  const resolved = registry.resolveForActor(ownerId, extras);
+  const pool = roundMemory === 'synopsis' ? resolved.filter(tool => !isFinishRound(tool.metadata.name)) : resolved;
   const protocol = resolveExposureProtocol(pool, assembly.capabilities.toolDiscovery);
   const catalog = planToolCatalog(registry, pool, protocol, assembly.history);
   const effective = resources ?? new Resources(cwd);
@@ -109,6 +113,7 @@ export async function agentRequestBase(cwd: string, ownerId: string, extraTools:
     skillsIndex: rules.skills,
     toolsIndex: catalog.catalog,
     includeSummary,
+    roundMemory,
     scratchpadDir,
     environmentBaseline,
   });

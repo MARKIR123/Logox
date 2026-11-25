@@ -6,7 +6,7 @@ import {ProviderError} from '../providers/http.js';
 import {roleCacheRetention} from '../providers/cache.js';
 import {omitImages} from '../providers/vision-fallback.js';
 import {createRuntimeContextMessage, isTransientContext, withoutAnsweredTransient, type RuntimeContextMessage} from '../runtime/context-updates.js';
-import {omitInternalToolPairs} from '../context/round-memory.js';
+import {omitInternalToolPairs, withoutSynopses} from '../context/round-memory.js';
 import {askOwedWhileWorking} from '../prompts/runtime/recovery.js';
 import {FINISH_ROUND_FOLLOW_UP} from '../tools/protocol/_FinishRoundTool/prompt.js';
 import {restoreBrokenReadStubs} from './read-reuse.js';
@@ -117,7 +117,7 @@ export async function prepareRequest(run: AgentRun, buildInstruction: (assembly:
   }
   const initialProjection = prepared?.request ?? {...base, messages};
   // Hiding finished `_FinishRound` pairs, answered reminders, answered never-executed turns and old finalizer notes saves tokens, but on an append-only protocol it is a history edit.
-  const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : omitInternalToolPairs(withoutAnsweredUnexecuted(withoutAnsweredTransient(initialProjection.messages))))
+  const projected = {...initialProjection, messages: [...normalizeMessages(appendOnly ? initialProjection.messages : withoutSynopses(omitInternalToolPairs(withoutAnsweredUnexecuted(withoutAnsweredTransient(initialProjection.messages)))))
     .filter(message => appendOnly || message.role !== 'context' || message.kind !== 'finalizer' || state.closing && message.data?.activityId === context.activityId)
     // Sessions saved before snapshots stopped being stored still hold old copies; removing them is itself a history edit where that matters.
     .filter(message => appendOnly || message.role !== 'context' || message.data?.slot !== 'director-facts')]};

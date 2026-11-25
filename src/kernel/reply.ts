@@ -136,6 +136,8 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
         options.store.message(run.context.sessionId, run.context.ownerId, 'assistant', report, {activityId: run.context.activityId});
       }
       const valid = allowed && !!accepted && (closing || onlyFinalizer && !!state.finalText.trim());
+      // Where `_FinishRound` is not offered (`[context] round_memory = "synopsis"`), a call to it out of habit beside delivered text ends the round as that text would: no follow-up asks for a tool that does not exist.
+      const settled = valid || closing || !allowed && !!state.finalText.trim();
       const error = !closing && !onlyFinalizer ? 'Terminal metadata must be the only tool in its batch. No business tools were executed.'
         : truncated ? 'Terminal metadata was truncated or the response did not end with tool calls.'
         : !allowed ? 'Terminal metadata is not available in this request.'
@@ -158,12 +160,12 @@ export async function settleReply(run: AgentRun, kind: TurnOutcome, reply: Reply
         return 'done';
       }
       run.context.signal.throwIfAborted();
-      if ((valid || closing) && await holdClose()) return 'again';
-      if (await drainInbox(valid || closing)) return 'again';
+      if (settled && await holdClose()) return 'again';
+      if (await drainInbox(settled)) return 'again';
       run.context.signal.throwIfAborted();
       // The follow-up is asked once: whatever it held besides a usable call, the runtime writes the record and the round ends.
       if (valid) run.context.acceptRoundMemory?.(sent!.id);
-      if (valid || closing) return 'done';
+      if (settled) return 'done';
       if (state.finalText.trim()) {state.closingCallRequested(); return 'again';}
       // Nothing was ever delivered: the empty-reply recovery applies.
       if (!directorWaiting()) {

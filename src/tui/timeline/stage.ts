@@ -29,6 +29,7 @@ import {groupToolMessages, type EditRun, type ToolGroup} from './tool-groups.js'
 import {draftingLabel, liveStatus, reconnectLabel, type LiveStatus} from './live-status.js';
 import {renderEditRun} from '../../tools/EditTool/UI.js';
 import {pushToolGroupCard} from './group-row.js';
+import {parseSynopsis, visibleWhileStreaming, type Synopsis} from '../../context/synopsis.js';
 
 /** Opens each thought in a thinking body (Claude Code's thinking marker); continuation rows hang under the text. */
 const THOUGHT_MARK = '∴ ';
@@ -147,6 +148,17 @@ function isThinkingId(snapshot: RuntimeSnapshot, id: string): boolean {
   if (!ids) {ids = new Set(snapshot.messages.filter(message => message.kind === 'thinking').map(message => message.id)); thinkingIds.set(snapshot, ids);}
   return ids.has(id);
 }
+/** The fold id of the synopsis row under an assistant reply. */
+export const synopsisFoldId = (messageId: string): string => messageId + '-synopsis';
+
+/** One expandable row for a synopsis, `▸ Synopsis · <title>`, folded by default; open, it shows the summary. */
+function pushSynopsis(target: RowBuilder, id: string, synopsis: Synopsis, isOpen: boolean, rail: string, frame?: FrameWrap): void {
+  const text = (isOpen ? '▾ ' : '▸ ') + 'Synopsis' + (synopsis.title ? ' · ' + synopsis.title : '');
+  target.pushOrdinaryCard({id, kind: 'Tool', title: text, expandable: true, bodyLines: [synopsis.summary], open: isOpen, railColor: rail,
+    titleSegments: [{text, color: isOpen ? palette.fg : palette.muted, italic: true, selectionKey: id + ':title', selectionOffset: 0}],
+    ...(frame ? {parentFrame: frame} : {})});
+}
+
 export function stageFoldOpen(snapshot: RuntimeSnapshot, id: string, folds: Readonly<Record<string, boolean>>): boolean {
   return folds[id] ?? (snapshot.interactions.some(request => request.status === 'pending' && (request.activityId === id || request.requestId === id))
     || uiSettings().thinkingDisplay !== 'folded' && isThinkingId(snapshot, id));
@@ -219,7 +231,9 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
     const stop = {disabled: controls.stopping?.has(message.id) ?? false, focused: controls.focusedStop === message.id, hovered: controls.hoveredStop === message.id};
     const run = runArg ?? editRuns.get(message.id)?.messages;
     const runKey = run ? run.map(item => item.id + ':' + (item.step?.state ?? '') + ':' + (item.step?.elapsedMs ?? 0) + ':' + item.text.length).join('|') : null;
-    const key = JSON.stringify([themeRevision(), imageRevision(), userLabelRevision(), width, frameKey, rail, accent, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey]);
+    const synopsisId = synopsisFoldId(message.id);
+    const key = JSON.stringify([themeRevision(), imageRevision(), userLabelRevision(), width, frameKey, rail, accent, Boolean((message.kind || systemError) && open(message.id)), hovered === message.id, nestedKey(message), pairs.get(message.id) ?? null, stoppable ? stop : null, runKey,
+      message.role === 'assistant' && open(synopsisId), hovered === synopsisId]);
     let layouts = messageLayouts.get(message);
     if (!layouts) {layouts = new Map(); messageLayouts.set(message, layouts);}
     let rows = layouts.get(key);
@@ -249,7 +263,11 @@ export function buildStageRows(snapshot: RuntimeSnapshot, sessionId: string, vie
         // The model's own intent line is a faint one-line heading above that reply's text and tools; the runtime's fallback label never reaches here.
         const intent = message.role === 'assistant' ? extractNarration(message.text)?.narration : undefined;
         if (intent) chunk.pushStageLine(message.id + '-stage', intent, rail, frame);
-        chunk.pushMarkdown(message.id, stripNarration(message.text), rail, frame, accent);
+        // A synopsis ending the reply is round memory: it folds into one row under the text, and while streaming not a character of it shows.
+        const text = stripNarration(message.text);
+        chunk.pushMarkdown(message.id, message.role === 'assistant' ? visibleWhileStreaming(text) : text, rail, frame, accent);
+        const synopsis = message.role === 'assistant' ? parseSynopsis(text).synopsis : undefined;
+        if (synopsis) pushSynopsis(chunk, synopsisId, synopsis, open(synopsisId), rail, frame);
       }
       else chunk.pushProse(message.id, stripNarration(message.text), rail, 'body', frame, undefined, isSystem ? palette.system : undefined);
       rows = chunk.rows;

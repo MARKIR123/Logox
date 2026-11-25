@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {parseSynopsis} from './synopsis.js';
 import type {ModelMessage} from '../runtime/messages.js';
 import type {RoundStatus} from './contracts.js';
 import {truncateToTokens} from './budget.js';
@@ -101,6 +102,23 @@ export function readFinishRound(raw: string, fallbackTitle = ''): FinishRoundArg
   if (!summary) summary = [args.outcome, args.verification, ...Array.isArray(args.carry_forward) ? args.carry_forward : []].map(text).filter(Boolean).join('; ');
   if (!summary) return undefined;
   return {title: text(args.title) || text(fallbackTitle) || 'Round', summary};
+}
+
+/** The round memory a `<synopsis>` ending this reply carries, under the same caps and title fallback as `_FinishRound` arguments. */
+export function synopsisRoundMemory(text: string, fallbackTitle = ''): RoundMemory | undefined {
+  const {synopsis} = parseSynopsis(text);
+  const parsed = synopsis && normalizeFinishRound(JSON.stringify(synopsis), fallbackTitle);
+  return parsed ? {...parsed, source: 'model'} : undefined;
+}
+
+/** Assistant text without a synopsis ending it: the block repeats the round, so no later request carries it. A reply left with nothing is dropped. */
+export function withoutSynopses(messages: readonly ModelMessage[]): ModelMessage[] {
+  return messages.flatMap(message => {
+    if (message.role !== 'assistant' || !message.text.includes('<')) return [message];
+    const {answer} = parseSynopsis(message.text);
+    if (answer === message.text) return [message];
+    return answer.trim() || message.toolCalls?.length ? [{...message, text: answer}] : [];
+  });
 }
 
 export function omitInternalToolPairs(messages: readonly ModelMessage[]): ModelMessage[] {

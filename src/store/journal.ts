@@ -12,7 +12,8 @@ import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
-import {extractRoundMemory, runtimeRoundSummary, type RoundMemory} from '../context/round-memory.js';
+import {extractRoundMemory, runtimeRoundSummary, synopsisRoundMemory, type RoundMemory} from '../context/round-memory.js';
+import {parseSynopsis} from '../context/synopsis.js';
 import {isFinishRound} from '../tools/protocol/_FinishRoundTool/_FinishRoundTool.js';
 import {atomicWrite} from '../tools/snapshots.js';
 
@@ -362,7 +363,15 @@ export class Journal implements HistoryStore {
     const start = roundId === activityId ? own : entries.findIndex(entry => entry.activityId === roundId && entry.role === 'user');
     const messages: ModelMessage[] = entries.slice(start, end).map(storedMessage);
     const legacy = summarizeRound(messages, status);
-    const accepted = status === 'completed' && !reply ? extractRoundMemory(messages, finalizerCallId) : undefined;
+    // The delivered text: the last assistant reply with something to say, without a synopsis ending it; a reply that is only a synopsis delivers nothing itself.
+    const replies = messages.filter(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall);
+    const answerOf = (message: ModelMessage) => parseSynopsis(message.text).answer;
+    const closing = replies.findLast(message => stripNarration(message.text).trim());
+    const delivering = closing && stripNarration(answerOf(closing)).trim() ? closing
+      : replies.findLast(message => message !== closing && stripNarration(answerOf(message)).trim());
+    const final = stripLeadingActionLines(delivering ? answerOf(delivering) : '');
+    // A `_FinishRound` call names the round's memory; otherwise a synopsis ending the closing reply does (`[context] round_memory = "synopsis"`).
+    const accepted = status === 'completed' && !reply ? extractRoundMemory(messages, finalizerCallId) ?? (closing ? synopsisRoundMemory(closing.text, legacy.title) : undefined) : undefined;
     const modernClosure = reply || finalizerCallId !== undefined || messages.some(message => message.role === 'assistant' &&
       (message.memoryOnly || message.toolCalls?.some(call => isFinishRound(call.name))));
     const replyTitle = placement.title?.trim() || (legacy.source === 'model' ? legacy.title : legacy.title && legacy.title !== 'Completed' ? legacy.title : 'Reply');
@@ -371,7 +380,6 @@ export class Journal implements HistoryStore {
       summary: modernClosure || status !== 'completed' ? runtimeRoundSummary(messages, status, reply) : (legacy.source === 'model' ? 'Legacy summary; inspect the record for verification and remaining work.' : 'Round metadata unavailable; inspect recorded work before continuing.'),
       source: modernClosure ? 'runtime' : 'legacy',
     };
-    const final = stripLeadingActionLines(messages.findLast(message => message.role === 'assistant' && !message.contextExcluded && !message.memoryOnly && !message.textToolCall && stripNarration(message.text).trim())?.text ?? '');
     // The `_FinishRound` title names the round; only a stage line or a parenthetical aside falls back to the text-derived one.
     const modelTitle = accepted?.title.trim();
     const summary: RoundSummary = accepted ? {title: modelTitle && !isActionLine(modelTitle) ? modelTitle : legacy.title, report: final.slice(0, 2000) || 'Round completed.', source: 'model'} : legacy;
