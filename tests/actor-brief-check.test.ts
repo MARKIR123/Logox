@@ -140,6 +140,23 @@ test('briefCheck "skip" runs no check, says so, and dispatches', {timeout: 10000
   } finally {await f.close();}
 });
 
+test('the owns gate runs before any check and is never skipped: tasks that may run together cannot own the same file', {timeout: 10000}, async () => {
+  let calls = 0;
+  const f = await fixture(async () => {calls++; return {status: 'clear'};});
+  try {
+    for (const briefCheck of [undefined, 'skip']) {
+      const result = await f.dispatch({tasks: [short('techne', {owns: ['src/a.ts']}), short('kalon', {owns: ['src/']})], ...(briefCheck ? {briefCheck} : {})});
+      assert.equal(result.isError, true);
+      assert.match(result.text, /^Nothing was dispatched: tasks that may run at the same time both own the same files\.$/m);
+      assert.match(result.text, /^- techne and kalon both own src\/a\.ts$/m);
+      assert.deepEqual(f.started(), []);
+    }
+    assert.equal(calls, 0, 'the brief check never ran');
+    const ordered = await f.dispatch({tasks: [short('techne', {owns: ['src/a.ts']}), short('kalon', {owns: ['src/'], after: ['techne']})]});
+    assert.equal(ordered.isError, false, 'ordered with after: dispatched');
+  } finally {await f.close();}
+});
+
 test('a failed check never blocks: a failed outcome or a throw dispatches with the failure line', {timeout: 10000}, async () => {
   for (const checker of [async (): Promise<BriefCheckOutcome> => ({status: 'failed', reason: 'provider unavailable'}), async (): Promise<BriefCheckOutcome> => {throw new Error('boom');}]) {
     const f = await fixture(checker);

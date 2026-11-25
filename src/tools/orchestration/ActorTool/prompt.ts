@@ -1,7 +1,7 @@
 export const ACTOR_TOOL_NAME = 'Actor';
 
 export const ACTOR_DESCRIPTION =
-  'Dispatch work to persistent ensemble companions (Techne, Kalon, Aletheia or custom actors). Each task has a short `title` and a `prompt` written for a capable colleague who has not seen your conversation: the goal and why it matters, what is already known or ruled out, the names, IDs and formats others rely on, and what is out of scope. `owns` lists the paths the task may change; `acceptance` lists the checks that define done, and comes back to you beside the report. When a task needs another task\'s output, set `after` to that actor id or activity id: the runtime starts it only when that work has ended and hands it the report. Tasks without `after` run in parallel. `resumeTask` continues a failed or interrupted activity.';
+  'Dispatch work to persistent ensemble companions (Techne, Kalon, Aletheia or custom actors). Each task has a short `title` and a `prompt` written for a capable colleague who has not seen your conversation: the goal and why it matters, what is already known or ruled out, the names, IDs and formats others rely on, and what is out of scope. `owns` lists the paths the task may change, and two tasks that may run at the same time cannot own the same path; `acceptance` lists the checks that define done, and comes back to you beside the report. When a task needs another task\'s output, set `after` to that actor id or activity id: the runtime starts it only when that work has ended and hands it the report. Tasks without `after` run in parallel. `resumeTask` continues a failed or interrupted activity.';
 
 
 /** What the Director needs to know while dispatched work runs; the tool result is the one place that says it. */
@@ -41,9 +41,15 @@ export const briefCheckFailed = (reason: string): string => `Brief check: failed
 export const briefCheckBlocked = (gaps: string): string =>
   `Brief check found gaps; nothing was dispatched. Fix the briefs and call Actor again, or add "briefCheck": "skip" to dispatch them as they are.\n${gaps}`;
 
+/** The deterministic gate before any brief check (never skipped): tasks that may run at the same time claim the same files. Nothing starts. */
+export const ownsConflictRefusal = (conflicts: readonly {readonly a: string; readonly b: string; readonly path: string}[]): string =>
+  'Nothing was dispatched: tasks that may run at the same time both own the same files.\n' +
+  conflicts.map(({a, b, path}) => `- ${a} and ${b} both own ${path}`).join('\n') +
+  '\nGive each file one owner, or order the tasks with `after` so one builds on the other, then call Actor again. Editing a file never needs owning it.';
+
 /** Dispatch-time notes: advisory only, appended to the result of a dispatch that already succeeded. */
-export const overlapNote = (a: string, b: string, path: string): string =>
-  `Note: ${a} and ${b} both own ${path} and run in parallel. File locks keep the edits safe; set \`after\` or split the paths if one must build on the other.`;
+export const liveOwnsNote = (owner: string, path: string, holder: string, title: string, activityId: string): string =>
+  `Note: ${owner} owns ${path}, which ${holder}'s active task "${title.replace(/\s+/g, ' ').trim().slice(0, 80)}" (${activityId}) already owns. Edits are not blocked: order the task with \`after\`, or coordinate with SendMessage.`;
 export const missingOwnsNote = (actor: string): string =>
   `Note: ${actor} has no \`owns\`, so teammates are not told which files it is changing.`;
 export const missingAcceptanceNote = (actor: string): string =>

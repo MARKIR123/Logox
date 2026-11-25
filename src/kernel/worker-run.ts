@@ -30,10 +30,10 @@ export interface WorkerTerminal<T> {
   /** The tool result stored for an accepted call, so a kept worker's history stays paired. */
   readonly accepted: string;
   /**
-   * The terminal tool is not in the tool list the requests carry (a fork sends its dispatcher's tools): a call to it is still accepted by name, and a turn with
-   * text and no tool call ends the run with that text as its result (`plain`), for a provider or model that cannot call an undeclared tool.
+   * A complete turn with text and no tool call ends the run with that text as its result. Models end their work with a plain reply by habit;
+   * the terminal tool stays the way to hand back structure (and is accepted by name even where the request does not declare it, as in a fork).
    */
-  readonly undeclared?: {plain(text: string): T} | undefined;
+  readonly plain?: ((text: string) => T) | undefined;
   settle(call: ToolCall): {readonly ok: true; readonly value: T} | {readonly ok: false; readonly text: string};
 }
 
@@ -75,9 +75,14 @@ export interface WorkerRun<T> {
 }
 
 export type WorkerEnd<T> =
-  | {readonly kind: 'finished'; readonly value: T; readonly imagesOmitted: boolean; /** Ended by a plain reply (`WorkerTerminal.undeclared`), not by the terminal tool. */ readonly plain?: true}
-  /** Three turns in a row without a tool call: a stall rule, not a budget. */
-  | {readonly kind: 'stalled'; readonly lastText: string; readonly imagesOmitted: boolean};
+  | {readonly kind: 'finished'; readonly value: T; readonly imagesOmitted: boolean; /** Ended by a plain reply (`WorkerTerminal.plain`), not by the terminal tool. */ readonly plain?: true}
+  /** Three turns in a row without a tool call or text: a stall rule, not a budget. */
+  | {readonly kind: 'stalled'; readonly lastText: string; readonly imagesOmitted: boolean}
+  /** The terminal tool was refused `REFUSED_TERMINAL_LIMIT` times in a row; `reason` is the last refusal. */
+  | {readonly kind: 'refused'; readonly reason: string; readonly imagesOmitted: boolean};
+
+/** Consecutive refusals of the terminal tool's arguments that end the run, so a model that keeps sending the same bad call cannot loop. */
+export const REFUSED_TERMINAL_LIMIT = 2;
 
 const NOT_EXECUTED = 'Not executed: the response was cut off and the arguments may be incomplete. Reissue the call.';
 
@@ -101,7 +106,7 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
   const {messages, terminal} = run;
   const repeat = new RepeatGuard(run.cwd);
   const note = (text: string, slot: string) => messages.push(createRuntimeContextMessage('reminder', text, {slot, activityId: run.workerId}));
-  let imagesOmitted = false, silent = 0, echoes = 0, truncatedBefore = false;
+  let imagesOmitted = false, silent = 0, echoes = 0, truncatedBefore = false, refusals = 0;
   for (let turnNumber = 1;; turnNumber++) {
     run.signal.throwIfAborted();
     const capabilities = await run.provider.resolveCapabilities?.(run.signal) ?? run.provider.capabilities ?? FALLBACK_CAPABILITIES;
@@ -127,9 +132,9 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
     await run.onTurn?.(turn);
     const calls = turn.message.toolCalls ?? [];
     if (!calls.length) {
-      // A fork that cannot call its terminal tool ends with a plain reply: its text is the result.
-      if (terminal.undeclared && turn.stop !== 'length' && !turn.echo && turn.message.text.trim()) return {kind: 'finished', value: terminal.undeclared.plain(turn.message.text.trim()), imagesOmitted, plain: true};
-      // A turn with no tool call leaves the job open; only a streak of them is a stall.
+      // A complete plain reply is the result.
+      if (terminal.plain && turn.stop !== 'length' && !turn.echo && turn.message.text.trim()) return {kind: 'finished', value: terminal.plain(turn.message.text.trim()), imagesOmitted, plain: true};
+      // A turn with neither a tool call nor a usable reply leaves the job open; only a streak of them is a stall.
       echoes = turn.echo ? echoes + 1 : 0;
       if (++silent >= LOOP_STREAK) return {kind: 'stalled', lastText: echoes >= LOOP_STREAK ? ECHO_STOP_ERROR : turn.message.text.trim(), imagesOmitted};
       note(turn.echo ? ECHO_REMINDER : terminal.reminder, turn.echo ? 'echo' : 'no-tool');
@@ -186,7 +191,10 @@ export async function runWorker<T>(run: WorkerRun<T>): Promise<WorkerEnd<T>> {
         return {kind: 'finished', value: decision.value, imagesOmitted};
       }
       messages.push({role: 'tool', callId: closing.id, name: closing.name, text: decision.text, isError: true});
+      // Only a refused argument counts toward the limit: a call that merely came with others is answered with its fix and is no repeat.
+      if (!business.length && ++refusals >= REFUSED_TERMINAL_LIMIT) return {kind: 'refused', reason: decision.text, imagesOmitted};
     }
+    if (!closing || business.length) refusals = 0;
     if (loopNote) note(loopNote, 'loop');
     if (turn.recovered) note(TEXT_CALL_RECOVERED_NOTE, 'text-call');
   }

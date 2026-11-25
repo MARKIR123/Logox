@@ -112,7 +112,7 @@ test('Fork: the first request is the parent request, its assistant turn, the fix
     assert.equal(first.messages.at(-1)!.role, 'user');
     assert.ok(directive.startsWith(`You are a fork of yourself, running one part of the work in parallel while your original continues. You know everything your original knew up to this point. Do only the part below; leave everything else to your original.
 - You cannot dispatch, fork, message teammates or change the plan; those calls are refused. Work with the files and commands you need for your part.
-- End by calling Finish exactly once with what you did and the evidence. Your original reads only that.
+- End with your result: call Finish once with what you did and the evidence, or reply in plain text. Your original reads only that.
 
 Title: Alpha part
 
@@ -228,13 +228,13 @@ test('Fork: a fork that cannot call the undeclared Finish ends with a plain repl
     assert.match(result.text, /status="done"/);
     assert.match(result.text, /Summary: I changed a\.txt line 1\./);
     assert.match(result.text, /Note: this fork ended with a plain reply instead of Finish; its last text is the summary\./);
-    // Where Finish is declared, a plain reply is only a reminder, as for a worker.
-    const declared = recording((_request, index) => index === 0 ? turn('thinking aloud', []) : finish('after the reminder'));
+    // Where Finish is declared, a plain reply still ends the fork, as for a worker, but it is the normal way to end and carries no note.
+    const declared = recording(() => turn('Changed b.txt.', []));
     const again = {jobs: [job('Declared', {fork: true})]};
     const parent = parentTurn(declared.provider, again, {tools: [...parentTools, {name: 'Finish', description: 'f', parameters: {type: 'object'}}]});
     const second = await tools.execute(dispatch(again), principal({parentTurn: parent, activityId: 'act2'}));
-    assert.equal(declared.requests.length, 2);
-    assert.match(second.text, /Summary: after the reminder/);
+    assert.equal(declared.requests.length, 1);
+    assert.match(second.text, /Summary: Changed b\.txt\./);
     assert.doesNotMatch(second.text, /plain reply/);
   } finally {await done();}
 });

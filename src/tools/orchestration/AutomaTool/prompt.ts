@@ -22,17 +22,19 @@ Minimal call: {"jobs":[{"brief":"List every caller of parseConfig under src/ as 
 
 Unknown fields are ignored with a note; a refused call states its exact fix.`;
 
-export const FINISH_DESCRIPTION = `Hand your result back to your dispatcher and end the job. Call it exactly once, as your last action.
+export const FINISH_DESCRIPTION = `Hand your result back to your dispatcher with its structure, and end the job. Call it once, alone, as your last action. (A plain reply without a tool call also ends the job, as done, with that text as the summary.)
 
 - \`status\`: \`done\` when the brief is fulfilled; \`blocked\` when a missing fact or decision stops you (put the one question in \`question\`; your dispatcher can answer and let you continue); \`failed\` when the job cannot be done, with the reason in \`summary\`.
 - \`summary\`: the answer or what you did, in one or two sentences. It must follow from your evidence.
 - \`evidence\`: one item per fact: \`path:line\`, or a command you ran with its key output.
 - \`notVerified\`: what you did not check, could not do, or left outside your brief. Empty when nothing.`;
 
-/** A worker turn that called no tool: a transient reminder, never a failure by itself. */
-export const AUTOMA_NO_TOOL_REMINDER = 'Your last turn called no tool, so your job is still open. Continue the work, or call Finish with status done, blocked or failed. Do not invent a reason for stopping.';
-/** The stall rule's verdict: three turns in a row without a tool call. */
-export const AUTOMA_STALLED_SUMMARY = 'The worker stopped without calling Finish.';
+/** A worker turn with neither a tool call nor a reply: a transient reminder, never a failure by itself. */
+export const AUTOMA_NO_TOOL_REMINDER = 'Your last turn had no tool call and no reply, so your job is still open. Continue the work, call Finish, or reply with your result. Do not invent a reason for stopping.';
+/** The stall rule's verdict: three turns in a row with neither a tool call nor a reply. */
+export const AUTOMA_STALLED_SUMMARY = 'The worker stopped without a result.';
+/** Finish was refused twice in a row (`src/kernel/worker-run.ts:REFUSED_TERMINAL_LIMIT`); the last refusal goes under Not verified. */
+export const AUTOMA_FINISH_REFUSED_SUMMARY = 'The worker ended after its Finish call was refused twice in a row.';
 /** Finish arrived together with other calls: those ran, this one is answered with the fix. */
 export const AUTOMA_FINISH_ALONE = 'Finish was not accepted: it came in the same batch as other calls, whose results you have not seen yet. Call Finish alone, after reading those results.';
 /** The answer to an accepted Finish; the worker sees it again when it is continued. */
@@ -65,7 +67,7 @@ export const FORK_SIBLING_RESULT_TEXT = 'Handled by your original.';
 /** The user message that opens a fork, before the job's own fields. */
 export const FORK_DIRECTIVE = `You are a fork of yourself, running one part of the work in parallel while your original continues. You know everything your original knew up to this point. Do only the part below; leave everything else to your original.
 - You cannot dispatch, fork, message teammates or change the plan; those calls are refused. Work with the files and commands you need for your part.
-- End by calling Finish exactly once with what you did and the evidence. Your original reads only that.`;
+- End with your result: call Finish once with what you did and the evidence, or reply in plain text. Your original reads only that.`;
 /** A fork called an orchestration tool. */
 export const FORK_REFUSAL = 'Forks cannot dispatch, fork, message teammates or change the plan. Do your part with your other tools.';
 /** `fork: true` outside an actor's own call. */

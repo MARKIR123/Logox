@@ -31,7 +31,7 @@ import {AUTOMA_RETAINED_INPUT_LIMIT, type IdleWorker, type WorkerShelf} from './
 import {Semaphore} from '../../../kernel/semaphore.js';
 import {finishSchema, parseFinish, type FinishArgs} from './finish.js';
 import type {AutomaRoute} from './preset.js';
-import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, FORK_PLAIN_END_NOTE, forkCacheNote, queuedForksLine, queuedJobsLine} from './prompt.js';
+import {AUTOMA_FINISH_ACCEPTED, AUTOMA_FINISH_ALONE, AUTOMA_FINISH_REFUSED_SUMMARY, AUTOMA_NO_TOOL_REMINDER, AUTOMA_STALLED_SUMMARY, FINISH_DESCRIPTION, FINISH_TOOL_NAME, FORK_PLAIN_END_NOTE, forkCacheNote, queuedForksLine, queuedJobsLine} from './prompt.js';
 import {forkOpening, type ForkBase} from './fork.js';
 
 /** A fork whose first response read less than this share of its input from cache gets the cost note. */
@@ -188,7 +188,10 @@ export function normalizeAutomaInput(input: unknown, notes: string[] = []): unkn
 }
 
 /** The part of a worker's system prompt that never changes; the project rules, the shared context and the style flavour follow it (`workerSystem()`). */
-export const AUTOMA_SYSTEM_PROMPT = `You are an Automa worker in LOGOX: a stateless worker that one member of the ensemble dispatched for one job. You have no personality and nobody to talk to. The brief, the project rules and the shared context are everything you know; the result you hand back through Finish is the only thing your dispatcher reads.
+/** Characters of a plain reply kept as the job's summary. */
+const PLAIN_RESULT_CHARS = 2000;
+
+export const AUTOMA_SYSTEM_PROMPT = `You are an Automa worker in LOGOX: a stateless worker that one member of the ensemble dispatched for one job. You have no personality and nobody to talk to. The brief, the project rules and the shared context are everything you know; the result you hand back is the only thing your dispatcher reads.
 
 Do exactly what the brief asks. You may read anything your dispatcher can read and run commands; you may write only the paths your grant lists, plus your scratchpad. Every call is judged by your dispatcher's permission rules: when one is refused, report it, do not look for a way around it.
 
@@ -199,7 +202,7 @@ How to work:
 - Something that matters but lies outside your brief: leave it and name it under notVerified.
 - Run the acceptance checks the brief lists, if any, before you finish.
 
-End by calling Finish exactly once. Every turn must call a tool until then.`;
+End with your result: call Finish once (status, summary, evidence, notVerified; "blocked" with the one question you need answered), or reply in plain text, which ends the job as done with that text as your summary. Until then every turn calls a tool: a reply without one is your result.`;
 
 /** The part of a worker's definition that comes from the project: the contract and the rules, as they are now. Stored with a worker, compared when it is continued. */
 export function workerPromptHash(rules: string): string {
@@ -594,7 +597,7 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
           : `Job "${planned.job.title.trim() || '#' + (index + 1)}" needs a model that can see images. Choose a vision fallback under /model automa.`}, route);
         return;
       }
-      // A fork's tool list is its dispatcher's, whatever it holds: Finish may be missing from it, and is then taken by name or, failing that, by a plain reply.
+      // A fork's tool list is its dispatcher's, whatever it holds: Finish may be missing from it, and is then taken by name or, failing that, by a plain reply (noted).
       const finishDeclared = forkBase?.frame.tools.some(tool => tool.name === FINISH_TOOL_NAME) ?? true;
       let plainEnd = false;
       const end = await runWorker<FinishArgs>({
@@ -602,7 +605,8 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
         ...(forkBase ? {fork: {frame: forkBase.frame, prefix: forkBase.prefix}} : {}),
         cwd: options.cwd, sessionId: options.sessionId, workerId, cacheKey: forkBase?.frame.cacheKey ?? promptCacheKey(options.sessionId, 'automa:' + options.activityId), retries: options.retries ?? DEFAULT_PROVIDER_RETRIES,
         terminal: {name: FINISH_TOOL_NAME, reminder: AUTOMA_NO_TOOL_REMINDER, alone: AUTOMA_FINISH_ALONE, accepted: AUTOMA_FINISH_ACCEPTED, settle: call => parseFinish(call.arguments),
-          ...(forkBase && !finishDeclared ? {undeclared: {plain: (reply: string): FinishArgs => {plainEnd = true; return {status: 'done', summary: reply.length > 600 ? reply.slice(0, 599).trimEnd() + '…' : reply};}}} : {})},
+          // A plain reply is a worker's answer: kept far longer than a Finish summary, so the answer is not cut.
+          plain: (reply: string): FinishArgs => {plainEnd = isFork && !finishDeclared; return {status: 'done', summary: reply.length > PLAIN_RESULT_CHARS ? reply.slice(0, PLAIN_RESULT_CHARS - 1).trimEnd() + '…' : reply};}},
         ...(options.readOnly ? {readOnly: options.readOnly} : {}), concurrency: options.readonlyConcurrency,
         executeCall: async call => {
           const title = callTitle(call);
@@ -652,6 +656,10 @@ export function startAutomaDispatch(options: DispatchOptions): DispatchRun {
       const cold = isFork && share !== undefined && share < FORK_CACHE_NOTE_BELOW ? forkCacheNote(share) : undefined;
       // The block prefixes `Note: ` itself.
       const note = [change?.replace(/^Note: /, ''), large, cold, plainEnd ? FORK_PLAIN_END_NOTE : undefined].filter(Boolean).join('\n') || undefined;
+      if (end.kind === 'refused') {
+        await finish(index, 'failed', started, modelName, {summary: AUTOMA_FINISH_REFUSED_SUMMARY, notVerified: [end.reason.slice(0, 600), ...notes], ...measured(), note}, route, {stalled: true}, shelve);
+        return;
+      }
       if (end.kind === 'stalled') {
         await finish(index, 'failed', started, modelName, {summary: AUTOMA_STALLED_SUMMARY, notVerified: [...(end.lastText ? [end.lastText.slice(0, 600)] : []), ...notes], ...measured(), note}, route, {stalled: true}, shelve);
         return;

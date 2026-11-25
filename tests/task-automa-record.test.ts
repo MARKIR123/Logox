@@ -43,7 +43,7 @@ test('a result block shows stop only when the run did not complete, and the swar
     tools.setAutomaEnvironment(environment({async respond({messages}) {
       const first = messages[0]!.text;
       if (first.startsWith('boom')) throw new Error('worker exploded');
-      if (first.startsWith('quiet')) return {message: {role: 'assistant', text: 'nothing to say'}, stop: 'complete'};
+      if (first.startsWith('quiet')) return {message: {role: 'assistant', text: ''}, stop: 'complete'};
       if (first.startsWith('ask')) return finished('cannot go on', {status: 'blocked', question: 'Which file?'}) as ModelTurn;
       return finished('all good');
     }}));

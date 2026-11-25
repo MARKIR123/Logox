@@ -13,7 +13,7 @@ import {builtinActors} from './builtins.js';
 import {Collaboration} from './collaboration.js';
 import type {Resources} from '../resources/manager.js';
 import {storedMessage, type Journal} from '../store/journal.js';
-import {dispatchNotes} from '../tools/orchestration/ActorTool/notes.js';
+import {dispatchNotes, liveOwnsNotes, ownsConflicts} from '../tools/orchestration/ActorTool/notes.js';
 import {buildRuntimeRecord} from './runtime-record.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {ModelPool} from '../providers/model-pool.js';
@@ -52,7 +52,7 @@ import {activeEnsembleRoster, directorFacts, hasOpenWork, heldProgress, openWork
 import {ENSEMBLE_RECORD_HEADER, DIRECTOR_COORDINATION_WAKE, DIRECTOR_FAILURE,
   DIRECTOR_RECOVERY_EXHAUSTED, DIRECTOR_RECOVERY_LIFTED, DIRECTOR_EXECUTION_REVIEW, DIRECTOR_STREAM_REVIEW, DIRECTOR_USER_STOP,
   DIRECTOR_PAUSED_BATCH, DIRECTOR_PAUSED_BATCH_RULE, directorResumeAdvice, pausedBatchesHint, automatedEvent} from '../prompts/runtime/director.js';
-import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, NO_PLAN_NOTE, briefCheckBlocked, briefCheckFailed, dispatchedResult, endedBatchResult, queuedBehindNote, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
+import {BRIEF_CHECK_CLEAR, BRIEF_CHECK_SKIPPED, NO_PLAN_NOTE, briefCheckBlocked, briefCheckFailed, dispatchedResult, ownsConflictRefusal, endedBatchResult, queuedBehindNote, resumedBatchResult, type DispatchedTask} from '../tools/orchestration/ActorTool/prompt.js';
 import {briefCheckNeeded, type BriefChecker, type BriefCheckInput, type BriefCheckOutcome} from '../tools/orchestration/ActorTool/brief-check.js';
 import {checkpointOrigin, restartStopped} from './restart.js';
 import type {TaskCheckpoint} from '../store/journal.js';
@@ -354,6 +354,9 @@ export class ActorServices {
           if (group) applyBatch = () => {this.resumableBatches.delete(resumeBatch); this.restartBlockers.delete(resumeBatch); group.paused = false; this.options.resumeBatch?.(resumeBatch);};
           if (!tasks.length) {applyBatch?.(); return {text: applyBatch ? resumedBatchResult(resumeBatch) : endedBatchResult(resumeBatch), isError: false};}
         }
+        // The deterministic gate comes first and is never skipped: tasks that may run at the same time cannot both own a file.
+        const conflicts = ownsConflicts(tasks, this.options.projectDir ?? process.cwd());
+        if (conflicts.length) return {text: ownsConflictRefusal(conflicts), isError: true};
         // A larger dispatch is read by a read-only check first: gaps return to the Director with nothing started; a failed check never blocks.
         let briefLine: string | undefined = briefCheck === 'skip' ? BRIEF_CHECK_SKIPPED : undefined;
         if (!briefLine && this.briefChecker && briefCheckNeeded(tasks)) {
@@ -406,7 +409,7 @@ export class ActorServices {
           for (const waiting of this.restartBlockers.values()) waiting.delete(activityId);
         }
         return {
-          text: dispatchedResult(receipt, group.batchId, [...dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), ...resumeNotes, ...this.queuedNotes(receipt, snapshot), ...(planAdvice ? [NO_PLAN_NOTE] : [])], briefLine),
+          text: dispatchedResult(receipt, group.batchId, [...dispatchNotes(tasks, this.options.projectDir ?? process.cwd()), ...liveOwnsNotes(tasks, snapshot?.activities.filter(activity => activity.sessionId === context.sessionId) ?? [], this.options.projectDir ?? process.cwd()), ...resumeNotes, ...this.queuedNotes(receipt, snapshot), ...(planAdvice ? [NO_PLAN_NOTE] : [])], briefLine),
           isError: false,
         };
       }

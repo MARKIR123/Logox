@@ -1,6 +1,6 @@
 import {z} from 'zod';
 
-/** The worker's one exit. `question` belongs to `blocked` and to nothing else: required there (the refinement states the fix), dropped elsewhere by `parseFinish()`. */
+/** The worker's structured exit. `parseFinish()` reads it leniently; the schema states the shape models are asked for. */
 export const finishSchema = z.strictObject({
   status: z.enum(['done', 'blocked', 'failed']).describe('done, blocked or failed'),
   summary: z.string().trim().min(1).max(600).describe('The answer or what you did, in one or two sentences'),
@@ -14,16 +14,30 @@ export const finishSchema = z.strictObject({
 
 export type FinishArgs = z.infer<typeof finishSchema>;
 
+const clip = (value: unknown, max: number): unknown => typeof value === 'string' && value.trim().length > max ? value.trim().slice(0, max - 1).trimEnd() + '…' : value;
+const list = (value: unknown, items: number, max: number): unknown => Array.isArray(value)
+  ? value.filter(item => typeof item === 'string' && item.trim()).slice(0, items).map(item => clip(item, max)) : value;
+
+/**
+ * What a worker means, not what it typed: only an unusable status or an empty summary is refused. Unknown fields go, over-long text is cut,
+ * lists keep their first items, a `question` beside any status but `blocked` is filler (evals t6, 2026-11-17: refusing it looped for 20+ turns),
+ * and `blocked` without one asks its summary.
+ */
+function lenient(args: Record<string, unknown>): Record<string, unknown> {
+  const status = typeof args.status === 'string' ? args.status.trim().toLowerCase() : args.status;
+  const out: Record<string, unknown> = {status, summary: clip(args.summary, 600)};
+  if (args.evidence !== undefined) out.evidence = list(args.evidence, 20, 300);
+  if (args.notVerified !== undefined) out.notVerified = list(args.notVerified, 12, 300);
+  const question = typeof args.question === 'string' && args.question.trim() ? clip(args.question, 600) : undefined;
+  if (status === 'blocked') out.question = question ?? out.summary;
+  return out;
+}
+
 /** The parsed call, or the refusal text the worker reads (every issue with its field, then the instruction to retry). */
 export function parseFinish(raw: string): {readonly ok: true; readonly value: FinishArgs} | {readonly ok: false; readonly text: string} {
   let args: unknown;
   try {args = JSON.parse(raw);} catch {return {ok: false, text: 'Finish refused: the arguments are not valid JSON. Send Finish again with complete arguments.'};}
-  // A `question` beside a status that is not `blocked` is filler (a model that fills every optional field, e.g. "placeholder"), and a
-  // refusal for it can loop for the whole job (evals t6, 2026-11-17: 20+ refusals, 991k tokens): it is dropped, not refused.
-  if (args && typeof args === 'object' && !Array.isArray(args) && 'question' in args && (args as {status?: unknown}).status !== 'blocked') {
-    const {question: _dropped, ...rest} = args as Record<string, unknown>;
-    args = rest;
-  }
+  if (args && typeof args === 'object' && !Array.isArray(args)) args = lenient(args as Record<string, unknown>);
   const parsed = finishSchema.safeParse(args);
   if (parsed.success) return {ok: true, value: parsed.data};
   return {ok: false, text: 'Finish refused: ' + parsed.error.issues.map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; ') + '. Fix the call and send Finish again.'};

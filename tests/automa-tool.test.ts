@@ -8,7 +8,7 @@ import {finishSchema, parseFinish} from '../src/tools/orchestration/AutomaTool/f
 import {composeActorSystemPrompt, projectRulesSection} from '../src/prompts/boundary.js';
 import {ProviderError} from '../src/providers/http.js';
 import {automaProfileSchema, autoAutomaModel, chooseAutomaModel, type AutomaProfile} from '../src/tools/orchestration/AutomaTool/preset.js';
-import {AUTOMA_ANIMATION_FRAMES, AUTOMA_COLOR_TOKEN, AUTOMA_DESCRIPTION} from '../src/tools/orchestration/AutomaTool/prompt.js';
+import {AUTOMA_ANIMATION_FRAMES, AUTOMA_COLOR_TOKEN, AUTOMA_DESCRIPTION, AUTOMA_NO_TOOL_REMINDER} from '../src/tools/orchestration/AutomaTool/prompt.js';
 import {metadata} from '../src/tools/orchestration/AutomaTool/AutomaTool.js';
 import {patternsOverlap} from '../src/tools/ownership.js';
 import {normalizeWrite, pathDenial, planDispatch} from '../src/tools/orchestration/AutomaTool/grant.js';
@@ -868,77 +868,79 @@ test('Unfinished jobs are marked interrupted on restart and never replayed', asy
   } finally {await rm(cwd, {recursive: true, force: true});}
 });
 
-test('Finish is validated: blocked needs its question, a question beside any other status is dropped, and the worker retries with the fix', async () => {
+test('Finish is read leniently: only an unusable status or an empty summary is refused, and a worker refused twice in a row ends', async () => {
   const valid = (args: object) => parseFinish(JSON.stringify(args));
-  assert.equal(valid({status: 'done', summary: 'ok'}).ok, true);
-  assert.equal(valid({status: 'blocked', summary: 'stuck', question: 'Which port?'}).ok, true);
-  const noQuestion = valid({status: 'blocked', summary: 'stuck'});
-  assert.ok(!noQuestion.ok && /`question` is required when status is "blocked"/.test(noQuestion.text) && /Fix the call and send Finish again/.test(noQuestion.text), JSON.stringify(noQuestion));
-  const stray = valid({status: 'done', summary: 'ok', question: 'placeholder'});
-  assert.ok(stray.ok && stray.value.question === undefined, 'a filler question is dropped, not refused');
-  assert.deepEqual(valid({status: 'failed', summary: 'x', question: 'q'}), {ok: true, value: {status: 'failed', summary: 'x'}});
-  for (const bad of [{status: 'done', summary: ''}, {status: 'done', summary: 'x'.repeat(601)}, {status: 'maybe', summary: 'x'}, {status: 'done', summary: 'x', evidence: Array.from({length: 21}, () => 'e')},
-    {status: 'done', summary: 'x', evidence: ['e'.repeat(301)]}, {status: 'done', summary: 'x', notVerified: Array.from({length: 13}, () => 'n')}, {status: 'blocked', summary: 'x', question: 'q'.repeat(601)},
-    {status: 'done', summary: 'x', extra: 1}]) assert.equal(valid(bad).ok, false, JSON.stringify(bad).slice(0, 80));
+  assert.deepEqual(valid({status: 'done', summary: 'ok'}), {ok: true, value: {status: 'done', summary: 'ok'}});
+  assert.deepEqual(valid({status: 'Blocked', summary: 'stuck'}), {ok: true, value: {status: 'blocked', summary: 'stuck', question: 'stuck'}}, 'blocked without a question asks its summary');
+  assert.deepEqual(valid({status: 'blocked', summary: 'stuck', question: 'Which port?'}), {ok: true, value: {status: 'blocked', summary: 'stuck', question: 'Which port?'}});
+  assert.deepEqual(valid({status: 'done', summary: 'ok', question: 'placeholder', extra: 1}), {ok: true, value: {status: 'done', summary: 'ok'}}, 'filler and unknown fields go');
+  const long = valid({status: 'done', summary: 'x'.repeat(900), evidence: Array.from({length: 25}, () => 'e'.repeat(400)), notVerified: ['', 'n']});
+  assert.ok(long.ok && long.value.summary.length === 600 && long.value.evidence!.length === 20 && long.value.evidence![0]!.length === 300 && long.value.notVerified!.length === 1, 'over-long text is cut, never refused');
+  for (const bad of [{status: 'done', summary: ''}, {status: 'maybe', summary: 'x'}, {summary: 'x'}]) assert.equal(valid(bad).ok, false, JSON.stringify(bad));
   assert.equal(parseFinish('{nope').ok, false);
-  assert.equal(finishSchema.safeParse({status: 'done', summary: 'x', evidence: [], notVerified: []}).success, true);
   const {tools, done} = await project();
   try {
+    // Refused twice in a row: the job ends as failed with the refusal, instead of retrying until the dispatcher gives up.
     const requests: Parameters<typeof workers>[1] = [];
-    tools.setAutomaEnvironment(environment(workers({Ask: [['Finish', {status: 'blocked', summary: 'Cannot pick a port.'}], ['Finish', {status: 'done', summary: ''}],
-      ['Finish', {status: 'blocked', summary: 'Cannot pick a port.', question: 'Which port should the server use?', evidence: ['config.ts:3'], notVerified: ['the second server']}]]}, requests)));
-    const result = await tools.execute(dispatch({jobs: [job('Ask')]}), principal());
-    assert.equal(requests.length, 3, 'two refusals, then the accepted call');
-    const answers = requests.at(-1)!.messages.filter(message => message.role === 'tool');
-    assert.deepEqual(answers.map(message => message.isError), [true, true]);
-    assert.match(answers[0]!.text, /required when status is "blocked"/);
-    assert.equal(result.isError, false, 'blocked is not a failure');
-    assert.match(result.text, /status="blocked"/);
-    assert.match(result.text, /^Summary: Cannot pick a port\.$/m);
-    assert.match(result.text, /^Question: Which port should the server use\?$/m);
-    assert.doesNotMatch(result.text, /^Kept:/m);
-    // A blocked worker waits for the answer: continuing it brings the next result under the same id.
-    const answered = await tools.execute(dispatch({jobs: [{title: 'Ask', brief: 'Use port 8080.', scope: 'exact', continue: 'T1'}]}), principal());
-    assert.match(answered.text, /<automa-result id="T1" title="Ask" status="done"/);
-    assert.match(result.text, /0\/1 done/);
+    tools.setAutomaEnvironment(environment(workers({Loop: [['Finish', {status: 'maybe', summary: 'x'}], ['Finish', {status: 'maybe', summary: 'x'}], ['Finish', {status: 'done', summary: 'never reached'}]]}, requests)));
+    const result = await tools.execute(dispatch({jobs: [job('Loop')]}), principal());
+    assert.equal(requests.length, 2, 'the second refusal ends the job');
+    assert.match(result.text, /status="failed"/);
+    assert.match(result.text, /^Summary: The worker ended after its Finish call was refused twice in a row\.$/m);
+    assert.match(result.text, /^Not verified:\n- Finish refused: status/m);
+    // One refusal is answered with its fix and the corrected call is accepted.
+    const again: Parameters<typeof workers>[1] = [];
+    tools.setAutomaEnvironment(environment(workers({Fix: [['Finish', {status: 'maybe', summary: 'x'}], ['Finish', {status: 'done', summary: 'fixed'}]]}, again)));
+    const fixed = await tools.execute(dispatch({jobs: [job('Fix')]}), principal());
+    assert.equal(again.length, 2);
+    assert.match(fixed.text, /status="done"/);
+    assert.match(fixed.text, /^Summary: fixed$/m);
   } finally {await done();}
 });
-
-test('A turn without a tool call gets a reminder and the job stays open; three in a row end it as failed, with the last text kept', async () => {
+test('A plain reply ends the job as done with its text as the summary; an empty turn gets a reminder and three in a row end the job as failed', async () => {
   const {tools, done} = await project();
   try {
     const seen: ModelMessage[][] = [];
+    // A plain reply is the result, kept far beyond a Finish summary.
+    tools.setAutomaEnvironment(environment({async respond(request) {
+      seen.push([...request.messages]);
+      return {message: {role: 'assistant', text: 'The callers are a.ts:3 and b.ts:9. ' + 'x'.repeat(2500)}, stop: 'complete'};
+    }}));
+    const plain = await tools.execute(dispatch({jobs: [job('x')]}), principal());
+    assert.equal(seen.length, 1);
+    assert.match(plain.text, /status="done"/);
+    const summary = /^Summary: (The callers are a\.ts:3 and b\.ts:9\. x+…)$/m.exec(plain.text)?.[1];
+    assert.equal(summary?.length, 2000, 'a plain reply keeps 2000 characters');
+    assert.doesNotMatch(plain.text, /plain reply/, 'no note: it is the normal way to end');
+    // An empty turn (thinking only) leaves the job open with a reminder.
+    seen.length = 0;
     let turn = 0;
     tools.setAutomaEnvironment(environment({async respond(request) {
       seen.push([...request.messages]);
-      return ++turn === 1 ? {message: {role: 'assistant', text: 'Let me think about this.'}, stop: 'complete'} : finished('recovered after a reminder');
+      return ++turn === 1 ? {message: {role: 'assistant', text: ''}, stop: 'complete'} : finished('recovered after a reminder');
     }}));
     const ok = await tools.execute(dispatch({jobs: [job('x')]}), principal());
     assert.match(ok.text, /status="done"/);
     const reminder = contexts(seen[1]!)[0];
-    assert.ok(reminder && reminder.kind === 'reminder' && /Your last turn called no tool, so your job is still open\. Continue the work, or call Finish with status done, blocked or failed\. Do not invent a reason for stopping\./.test(reminder.text));
-    // Stalled: the same silence three turns in a row.
+    assert.ok(reminder && reminder.kind === 'reminder' && reminder.text === AUTOMA_NO_TOOL_REMINDER);
+    // Stalled: three empty turns in a row.
     seen.length = 0;
     tools.setAutomaEnvironment(environment({async respond(request) {
       seen.push([...request.messages]);
-      return {message: {role: 'assistant', text: 'I think I am done here. ' + 'x'.repeat(700)}, stop: 'complete'};
+      return {message: {role: 'assistant', text: ''}, stop: 'complete'};
     }}));
     const stalled = await tools.execute(dispatch({jobs: [job('x')]}), principal());
     assert.equal(seen.length, 3);
     assert.match(stalled.text, /status="failed"/);
-    assert.match(stalled.text, /^Summary: The worker stopped without calling Finish\.$/m);
-    const kept = /^Not verified:\n- (I think I am done here\. x+)$/m.exec(stalled.text)?.[1];
-    assert.equal(kept?.length, 600, 'the last text is kept, cut at 600 characters');
+    assert.match(stalled.text, /^Summary: The worker stopped without a result\.$/m);
     assert.equal(stalled.isError, true);
-    // A tool call in between resets the streak: silence, tool, silence, silence, then Finish.
-    seen.length = 0;
-    const script: ModelTurn[] = [{message: {role: 'assistant', text: 'hm'}, stop: 'complete'}, {message: {role: 'assistant', text: '', toolCalls: [{id: 'r', name: 'Read', arguments: JSON.stringify({file_path: 'a.txt'})}]}, stop: 'tools'},
-      {message: {role: 'assistant', text: 'hm'}, stop: 'complete'}, {message: {role: 'assistant', text: 'hm'}, stop: 'complete'}, finished('late but done')];
+    // A tool call in between resets the streak: empty, tool, empty, empty, then Finish.
+    const script: ModelTurn[] = [{message: {role: 'assistant', text: ''}, stop: 'complete'}, {message: {role: 'assistant', text: '', toolCalls: [{id: 'r', name: 'Read', arguments: JSON.stringify({file_path: 'a.txt'})}]}, stop: 'tools'},
+      {message: {role: 'assistant', text: ''}, stop: 'complete'}, {message: {role: 'assistant', text: ''}, stop: 'complete'}, finished('late but done')];
     tools.setAutomaEnvironment(environment({async respond() {return script.shift()!;}}));
     assert.match((await tools.execute(dispatch({jobs: [job('x')]}), principal())).text, /status="done"/);
   } finally {await done();}
 });
-
 test('A Finish that arrives with other calls is not accepted: the other calls run and Finish is answered with the fix', async () => {
   const {tools, done} = await project();
   try {
