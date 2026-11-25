@@ -37,6 +37,7 @@ node evals/run.mjs --tasks t1 --keep
 | `--model <名称>` | 透传给 Logox 的 `--model` |
 | `--base-url <URL>` | 透传给 Logox 的 `--base-url` |
 | `--auth-file <路径>` | 透传给 Logox 的 `--auth-file` |
+| `--project-config <文件>` | 把该文件复制为每个工作目录的 `.logox/config.toml`（在基线提交之前，不算作任务改动），例如设置 `[context] round_memory = "synopsis"` |
 | `--logox <路径>` | 指定 Logox CLI 入口，默认为仓库根目录下 `dist/src/cli.js` |
 | `--dry-run` | 不调用 Logox，对所有任务执行基线（必不通过）与参考答案（必通过）双向检查 |
 | `--compare <a> <b>` | 对比两次运行的 `summary.json` |

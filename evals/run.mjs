@@ -97,9 +97,14 @@ async function archiveRunData(workDir, taskResultDir) {
   if (existsSync(projectLogox)) await cp(projectLogox, join(taskResultDir, 'logox-project'), {recursive: true});
 }
 
-async function setupWorkDir(taskDir, applySolution = false) {
+async function setupWorkDir(taskDir, applySolution = false, projectConfig = undefined) {
   const workDir = await mkdtemp(join(tmpdir(), 'logox-eval-'));
   await cp(join(taskDir, 'repo'), workDir, {recursive: true});
+  // Copied before the baseline commit, so the checks never count it as a change the run made.
+  if (projectConfig) {
+    await mkdir(join(workDir, '.logox'), {recursive: true});
+    await cp(projectConfig, join(workDir, '.logox', 'config.toml'));
+  }
   await initBaselineRepo(workDir);
   if (applySolution) {
     const solDir = join(taskDir, 'solution');
@@ -437,6 +442,7 @@ async function main() {
       model: {type: 'string'},
       'base-url': {type: 'string'},
       'auth-file': {type: 'string'},
+      'project-config': {type: 'string'},
       logox: {type: 'string'},
       help: {type: 'boolean', short: 'h'},
     },
@@ -446,7 +452,7 @@ async function main() {
     console.log(
       'Usage:\n' +
       '  node evals/run.mjs [--tasks t1,t2] [--repeat N] [--label name] [--keep]\n' +
-      '                     [--open-terminal] [--quiet] [--provider name] [--model name] [--logox path]\n' +
+      '                     [--open-terminal] [--quiet] [--provider name] [--model name] [--project-config file] [--logox path]\n' +
       '  node evals/run.mjs --dry-run [--tasks t1,t2]\n' +
       '  node evals/run.mjs --compare <runA> <runB>\n'
     );
@@ -499,7 +505,7 @@ async function main() {
       const taskResultDir = repeat > 1 ? join(runDir, task.id, `run-${runIndex}`) : join(runDir, task.id);
       await mkdir(taskResultDir, {recursive: true});
 
-      const workDir = await setupWorkDir(task.dir, false);
+      const workDir = await setupWorkDir(task.dir, false, values['project-config'] ? resolve(values['project-config']) : undefined);
       let keepThisDir = values.keep;
       try {
         const taskFilePath = join(task.dir, 'task.md');
@@ -603,6 +609,8 @@ async function main() {
           keptDirs.push({label: tag, path: workDir});
         }
       } finally {
+        // Ledgers and plans stay beside the result whether or not the work directory is kept.
+        await archiveRunData(workDir, taskResultDir).catch(error => console.warn(`    archive failed: ${error instanceof Error ? error.message : error}`));
         if (!keepThisDir) {
           for (const dir of projectDataDirsFor(workDir)) await rm(dir, {recursive: true, force: true});
           await rm(workDir, {recursive: true, force: true});
