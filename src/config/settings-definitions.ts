@@ -26,10 +26,10 @@ export interface SettingsEnv {
   permissionMode(): string;
   permissionModes(): readonly string[];
   savePermissionMode(mode: string): Promise<void>;
-  /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`, `shell_auto_background_seconds`). */
-  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number; readonly shellAutoBackgroundSeconds: number};
+  /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`, `shell_auto_background_seconds`, `check_after_minutes`). */
+  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number; readonly shellAutoBackgroundSeconds: number; readonly checkAfterMinutes: number};
   /** Persists a kernel option (`~/.logox/kernel-preferences.json`, which wins over the TOML files) and applies it to the running session. */
-  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number; readonly shellAutoBackgroundSeconds?: number}): Promise<void>;
+  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number; readonly shellAutoBackgroundSeconds?: number; readonly checkAfterMinutes?: number}): Promise<void>;
 }
 
 export interface SettingDefinition {
@@ -149,6 +149,10 @@ export const settingDefinitions: readonly SettingDefinition[] = [
     description: 'Seconds a foreground Shell command may run before it moves to the background and notifies its actor when it ends; 0 never. [kernel] shell_auto_background_seconds',
     read: env => env.kernel().shellAutoBackgroundSeconds,
     write: (env, value) => env.saveKernel({shellAutoBackgroundSeconds: Number(value)})},
+  {key: 'checkAfter', label: 'Check long work', group: 'runtime', kind: 'number', default: 20, min: 0, max: 240, step: 10,
+    description: 'Minutes of work (waiting for you or another actor excluded) before the Director is asked to look at a companion that seems stuck, then at double that; nothing is ever stopped, 0 never. [kernel] check_after_minutes',
+    read: env => env.kernel().checkAfterMinutes,
+    write: (env, value) => env.saveKernel({checkAfterMinutes: Number(value)})},
 ];
 const byKey = new Map(settingDefinitions.map(definition => [definition.key, definition]));
 export function settingDefinition(key: string): SettingDefinition | undefined {return byKey.get(key);}

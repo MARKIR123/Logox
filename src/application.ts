@@ -47,7 +47,9 @@ import type {SubmitDelivery} from './runtime/delivery.js';
 export type {SubmitDelivery} from './runtime/delivery.js';
 import type {PermissionEngine} from './permissions/engine.js';
 import {Tools} from './tools/tools.js';
-import {USER_STOP_REASON, killActiveProcess, killActivityProcesses, killBackgroundJobs} from './tools/process.js';
+import {USER_STOP_REASON, killActiveProcess, killActivityProcesses, killBackgroundJobs, listBackgroundJobs} from './tools/process.js';
+import {Watchdog} from './actors/watchdog.js';
+import {asksFor} from './runtime/asks.js';
 import {createManagedApplication} from './application-sessions.js';
 import type {Provider} from './runtime/messages.js';
 import {SystemHistory} from './store/system-history.js';
@@ -371,6 +373,15 @@ export async function createSessionApplication(options: SessionApplicationOption
   const shellJobs = createShellJobs({sessionId: session, nameOf: id => actors.list().find(item => item.id === id)?.name ?? id, closed: () => state.closed,
     deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'runtime', summary, 'queue', {activityId}),
     notifyDirector: (text, source) => actorServices.notifyDirector(text, source)});
+  // After long work the Director is asked to look at a companion that seems stuck; nothing is ever stopped (src/actors/watchdog.ts).
+  const watchdog = new Watchdog({store, sessionId: session, minutes: () => config.kernel.check_after_minutes,
+    parked: ownerId => asksFor(store).isParked(session, ownerId),
+    jobs: ownerId => listBackgroundJobs(session).filter(job => job.ownerId === ownerId && job.exitCode === undefined && !job.stopped).map(job => job.id),
+    shellFiles: activityId => tools.shellChangedPaths([activityId]),
+    nameOf: id => actors.list().find(item => item.id === id)?.name ?? id,
+    pending: activityId => actorServices.noticePending(text => text.startsWith('[Watchdog]') && text.includes(`(activity ${activityId})`)),
+    notify: (text, source) => state.closed ? Promise.resolve() : actorServices.notifyDirector(text, source)});
+  watchdog.start();
   const recovered = await recoverCheckpoints({session, journal, actors, actorServices, taskModels, taskModelLedger, configureMeter: sessionStatus.configureMeter});
   const {checkpoints, owners} = recovered;
   const ui = options.uiPreferences ?? loadUiPreferences(homeDir, config);
@@ -492,7 +503,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       killActivityProcesses(activityId, USER_STOP_REASON, 'user', session); killBackgroundJobs(activityId, session);
     }},
     async close() {
-      state.closed = true; shellJobs.dispose(); actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
+      state.closed = true; shellJobs.dispose(); watchdog.dispose(); actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), anamnesis.lifecycle.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
         await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await plans.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail(); await notices.tail();

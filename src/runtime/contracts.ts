@@ -9,6 +9,8 @@ const id = z.string().trim().min(1);
 export const taskOriginSchema = z.object({parentActivityId: id.optional(), rootActivityId: id.optional(), batchId: id.optional(),
   /** The plan node this task carries out (`src/runtime/plan.ts`); the plan holds the link, the activity keeps the origin. */
   planNode: z.string().trim().min(1).max(40).optional(),
+  /** How long the Director expects this task to take (`Actor` task `expect`); the watchdog's first check waits at least this long. */
+  expectMinutes: z.number().positive().max(7 * 24 * 60).optional(),
   resumeTaskId: id.optional(), taskTitle: z.string().trim().min(1).max(120).optional(), ownedFiles: z.array(z.string().trim().min(1)).max(32).optional(), acceptance: z.array(z.string().trim().min(1).max(400)).max(12).optional(), after: z.array(id).max(8).optional(), coordinationWake: z.boolean().optional(),
   /** The Director's first dispatch of a new round reopens the previous act of the team stage instead of opening a new one (`src/runtime/team-acts.ts`); only a Director's dispatch carries it. */
   continueAct: z.boolean().optional(), dispatchDepth: z.number().int().nonnegative().optional(), grantExecution: z.boolean().optional(),

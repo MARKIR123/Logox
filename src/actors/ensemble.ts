@@ -387,6 +387,7 @@ export class EnsembleRuntime<Id extends string> {
       ...(origin.acceptance?.length ? {acceptance: [...origin.acceptance]} : {}),
       ...(origin.after?.length ? {after: [...origin.after]} : {}),
       ...(origin.planNode ? {planNode: origin.planNode} : {}),
+      ...(origin.expectMinutes ? {expectMinutes: origin.expectMinutes} : {}),
       ...(origin.grantExecution ? {grantExecution: true} : {}),
       ...(origin.fingerprint ? {fingerprint: origin.fingerprint} : {}),
       ...(origin.dispatchDepth !== undefined ? {dispatchDepth: origin.dispatchDepth} : {}),

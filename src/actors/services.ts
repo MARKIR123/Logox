@@ -46,6 +46,7 @@ import {
 import type {PlanBoard} from '../store/plans.js';
 import {planUnknownLinkNode} from '../prompts/runtime/plan.js';
 import {renderBrief} from '../tools/orchestration/ActorTool/brief.js';
+import {parseExpectMinutes} from '../tools/orchestration/ActorTool/expect.js';
 import type {ListActorsMemo} from '../tools/coordination/ListActorsTool/ListActorsTool.js';
 import type {RuntimeSnapshot} from '../runtime/contracts.js';
 import {DeliveryQueue} from './delivery-queue.js';
@@ -370,7 +371,7 @@ export class ActorServices {
           const fingerprint = this.fingerprintOf(owner);
           const childOrigin = {...origin, batchId: group.batchId, ...(fingerprint ? {fingerprint} : {}), ...(task.resumeTask ? {resumeTaskId: task.resumeTask} : {}), ...(task.title ? {taskTitle: task.title} : {}),
             ...(task.owns?.length ? {ownedFiles: [...new Set(task.owns)]} : {}), ...(task.acceptance?.length ? {acceptance: task.acceptance} : {}), ...(after.length ? {after} : {}),
-            ...(task.node ? {planNode: task.node} : {})};
+            ...(task.node ? {planNode: task.node} : {}), ...(task.expect ? {expectMinutes: parseExpectMinutes(task.expect)} : {})};
           // Teammates are the other tasks of the call it does not wait for, and live work on the same root it does not wait for.
           const earlier = graph.ancestors(key);
           const teammates = teammatesBlock(owner, batch.filter(mate => mate.key !== key && !earlier.has(mate.key)), snapshot, rootActivityId, new Set(external));
@@ -546,6 +547,10 @@ export class ActorServices {
   async notifyDirector(text: string, source: string): Promise<void> {
     await this.deliveries.enqueue({ownerId: DIRECTOR_ID, source, kind: 'collaboration', inputKind: 'collaboration', text});
     this.wakeDirector();
+  }
+  /** Whether a notice to the Director that satisfies `match` has not been delivered yet. */
+  noticePending(match: (text: string, source: string) => boolean): boolean {
+    return this.deliveries.pending(DIRECTOR_ID).some(item => item.kind === 'collaboration' && match(item.text, item.source));
   }
   private wakeDirector(): void {
     if (this.recovery.stopped() || this.wakeTask || this.backoff.waiting) return;
