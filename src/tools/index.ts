@@ -341,6 +341,8 @@ export class Tools {
 
   /** Told the canonical path of every file a Read returned successfully (skill usage counting); an observer's failure never reaches the call. */
   onSkillRead: ((path: string, context: ActorContext) => void) | undefined;
+  /** Milliseconds a foreground Shell command may run before it moves to the background (0 never); read per call so a `/settings` change applies at once. */
+  shellAutoBackgroundMs: (() => number) | undefined;
   /** The skills an actor sees and their use counts, for the `Skill` tool; set by the project host. */
   skills: SkillLibrary | undefined;
   private registry: ToolRegistry | undefined;
@@ -956,7 +958,9 @@ export class Tools {
       }
       if (name === 'Shell') {
         const args = schemas.Shell.parse(parsed);
-        const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id, sessionId: context.sessionId});
+        const run = () => executeShell(args, this.cwd, context.signal, {activityId: context.activityId, toolId: call.id, sessionId: context.sessionId, ownerId: context.ownerId,
+          logFile: join(getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId), 'shell-' + call.id.replace(/[^\w.-]/g, '_').slice(-48) + '.log')},
+          this.shellAutoBackgroundMs?.() ?? 0);
         const exec = () => context.via && isExclusiveCommand(context.via.grant, args.command) ? this.snapshots.withLock('automa-exclusive-command', run) : run();
         // A background command has no end to compare against; only a foreground one is audited.
         return await (args.run_in_background ? exec() : this.withShellAudit(context, call.id, exec));

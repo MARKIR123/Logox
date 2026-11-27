@@ -113,9 +113,11 @@ const schema = z.object({
     cache_keepalive: z.boolean().default(true),
     /** Minutes after the last real request that the Director's cache is kept warm for a returning human (0 never warms for the human). Waits for another actor are not limited by it. */
     away_keepalive_minutes: z.number().nonnegative().max(24 * 60).default(60),
+    /** A foreground Shell command still running after this many seconds moves to the background in place and notifies its actor when it ends (0 never). `sleep` is exempt. */
+    shell_auto_background_seconds: z.number().nonnegative().max(3600).default(120),
     /** Record one small hash-and-size line per model request (`<session>/requests/<actor>.fingerprints.jsonl`) so cache misses can be explained afterwards. Never message text. */
     request_fingerprints: z.boolean().default(true),
-  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true, away_keepalive_minutes: 60, request_fingerprints: true}),
+  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true, away_keepalive_minutes: 60, shell_auto_background_seconds: 120, request_fingerprints: true}),
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
@@ -207,7 +209,7 @@ function merge(left: Record<string, unknown>, right: Record<string, unknown>): R
   return result;
 }
 /** `/settings` choices that live beside the TOML files (`~/.logox/kernel-preferences.json`); the keys are the `[kernel]` keys they override. */
-export const kernelPreferenceSchema = z.strictObject({version: z.literal(1), cache_keepalive: z.boolean().optional(), away_keepalive_minutes: z.number().nonnegative().max(24 * 60).optional()});
+export const kernelPreferenceSchema = z.strictObject({version: z.literal(1), cache_keepalive: z.boolean().optional(), away_keepalive_minutes: z.number().nonnegative().max(24 * 60).optional(), shell_auto_background_seconds: z.number().nonnegative().max(3600).optional()});
 export type KernelPreference = z.infer<typeof kernelPreferenceSchema>;
 export async function loadConfig(cwd: string, overrides: Record<string, unknown> = {},
   env: NodeJS.ProcessEnv = process.env, home = homedir(), projectBoundary?: string,
@@ -265,7 +267,8 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   try {
     const kernel = await new StateFile(join(home, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).read();
     if (kernel) raw = merge(raw, {kernel: {...(kernel.cache_keepalive !== undefined ? {cache_keepalive: kernel.cache_keepalive} : {}),
-      ...(kernel.away_keepalive_minutes !== undefined ? {away_keepalive_minutes: kernel.away_keepalive_minutes} : {})}});
+      ...(kernel.away_keepalive_minutes !== undefined ? {away_keepalive_minutes: kernel.away_keepalive_minutes} : {}),
+      ...(kernel.shell_auto_background_seconds !== undefined ? {shell_auto_background_seconds: kernel.shell_auto_background_seconds} : {})}});
   } catch {diagnostic('The saved kernel settings are unreadable or invalid; using config instead. The original state file is preserved.');}
   let environment: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(env)) {

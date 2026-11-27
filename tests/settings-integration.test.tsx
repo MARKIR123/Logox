@@ -62,7 +62,7 @@ test('/settings and its legacy alias open the data-driven page, the old two-tab 
     for (const command of ['/settings', '/animations']) {
       await f.open(command);
       const surface = f.app.surfaces.getSnapshot(); assert.equal(surface?.kind, 'settings');
-      assert.ok(surface?.kind === 'settings' && surface.items.length === 17 && surface.pages.map(page => page.id).join() === 'theme,statusbar,permissions,models,shortcuts');
+      assert.ok(surface?.kind === 'settings' && surface.items.length === 18 && surface.pages.map(page => page.id).join() === 'theme,statusbar,permissions,models,shortcuts');
       assert.match(f.text(), /Settings/); assert.match(f.text(), /Theme +logox-dark ›/); assert.doesNotMatch(f.text(), /Theme preset:|Cursor style:|UI animations/);
       await f.key('\x1b'); assert.equal(f.app.surfaces.getSnapshot(), null);
     }

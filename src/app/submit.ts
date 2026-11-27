@@ -43,6 +43,8 @@ import type {Tools} from '../tools/tools.js';
 import {palette} from '../tui/appearance/theme.js';
 import {createAnamnesisCommand} from '../commands/anamnesis-page.js';
 import {createTasksCommand} from '../commands/tasks-page.js';
+import {createJobsCommand} from '../commands/jobs-page.js';
+import type {ShellJobs} from './shell-jobs.js';
 import {createPlanPages} from '../commands/plan-page.js';
 import type {PlanBoard} from '../store/plans.js';
 import {activityCosts} from '../runtime/delegations.js';
@@ -63,6 +65,8 @@ export interface SubmitDeps {
   memory: {prompt(): string; refresh(): Promise<void>};
   /** The Anamnesis API behind `/anamnesis`. */
   anamnesis: AnamnesisApi;
+  /** The session's background Shell jobs behind `/jobs`. */
+  shellJobs: ShellJobs;
   profileReady: Promise<void>;
   signal: AbortSignal;
   notice: Notice; receipt: Receipt;
@@ -78,10 +82,11 @@ export interface SubmitDeps {
 
 export function createSubmit(deps: SubmitDeps) {
   const {session, cwd, homeDir, state, env, resourceOptions, store, journal, surfaces, authentication, ensemble, permissions, tools, toolRegistry,
-    actors, actorServices, plans, resources, contexts, registry, modelPool, owners, memory, anamnesis, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
+    actors, actorServices, plans, resources, contexts, registry, modelPool, owners, memory, anamnesis, shellJobs, profileReady, signal, notice, receipt, queryResult, input, modelSelection,
     providers, pages, buildContext, sessionCommand, requireIdle} = deps;
   const {beginTask, dispatchInput, ownerIsBusy} = input;
   const anamnesisCommand = createAnamnesisCommand({surfaces, anamnesis, registry, modelPool, receipt});
+  const jobsCommand = createJobsCommand({surfaces, shellJobs});
   const tasksCommand = createTasksCommand({surfaces, store, session, actors, deliveries: () => actorServices.deliveries.snapshot(), journalPath: () => tools.automa?.journalPath?.(session),
     costs: async () => activityCosts((await Promise.all(owners.map(owner => journal.load(session, owner).catch(() => [])))).flat())});
   createPlanPages({surfaces, board: plans, tasks: tasksCommand, actors, store, session, workTitle: id => tasksCommand.titleOf(id)});
@@ -198,6 +203,7 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
     if (text === '/theme') {pages.openTheme(); return;}
     if (text === '/notices') {surfaces.openNotices(); return;}
+    if (text === '/jobs') {await jobsCommand.open(); return;}
     const teamArgs = /^\/team(?:\s+([\s\S]*))?$/i.exec(text);
     if (teamArgs) {await tasksCommand.team(teamArgs[1] ?? ''); return;}
     const sidebarArgs = /^\/sidebar(?:\s+([\s\S]*))?$/i.exec(text);

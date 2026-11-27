@@ -374,6 +374,7 @@ export class EnsembleRuntime<Id extends string> {
     this.closed = true;
     for (const task of [...this.tasks.values()]) this.cancel(task.activityId, 'shutdown');
     await Promise.allSettled([...this.activeSlots.values()]);
+    // Session close is where background jobs die with their session (they outlive the activities that started them).
     killBackgroundJobs(undefined, this.sessionId);
     await Promise.allSettled([...this.pendingWrites]);
   }
@@ -700,7 +701,6 @@ export class EnsembleRuntime<Id extends string> {
         });
       }
     } finally {
-      killBackgroundJobs(activityId, this.sessionId);
       this.store.interactions.cancelActivity(this.sessionId, activityId);
       this.controllers.delete(activityId);
     }

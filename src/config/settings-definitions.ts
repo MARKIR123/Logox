@@ -26,10 +26,10 @@ export interface SettingsEnv {
   permissionMode(): string;
   permissionModes(): readonly string[];
   savePermissionMode(mode: string): Promise<void>;
-  /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`). */
-  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number};
+  /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`, `shell_auto_background_seconds`). */
+  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number; readonly shellAutoBackgroundSeconds: number};
   /** Persists a kernel option (`~/.logox/kernel-preferences.json`, which wins over the TOML files) and applies it to the running session. */
-  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number}): Promise<void>;
+  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number; readonly shellAutoBackgroundSeconds?: number}): Promise<void>;
 }
 
 export interface SettingDefinition {
@@ -145,6 +145,10 @@ export const settingDefinitions: readonly SettingDefinition[] = [
     description: 'Minutes to keep the Director\'s prompt cache warm after your last message while you are away; 0 never warms it. [kernel] away_keepalive_minutes',
     read: env => env.kernel().awayKeepaliveMinutes,
     write: (env, value) => env.saveKernel({awayKeepaliveMinutes: Number(value)})},
+  {key: 'shellAutoBackground', label: 'Shell to background', group: 'runtime', kind: 'number', default: 120, min: 0, max: 600, step: 30,
+    description: 'Seconds a foreground Shell command may run before it moves to the background and notifies its actor when it ends; 0 never. [kernel] shell_auto_background_seconds',
+    read: env => env.kernel().shellAutoBackgroundSeconds,
+    write: (env, value) => env.saveKernel({shellAutoBackgroundSeconds: Number(value)})},
 ];
 const byKey = new Map(settingDefinitions.map(definition => [definition.key, definition]));
 export function settingDefinition(key: string): SettingDefinition | undefined {return byKey.get(key);}

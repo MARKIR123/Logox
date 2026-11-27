@@ -11,7 +11,7 @@ export async function settingsFixture() {
   const root = await mkdtemp(join(tmpdir(), 'logox-settings-'));
   const state = {
     name: undefined as string | undefined, effort: 'auto', mode: 'default',
-    kernel: {cacheKeepalive: true, awayKeepaliveMinutes: 60},
+    kernel: {cacheKeepalive: true, awayKeepaliveMinutes: 60, shellAutoBackgroundSeconds: 120},
     appliedCursors: [] as string[], savedModes: [] as string[], savedEfforts: [] as string[],
   };
   const ui = new UiPreferences(root), statusbar = new StatusbarPreferences(join(root, '.logox', 'statusbar.json'));

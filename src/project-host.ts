@@ -114,6 +114,7 @@ export class ProjectHost {
       const tools = observeTools(new Tools(cwd, undefined, permissions, {home, dataDir: dataMigration.dataDir}), projectExtensions.hooks);
       const skillUsage = new SkillUsage({home, cwd, dataDir: dataMigration.dataDir, resources: projectExtensions.resources});
       tools.onSkillRead = (path, context) => skillUsage.read(path, context);
+      tools.shellAutoBackgroundMs = () => config.kernel.shell_auto_background_seconds * 1000;
       tools.skills = {visible: actorId => projectExtensions.resources.skillsFor({actorId}), uses: skills => skillUsage.entriesFor(skills)};
       projectExtensions.resources.usage = skills => skillUsage.entriesFor(skills);
       const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(home, '.logox', 'statusbar.json'));

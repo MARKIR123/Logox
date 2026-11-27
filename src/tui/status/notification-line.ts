@@ -2,6 +2,7 @@ import stringWidth from 'string-width';
 import {contextCategories, type ContextCategory} from '../../context/breakdown.js';
 import type {StatusbarId} from '../../config/statusbar-preferences.js';
 import type {StageStatus} from '../../runtime/stage-status.js';
+import type {ShellJobView} from '../../app/shell-jobs.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
 import type {NoticeTone} from '../../runtime/notices.js';
 import {palette} from '../appearance/theme.js';
@@ -183,6 +184,13 @@ export function pillDetail(input: PillDetailInput): NoteSegment[] {
   if (input.contextPercent !== undefined) groups.push([dim('ctx ' + input.contextPercent + '%')]);
   groups.push([click('click to open')]);
   return join(groups);
+}
+
+/** The jobs pill's hover detail: the running jobs (actor, id, run time, command), the most recent first, and what a click does. */
+export function jobsHoverDetail(jobs: readonly ShellJobView[], now: number): NoteSegment[] {
+  const running = jobs.filter(job => job.state === 'running').sort((a, b) => b.startedAt - a.startedAt);
+  const shown = running.slice(0, 3).map(job => [value(job.actor + ' ' + job.id), dim(' ' + elapsed(now - job.startedAt) + ' · ' + job.command.replace(/s+/g, ' ').trim().slice(0, 48))]);
+  return join([[value('⧗ ' + running.length + (running.length === 1 ? ' background job' : ' background jobs'), palette.accent)], ...shown, ...(running.length > shown.length ? [[dim('+' + (running.length - shown.length) + ' more')]] : []), [click('click to open')]]);
 }
 
 /** Context-aware key hints: the quiet default of row 2. */

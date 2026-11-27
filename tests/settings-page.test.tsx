@@ -146,10 +146,10 @@ test('search filters rows by label, description and group; Esc clears, no match 
   const ui = await mount(f.items(), f.pages);
   try {
     await ui.key('/'); assert.match(ui.screen(), /\/▌/);
-    await ui.key('diff layout'); assert.match(ui.screen(), /\/diff layout▌ +1\/22/, 'the header shows matches over all rows');
+    await ui.key('diff layout'); assert.match(ui.screen(), /\/diff layout▌ +1\/23/, 'the header shows matches over all rows');
     assert.match(ui.screen(), /Diff layout/); assert.doesNotMatch(ui.screen(), /Cursor/); assert.match(ui.screen(), /Conversation/);
     assert.match(ui.screen(), /Enter done · Esc clear/);
-    await ui.key('\r'); assert.match(ui.screen(), /\/diff layout +1\/22/, 'Enter keeps the filter and returns to the list');
+    await ui.key('\r'); assert.match(ui.screen(), /\/diff layout +1\/23/, 'Enter keeps the filter and returns to the list');
     await ui.key('\x1b[C'); assert.match(ui.screen(), /‹ unified ›/, 'the filtered row is editable');
     await ui.key('\x1b'); assert.match(ui.screen(), /Cursor/, 'Esc clears the filter first'); assert.equal(ui.calls.discards, 0);
     await ui.key('/'); await ui.key('splash'); assert.match(ui.screen(), /Start page/); assert.match(ui.screen(), /Tagline/); assert.doesNotMatch(ui.screen(), /Theme/);

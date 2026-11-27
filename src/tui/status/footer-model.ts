@@ -10,9 +10,10 @@ import {uiSettings} from '../../config/ui-settings.js';
 import {ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
 import {liveStatus, liveStatusLine, reconnectLabel} from '../timeline/live-status.js';
 import {statusbarText, usedPercent} from './statusbar.js';
-import type {ActivePillItem} from './actor-pills.js';
+import {JOBS_PILL_ID, type ActivePillItem} from './actor-pills.js';
+import type {ShellJobView} from '../../app/shell-jobs.js';
 import type {PersistentNotice} from '../../runtime/notices.js';
-import {footerHints, notificationSegments, pillDetail, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './notification-line.js';
+import {footerHints, jobsHoverDetail, notificationSegments, pillDetail, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './notification-line.js';
 import {noticeRow, type NoticeRow} from './notice-line.js';
 
 export function statusLeftText({notice, cachedStageStatus, width, layout, demoScene, own, currentView, roles, request, scenario, pending, activities, scene}: {
@@ -55,9 +56,9 @@ export function footerKeyLabel({own, closing, width}: {own: boolean; closing: bo
 /** Row 2: its segments and, when the persistent notice is what it shows, that notice's row plan (the clickable regions). */
 export interface FooterNote {readonly segments: NoteSegment[]; readonly notice?: NoticeRow | undefined}
 
-export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
+export function footerNoteSegments({hoveredPill, activePills, jobs, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
   width, footerHeight, own, queuedHere, menuHeight, closing, persistent, hoveredNotice}: {
-  hoveredPill: string | null; activePills: readonly ActivePillItem[]; snapshot: RuntimeSnapshot; getStatus: ((ownerId: string) => StageStatus) | undefined;
+  hoveredPill: string | null; activePills: readonly ActivePillItem[]; /** The session's background Shell jobs (the jobs pill's hover detail). */ jobs?: readonly ShellJobView[]; snapshot: RuntimeSnapshot; getStatus: ((ownerId: string) => StageStatus) | undefined;
   roles: ActorStyles; notice: string; noticeInline: boolean; noticeTone: NoticeTone; hoveredWidget: StatusbarId | null; footerStatus: StageStatus | undefined;
   windowColor: string; width: number; footerHeight: number; own: boolean; queuedHere: number; menuHeight: number; closing: boolean;
   /** Every persistent notice in display order (`src/runtime/notices.ts:persistentNotices`) and the region of the top one under the pointer. */
@@ -67,6 +68,7 @@ export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatu
   const pillHoverDetail = (): NoteSegment[] | undefined => {
     const pill = hoveredPill ? activePills.find(item => item.ownerId === hoveredPill) : undefined;
     if (!pill) return undefined;
+    if (pill.ownerId === JOBS_PILL_ID) return jobsHoverDetail(jobs ?? [], Date.now());
     const activity = snapshot.activities.find(item => item.activityId === pill.id);
     const own = snapshot.messages.filter(message => message.activityId === pill.id);
     const asked = pill.state === 'approval' ? snapshot.interactions.find(item => item.status === 'pending' && item.kind === 'permission' && item.ownerId === pill.ownerId) : undefined;

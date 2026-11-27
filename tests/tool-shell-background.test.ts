@@ -43,7 +43,7 @@ test('run_in_background returns at once with an id and initial output, ShellJob 
   } finally {killBackgroundJobs(); await rm(cwd, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});}
 });
 
-test('background jobs end with their activity, and the per-call stop reaches them', {timeout: 20_000}, async () => {
+test('a user Stop of an activity ends its jobs, another activity keeps its job, and the per-call stop reaches them', {timeout: 20_000}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-bg-'));
   try {
     const sleeper = await script(cwd, 'sleep.js', 'setInterval(() => {}, 1000);');

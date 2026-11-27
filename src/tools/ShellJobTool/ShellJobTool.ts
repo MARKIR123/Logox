@@ -20,7 +20,7 @@ export async function executeShellJob(args: ShellJobArgs, sessionId?: string): P
     ? job.stopped ? 'stopping' : 'running'
     : job.stopped ? 'stopped' : `exited with code ${job.exitCode}`;
   const seconds = Math.round((Date.now() - job.startedAt) / 1000);
-  return {text: `Job ${job.id} (pid ${job.pid}) ${state}, started ${seconds}s ago.\n${dropped ? '[Older output dropped]\n' : ''}${output || '(no new output)'}`, isError: false};
+  return {text: `Job ${job.id} (pid ${job.pid}) ${state}, started ${seconds}s ago.${job.logPath ? '\nFull output: ' + job.logPath : ''}\n${dropped ? '[Older output dropped]\n' : ''}${output || '(no new output)'}`, isError: false};
 }
 
 export const metadata: import('../metadata.js').ToolMetadataInput = {name: 'ShellJob', category: 'core', roles: 'all', terminalVisibility: 'card', description: 'Read output of or stop a background Shell job'};

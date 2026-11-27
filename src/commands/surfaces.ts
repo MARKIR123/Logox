@@ -369,8 +369,20 @@ export class CommandSurfaces {
     if (state?.kind !== 'picker' || state.id !== surfaceId || state.status !== 'ready' || !actions) return;
     if (!state.items.some(item => item.id === itemId && item.deletable)) return;
     this.publish({...state, status: 'saving', error: ''});
-    try {await actions.onDelete(itemId); if (this.state?.id === surfaceId) this.publish({...state, status: 'ready'});}
+    try {
+      await actions.onDelete(itemId);
+      // The callback may have refreshed the rows: keep whatever is open now.
+      const now = this.state;
+      if (now?.kind === 'picker' && now.id === surfaceId) this.publish({...now, status: 'ready'});
+    }
     catch (error) {if (this.state?.id === surfaceId) this.publish({...state, error: error instanceof Error ? error.message : 'Delete failed'});}
+  }
+  /** Replaces the rows of the open picker called `title` (a list that follows live data); false when that picker is not the one open. */
+  setPickerItems(title: string, items: readonly PickerItem[]): boolean {
+    const state = this.state;
+    if (state?.kind !== 'picker' || state.title !== title) return false;
+    this.publish({...state, items});
+    return true;
   }
   /** Persists an edit of one model row's marks and redraws every row of that model; a failure keeps the list and shows the reason. */
   async setMark(surfaceId: string, itemId: string, change: MarkChange): Promise<void> {

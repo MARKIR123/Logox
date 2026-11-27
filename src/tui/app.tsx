@@ -60,7 +60,7 @@ import {footerKeyLabel, footerNoteSegments, statusLeftText} from './status/foote
 import {screenHeights} from './input/screen-heights.js';
 import {useTerminalInput} from './terminal/terminal-input.js';
 import {useNotices} from './status/use-notices.js';
-import {useActivePills} from './status/use-active-pills.js';
+import {useActivePills, useShellJobs, type ShellJobsSource} from './status/use-active-pills.js';
 import {usePersistentNotices} from './status/use-persistent-notices.js';
 import {runNoticeAction} from './input/notice-actions.js';
 import type {NoticeAction, NoticeBoard} from '../runtime/notices.js';
@@ -89,6 +89,8 @@ export interface AppProps {
   getActors?: () => readonly (ActorStyle & {id: string})[];
   getStatus?: (ownerId: string) => StageStatus;
   statusbar?: StatusbarPreferences;
+  /** The session's background Shell jobs: the footer shows a `⧗ N jobs` pill while some run (click: the `/jobs` page). */
+  shellJobs?: ShellJobsSource;
   registerInterrupt?: (handler: () => void) => () => void;
   sessionId: string;
   demoScene?: boolean;
@@ -123,7 +125,7 @@ function usageEntries(getStatus: AppProps['getStatus'], roles: ActorStyles): Usa
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, plans, authentication, surfaces, notices: noticeBoard, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
+export function App({store, plans, authentication, surfaces, notices: noticeBoard, getCommandContext, getActors, getStatus, statusbar, shellJobs, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
   const imageVersion = useSyncExternalStore(subscribeImages, imageRevision);
@@ -378,7 +380,9 @@ export function App({store, plans, authentication, surfaces, notices: noticeBoar
   };
   const menuKeys = width < 45 ? 'Arrows select · Tab complete · Esc close' : 'Arrows select · Tab complete · Enter confirm · Esc close';
   const renderedFooterKeys = menuHeight ? menuKeys : footerKeys;
-  const {activePills} = useActivePills({snapshot, sessionId, roles, width, themeVersion});
+  const jobsSeen = useShellJobs(demoScene ? undefined : shellJobs);
+  const runningJobsRef = useRef(0); runningJobsRef.current = jobsSeen.running;
+  const {activePills} = useActivePills({snapshot, sessionId, roles, width, themeVersion, jobs: jobsSeen.pill});
 
   const pillsWidth = calculatePillsWidth(activePills);
   const footerStatus = cachedStageStatus;
@@ -393,7 +397,7 @@ export function App({store, plans, authentication, surfaces, notices: noticeBoar
   const footerStatusText = footerStatus && !noticeInline ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
   const queuedHere = pendingAll.length;
   const persistentList = usePersistentNotices({board: demoScene ? undefined : noticeBoard, snapshot, sessionId, roles});
-  const footerNote = footerNoteSegments({hoveredPill, activePills, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
+  const footerNote = footerNoteSegments({hoveredPill, activePills, jobs: jobsSeen.jobs, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
     width, footerHeight, own, queuedHere, menuHeight, closing, persistent: demoScene ? [] : persistentList, hoveredNotice});
 
   const activityRef = useRef<DOMElement>(null);
@@ -459,7 +463,7 @@ export function App({store, plans, authentication, surfaces, notices: noticeBoar
     if (copied) {stdout?.write(osc52Clipboard(copied)); exitDeadline.current = 0; flash('Copied selection to clipboard', 3500, 'success'); return;}
     const now = Date.now();
     if (exitDeadline.current > now) {close(); return;}
-    exitDeadline.current = now + 1500; flash('Press Ctrl+C again to exit', 1500, 'warning');
+    exitDeadline.current = now + (runningJobsRef.current ? 2500 : 1500); flash((runningJobsRef.current ? runningJobsRef.current + (runningJobsRef.current === 1 ? ' background job is' : ' background jobs are') + ' running and will be stopped. ' : '') + 'Press Ctrl+C again to exit', runningJobsRef.current ? 2500 : 1500, 'warning');
   };
   const interruptRef = useRef(interrupt); interruptRef.current = interrupt;
   useEffect(() => registerInterrupt?.(() => interruptRef.current()), [registerInterrupt]);

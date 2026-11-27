@@ -542,6 +542,11 @@ export class ActorServices {
     const director = this.options.modelResolver?.(DIRECTOR_ID)?.provider, failed = error.context?.provider;
     return !!director && !!failed && director !== failed;
   }
+  /** Delivers a runtime notice (a background job ended, for one) to the Director like a companion's message and wakes it when idle; a running Director receives it at its next step. The runtime never wakes a companion by itself. */
+  async notifyDirector(text: string, source: string): Promise<void> {
+    await this.deliveries.enqueue({ownerId: DIRECTOR_ID, source, kind: 'collaboration', inputKind: 'collaboration', text});
+    this.wakeDirector();
+  }
   private wakeDirector(): void {
     if (this.recovery.stopped() || this.wakeTask || this.backoff.waiting) return;
     if (this.options.canReceiveMessage?.(DIRECTOR_ID) ?? !!this.options.getActiveTask?.(DIRECTOR_ID)) return;

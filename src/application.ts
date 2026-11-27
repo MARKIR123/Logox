@@ -67,6 +67,7 @@ import {createSubmit} from './app/submit.js';
 import {ANAMNESIS_TICK_MS, createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
 import {recoverCheckpoints, replaySession} from './app/restore.js';
 import {createNotices} from './app/notices.js';
+import {createShellJobs} from './app/shell-jobs.js';
 import type {SessionState} from './app/state.js';
 
 export interface ApplicationOptions {
@@ -366,6 +367,10 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     settled: async (activityId, status) => {directorReports.delete(activityId); anamnesis.lifecycle.foregroundFinished(); await actorServices.settled(activityId, status);},
   });
+  // Background Shell jobs belong to the session: their exit notice goes into the starting actor's task while it is open, else to the Director.
+  const shellJobs = createShellJobs({sessionId: session, nameOf: id => actors.list().find(item => item.id === id)?.name ?? id, closed: () => state.closed,
+    deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'runtime', summary, 'queue', {activityId}),
+    notifyDirector: (text, source) => actorServices.notifyDirector(text, source)});
   const recovered = await recoverCheckpoints({session, journal, actors, actorServices, taskModels, taskModelLedger, configureMeter: sessionStatus.configureMeter});
   const {checkpoints, owners} = recovered;
   const ui = options.uiPreferences ?? loadUiPreferences(homeDir, config);
@@ -423,7 +428,7 @@ export async function createSessionApplication(options: SessionApplicationOption
   const input = createInput({session, state, store, ensemble, actorServices, systems, notice, beforeTask: options.beforeTask});
   const submitCommand = createSubmit({session, cwd, homeDir, state, env: options.env ?? process.env, resourceOptions: options.resourceOptions, store, journal,
     surfaces, authentication, ensemble, permissions, tools, toolRegistry, actors, actorServices, plans, resources, contexts, registry, modelPool, owners,
-    memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, anamnesis: anamnesis.api, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
+    memory: {prompt: anamnesis.lifecycle.memoryPrompt, refresh: anamnesis.lifecycle.refreshMemory}, anamnesis: anamnesis.api, shellJobs, profileReady, signal: commands.signal, notice, receipt, queryResult, input, modelSelection, providers, pages, buildContext,
     sessionCommand: options.sessionCommand, requireIdle});
   return {
     sendPendingNow: input.sendPendingNow, discardPending: input.discardPending,
@@ -432,6 +437,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     notices: notices.board,
     /** Anamnesis: `runNow`, `memories`, `forget`, `anamnesisModel`, `setAnamnesisModel`, `settings`, `setAuto` (see `app/anamnesis.ts`). */
     anamnesis: anamnesis.api,
+    /** The session's background Shell jobs for the footer pill and the jobs page (`app/shell-jobs.ts`). */
+    shellJobs,
     status: sessionStatus.status, isBusy: busy,
     systemNotice: notice,
     getInputQueue: (ownerId?: string) => ({queued: ensemble.queuedInputs(ownerId), steering: deliveries.snapshot().filter(item =>
@@ -485,7 +492,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       killActivityProcesses(activityId, USER_STOP_REASON, 'user', session); killBackgroundJobs(activityId, session);
     }},
     async close() {
-      state.closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
+      state.closed = true; shellJobs.dispose(); actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), anamnesis.lifecycle.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
         await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await plans.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail(); await notices.tail();

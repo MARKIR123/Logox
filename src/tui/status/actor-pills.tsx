@@ -12,10 +12,12 @@ export const PL_RIGHT_ROUND = '';
 export const PL_LEFT_ARROW = '';
 
 /** Every non-idle actor state a pill can show; idle actors have no pill. */
-export type PillState = 'running' | 'question' | 'approval' | 'queued' | 'paused' | 'failed';
+export type PillState = 'running' | 'question' | 'approval' | 'queued' | 'paused' | 'failed' | 'jobs';
+/** The owner id of the pill that stands for the session's running background Shell jobs; no actor id can look like it. */
+export const JOBS_PILL_ID = '⧗jobs';
 /** Distinct static glyphs (`running` animates through the actor's own frames). */
-export const PILL_GLYPHS: Readonly<Record<Exclude<PillState, 'running'>, string>> = {question: '?', approval: '!', queued: '◷', paused: '‖', failed: '✗'};
-const PILL_LABELS: Readonly<Record<PillState, string>> = {running: '', question: 'answer', approval: 'approval', queued: 'queued', paused: 'paused', failed: 'failed'};
+export const PILL_GLYPHS: Readonly<Record<Exclude<PillState, 'running'>, string>> = {question: '?', approval: '!', queued: '◷', paused: '‖', failed: '✗', jobs: '⧗'};
+const PILL_LABELS: Readonly<Record<PillState, string>> = {running: '', question: 'answer', approval: 'approval', queued: 'queued', paused: 'paused', failed: 'failed', jobs: ''};
 /** How long a failed actor keeps its pill after it was first seen failing. */
 export const FAILED_PILL_MS = 8000;
 
@@ -41,8 +43,15 @@ export interface PillOptions {
   readonly failedSince?: ReadonlyMap<string, number>;
   /** Cells the pills may use; defaults to the container width. Overflow compacts, then drops the oldest. */
   readonly maxWidth?: number;
+  /** Running background Shell jobs of the session: a `⧗ N jobs 12m` pill (the run time of the oldest) docks left of the actor pills. */
+  readonly jobs?: {readonly count: number; readonly oldestMs: number};
 }
-const rank: Readonly<Record<PillState, number>> = {question: 0, approval: 0, running: 1, paused: 2, queued: 3, failed: 4};
+/** `45s`, `12m`, `2h 5m`: the run time shown in the jobs pill. */
+export function shortDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? seconds + 's' : seconds < 3600 ? Math.floor(seconds / 60) + 'm' : Math.floor(seconds / 3600) + 'h ' + Math.floor(seconds % 3600 / 60) + 'm';
+}
+const rank: Readonly<Record<PillState, number>> = {question: 0, approval: 0, running: 1, paused: 2, queued: 3, failed: 4, jobs: 5};
 
 function pillState(activity: any, options: PillOptions, now: number): PillState | undefined {
   if (activity.status === 'running') return 'running';
@@ -75,7 +84,7 @@ export function computeActivePills(
     const known = owners.get(activity.ownerId);
     if (!known || rank[state] < rank[known.state]) owners.set(activity.ownerId, {activity, state});
   }
-  if (owners.size === 0) return [];
+  if (owners.size === 0 && !options.jobs?.count) return [];
 
   // Sort by activation order: earlier actors appear first, newer actors appear later (docked to the right)
   const sorted = [...owners.entries()].sort(([ownerA], [ownerB]) => {
@@ -87,7 +96,15 @@ export function computeActivePills(
     return 0;
   });
 
-  const build = (compact: boolean) => sorted.map(([ownerId, {activity, state}]) => {
+  const buildJobs = (compact: boolean): Omit<ActivePillItem, 'startX' | 'endX'>[] => {
+    const jobs = options.jobs;
+    if (!jobs?.count) return [];
+    const name = jobs.count + (jobs.count === 1 ? ' job ' : ' jobs ') + shortDuration(jobs.oldestMs);
+    const text = ' ' + PILL_GLYPHS.jobs + (compact ? ' ' : ' ' + name + ' ');
+    return [{id: 'jobs', ownerId: JOBS_PILL_ID, name, icon: PILL_GLYPHS.jobs, state: 'jobs', bg: palette.actorPillBg, fg: palette.actorPillFg, width: stringWidth(text), frames: undefined, compact}];
+  };
+  const build = (compact: boolean) => [...buildJobs(compact), ...buildActors(compact)];
+  const buildActors = (compact: boolean) => sorted.map(([ownerId, {activity, state}]) => {
     const role = roles[ownerId];
     const frames = role?.thinkingAnimation;
     const icon = state === 'running' ? stepIcon({state: 'running'} as any, now, true, frames) : PILL_GLYPHS[state];
@@ -105,7 +122,7 @@ export function computeActivePills(
   const limit = Math.max(0, Math.min(options.maxWidth ?? containerWidth, containerWidth));
   let raw = build(false);
   if (widthOf(raw) > limit) raw = build(true);
-  // Still too wide: the newest actors matter most, so the oldest pills give way first.
+  // Still too wide: the newest actors matter most, so the oldest pills (and the jobs pill, which docks first) give way first.
   while (raw.length > 0 && widthOf(raw) > limit) raw = raw.slice(1);
   if (raw.length === 0) return [];
 

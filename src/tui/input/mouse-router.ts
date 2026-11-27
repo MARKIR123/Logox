@@ -11,6 +11,7 @@ import {viewport} from '../timeline/viewport.js';
 import {extractStatusBarSlice} from '../status/statusbar.js';
 import {widgetCommand} from '../status/notification-line.js';
 import {regionAt} from '../status/notice-line.js';
+import {JOBS_PILL_ID} from '../status/actor-pills.js';
 import {clickNoticeRegion} from './notice-actions.js';
 import {osc52Clipboard} from '../terminal/clipboard.js';
 import type {SgrMouseEvent} from '../terminal/mouse.js';
@@ -161,6 +162,11 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
         if (command) {
           clearSelection();
           void onSubmit(command, currentView, {mode: 'queue'}).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));
+          return;
+        }
+        if (clickedPill?.ownerId === JOBS_PILL_ID) {
+          clearSelection();
+          void onSubmit('/jobs', currentView, {mode: 'queue'}).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));
           return;
         }
         if (clickedPill) {

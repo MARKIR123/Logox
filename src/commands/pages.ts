@@ -134,10 +134,11 @@ export function createPages(deps: PagesDeps) {
     permissionMode: () => permissions.mode,
     permissionModes: () => Object.keys(permissionModes),
     savePermissionMode: mode => permissions.setMode(permissionModeSchema.parse(mode)),
-    kernel: () => ({cacheKeepalive: config.kernel.cache_keepalive, awayKeepaliveMinutes: config.kernel.away_keepalive_minutes}),
+    kernel: () => ({cacheKeepalive: config.kernel.cache_keepalive, awayKeepaliveMinutes: config.kernel.away_keepalive_minutes, shellAutoBackgroundSeconds: config.kernel.shell_auto_background_seconds}),
     saveKernel: async patch => {
       const next = {...(patch.cacheKeepalive !== undefined ? {cache_keepalive: patch.cacheKeepalive} : {}),
-        ...(patch.awayKeepaliveMinutes !== undefined ? {away_keepalive_minutes: patch.awayKeepaliveMinutes} : {})};
+        ...(patch.awayKeepaliveMinutes !== undefined ? {away_keepalive_minutes: patch.awayKeepaliveMinutes} : {}),
+        ...(patch.shellAutoBackgroundSeconds !== undefined ? {shell_auto_background_seconds: patch.shellAutoBackgroundSeconds} : {})};
       await new StateFile(join(homeDir, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).update(current => ({...current, ...next, version: 1 as const}));
       Object.assign(config.kernel, next);
     },
