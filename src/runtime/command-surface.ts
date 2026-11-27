@@ -59,6 +59,8 @@ export type CommandSurface = Partial<CommandOrigin> & (
       readonly markdown?: true}
   /** The lightbox over one image file (PNG or JPEG), opened by a click on a preview in the timeline. */
   | {readonly id: string; readonly kind: 'image'; readonly title: string; readonly path: string}
+  /** The Notices page (`/notices`, the footer's `+N` badge): every persistent notice, pending first. The rows are read live by the terminal, never carried here. */
+  | {readonly id: string; readonly kind: 'notices'; readonly title: string}
   | {readonly id: string; readonly kind: 'settings'; readonly title: string; readonly items: readonly SettingsItem[]; readonly pages: readonly SettingsPageLink[];
       readonly saving?: boolean; readonly error?: string; readonly sub?: SettingsSubPage;
       /** The /theme page opened from the Theme row; it draws over the settings and Esc returns to them. */

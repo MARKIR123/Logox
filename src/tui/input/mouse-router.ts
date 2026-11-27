@@ -10,6 +10,8 @@ import {contentPoint} from '../timeline/selection.js';
 import {viewport} from '../timeline/viewport.js';
 import {extractStatusBarSlice} from '../status/statusbar.js';
 import {widgetCommand} from '../status/notification-line.js';
+import {regionAt} from '../status/notice-line.js';
+import {clickNoticeRegion} from './notice-actions.js';
 import {osc52Clipboard} from '../terminal/clipboard.js';
 import type {SgrMouseEvent} from '../terminal/mouse.js';
 import {cursorAt} from './editor.js';
@@ -45,7 +47,7 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       inputDrag, inputHeight, inputKey, inputLayout, inputView, inputY, lastClickRef, lastHoverRef, loginFolded, loginState, menuHeight,
       messageRows, mouseListeners, noticeInline, onSubmit, pendingAt, presentReading, promptWidth, questionHeight, readingRows, roles,
       screenRows, sendPending, setAnchor, setComposerMode, setEditingCustom, setExpandHovered, setExpanded, setFocus, setHoveredFoldId,
-      setHoveredPill, setHoveredStop, setHoveredWidget, setNotice, setPendingHover, stage, statusSelectionRef, stdout, stopEdgeScroll,
+      setHoveredPill, setHoveredStop, setHoveredWidget, setHoveredNotice, hoveredNoticeRef, noticeRow, setNotice, setPendingHover, stage, statusSelectionRef, stdout, stopEdgeScroll,
       surface, switchView, takePendingBack, timelineHeight, width, planSidebar, setComposerBlurred} = ctx;
   const updateDrag = (x: number, y: number) => {
     const current = viewport(messageRows, timelineHeight, anchors.current[currentView] ?? null);
@@ -112,6 +114,12 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
         hoveredWidgetRef.current = nextHoveredWidget;
         setHoveredWidget(nextHoveredWidget);
       }
+      // Row 2 shows a persistent notice: its parts, `×` and `+N` are hit cells.
+      const nextHoveredNotice = noticeRow && footerHeight > 1 && event.y === footerStatusY + 1 ? regionAt(noticeRow.regions, event.x)?.id ?? null : null;
+      if (hoveredNoticeRef.current !== nextHoveredNotice) {
+        hoveredNoticeRef.current = nextHoveredNotice;
+        setHoveredNotice(nextHoveredNotice);
+      }
       if (lastHoverRef.current.x === event.x && lastHoverRef.current.y === event.y) return;
       lastHoverRef.current = {x: event.x, y: event.y};
       const rows = readingRows();
@@ -140,8 +148,12 @@ export function createMouseHandler(ctx: ShellContext): (event: SgrMouseEvent) =>
       // The shared menu handles its own item coordinates through MouseContext.
       // Keep presses on its title/footer away from the timeline/composer handlers.
       if (menuHeight && event.y >= menuY && event.y < menuY + menuHeight) return;
-      // Footer click: row 2 (notifications) is passive.
-      if (footerHeight > 1 && event.y > footerStatusY) return;
+      // Footer click: row 2 is passive except for the parts of a persistent notice.
+      if (footerHeight > 1 && event.y > footerStatusY) {
+        const region = noticeRow && event.y === footerStatusY + 1 ? regionAt(noticeRow.regions, event.x) : undefined;
+        if (region) {clearSelection(); clickNoticeRegion(ctx, region.id);}
+        return;
+      }
       if (event.y >= screenRows - footerHeight) {
         const clickedPill = activePills.find(pill => event.x >= pill.startX && event.x < pill.endX);
         const clickedRegion = clickedPill || noticeInline ? undefined : footerLayout.regions.find(region => event.x >= region.startX && event.x < region.endX);

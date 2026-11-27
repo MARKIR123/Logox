@@ -43,6 +43,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
   const view = useRef<SettingsView>(initialView);
   const [, rerender] = useState(0);
   const pointer = usePointer(), hoverColor = useHoverColor(palette.accent);
+  const pointerRef = useRef(pointer); pointerRef.current = pointer;
   const update = (patch: Partial<SettingsView>) => {view.current = {...view.current, ...patch}; rerender(count => count + 1);};
   const plan = settingsLayout({items, pages, view: {...view.current, saving, error, notice}, width, height, y, pointer, hoverColor});
   // Selection and scroll are normalised by the plan; keep them so the next event starts from what is drawn.
@@ -108,6 +109,8 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
 
   useInput((input, key) => {
     if (key.eventType === 'release' || sub || theme || saving) return;
+    // A key takes the description back to the selected row until the pointer moves.
+    view.current = {...view.current, hoverMuted: pointerRef.current};
     const state = view.current;
     if (state.confirming) {
       if (input === 'y' || input === 'Y') run({kind: 'confirm', yes: true});
@@ -162,7 +165,7 @@ export function SettingsPage({items, pages, width, height, y = 0, saving = false
   useMouse(event => {
     if (sub || theme || saving || event.x < 0 || event.x >= width || event.y < y || event.y >= y + height) return;
     const wheel = event.action === 'wheel_up' ? -1 : event.action === 'wheel_down' ? 1 : 0;
-    if (wheel) {if (!view.current.confirming && view.current.editing === undefined) run({kind: 'move', delta: wheel}); return;}
+    if (wheel) {if (!view.current.confirming && view.current.editing === undefined) {view.current = {...view.current, hoverMuted: {x: event.x, y: event.y}}; run({kind: 'move', delta: wheel});} return;}
     if (event.action !== 'press' || event.button !== 0) return;
     const clickedFooter = hitFooter(footerView, event);
     if (clickedFooter?.run) {clickedFooter.run(); return;}

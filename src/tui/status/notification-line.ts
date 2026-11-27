@@ -3,13 +3,14 @@ import {contextCategories, type ContextCategory} from '../../context/breakdown.j
 import type {StatusbarId} from '../../config/statusbar-preferences.js';
 import type {StageStatus} from '../../runtime/stage-status.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
+import type {NoticeTone} from '../../runtime/notices.js';
 import {palette} from '../appearance/theme.js';
 import {mixHex, windowAccent} from '../appearance/colors.js';
 import {cacheHitRate, cacheLook, contextOver, contextRamp, contextTone, formatCountdown, formatMinutes} from './statusbar.js';
 
 /** One styled run of the notification line (row 2 of the footer). */
-export interface NoteSegment {readonly text: string; readonly color?: string; readonly bold?: boolean; readonly italic?: boolean}
-export type NoticeTone = 'success' | 'warning' | 'error' | 'info';
+export interface NoteSegment {readonly text: string; readonly color?: string; readonly bold?: boolean; readonly italic?: boolean; readonly underline?: boolean}
+export type {NoticeTone} from '../../runtime/notices.js';
 export interface Notice {readonly text: string; readonly tone: NoticeTone}
 
 const faint = () => mixHex(palette.muted, palette.bg, 0.6);
@@ -195,14 +196,18 @@ export function footerHints(input: {readonly own: boolean; readonly queued: numb
   return back + (input.own ? 'Enter send · / commands' : 'Enter send · Shift+Enter newline · @role dispatch · / commands');
 }
 
-const toneGlyph: Readonly<Record<NoticeTone, string>> = {success: '✓ ', warning: '▲ ', error: '✗ ', info: ''};
-/** Row 2 shows exactly one thing: an active notice, else the hovered widget's detail, else the faint key hints. */
-export function notificationSegments(input: {readonly notice?: Notice | undefined; readonly detail?: readonly NoteSegment[] | undefined; readonly hints: string}, width: number): NoteSegment[] {
+export const toneGlyph: Readonly<Record<NoticeTone, string>> = {success: '✓ ', warning: '▲ ', error: '✗ ', info: ''};
+/**
+ * Row 2 shows exactly one thing: a transient notice, else the hovered widget's detail, else the persistent notice (`persistent`, already laid
+ * out to fit by `status/notice-line.ts:noticeRow`), else the faint key hints.
+ */
+export function notificationSegments(input: {readonly notice?: Notice | undefined; readonly detail?: readonly NoteSegment[] | undefined; readonly persistent?: readonly NoteSegment[] | undefined; readonly hints: string}, width: number): NoteSegment[] {
   let segments: NoteSegment[];
   if (input.notice?.text) {
     const tone = input.notice.tone, color = tone === 'info' ? palette.fg : palette[tone];
     segments = [...(toneGlyph[tone] ? [{text: toneGlyph[tone], color, bold: true}] : []), {text: input.notice.text, color: palette.fg, bold: true}];
   } else if (input.detail?.length) segments = [...input.detail];
+  else if (input.persistent?.length) segments = [...input.persistent];
   else segments = [{text: input.hints, color: faint(), italic: true}];
   return fitSegments(segments, width);
 }

@@ -30,6 +30,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'ensemble', usage: '/ensemble', description: 'One tab per actor: model, context, tools, skills, session figures and prompts', argument: 'none'},
   {name: 'team', usage: '/team [show|hide|toggle]', description: 'Team stage sidebar: the task graph one act at a time with the team replayed on stage; click the act header for the programme', argument: 'none'},
   {name: 'sidebar', usage: '/sidebar [team|changes|usage] [show|hide|toggle]', description: 'Sidebar tabs: the team stage, files changed in this session, tokens and cost per actor; without a tab it only shows or hides the sidebar', argument: 'none'},
+  {name: 'notices', usage: '/notices', description: 'Persistent footer notices: open approvals and questions first, then results kept until dismissed', argument: 'none'},
   {name: 'anamnesis', usage: '/anamnesis [recap|dream]', description: 'Recap and memory: run one now, browse or delete memory records, choose the model', argument: 'none'},
   {name: 'name', usage: '/name [new name | --reset]', description: 'Show, set or clear the name Logox calls you', argument: 'text'},
   {name: 'doctor', usage: '/doctor', description: 'Check the environment: fonts, browser, ripgrep, credentials and actor profiles', argument: 'none'},

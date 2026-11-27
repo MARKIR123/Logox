@@ -9,6 +9,8 @@ import {osc52Clipboard} from '../terminal/clipboard.js';
 import {CommandResultPanel} from './command-result.js';
 import {EnsemblePage} from './ensemble-page.js';
 import {ImageLightbox} from './image-lightbox.js';
+import {NoticesPage} from './notices-page.js';
+import {runNoticeAction} from '../input/notice-actions.js';
 import {PlanOverlay} from './plan-sidebar-view.js';
 import {SettingsPage} from './settings-page.js';
 import {TabbedPage} from './tabbed-page.js';
@@ -17,7 +19,7 @@ import {ThemePage} from './theme-page.js';
 export function overlayPage(ctx: ShellContext): ReactElement | null {
   const {close, closing, composerExpanded, composerMode, currentView, draft, exitDeadline, flash, interrupt, notice, onDraft, roles, screenRows,
       sendSceneInput, setComposerMode, setCursorPosition, setDraft, setNotice, stdout, steerInput, subscribeMouse, surface, surfaces,
-      width, windowColor, planSidebar} = ctx;
+      width, windowColor, planSidebar, notices, noticeBoard} = ctx;
   if (composerExpanded) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <FullscreenEditor draft={draft} width={width} height={screenRows} disabled={closing} title={'Compose · ' + (roles[currentView]?.name ?? currentView)} notice={notice}
       onEdit={update => {setDraft(update); onDraft?.(); exitDeadline.current = 0; if (notice) setNotice('');}}
@@ -34,6 +36,11 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
   </MouseHost>;
   if (surface?.kind === 'image' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
     <ImageLightbox key={surface.id} path={surface.path} width={width} height={screenRows} onClose={() => surfaces.cancel()}/>
+  </MouseHost>;
+  if (surface?.kind === 'notices' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}>
+    <NoticesPage key={surface.id} notices={notices} width={width} height={screenRows} onClose={() => surfaces.cancel()}
+      onAction={action => {surfaces.cancel(); runNoticeAction(ctx, action);}}
+      onDismiss={id => {noticeBoard?.dismiss(id);}} onDismissAll={() => {noticeBoard?.dismissAll();}}/>
   </MouseHost>;
   if (surface?.kind === 'settings' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><SettingsPage key={surface.id} items={surface.items} pages={surface.pages}
     width={width} height={screenRows} saving={surface.saving ?? false} error={surface.error ?? ''} notice={notice} sub={surface.sub} theme={surface.theme}

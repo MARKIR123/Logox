@@ -9,6 +9,7 @@ import {taskOriginSchema, stepSchema, taskProgressSchema, type TaskProgressSnaps
 import {inputKindSchema} from '../runtime/provenance.js';
 import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
+import {readNoticeSchema, type ReadNotice} from '../runtime/notices.js';
 import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
@@ -281,6 +282,20 @@ export class Journal implements HistoryStore {
   async saveHeld(sessionId: string, items: readonly HeldInput[]): Promise<void> {
     const file = join(this.directory, sessionId, 'pending.json'), parsed = z.array(heldInputSchema).parse(items);
     if (parsed.some(item => item.sessionId !== sessionId)) throw new Error('Held input session identity does not match.');
+    if (!parsed.length && await this.read(file) === undefined) return;
+    await mkdir(join(this.directory, sessionId), {recursive: true});
+    await atomicWrite(file, Buffer.from(JSON.stringify(parsed, null, 2)));
+  }
+  /** Read notices of the session (`notices.json` in the session tree: what stays in the footer until dismissed); empty when the file is missing. */
+  async loadNotices(sessionId: string): Promise<ReadNotice[]> {
+    const raw = await this.read(join(this.directory, sessionId, 'notices.json'));
+    const items = raw === undefined ? [] : z.array(readNoticeSchema).parse(JSON.parse(raw));
+    if (items.some(item => item.sessionId !== sessionId)) throw new Error('Notice session identity does not match.');
+    return items;
+  }
+  async saveNotices(sessionId: string, items: readonly ReadNotice[]): Promise<void> {
+    const file = join(this.directory, sessionId, 'notices.json'), parsed = z.array(readNoticeSchema).parse(items);
+    if (parsed.some(item => item.sessionId !== sessionId)) throw new Error('Notice session identity does not match.');
     if (!parsed.length && await this.read(file) === undefined) return;
     await mkdir(join(this.directory, sessionId), {recursive: true});
     await atomicWrite(file, Buffer.from(JSON.stringify(parsed, null, 2)));

@@ -197,6 +197,7 @@ export function createSubmit(deps: SubmitDeps) {
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
     if (text === '/theme') {pages.openTheme(); return;}
+    if (text === '/notices') {surfaces.openNotices(); return;}
     const teamArgs = /^\/team(?:\s+([\s\S]*))?$/i.exec(text);
     if (teamArgs) {await tasksCommand.team(teamArgs[1] ?? ''); return;}
     const sidebarArgs = /^\/sidebar(?:\s+([\s\S]*))?$/i.exec(text);

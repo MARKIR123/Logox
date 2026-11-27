@@ -61,6 +61,9 @@ import {screenHeights} from './input/screen-heights.js';
 import {useTerminalInput} from './terminal/terminal-input.js';
 import {useNotices} from './status/use-notices.js';
 import {useActivePills} from './status/use-active-pills.js';
+import {usePersistentNotices} from './status/use-persistent-notices.js';
+import {runNoticeAction} from './input/notice-actions.js';
+import type {NoticeAction, NoticeBoard} from '../runtime/notices.js';
 import {createAnswerActions} from './interactions/answer-actions.js';
 import {createMouseHandler, locateActor} from './input/mouse-router.js';
 import {useKeyboard} from './input/keyboard.js';
@@ -80,6 +83,8 @@ export interface AppProps {
   plans?: PlanBoard;
   authentication?: LoginFlow;
   surfaces?: CommandSurfaces;
+  /** The session's read notices (kept until dismissed); the pending ones come from the store. Absent: the footer keeps no persistent notices. */
+  notices?: NoticeBoard;
   getCommandContext?: () => CommandContext;
   getActors?: () => readonly (ActorStyle & {id: string})[];
   getStatus?: (ownerId: string) => StageStatus;
@@ -118,7 +123,7 @@ function usageEntries(getStatus: AppProps['getStatus'], roles: ActorStyles): Usa
 const noLoginSubscription = () => () => {};
 const noLoginSnapshot = () => null;
 
-export function App({store, plans, authentication, surfaces, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
+export function App({store, plans, authentication, surfaces, notices: noticeBoard, getCommandContext, getActors, getStatus, statusbar, registerInterrupt, sessionId, demoScene = false, stage = false, scenario, onSubmit, onSendPending, onDiscardPending, onCancel, onCancelTool, onClose, onDraft}: AppProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const deferredSnapshot = useDeferredValue(snapshot);
   const imageVersion = useSyncExternalStore(subscribeImages, imageRevision);
@@ -173,6 +178,10 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const hoveredFoldIdRef = useRef<string | null>(null);
   const [hoveredPill, setHoveredPill] = useState<string | null>(null);
   const hoveredPillRef = useRef<string | null>(null);
+  const [hoveredNotice, setHoveredNotice] = useState<string | null>(null);
+  const hoveredNoticeRef = useRef<string | null>(null);
+  const jumpAfterSwitch = useRef<NoticeAction | null>(null);
+  const shellRef = useRef<ShellContext | null>(null);
   const [hoveredWidget, setHoveredWidget] = useState<StatusbarId | null>(null);
   const hoveredWidgetRef = useRef<StatusbarId | null>(null);
   const contentSelection = useRef<ContentSelection | null>(null);
@@ -383,8 +392,9 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const footerStatusParts = footerLayout.parts;
   const footerStatusText = footerStatus && !noticeInline ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
   const queuedHere = pendingAll.length;
+  const persistentList = usePersistentNotices({board: demoScene ? undefined : noticeBoard, snapshot, sessionId, roles});
   const footerNote = footerNoteSegments({hoveredPill, activePills, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
-    width, footerHeight, own, queuedHere, menuHeight, closing});
+    width, footerHeight, own, queuedHere, menuHeight, closing, persistent: demoScene ? [] : persistentList, hoveredNotice});
 
   const activityRef = useRef<DOMElement>(null);
   const activityContentHeight = useContentHeight(activityRef);
@@ -503,13 +513,22 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
     escArmedUntil, width, screenRows, timelineHeight, activityHeight, questionHeight, messageRows, view, selection, anchors, setAnchor, scroll,
     presentReading, readingRows, copySelection, clearSelection, stopEdgeScroll, contentSelection, gesture, edgeTimer, edgePointer, statusSelectionRef,
     lastClickRef, foldTimerRef, lastHoverRef, mouseListeners, hoveredFoldIdRef, setHoveredFoldId, hoveredStopRef, setHoveredStop, hoveredPillRef,
-    setHoveredPill, hoveredWidgetRef, setHoveredWidget, footerHeight, footerStatusY, footerLayout, footerStatusText, noticeInline, activePills,
+    setHoveredPill, hoveredWidgetRef, setHoveredWidget, notices: persistentList, noticeBoard, noticeRow: footerNote.notice, hoveredNoticeRef, setHoveredNotice,
+    jumpLater: action => {jumpAfterSwitch.current = action;}, footerHeight, footerStatusY, footerLayout, footerStatusText, noticeInline, activePills,
     surfaces, composerMode, setCursorPosition, subscribeMouse, windowColor, planSidebar, timelineWidth,
     locateActor: ownerId => {if (!locateActor(shell, ownerId)) flash(`${roles[ownerId]?.name ?? ownerId} has no card in the timeline yet.`, 3000, 'info');},
   };
   locateRef.current = shell.locateActor;
+  shellRef.current = shell;
   mouseHandlerRef.current = createMouseHandler(shell);
   useKeyboard(shell);
+  // A notice action that needed another window runs once that window is shown.
+  useEffect(() => {
+    const action = jumpAfterSwitch.current;
+    if (!action || !shellRef.current) return;
+    jumpAfterSwitch.current = null;
+    runNoticeAction(shellRef.current, action);
+  }, [currentView, messageRows]);
 
   const bg = canvasBg();
   const overlay = overlayPage(shell);
@@ -550,7 +569,7 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
     {hairlineHeight > 0 && <ComposerRule color={composerRule} width={width} active={composerActive} motion={layout?.motion ?? true}/>}
     {footerHeight > 0 && <FooterBar height={footerHeight} width={width} hasStatus={Boolean(getStatus)} noticeInline={noticeInline} demoScene={demoScene} notice={notice}
       statusLeft={statusLeft} statusLeftColor={statusLeftColor} statusText={footerStatusText} layout={footerLayout} pills={activePills} pillsWidth={pillsWidth}
-      hoveredPill={hoveredPill} keys={renderedFooterKeys} note={footerNote}/>}
+      hoveredPill={hoveredPill} keys={renderedFooterKeys} note={footerNote.segments}/>}
     </>}
   </Box>;
 }

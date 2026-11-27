@@ -130,6 +130,12 @@ export class CommandSurfaces {
     this.publish({id, kind: 'image', title: basename(path), path, ...this.origin?.()});
     return id;
   }
+  /** Opens the Notices page over the timeline (`/notices`, the `+N` badge of the footer). Does nothing when a surface is already open and it is this page. */
+  openNotices(): void {
+    if (this.state?.kind === 'notices') return;
+    this.assertIdle();
+    this.publish({id: randomUUID(), kind: 'notices', title: 'Notices', ...this.origin?.()});
+  }
   updateResult(surfaceId: string, text: string, lines?: readonly ResultLine[]): void {
     if (this.state?.kind === 'result' && this.state.id === surfaceId) this.publish({...this.state, text, ...(lines ? {lines} : {})});
   }

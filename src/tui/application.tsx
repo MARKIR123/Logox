@@ -7,7 +7,7 @@ export function ApplicationStage({application, registerInterrupt}: {application:
   const session = useSyncExternalStore(application.subscribeSession, application.getSessionSnapshot);
   useSyncExternalStore(application.subscribeStatus, application.getStatusSnapshot);
   return <App key={session.revision} store={application.store} plans={application.plans} sessionId={session.sessionId} stage
-    authentication={application.authentication} surfaces={application.surfaces} getCommandContext={application.commandContext}
+    authentication={application.authentication} surfaces={application.surfaces} notices={application.notices} getCommandContext={application.commandContext}
     getActors={() => application.actors.list()}
     getStatus={application.status} getQueuedCount={owner => application.getInputQueue(isDirector(owner) ? undefined : owner).queued.length} statusbar={application.statusbar} {...(registerInterrupt ? {registerInterrupt} : {})}
     onSubmit={application.submit} onSendPending={application.sendPendingNow} onDiscardPending={application.discardPending} onDraft={application.noteDraft} onCancel={application.cancel} onCancelTool={application.cancelTool} onClose={application.close}/>;

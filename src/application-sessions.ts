@@ -264,7 +264,7 @@ export async function createManagedApplication(options: ApplicationOptions, crea
     get permissions() {return permissions;}, get extensions() {return extensions;}, get resources() {return extensions.resources;},
     get surfaces() {return current.surfaces;}, get contexts() {return current.contexts;}, sessions: manager,
     get actors() {return actors;}, get taskModels() {return current.taskModels;},
-    get statusbar() {return current.statusbar;}, get anamnesis() {return current.anamnesis;},
+    get statusbar() {return current.statusbar;}, get notices() {return current.notices;}, get anamnesis() {return current.anamnesis;},
     status: (ownerId: string) => current.status(ownerId),
     getStatusSnapshot: () => snapshot.revision + ':' + current.getStatusSnapshot(),
     subscribeStatus(listener: () => void) {

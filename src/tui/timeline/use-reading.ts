@@ -40,7 +40,7 @@ export interface ReadingInput {
 export function useReading({plane, messageRows, timelineHeight, anchors, currentView, composerExpanded, surface, welcome, width, layout, contentSelection,
   hoveredFoldIdRef, view, baselines, selection, setAnchor, side, planOverlay = false, focused = false}: ReadingInput) {
   const [, refreshReading] = useState(0);
-  const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'theme' || surface?.kind === 'result' || surface?.kind === 'image' || welcome;
+  const covered = () => composerExpanded || planOverlay || surface?.kind === 'page' || surface?.kind === 'settings' || surface?.kind === 'ensemble' || surface?.kind === 'notices' || surface?.kind === 'theme' || surface?.kind === 'result' || surface?.kind === 'image' || welcome;
   const presentReading = () => {
     const current = timelineView(messageRows, timelineHeight, width, anchors.current[currentView] ?? null, baselines, currentView);
     if (plane && covered()) {plane.hide(); return;}

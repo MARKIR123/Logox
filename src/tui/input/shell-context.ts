@@ -25,6 +25,8 @@ import type {CommandSurface} from '../../runtime/command-surface.js';
 import type {CommandSurfaces} from '../../commands/surfaces.js';
 import type {MouseSubscriber} from '../terminal/mouse.js';
 import type {TeamSidebar} from '../panels/use-team-sidebar.js';
+import type {NoticeAction, NoticeBoard, PersistentNotice} from '../../runtime/notices.js';
+import type {NoticeRow} from '../status/notice-line.js';
 
 export type Setter<T> = Dispatch<SetStateAction<T>>;
 type Ref<T> = MutableRefObject<T>;
@@ -181,6 +183,14 @@ export interface ShellContext {
   footerStatusText: string;
   noticeInline: boolean;
   activePills: readonly ActivePillItem[];
+  // Persistent notices: the list (pending first), the board that stores the read ones, row 2's plan while it shows the top one, and its hover.
+  notices: readonly PersistentNotice[];
+  noticeBoard: NoticeBoard | undefined;
+  noticeRow: NoticeRow | undefined;
+  hoveredNoticeRef: Ref<string | null>;
+  setHoveredNotice: Setter<string | null>;
+  /** Runs a notice action again once the window switch it asked for has happened. */
+  jumpLater(action: NoticeAction): void;
   // The plan sidebar (docked or overlay), its footer chip and the timeline width it leaves.
   planSidebar: TeamSidebar;
   timelineWidth: number;

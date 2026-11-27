@@ -66,6 +66,7 @@ import {createInput} from './app/input.js';
 import {createSubmit} from './app/submit.js';
 import {ANAMNESIS_TICK_MS, createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
 import {recoverCheckpoints, replaySession} from './app/restore.js';
+import {createNotices} from './app/notices.js';
 import type {SessionState} from './app/state.js';
 
 export interface ApplicationOptions {
@@ -401,6 +402,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     if (!surfaces.getSnapshot()) state.activeCommandPage = '';
   });
   const replayed = await replaySession({session, journal, store, ensemble, actors, actorServices, notice, ...recovered});
+  const notices = await createNotices({session, journal, notice});
   const welcomeTitle = 'Session ' + session;
   const welcomeSelection = modelSelection.current();
   const welcomeBody = welcomeSelection.model
@@ -426,6 +428,8 @@ export async function createSessionApplication(options: SessionApplicationOption
   return {
     sendPendingNow: input.sendPendingNow, discardPending: input.discardPending,
     sessionId: session, store, ensemble, journal, tools, plans, permissions, authentication, surfaces, contexts, extensions, resources, actors, taskModels, statusbar,
+    /** The read notices the footer keeps until dismissed: `notices.postNotice({kind: 'read', tone, parts})` (see `runtime/notices.ts:NoticeBoard`). */
+    notices: notices.board,
     /** Anamnesis: `runNow`, `memories`, `forget`, `anamnesisModel`, `setAnamnesisModel`, `settings`, `setAuto` (see `app/anamnesis.ts`). */
     anamnesis: anamnesis.api,
     status: sessionStatus.status, isBusy: busy,
@@ -484,7 +488,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       state.closed = true; actorServices.close(); keepAlive.dispose(); commands.abort(); surfaces.close(); stopPageUpdates(); stopNotifier(); store.interactions.close(); state.compactTask?.controller.abort();
       try {
         await Promise.all([authentication.close(), ensemble.close(), anamnesis.lifecycle.close(), state.compactTask?.done, state.reloadTask, state.permissionTask, sessionStatus.meterRestore, sessionStatus.subscriptionsDone(), permissions.flushStats()]);
-        await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await plans.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail();
+        await Promise.allSettled([modelSelection.selectionDone()]); await actorServices.flush(); await plans.flush(); await usage.flush(); await systems.flush(); await replayed.heldTail(); await notices.tail();
       } finally {replayed.stopHeld(); await sessionStatus.closeGit(); stopPermissionPolicy(); stopPermissions(); stopSystemUpdates(); input.stopPending(); stopSurfaceErrors(); stopLoginErrors();}
     },
     async submit(raw: string, source = DIRECTOR_ID, inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {

@@ -11,7 +11,9 @@ import {ownerHeader, type ActorStyles} from '../appearance/actor-style.js';
 import {liveStatus, liveStatusLine, reconnectLabel} from '../timeline/live-status.js';
 import {statusbarText, usedPercent} from './statusbar.js';
 import type {ActivePillItem} from './actor-pills.js';
+import type {PersistentNotice} from '../../runtime/notices.js';
 import {footerHints, notificationSegments, pillDetail, widgetDetail, type NoteSegment, type Notice, type NoticeTone} from './notification-line.js';
+import {noticeRow, type NoticeRow} from './notice-line.js';
 
 export function statusLeftText({notice, cachedStageStatus, width, layout, demoScene, own, currentView, roles, request, scenario, pending, activities, scene}: {
   notice: string; cachedStageStatus: StageStatus | undefined; width: number; layout: StatusbarSnapshot | null | undefined; demoScene: boolean; own: boolean;
@@ -50,13 +52,18 @@ export function footerKeyLabel({own, closing, width}: {own: boolean; closing: bo
   return footerKeys;
 }
 
+/** Row 2: its segments and, when the persistent notice is what it shows, that notice's row plan (the clickable regions). */
+export interface FooterNote {readonly segments: NoteSegment[]; readonly notice?: NoticeRow | undefined}
+
 export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatus, roles, notice, noticeInline, noticeTone, hoveredWidget, footerStatus, windowColor,
-  width, footerHeight, own, queuedHere, menuHeight, closing}: {
+  width, footerHeight, own, queuedHere, menuHeight, closing, persistent, hoveredNotice}: {
   hoveredPill: string | null; activePills: readonly ActivePillItem[]; snapshot: RuntimeSnapshot; getStatus: ((ownerId: string) => StageStatus) | undefined;
   roles: ActorStyles; notice: string; noticeInline: boolean; noticeTone: NoticeTone; hoveredWidget: StatusbarId | null; footerStatus: StageStatus | undefined;
   windowColor: string; width: number; footerHeight: number; own: boolean; queuedHere: number; menuHeight: number; closing: boolean;
-}): NoteSegment[] {
-  /** Row 2: a held notice, else the detail of the hovered widget or pill, else faint key hints. */
+  /** Every persistent notice in display order (`src/runtime/notices.ts:persistentNotices`) and the region of the top one under the pointer. */
+  persistent?: readonly PersistentNotice[]; hoveredNotice?: string | null;
+}): FooterNote {
+  /** Row 2: a held notice, else the detail of the hovered widget or pill, else the persistent notice, else faint key hints. */
   const pillHoverDetail = (): NoteSegment[] | undefined => {
     const pill = hoveredPill ? activePills.find(item => item.ownerId === hoveredPill) : undefined;
     if (!pill) return undefined;
@@ -75,7 +82,9 @@ export function footerNoteSegments({hoveredPill, activePills, snapshot, getStatu
   };
   const noteNotice: Notice | undefined = notice && !noticeInline ? {text: notice, tone: noticeTone} : undefined;
   const hoverDetail = hoveredPill ? pillHoverDetail() : hoveredWidget && footerStatus ? widgetDetail(hoveredWidget, footerStatus, windowColor, width) : undefined;
-  const footerNote = footerHeight > 1 ? notificationSegments({notice: noteNotice, detail: hoverDetail,
+  const top = persistent?.[0];
+  const row = footerHeight > 1 && top && !noteNotice && !hoverDetail?.length ? noticeRow({top, total: persistent!.length, width, hovered: hoveredNotice, hoverColor: windowColor}) : undefined;
+  const segments = footerHeight > 1 ? notificationSegments({notice: noteNotice, detail: hoverDetail, ...(row ? {persistent: row.segments} : {}),
     hints: footerHints({own, queued: queuedHere, menu: Boolean(menuHeight), closing, width, newlineEnter: uiSettings().enterKey === 'newline'})}, width) : [];
-  return footerNote;
+  return {segments, notice: row};
 }

@@ -16,7 +16,7 @@ export interface SettingsEntry {
   /** A page row's current value, shown before its arrow (the saved theme). */
   readonly value?: string;
 }
-export interface Seg {readonly text: string; readonly color: string; readonly bold?: boolean; readonly italic?: boolean; readonly bg?: string}
+export interface Seg {readonly text: string; readonly color: string; readonly bold?: boolean; readonly italic?: boolean; readonly underline?: boolean; readonly bg?: string}
 export type SettingsCommand =
   | {readonly kind: 'move'; readonly delta: number}
   | {readonly kind: 'select'; readonly index: number}
@@ -38,6 +38,8 @@ export interface SettingsView {
   /** Text being typed into a `text` row, when one is being edited. */
   readonly editing?: string | undefined;
   readonly confirming: boolean; readonly saving: boolean; readonly error: string; readonly notice: string;
+  /** Where the pointer was when a key or the wheel last moved the selection: hover does not show a description again until the pointer moves off that cell. */
+  readonly hoverMuted?: Pointer | null | undefined;
 }
 export interface SettingsLayout {
   readonly entries: readonly SettingsEntry[];
@@ -125,6 +127,9 @@ export function settingsLayout(input: {
   const descriptionRows = frame.bodyHeight >= 12 ? 2 : frame.bodyHeight >= 4 ? 1 : 0, showDescription = descriptionRows > 0, listRows = Math.max(1, frame.bodyHeight - descriptionRows);
   const bodyY = y + frame.bodyY, faint = faintColor(), selectedBg = mixHex(hoverColor, palette.bg, 0.12);
   const hits: SettingsHit[] = [], rowWide: SettingsHit[] = [];
+  // The description follows the row under the pointer (any row, the selected one too), else the selected row.
+  const muted = view.hoverMuted && pointer && view.hoverMuted.x === pointer.x && view.hoverMuted.y === pointer.y;
+  let hoverEntry: SettingsEntry | undefined;
 
   // Group headings and entries in one list of body rows.
   type Line = {readonly kind: 'group'; readonly text: string} | {readonly kind: 'entry'; readonly index: number};
@@ -150,6 +155,7 @@ export function settingsLayout(input: {
       return;
     }
     const index = line.index, current = entries[index]!, isSelected = index === selected, bg = isSelected ? selectedBg : undefined;
+    if (pointer !== null && !muted && pointer.y === rowY && pointer.x >= 0 && pointer.x < width) hoverEntry = current;
     const rowHover = !isSelected && pointer !== null && pointer.y === rowY && pointer.x >= 0 && pointer.x < width;
     const labelColor = isSelected ? palette.fg : rowHover ? hoverColor : palette.muted;
     const marker: Seg = {text: isSelected ? '❯ ' : '  ', color: hoverColor, bold: true, ...(bg ? {bg} : {})};
@@ -225,7 +231,7 @@ export function settingsLayout(input: {
         {text: yes, color: inRegion(pointer, yesRegion) ? hoverColor : palette.warning, bold: true}, {text: sep, color: faint},
         {text: no, color: inRegion(pointer, noRegion) ? hoverColor : palette.muted, bold: inRegion(pointer, noRegion)}]);
     } else {
-      const text = entry?.description ?? (entries.length ? '' : 'No setting matches "' + view.query + '".');
+      const text = (hoverEntry ?? entry)?.description ?? (entries.length ? '' : 'No setting matches "' + view.query + '".');
       const wrapped = wrapAnsi(text, columns, {hard: true, trim: true}).split(String.fromCharCode(10));
       const shown = wrapped.slice(0, descriptionRows);
       if (wrapped.length > descriptionRows) shown[descriptionRows - 1] = clipLine(shown[descriptionRows - 1]! + '…', columns);

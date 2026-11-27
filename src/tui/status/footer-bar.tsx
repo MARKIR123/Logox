@@ -44,6 +44,6 @@ export function FooterBar({height, width, hasStatus: getStatus, noticeInline, de
         </> : null}
       </Box>
       {height > 1 && <Box height={1} flexShrink={0}><Text wrap="truncate">{footerNote.map((segment, index) =>
-        <Text key={index} {...(segment.color ? {color: segment.color} : {})} {...(segment.bold ? {bold: true} : {})} {...(segment.italic ? {italic: true} : {})}>{segment.text}</Text>)}</Text></Box>}
+        <Text key={index} {...(segment.color ? {color: segment.color} : {})} {...(segment.bold ? {bold: true} : {})} {...(segment.italic ? {italic: true} : {})} {...(segment.underline ? {underline: true} : {})}>{segment.text}</Text>)}</Text></Box>}
     </Box>;
 }
