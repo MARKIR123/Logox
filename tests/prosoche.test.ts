@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RuntimeStore} from '../src/runtime/store.js';
 import type {Activity, Step} from '../src/runtime/contracts.js';
-import {Watchdog, advanceWork, callsOf, checkActivity, firstCheckMs, workStateOf, type WatchdogDeps, type WorkClock} from '../src/actors/watchdog.js';
+import {Prosoche, advanceWork, callsOf, checkActivity, firstCheckMs, workStateOf, type ProsocheDeps, type WorkClock} from '../src/actors/prosoche.js';
 import {parseExpectMinutes} from '../src/tools/orchestration/ActorTool/expect.js';
 import {taskSpecSchema} from '../src/tools/orchestration/ActorTool/ActorTool.js';
 
@@ -13,10 +13,10 @@ function setup(options: {minutes?: number; expectMinutes?: number; owner?: strin
   const clock = {now: 1_000_000};
   const notices: Array<{text: string; source: string}> = [];
   let calls = 0;
-  const deps: WatchdogDeps = {store, sessionId: S, minutes: () => options.minutes ?? 20, parked: () => options.parked?.() ?? false, jobs: () => options.jobs ?? [],
+  const deps: ProsocheDeps = {store, sessionId: S, minutes: () => options.minutes ?? 20, parked: () => options.parked?.() ?? false, jobs: () => options.jobs ?? [],
     shellFiles: () => [], nameOf: id => id[0]!.toUpperCase() + id.slice(1), pending: () => options.pending?.() ?? false,
     notify: async (text, source) => {notices.push({text, source});}, now: () => clock.now};
-  const watchdog = new Watchdog(deps);
+  const prosoche = new Prosoche(deps);
   store.activities.create({sessionId: S, activityId: 'a1', ownerId: options.owner ?? 'techne', kind: options.kind ?? 'actor', title: 'Techne · Fix parser', status: 'running',
     stage: '', detail: '', taskTitle: 'Fix the parser', ...(options.expectMinutes ? {expectMinutes: options.expectMinutes} : {})});
   const call = (name: string, args: Record<string, unknown>, state: 'completed' | 'failed' = 'completed', result = 'ok') => {
@@ -26,10 +26,10 @@ function setup(options: {minutes?: number; expectMinutes?: number; owner?: strin
   };
   /** Advances the fake clock in coarse ticks so a long wait is sampled like the real timer would. */
   const advance = (ms: number) => {
-    for (let left = ms; left > 0;) {const step = Math.min(left, 30_000); clock.now += step; left -= step; watchdog.evaluate();}
+    for (let left = ms; left > 0;) {const step = Math.min(left, 30_000); clock.now += step; left -= step; prosoche.evaluate();}
   };
-  watchdog.evaluate();
-  return {store, clock, notices, watchdog, call, advance};
+  prosoche.evaluate();
+  return {store, clock, notices, prosoche, call, advance};
 }
 
 test('work time counts only the time spent working', () => {
@@ -50,14 +50,14 @@ test('work time counts only the time spent working', () => {
 
 test('a wait on the human or on another actor is not work time', () => {
   let parked = false;
-  const {store, advance, watchdog} = setup({parked: () => parked});
+  const {store, advance, prosoche} = setup({parked: () => parked});
   advance(5 * MIN);
-  store.activities.update(S, 'a1', {status: 'waiting_input'}); watchdog.evaluate();
+  store.activities.update(S, 'a1', {status: 'waiting_input'}); prosoche.evaluate();
   advance(30 * MIN);
-  store.activities.update(S, 'a1', {status: 'running'}); watchdog.evaluate();
-  parked = true; watchdog.evaluate(); advance(30 * MIN);
-  parked = false; watchdog.evaluate(); advance(5 * MIN);
-  assert.equal(watchdog.workMs('a1'), 10 * MIN);
+  store.activities.update(S, 'a1', {status: 'running'}); prosoche.evaluate();
+  parked = true; prosoche.evaluate(); advance(30 * MIN);
+  parked = false; prosoche.evaluate(); advance(5 * MIN);
+  assert.equal(prosoche.workMs('a1'), 10 * MIN);
 });
 
 test('checkpoints fall at 20, 40 and 80 minutes of work and each sends one notice with the template', () => {
@@ -68,7 +68,7 @@ test('checkpoints fall at 20, 40 and 80 minutes of work and each sends one notic
   assert.equal(notices.length, 1);
   const first = notices[0]!;
   assert.equal(first.source, 'techne');
-  assert.match(first.text, /^\[Watchdog\] Techne has worked 20m on "Fix the parser" \(activity a1\)\. Since the last check: 2 calls, no files changed, no progress signal\. Recent calls: Read a\.ts \| Read b\.ts\. You may let it continue \(next check in 20m\), steer it with SendMessage, or stop it\.$/);
+  assert.match(first.text, /^\[Prosoche\] Techne has worked 20m on "Fix the parser" \(activity a1\)\. Since the last check: 2 calls, no files changed, no progress signal\. Recent calls: Read a\.ts \| Read b\.ts\. You may let it continue \(next check in 20m\), steer it with SendMessage, or stop it\.$/);
   advance(18 * MIN); assert.equal(notices.length, 1);
   advance(2 * MIN); assert.equal(notices.length, 2);
   advance(38 * MIN); assert.equal(notices.length, 2);
@@ -127,15 +127,15 @@ test('many calls with no write and no new file read are a loop signal; a running
   assert.equal(checkActivity({window: [], before: [], shellFiles: ['out.txt'], jobs: []}).verdict, 'progressing');
 });
 
-test('0 turns the watchdog off, and the Director and other kinds are never watched', () => {
+test('0 turns the prosoche off, and the Director and other kinds are never watched', () => {
   const off = setup({minutes: 0});
   off.advance(300 * MIN);
   assert.equal(off.notices.length, 0);
-  assert.equal(off.watchdog.workMs('a1'), undefined);
+  assert.equal(off.prosoche.workMs('a1'), undefined);
   const director = setup({owner: 'logox', kind: 'director'});
   director.advance(300 * MIN);
   assert.equal(director.notices.length, 0);
-  assert.equal(director.watchdog.workMs('a1'), undefined);
+  assert.equal(director.prosoche.workMs('a1'), undefined);
   const dream = setup({kind: 'anamnesis'});
   dream.advance(300 * MIN);
   assert.equal(dream.notices.length, 0);
@@ -149,11 +149,11 @@ test('nothing is cancelled: a flagged activity keeps running', () => {
 });
 
 test('a finished activity is dropped and the service disposes cleanly', () => {
-  const {store, watchdog, advance} = setup();
+  const {store, prosoche, advance} = setup();
   advance(5 * MIN);
-  store.activities.update(S, 'a1', {status: 'completed'}); watchdog.evaluate();
-  assert.equal(watchdog.workMs('a1'), undefined);
-  watchdog.start(); watchdog.dispose();
+  store.activities.update(S, 'a1', {status: 'completed'}); prosoche.evaluate();
+  assert.equal(prosoche.workMs('a1'), undefined);
+  prosoche.start(); prosoche.dispose();
 });
 
 test('callsOf reads finished tool steps of one activity and flags failed Shell exits', () => {

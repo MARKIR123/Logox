@@ -189,14 +189,21 @@ export class CacheKeeper {
     // Late timers (sleep, suspended process) mean the entry may already be gone: warming then only pays for a rewrite.
     if (now >= target.startedAt + entry.ttlMs) return this.stop(who, entry);
     // The harvest takes the last slot of a human wait in place of a ping: the slot where no further warm-up would be needed (or the first, when the budget plans none).
-    if (harvest && this.options.enabled() && this.options.certain(entry.who) === 'human') {
+    let offered = false;
+    const human = Boolean(harvest) && this.options.enabled() && this.options.certain(entry.who) === 'human';
+    /** Offers the slot once; true when the harvest took it (the keeper then stops) or the actor woke meanwhile. */
+    const offer = async (): Promise<boolean> => {
+      if (!harvest || offered) return false;
+      offered = true;
+      const taken = await harvest.slot(who, target);
+      if (entry.generation !== generation) return true;
+      if (taken) this.stop(who, entry);
+      return taken;
+    };
+    if (human) {
       const until = entry.idleSince + Math.max(0, this.options.awayMs());
       const warmNow = reason === 'human' && now < until && this.needsWarm(entry, until);
-      if (!warmNow || !this.needsWarm(entry, until, now)) {
-        const taken = await harvest.slot(who, target);
-        if (entry.generation !== generation) return;
-        if (taken) return this.stop(who, entry);
-      }
+      if ((!warmNow || !this.needsWarm(entry, until, now)) && await offer()) return;
     }
     if (!reason) return this.stop(who, entry);
     if (reason === 'human') {
@@ -205,7 +212,11 @@ export class CacheKeeper {
     }
     // One cache miss is the most the whole stretch may spend: a 5-minute cache pays for about a dozen warm-ups, a 1-hour cache for about twenty.
     const costs = warmCosts(tokens, target.model, this.options.pricing, entry.ttlMs >= LONG_CACHE_MS);
-    if (!costs || costs.miss - costs.warm < MIN_WARM_SAVINGS || entry.spent + costs.warm > costs.miss) return this.stop(who, entry);
+    if (!costs || costs.miss - costs.warm < MIN_WARM_SAVINGS || entry.spent + costs.warm > costs.miss) {
+      // The keeper gives up here (cost cap, unknown price): the cache is about to die, so this is a cliff too.
+      if (human && await offer()) return;
+      return this.stop(who, entry);
+    }
     const controller = new AbortController();
     entry.abort = controller;
     const startedAt = now;

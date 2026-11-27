@@ -27,6 +27,7 @@ const MINUTE = 60_000;
 const who: KeepAliveWho = {sessionId: 's', ownerId: 'logox', activityId: 'a', rootActivityId: 'a'};
 const MODEL = JSON.stringify(['anthropic', 'claude-test']);
 const cheapRead = {models: {'anthropic/claude-test': {prices: {currency: 'USD', input: 3, output: 15, cache_read: 0.03, cache_write: 3.75}}}};
+const dearRead = {models: {'anthropic/claude-test': {prices: {currency: 'USD', input: 3, output: 15, cache_read: 0.3, cache_write: 3.75}}}};
 const REPLY = {role: 'assistant' as const, text: 'All done.'};
 const request = (): ModelRequest => ({system: 'rules', tools: [], messages: [{role: 'user', text: 'hello'}], cacheKey: 'k'});
 const settle = async () => {for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));};
@@ -40,7 +41,7 @@ const withClock = (body: () => Promise<void>) => async () => {
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // Timing: when the harvest fires, on top of the cache keeper.
 // ---------------------------------------------------------------------------------------------------------------------------------------------
-function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; awayMinutes?: number; replayable?: boolean; lifetimeMs?: number | null; decline?: boolean}) {
+function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; awayMinutes?: number; replayable?: boolean; lifetimeMs?: number | null; decline?: boolean; pricing?: typeof cheapRead}) {
   const pings: number[] = [], starts: number[] = [], cancelled: number[] = [];
   const profile: CacheProfile | undefined = options.replayable === false ? undefined : {ttlMs: options.ttlMs, replayable: true};
   const usage: ModelTurn['usage'] = {input: 100_000, output: 1, cacheRead: 100_000};
@@ -59,7 +60,7 @@ function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; a
       return {finished: new Promise<boolean>(resolve => {state.finish = resolve;}), cancel() {cancelled.push(Date.now());}} satisfies HarvestRun;
     },
   });
-  const keeper = new CacheKeeper({enabled: () => true, certain: () => state.certain, awayMs: () => state.away * MINUTE, pricing: cheapRead, charge: () => {}, harvest: timing});
+  const keeper = new CacheKeeper({enabled: () => true, certain: () => state.certain, awayMs: () => state.away * MINUTE, pricing: options.pricing ?? cheapRead, charge: () => {}, harvest: timing});
   timing.attach({awaitingHuman: () => state.certain === 'human', touchedAt: actor => keeper.touchedAt(actor)});
   const arm = () => keeper.arm(who, {request: request(), provider, model: MODEL, startedAt: Date.now(), usage: {input: 100_000, output: 5, cacheRead: 100_000}, reply: REPLY});
   return {pings, starts, cancelled, state, timing, keeper, arm};
@@ -121,6 +122,27 @@ test('while a companion works (peer wait) nothing is harvested and the keeper ke
   await run(10 * MINUTE);
   assert.deepEqual(standalone.starts, [], 'the standalone timer also sees that the human is not the one awaited');
   assert.equal(standalone.timing.pending(), false, 'and stops expecting a harvest');
+}));
+
+test('the keeper giving up early on cost is a cliff too: the harvest runs at that slot instead of the cache dying', withClock(async () => {
+  const r = timingRig({ttlMs: 5 * MINUTE, awayMinutes: 600, pricing: dearRead});
+  await r.arm();
+  await run(120 * MINUTE);
+  assert.equal(r.pings.length, 11, 'the cumulative cost cap ends the warm-ups');
+  assert.deepEqual(r.starts.map(at => at - 1_000_000), [12 * 270_000], 'the harvest takes the slot where the keeper would have stopped');
+  assert.equal(r.keeper.state(who), undefined);
+}));
+
+test('an unknown price stops the keeper at its first slot and the harvest runs there', withClock(async () => {
+  const r = timingRig({ttlMs: 5 * MINUTE, awayMinutes: 60, pricing: {models: {}} as never});
+  await r.arm();
+  await run(10 * MINUTE);
+  assert.deepEqual(r.pings, []);
+  assert.deepEqual(r.starts.map(at => at - 1_000_000), [270_000]);
+  const peer = timingRig({ttlMs: 5 * MINUTE, certain: 'peer', pricing: {models: {}} as never});
+  await peer.arm();
+  await run(10 * MINUTE);
+  assert.deepEqual(peer.starts, [], 'a peer wait never harvests');
 }));
 
 test('a harvest that declines leaves the keeper to ping as before', withClock(async () => {

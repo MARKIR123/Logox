@@ -45,8 +45,8 @@ export const RUNTIME_RECORD_LABELS = Object.freeze({
   acceptance: 'Acceptance, as you wrote it:',
 });
 
-/** The watchdog's runtime notice to the Director when a companion has worked long and looks stuck (`src/actors/watchdog.ts`). It never stops anything. */
-export function watchdogNotice(facts: {name: string; worked: string; title: string; activityId: string; calls: number; files: string; signals: string; recent: string; next: string}): string {
-  return `[Watchdog] ${facts.name} has worked ${facts.worked} on "${facts.title}" (activity ${facts.activityId}). Since the last check: ${facts.calls} calls, ${facts.files}, ${facts.signals}. ` +
+/** The prosoche's runtime notice to the Director when a companion has worked long and looks stuck (`src/actors/prosoche.ts`). It never stops anything. */
+export function prosocheNotice(facts: {name: string; worked: string; title: string; activityId: string; calls: number; files: string; signals: string; recent: string; next: string}): string {
+  return `[Prosoche] ${facts.name} has worked ${facts.worked} on "${facts.title}" (activity ${facts.activityId}). Since the last check: ${facts.calls} calls, ${facts.files}, ${facts.signals}. ` +
     `Recent calls: ${facts.recent}. You may let it continue (next check in ${facts.next}), steer it with SendMessage, or stop it.`;
 }

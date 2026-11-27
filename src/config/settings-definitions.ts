@@ -149,8 +149,8 @@ export const settingDefinitions: readonly SettingDefinition[] = [
     description: 'Seconds a foreground Shell command may run before it moves to the background and notifies its actor when it ends; 0 never. [kernel] shell_auto_background_seconds',
     read: env => env.kernel().shellAutoBackgroundSeconds,
     write: (env, value) => env.saveKernel({shellAutoBackgroundSeconds: Number(value)})},
-  {key: 'checkAfter', label: 'Check long work', group: 'runtime', kind: 'number', default: 20, min: 0, max: 240, step: 10,
-    description: 'Minutes of work (waiting for you or another actor excluded) before the Director is asked to look at a companion that seems stuck, then at double that; nothing is ever stopped, 0 never. [kernel] check_after_minutes',
+  {key: 'checkAfter', label: 'Prosoche: check long work', group: 'runtime', kind: 'number', default: 20, min: 0, max: 240, step: 10,
+    description: 'Prosoche notifies the Director when a companion has worked this many minutes (waiting excluded) without progress, then again at double that; nothing is ever stopped, 0 never. [kernel] check_after_minutes',
     read: env => env.kernel().checkAfterMinutes,
     write: (env, value) => env.saveKernel({checkAfterMinutes: Number(value)})},
 ];

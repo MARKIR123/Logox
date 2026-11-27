@@ -1,8 +1,8 @@
-// The watchdog: after a companion activity has worked a long time it looks, mechanically and without a model call, at what the activity did since
+// The prosoche: after a companion activity has worked a long time it looks, mechanically and without a model call, at what the activity did since
 // the last check and asks the Director to take a look only when it seems stuck. It never stops, pauses or limits anything (natural loop).
 import type {Activity, Message, RuntimeSnapshot} from '../runtime/contracts.js';
 import {isDirector} from '../runtime/director-id.js';
-import {watchdogNotice} from '../prompts/runtime/director.js';
+import {prosocheNotice} from '../prompts/runtime/director.js';
 
 const MINUTE = 60_000;
 const REPEATED_ERROR = 3;
@@ -112,7 +112,7 @@ export function formatMinutes(ms: number): string {
   return minutes >= 60 ? Math.floor(minutes / 60) + 'h' + (minutes % 60 ? ' ' + (minutes % 60) + 'm' : '') : minutes + 'm';
 }
 
-export interface WatchdogDeps {
+export interface ProsocheDeps {
   readonly store: {getSnapshot(): RuntimeSnapshot; subscribe(listener: () => void): () => void};
   readonly sessionId: string;
   /** `[kernel] check_after_minutes`, read on every evaluation (0 never). */
@@ -124,7 +124,7 @@ export interface WatchdogDeps {
   /** Files the activity's foreground Shell commands changed so far. */
   shellFiles(activityId: string): readonly string[];
   nameOf(ownerId: string): string;
-  /** True while an earlier watchdog notice about this activity still waits for the Director. */
+  /** True while an earlier prosoche notice about this activity still waits for the Director. */
   pending(activityId: string): boolean;
   notify(text: string, source: string): Promise<void>;
   now?: () => number;
@@ -133,12 +133,12 @@ export interface WatchdogDeps {
 interface Watched {clock: WorkClock; threshold: number; seen: number; shell: Set<string>}
 
 /** One service per session: samples every companion activity on store changes and on a coarse tick, and looks at one when its work time reaches its next check. */
-export class Watchdog {
+export class Prosoche {
   private readonly watched = new Map<string, Watched>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private unsubscribe: (() => void) | undefined;
   private readonly now: () => number;
-  constructor(private readonly deps: WatchdogDeps) {this.now = deps.now ?? Date.now;}
+  constructor(private readonly deps: ProsocheDeps) {this.now = deps.now ?? Date.now;}
   start(): void {
     if (this.timer) return;
     this.unsubscribe = this.deps.store.subscribe(() => this.evaluate());
@@ -178,7 +178,7 @@ export class Watchdog {
     const result = checkActivity({window: calls.slice(entry.seen), before: calls.slice(0, entry.seen), shellFiles, jobs: this.deps.jobs(activity.ownerId)});
     entry.seen = calls.length; entry.shell = new Set(shellAll); entry.threshold *= 2;
     if (result.verdict === 'progressing' || this.deps.pending(activity.activityId)) return;
-    const text = watchdogNotice({name: this.deps.nameOf(activity.ownerId), worked: formatMinutes(entry.clock.workMs), title: activity.taskTitle ?? activity.title,
+    const text = prosocheNotice({name: this.deps.nameOf(activity.ownerId), worked: formatMinutes(entry.clock.workMs), title: activity.taskTitle ?? activity.title,
       activityId: activity.activityId, calls: result.calls, files: result.files ? result.files + (result.files === 1 ? ' file' : ' files') + ' changed' : 'no files changed',
       signals: result.signals.join('; ') || 'no signal', recent: result.recent.join(' | ') || 'none', next: formatMinutes(entry.threshold - entry.clock.workMs)});
     void this.deps.notify(text, activity.ownerId).catch(() => {});
