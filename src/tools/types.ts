@@ -27,6 +27,8 @@ export const toolAliases = {
   Write: 'Write',
   edit: 'Edit',
   Edit: 'Edit',
+  skill: 'Skill',
+  Skill: 'Skill',
   glob: 'Glob',
   Glob: 'Glob',
   grep: 'Grep',

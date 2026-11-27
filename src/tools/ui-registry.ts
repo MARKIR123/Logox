@@ -10,6 +10,7 @@ import {UI as Glob} from './GlobTool/UI.js';
 import {UI as Grep} from './GrepTool/UI.js';
 import {UI as Shell} from './ShellTool/UI.js';
 import {UI as ShellJob} from './ShellJobTool/UI.js';
+import {UI as Skill} from './SkillTool/UI.js';
 import {UI as AskUserQuestion} from './AskUserQuestionTool/UI.js';
 import {UI as WebFetch} from './WebFetchTool/UI.js';
 import {UI as Actor} from './orchestration/ActorTool/UI.js';
@@ -27,7 +28,7 @@ import {callLabel, hiddenToolUI} from '../tui/timeline/tool-ui.js';
 import {LEGACY_FINISH_ROUND} from '../context/round-memory.js';
 
 export const toolUIs: Readonly<Record<string, ToolUI>> = {
-  Read, Write, Edit, Glob, Grep, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
+  Read, Write, Edit, Glob, Grep, Skill, Shell, ShellJob, AskUserQuestion, WebFetch, Actor, CraftActor, ReadActor,
   ListActors, CancelActor, SendMessage, Plan, Automa,
   _GitStatus: GitStatus, LoadTools, mcp: Mcp,
   // Old ledgers still hold calls to the retired `_FinishRound`: restored, they stay as hidden as they always were.

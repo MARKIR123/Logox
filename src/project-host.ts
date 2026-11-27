@@ -27,6 +27,7 @@ import {Tools} from './tools/tools.js';
 import {PermissionEngine} from './permissions/engine.js';
 import {StateFile, preferenceSchema} from './config/model-preferences.js';
 import {UsageLedger} from './context/usage.js';
+import {SkillUsage} from './resources/skill-usage.js';
 import {ProjectExtensions, observeTools} from './extensions/runtime.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
 import {loadUiPreferences} from './commands/pages.js';
@@ -71,6 +72,7 @@ export class ProjectHost {
     readonly profile: Promise<string | undefined>,
     readonly notices: readonly string[],
     private readonly ownsExtensions: boolean,
+    readonly skillUsage: SkillUsage,
   ) {}
 
   static async open(options: ApplicationOptions, factory: SessionApplicationFactory): Promise<ProjectHost> {
@@ -110,6 +112,10 @@ export class ProjectHost {
       const projectExtensions = extensions = options.extensions ?? new ProjectExtensions(cwd, config, options.resourceOptions, approveExtension,
         text => host?.noticeSink(text) ?? notices.push(text));
       const tools = observeTools(new Tools(cwd, undefined, permissions, {home, dataDir: dataMigration.dataDir}), projectExtensions.hooks);
+      const skillUsage = new SkillUsage({home, cwd, dataDir: dataMigration.dataDir, resources: projectExtensions.resources});
+      tools.onSkillRead = (path, context) => skillUsage.read(path, context);
+      tools.skills = {visible: actorId => projectExtensions.resources.skillsFor({actorId}), uses: skills => skillUsage.entriesFor(skills)};
+      projectExtensions.resources.usage = skills => skillUsage.entriesFor(skills);
       const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(home, '.logox', 'statusbar.json'));
       let statusbarIssue: string | undefined;
       try {await statusbar.load();} catch (error) {statusbarIssue = error instanceof Error ? error.message : 'Could not read statusbar preferences; using default layout.';}
@@ -118,7 +124,7 @@ export class ProjectHost {
       const profile = loadUserName(home).catch(() => undefined);
       if (!options.extensions) await projectExtensions.initialize();
       host = new ProjectHost(options, factory, cwd, manager, dataMigration.dataDir, config, providers, journal, actors, preferences, permissions, ledger,
-        projectExtensions, tools, statusbar, ui, profile, statusbarIssue ? [...notices, statusbarIssue] : notices, options.extensions === undefined);
+        projectExtensions, tools, statusbar, ui, profile, statusbarIssue ? [...notices, statusbarIssue] : notices, options.extensions === undefined, skillUsage);
       return host;
     } catch (error) {
       try {await host?.close();} catch {}
@@ -143,6 +149,7 @@ export class ProjectHost {
 
   async createSession(options: HostSessionOptions): Promise<SessionApplication> {
     if (this.closed) throw new Error('Project host is closed');
+    this.skillUsage.recordDay();
     return this.factory({...this.options, cwd: this.cwd, config: this.config, sessionId: options.sessionId, dataDir: this.dataDir,
       registry: this.registry, tools: this.tools, preferences: this.preferences, permissions: this.permissions, usage: this.usage,
       extensions: this.extensions, actors: this.actors, sessionCommand: options.sessionCommand, beforeTask: options.beforeTask,

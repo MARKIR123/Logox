@@ -61,7 +61,7 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
     assert.ok(kalonSkills.includes('browser-screenshot')); // public is visible to all
     assert.ok(!kalonSkills.includes('tdd-workflow')); // Techne-only skill is not listed; Kalon can still Read its file
 
-    // Progressive Prompt Formatting: Kalon sees Core Principles and Domain Repositories, but NOT individual domain files
+    // Progressive Prompt Formatting: Kalon sees Core Principles and Domain Repositories, which list skill names but no domain file paths
     const kalonPrompt = resources.prompt({actorId: 'kalon'}).context;
     assert.ok(kalonPrompt.includes('### Core Principles'));
     assert.ok(kalonPrompt.includes('design-principles'));
@@ -71,7 +71,9 @@ test('Hierarchical Skills: loads built-in skills and assigns actor visibility by
     assert.ok(kalonPrompt.includes('styling/: Visual UI design languages'));
     assert.ok(kalonPrompt.includes('color/: Specialized palettes'));
     assert.ok(kalonPrompt.includes('literature/: Narrative storytelling'));
-    // Crucial: Domain SOP file names MUST NOT be flattened into the system prompt!
+    assert.ok(kalonPrompt.includes('Skill tool'));
+    assert.ok(!kalonPrompt.includes('Glob and Read'));
+    // Crucial: Domain SOP file paths MUST NOT be flattened into the system prompt (categories list skill names only)!
     assert.ok(!kalonPrompt.includes('flat-design.md'));
     assert.ok(!kalonPrompt.includes('morandi-palette.md'));
     assert.ok(!kalonPrompt.includes('material-design.md'));
@@ -149,4 +151,60 @@ test('Hierarchical Skills: non-destructively seeds builtin skills to ~/.logox/sk
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+async function categoryFixture(count: number) {
+  const root = await mkdtemp(join(tmpdir(), 'logox-category-listing-'));
+  const dir = join(root, '.logox', 'skills', 'techne', 'eng');
+  await mkdir(dir, {recursive: true});
+  await writeFile(join(root, '.logox', 'skills', 'techne', 'agent.md'), '---\ncategories:\n  eng: Engineering methods\n---\n');
+  for (let i = 0; i < count; i++) {
+    const name = 'skill-' + String.fromCharCode(97 + i);
+    await writeFile(join(dir, name + '.md'), '---\nname: ' + name + '\ndescription: ' + (name + ' does ').padEnd(200, 'x') + '\n---\nBody\n');
+  }
+  return root;
+}
+const section = (resources: Resources) => resources.promptSections({actorId: 'techne'}).skills.split('\n').filter(line => /^ {2}- |^- eng\//.test(line));
+
+test('category listing: skills in a category are ordered by name without usage data', async () => {
+  const root = await categoryFixture(3);
+  try {
+    const resources = new Resources(root, {home: root, boundary: root});
+    await resources.reload();
+    const lines = section(resources);
+    assert.equal(lines[0], '- eng/: Engineering methods');
+    assert.deepEqual(lines.slice(1).map(line => line.split(':')[0]), ['  - skill-a', '  - skill-b', '  - skill-c']);
+    assert.ok(lines[1]!.length <= '  - skill-a: '.length + 100, 'description cut to about 100 characters');
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('category listing: more than five skills show the top four by usage, then last use, and a count of the rest', async () => {
+  const root = await categoryFixture(7);
+  try {
+    let used: Record<string, {count: number; lastUsedAt: number}> = {'skill-g': {count: 5, lastUsedAt: 1}, 'skill-e': {count: 2, lastUsedAt: 9}, 'skill-d': {count: 2, lastUsedAt: 3}, 'skill-f': {count: 1, lastUsedAt: 1}};
+    const resources = new Resources(root, {home: root, boundary: root});
+    resources.usage = async () => used;
+    await resources.reload();
+    assert.deepEqual(section(resources).slice(1).map(line => line.split(':')[0]), ['  - skill-g', '  - skill-e', '  - skill-d', '  - skill-f', '  - +3 more']);
+    // Frozen: new uses do not change the prompt until the next reload.
+    const before = resources.promptSections({actorId: 'techne'}).skills;
+    used = {...used, 'skill-a': {count: 50, lastUsedAt: 99}};
+    assert.equal(resources.promptSections({actorId: 'techne'}).skills, before);
+    await resources.reload();
+    assert.notEqual(resources.promptSections({actorId: 'techne'}).skills, before);
+    assert.equal(section(resources)[1]!.split(':')[0], '  - skill-a');
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test('category listing: exactly five skills are all shown and a failing usage provider keeps the name order', async () => {
+  const root = await categoryFixture(5);
+  try {
+    const resources = new Resources(root, {home: root, boundary: root});
+    resources.usage = async () => {throw new Error('unreadable');};
+    await resources.reload();
+    const lines = section(resources);
+    assert.equal(lines.length, 6);
+    assert.ok(!lines.some(line => line.includes('more')));
+    assert.equal(lines[1]!.split(':')[0], '  - skill-a');
+  } finally {await rm(root, {recursive: true, force: true});}
 });

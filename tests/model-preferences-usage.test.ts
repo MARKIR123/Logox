@@ -155,7 +155,7 @@ test('正式应用真实HTTP用量重启保留，模型切换不改旧归属，�
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert.ok(address && typeof address === 'object');
   const load = () => f.load({providers: {local: {base_url: 'http://127.0.0.1:' + address.port}},
-    models: {'local/first': {context_window: 16384}, 'local/second': {context_window: 16384}}});
+    models: {'local/first': {context_window: 32768}, 'local/second': {context_window: 32768}}});
   let app = await f.app(await load(), 'http-session');
   try {
     const task = app.ensemble.dispatch('logox', 'synthetic request'); await task.done;

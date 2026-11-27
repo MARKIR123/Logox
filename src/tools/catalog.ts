@@ -7,6 +7,7 @@ import {canonicalToolName} from './types.js';
 import {metadata as meta0} from './ReadTool/ReadTool.js';
 import {metadata as meta1} from './WriteTool/WriteTool.js';
 import {metadata as meta2} from './EditTool/EditTool.js';
+import {metadata as metaSkill} from './SkillTool/SkillTool.js';
 import {metadata as meta3} from './GlobTool/GlobTool.js';
 import {metadata as meta4} from './GrepTool/GrepTool.js';
 import {metadata as meta5} from './ShellTool/ShellTool.js';
@@ -28,7 +29,7 @@ export interface ToolRegistration {metadata: ToolMetadataInput; definition: Tool
 export interface ResolvedTool {metadata: ToolMetadata; definition: ToolDefinition}
 
 export function builtinToolRegistrations(): readonly ToolRegistration[] {
-  return [meta0, meta1, meta2, meta3, meta4, meta5, metaShellJob, meta6, meta7, meta9, meta10, meta11, meta13, meta14, meta15, meta16, metaPlan, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
+  return [meta0, meta1, meta2, meta3, meta4, meta5, metaSkill, metaShellJob, meta6, meta7, meta9, meta10, meta11, meta13, meta14, meta15, meta16, metaPlan, meta18, loadToolsMetadata].map(metadata => ({metadata, definition: metadata.name === 'SendMessage' ? sendMessageTool : {
     name: metadata.name,
     description: descriptions[metadata.name as keyof typeof descriptions],
     parameters: z.toJSONSchema(schemas[metadata.name as keyof typeof schemas], {io: 'input'}),

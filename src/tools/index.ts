@@ -22,6 +22,8 @@ import {pathArg, toolAliases, canonicalToolName, type ToolResult, type Canonical
 import {filePathOf} from './aliases.js';
 import {readSchema, executeRead} from './ReadTool/ReadTool.js';
 import {READ_DESCRIPTION} from './ReadTool/prompt.js';
+import {skillSchema, executeSkill, type SkillLibrary} from './SkillTool/SkillTool.js';
+import {SKILL_DESCRIPTION} from './SkillTool/prompt.js';
 import {writeSchema, executeWrite} from './WriteTool/WriteTool.js';
 import {WRITE_DESCRIPTION} from './WriteTool/prompt.js';
 import {editSchema, executeEdit} from './EditTool/EditTool.js';
@@ -128,6 +130,7 @@ export {
 export const schemas = {
   LoadTools: loadToolsSchema,
   Read: readSchema,
+  Skill: skillSchema,
   Write: writeSchema,
   Edit: editSchema,
   Glob: globSchema,
@@ -151,6 +154,7 @@ export type ToolName = keyof typeof schemas;
 export const descriptions: Record<ToolName, string> = {
   LoadTools: LOAD_TOOLS_DESCRIPTION,
   Read: READ_DESCRIPTION,
+  Skill: SKILL_DESCRIPTION,
   Write: WRITE_DESCRIPTION,
   Edit: EDIT_DESCRIPTION,
   Glob: GLOB_DESCRIPTION,
@@ -335,6 +339,10 @@ export class Tools {
     this.marks = modelMarkStore(join(home, '.logox'));
   }
 
+  /** Told the canonical path of every file a Read returned successfully (skill usage counting); an observer's failure never reaches the call. */
+  onSkillRead: ((path: string, context: ActorContext) => void) | undefined;
+  /** The skills an actor sees and their use counts, for the `Skill` tool; set by the project host. */
+  skills: SkillLibrary | undefined;
   private registry: ToolRegistry | undefined;
   private readonly registries = new Map<string, ToolRegistry>();
   /** Without a session the registry is the legacy, project-wide one; concurrent sessions must bind their own. */
@@ -838,6 +846,13 @@ export class Tools {
         return await this.runAutoma(args, context, automaNotes, call);
       }
 
+      if (name === 'Skill') {
+        // Reads only skill files Logox already loaded for this actor, so there is nothing to approve.
+        const args = schemas.Skill.parse(parsed);
+        context.startTool?.();
+        return await executeSkill(args, context.ownerId, this.skills, path => this.onSkillRead?.(path, context));
+      }
+
       if (name === 'ShellJob') {
         const args = schemas.ShellJob.parse(parsed);
         context.startTool?.();
@@ -923,7 +938,9 @@ export class Tools {
       context.startTool?.();
 
       if (name === 'Read') {
-        return await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId, context.sessionId);
+        const read = await executeRead(schemas.Read.parse(parsed), path, this.snapshots, context.via?.workerId ?? context.ownerId, context.sessionId);
+        if (!read.isError) try {this.onSkillRead?.(path, context);} catch {}
+        return read;
       }
       if (name === 'Write') {
         return await this.withOverreachNote(path, context, () => executeWrite(schemas.Write.parse(parsed), path, this.snapshots, context.activityId, context.signal, context.via?.workerId ?? context.ownerId, getActorScratchpadDir(this.cwd, context.sessionId, context.ownerId), context.sessionId));

@@ -438,7 +438,7 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 ## 资源与扩展
 
 - 规范：按目录加载 `LOGOX.md`、`AGENTS.md`，或你自备的 `CLAUDE.md`。
-- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取。`/skills` 列出可用技能。
+- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取，模型也可以用 `Skill` 工具搜索和加载。`/skills` 列出可用技能。
 - 命令模板：在用户或项目的 `.logox/commands/` 下定义，展开成任务输入，不直接执行 Shell。
 - `/reload`：空闲时重新加载规范、技能、模板和角色定义；不会替换运行中的提供商，也不会重启 MCP。
 - MCP：目前支持 stdio 子进程，首次使用时启动，调用要经过 schema 与权限检查。

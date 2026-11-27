@@ -34,6 +34,8 @@ export interface ResourceSnapshot {
   readonly categories: readonly DomainCategorySignpost[];
   readonly commands: readonly CommandResource[];
   readonly issues: readonly ResourceIssue[];
+  /** Each skill's position by usage (0 is the most used) as of this load: frozen until the next reload so the prompt never changes mid-session. */
+  readonly ranks: Readonly<Record<string, number>>;
 }
 export interface ResourcePromptSections {readonly guidelines: readonly TextResource[]; readonly skills: string}
 export interface ResourceOptions {home?: string; boundary?: string}
@@ -103,10 +105,33 @@ async function ancestors(cwd: string, boundary?: string) {
   }
   return directories;
 }
+const SKILL_DISCOVERY_LINE = 'Find a domain skill with the Skill tool (action "search" by topic, then "load" by name); Read on a skill path works too.';
+const LISTED_PER_CATEGORY = 5;
+const oneLine = (text: string, max: number) => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+};
+/** Position of every skill by usage count, then last use, then name; with no usage data, by name. */
+async function usageRanks(skills: readonly SkillResource[], usage: Resources['usage']): Promise<Record<string, number>> {
+  let used: Readonly<Record<string, {readonly count: number; readonly lastUsedAt: number}>> = {};
+  try {used = await usage?.(skills) ?? {};} catch {}
+  const order = [...skills].sort((a, b) => (used[b.name]?.count ?? 0) - (used[a.name]?.count ?? 0) ||
+    (used[b.name]?.lastUsedAt ?? 0) - (used[a.name]?.lastUsedAt ?? 0) || a.name.localeCompare(b.name));
+  return Object.fromEntries(order.map((skill, index) => [skill.name, index]));
+}
+/** The most used skills of one category as indented lines; more than five show the top four and a count of the rest. */
+function categoryListing(skills: readonly SkillResource[], ranks: Readonly<Record<string, number>>): string[] {
+  const ordered = [...skills].sort((a, b) => (ranks[a.name] ?? Infinity) - (ranks[b.name] ?? Infinity) || a.name.localeCompare(b.name));
+  const shown = ordered.length > LISTED_PER_CATEGORY ? ordered.slice(0, LISTED_PER_CATEGORY - 1) : ordered;
+  return [...shown.map(item => `  - ${item.name}: ${oneLine(item.description, 100)}`),
+    ...(ordered.length > shown.length ? [`  - +${ordered.length - shown.length} more`] : [])];
+}
 export class Resources {
   private readonly assignments = new Map<string, Set<string>>();
   private readonly categoriesMap = new Map<string, Map<string, string>>();
-  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: []});
+  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: [], ranks: {}});
+  /** Usage of the given skills by name, read during `reload()` to order each category's listing; a failure leaves the name order. */
+  usage: ((skills: readonly SkillResource[]) => Promise<Readonly<Record<string, {readonly count: number; readonly lastUsedAt: number}>>>) | undefined;
   constructor(readonly cwd: string, readonly options: ResourceOptions = {}) {}
   snapshot(): ResourceSnapshot {return this.value;}
   /** Explicit assignment changes only this Resources instance; borrowing is supplied by one-off task input and never written to the assignment table. */
@@ -116,6 +141,13 @@ export class Resources {
     const actors = this.assignments.get(name) ?? new Set<string>();
     if (assigned) actors.add(actorId); else actors.delete(actorId);
     if (actors.size) this.assignments.set(name, actors); else this.assignments.delete(name);
+  }
+  private indexed: {readonly skills: readonly SkillResource[]; readonly byPath: Map<string, SkillResource>} | undefined;
+  /** The loaded skill whose file is `path` (an `agent.md` signpost or any other file is none); paths compare canonically. */
+  skillAt(path: string): SkillResource | undefined {
+    const skills = this.value.skills;
+    if (this.indexed?.skills !== skills) this.indexed = {skills, byPath: new Map(skills.map(skill => [key(resolve(skill.path)), skill]))};
+    return this.indexed.byPath.get(key(resolve(path)));
   }
   skillsFor(input: SkillVisibility): readonly SkillResource[] {
     actorIdSchema.parse(input.actorId);
@@ -183,8 +215,10 @@ export class Resources {
     if (actorCategories.length) sections.push([
       '### Domain Repositories',
       `Base root: skills/${visibility.actorId}/`,
-      ...actorCategories.map(cat => `- ${cat.category}/: ${cat.description}`),
-      `Discover domain instructions with Glob and Read. See skills/${visibility.actorId}/agent.md for category boundaries.`,
+      ...actorCategories.flatMap(cat => [`- ${cat.category}/: ${cat.description}`,
+        ...categoryListing(skills.filter(item => item.level === 'domain' && item.category === cat.category), this.value.ranks)]),
+      SKILL_DISCOVERY_LINE,
+      `See skills/${visibility.actorId}/agent.md for category boundaries.`,
     ].join('\n'));
     return {guidelines: this.value.guidelines, skills: sections.join('\n\n')};
   }
@@ -416,8 +450,10 @@ export class Resources {
         categoriesList.push(Object.freeze({actor, category, description}));
       }
     }
+    const loaded = Object.freeze([...skills.values()]);
     this.value = Object.freeze({guidelines: Object.freeze(guidelines),
-      skills: Object.freeze([...skills.values()]), categories: Object.freeze(categoriesList), commands: Object.freeze([...commands.values()]), issues: Object.freeze(issues)});
+      skills: loaded, categories: Object.freeze(categoriesList), commands: Object.freeze([...commands.values()]), issues: Object.freeze(issues),
+      ranks: Object.freeze(await usageRanks(loaded, this.usage))});
     return this.value;
   }
 }
