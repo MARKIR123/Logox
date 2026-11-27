@@ -9,15 +9,20 @@ import type {ActorCatalog} from '../actors/catalog.js';
 import type {ActorModel} from '../actors/definitions.js';
 import {ANAMNESIS_ID, anamnesisModel, bindAnamnesisModel, resolveModel, type AnamnesisModel} from '../anamnesis/model.js';
 import {MemoryStore, type MemoryRecord, type MemoryScope} from '../anamnesis/memory.js';
+import {changesPage, type HarvestParts, type HarvestSource} from '../anamnesis/harvest.js';
 import {AnamnesisRunner} from '../anamnesis/runner.js';
 import {Anamnesis, type RunKind, type RunResult} from '../anamnesis/service.js';
 import {WatermarkStore} from '../anamnesis/watermark.js';
 import type {Config} from '../config/config.js';
 import {StateFile} from '../config/model-preferences.js';
 import type {ContextManager} from '../context/manager.js';
+import {HarvestTiming, type HarvestRun} from '../kernel/harvest-timing.js';
+import type {KeepAliveTarget, KeepAliveWho} from '../kernel/cache-keepalive.js';
 import {memorySection} from '../prompts/memory.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {Provider} from '../runtime/messages.js';
+import type {NoticeInput} from '../runtime/notices.js';
+import {cacheLifetimeFor, modelOfIdentity} from './cache-lifetime.js';
 import {DIRECTOR_ID} from '../runtime/director-id.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import type {Journal} from '../store/journal.js';
@@ -49,8 +54,11 @@ export interface AnamnesisAppDeps {
   busy(): boolean;
   configureMeter(ownerId: string): Promise<void>;
   contexts: ContextManager;
+  /** Posts a persistent read notice (the harvest's `Harvested 23:39 · recap · 2 memories`); the board exists after this module is built, so it is only called later. */
+  postNotice(input: NoticeInput): void;
   options?: AnamnesisAppOptions | undefined;
 }
+const clock = (at: number): string => {const date = new Date(at); return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');};
 
 export async function createAnamnesis(deps: AnamnesisAppDeps) {
   const {session, cwd, homeDir, stateDir, config, store, journal, actors, registry, contexts} = deps, options = deps.options ?? {};
@@ -82,9 +90,47 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
       await deps.configureMeter(ANAMNESIS_ID);
       contexts.meter({sessionId: session, ownerId: ANAMNESIS_ID}).chargeUsage(usage, identity, 'anamnesis');
     },
+    // A harvest rides the Director's own request, so its tokens belong to the Director's meter, in a category of their own.
+    chargeHarvest: async (usage, identity) => {
+      await deps.configureMeter(DIRECTOR_ID);
+      contexts.meter({sessionId: session, ownerId: DIRECTOR_ID}).chargeUsage(usage, identity, 'harvest');
+    },
     ...(options.today ? {today: options.today} : {}),
   });
+  // The harvest of the Director's last request (see `anamnesis/harvest.ts`): `harvest` owns its timing, `service` its single flight and card.
+  const harvest: HarvestTiming = new HarvestTiming({
+    lifetime: (who, target) => {const model = modelOfIdentity(target.model); return model ? cacheLifetimeFor(registry, actors, model.provider, model.model, who.ownerId) : undefined;},
+    awayMs: () => config.kernel.away_keepalive_minutes * 60_000,
+    start: (who, target) => startHarvest(who, target),
+  });
+  /** One harvest or manual fork in flight as the timing sees it: `finished` also posts the notice. */
+  const follow = (started: {runId: string; done: Promise<RunResult>}, startedAt: number): HarvestRun => ({
+    cancel: () => {void service.pause();},
+    finished: started.done.then(result => {
+      if (result.status !== 'completed') return false;
+      const report = result.outcome.harvest;
+      if (report && (report.recap || report.changes.length)) {
+        const count = report.changes.length;
+        deps.postNotice({kind: 'read', tone: 'info', id: 'harvest:' + session + ':' + startedAt, parts: [
+          {text: 'Harvested ' + clock(report.at)},
+          ...(report.recap ? [{text: 'recap', action: {kind: 'jump-activity' as const, activityId: started.runId}}] : []),
+          ...(count ? [{text: count + (count === 1 ? ' memory' : ' memories'), action: {kind: 'open-page' as const, title: 'Harvested memory', text: changesPage(report.changes), markdown: true}}] : [])]});
+      }
+      return true;
+    }, () => false),
+  });
+  const sourceOf = (target: KeepAliveTarget, parts: HarvestParts): HarvestSource | undefined =>
+    target.reply && !target.reply.toolCalls?.length ? {request: target.request, reply: target.reply, provider: target.provider, model: target.model, parts} : undefined;
+  async function startHarvest(_who: KeepAliveWho, target: KeepAliveTarget): Promise<HarvestRun | undefined> {
+    const current = settings();
+    if (options.disabled || (!current.recap && !current.dream)) return undefined;
+    const parts = await runner.harvestParts({recap: current.recap, memory: current.dream});
+    const source = parts.recap || parts.memory ? sourceOf(target, parts) : undefined;
+    const started = source && service.startHarvest(source);
+    return started ? follow(started, target.startedAt) : undefined;
+  }
   const service = new Anamnesis(session, store, runner, deps.busy, {
+    deferred: () => harvest.pending(),
     ...(options.clock ? {clock: options.clock} : {}), ...(options.wall ? {wall: options.wall} : {}),
     recapIdleMs: options.recapIdleMs ?? config.anamnesis.recap_idle_minutes * 60_000,
     dreamIdleMs: options.dreamIdleMs ?? config.anamnesis.dream_idle_minutes * 60_000,
@@ -94,7 +140,15 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
 
   const api = {
     /** Starts a run now, whatever the idle clock says; throws while tasks run. `done` settles with the outcome and never rejects. */
-    runNow: (kind: RunKind): {runId: string; done: Promise<RunResult>} => service.runNow(kind),
+    runNow(kind: RunKind): {runId: string; done: Promise<RunResult>} {
+      // While the Director's cache is still warm the run forks its request (the part the kind names); a cold one reads the transcript.
+      const warm = harvest.warm(session, DIRECTOR_ID);
+      const source = warm && sourceOf(warm.target, {recap: kind === 'recap', memory: kind === 'dream'});
+      if (!warm || !source) return service.runNow(kind);
+      const started = service.runNow(kind, source);
+      harvest.follow(warm.who, follow(started, warm.target.startedAt));
+      return started;
+    },
     /** The kind running now, if any. */
     running: (): RunKind | undefined => service.running(),
     /** Every record of both folders, project first, then by name. */
@@ -122,6 +176,8 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     /** The static memory section for the system prompt of every actor. */
     memoryPrompt: () => section,
     refreshMemory,
+    /** Timing of the Director's harvest: the cache keeper offers it the last slot of a human wait (`kernel/harvest-timing.ts`). */
+    harvest,
     /** Starts the idle interval (unref'd); `fallbackMs` applies when the options give none. Does nothing without an interval. */
     start(fallbackMs?: number) {
       const every = options.tickMs ?? fallbackMs;
@@ -132,6 +188,7 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     tick: () => service.tick(),
     async close() {
       if (timer) {clearInterval(timer); timer = undefined;}
+      harvest.dispose();
       await service.close();
     },
   };

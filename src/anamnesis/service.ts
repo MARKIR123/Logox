@@ -5,12 +5,16 @@
  */
 import {randomUUID} from 'node:crypto';
 import type {RuntimeStore} from '../runtime/store.js';
+import type {HarvestReport, HarvestSource} from './harvest.js';
 
 export type RunKind = 'recap' | 'dream';
 export const ANAMNESIS_OWNER = 'anamnesis';
 /** The card title while a run works. */
 export const RUNNING_STAGE: Readonly<Record<RunKind, string>> = {recap: 'Writing recap', dream: 'Reviewing the session'};
 const FAILED_STAGE: Readonly<Record<RunKind, string>> = {recap: 'Recap failed', dream: 'Dream failed'};
+/** A harvest (a fork of the Director's own request) wears the card of the kind it was asked for, with its own titles. */
+export const HARVEST_STAGE = 'Harvesting the session';
+const HARVEST_FAILED_STAGE = 'Harvest failed';
 export interface RunContext {
   readonly runId: string;
   readonly sessionId: string;
@@ -18,11 +22,13 @@ export interface RunContext {
   /** Started by `runNow`: it ignores the idle clock and the new-material check. */
   readonly manual: boolean;
   readonly signal: AbortSignal;
+  /** Present when the run is a harvest: it forks this request instead of reading a transcript (`kind` then only says which card flavour the manual run asked for). */
+  readonly harvest?: HarvestSource | undefined;
   /** Updates the card while the run works; throws once the run was aborted. */
   report(stage: string, detail?: string): void;
 }
 /** What a finished run shows on its card. `empty` marks a dream that found nothing: an automatic one leaves no card behind. */
-export interface RunOutcome {stage: string; detail: string; empty?: boolean}
+export interface RunOutcome {stage: string; detail: string; empty?: boolean; /** What a harvest did, for the application's notice. */ harvest?: HarvestReport}
 export interface AnamnesisDriver {
   /** True when the kind has material newer than the last run of that kind. */
   material(kind: RunKind): Promise<boolean>;
@@ -42,8 +48,10 @@ export interface AnamnesisOptions {
   dreamIdleMs?: number;
   /** The two automatic switches, read at every tick. A switch off disables only the trigger, never `runNow`. */
   auto?: () => {recap: boolean; dream: boolean};
+  /** True while a harvest of the Director is scheduled: the idle recap and dream then wait for it (it covers the same material from the warm cache). */
+  deferred?: () => boolean;
 }
-interface Run {runId: string; kind: RunKind; controller: AbortController; done: Promise<RunResult>}
+interface Run {runId: string; kind: RunKind; controller: AbortController; done: Promise<RunResult>; harvest: boolean}
 export class Anamnesis {
   private current: Run | undefined;
   private closed = false;
@@ -52,18 +60,20 @@ export class Anamnesis {
   /** Bumps with every user activity: a "no material" answer stays valid until the next one (material only grows while the user works). */
   private epoch = 0;
   private readonly empty = new Map<RunKind, number>();
-  private readonly failedAt = new Map<RunKind, number>();
+  private readonly failedAt = new Map<string, number>();
   private failedCard: string | undefined;
   private readonly clock: () => number;
   private readonly wall: () => number;
   private readonly idleMs: Record<RunKind, number>;
   private readonly auto: () => {recap: boolean; dream: boolean};
+  private readonly deferred: () => boolean;
   constructor(readonly sessionId: string, private readonly store: RuntimeStore, private readonly driver: AnamnesisDriver,
     private readonly foregroundBusy: () => boolean, options: AnamnesisOptions = {}) {
     this.clock = options.clock ?? (() => performance.now());
     this.wall = options.wall ?? (() => Date.now());
     this.idleMs = {recap: options.recapIdleMs ?? 5 * 60_000, dream: options.dreamIdleMs ?? 30 * 60_000};
     this.auto = options.auto ?? (() => ({recap: true, dream: true}));
+    this.deferred = options.deferred ?? (() => false);
     this.lastActivity = this.clock();
   }
   /** A keystroke in the composer. */
@@ -79,7 +89,7 @@ export class Anamnesis {
   running(): RunKind | undefined {return this.current?.kind;}
   /** Runs the one kind that is due, if any. Called by the application's interval; cheap when nothing is due. */
   async tick(): Promise<void> {
-    if (this.closed || this.current || this.checking || this.foregroundBusy() || this.interactionPending()) return;
+    if (this.closed || this.current || this.checking || this.foregroundBusy() || this.interactionPending() || this.deferred()) return;
     const switches = this.auto(), idle = this.clock() - this.lastActivity, epoch = this.epoch;
     const due = (kind: RunKind) => switches[kind] && idle >= this.idleMs[kind] && this.clock() - (this.failedAt.get(kind) ?? -Infinity) >= this.idleMs[kind];
     const kinds = (['recap', 'dream'] as const).filter(due);
@@ -100,23 +110,31 @@ export class Anamnesis {
     void this.begin(next, false).done;
   }
   /** Starts a run regardless of the idle clock and of new material; refuses while the foreground works. */
-  runNow(kind: RunKind): {runId: string; done: Promise<RunResult>} {
+  runNow(kind: RunKind, harvest?: HarvestSource): {runId: string; done: Promise<RunResult>} {
     if (this.closed) throw new Error('Anamnesis is closed.');
     if (this.foregroundBusy()) throw new Error('Anamnesis cannot run while tasks are running. Wait for them to finish or cancel them.');
-    if (this.current) throw new Error('Anamnesis is already running (' + RUNNING_STAGE[this.current.kind].toLowerCase() + ').');
-    this.failedAt.delete(kind);
-    return this.begin(kind, true);
+    if (this.current) throw new Error('Anamnesis is already running (' + (this.current.harvest ? HARVEST_STAGE : RUNNING_STAGE[this.current.kind]).toLowerCase() + ').');
+    this.failedAt.delete(harvest ? 'harvest' : kind);
+    return this.begin(kind, true, harvest);
   }
-  private begin(kind: RunKind, manual: boolean): {runId: string; done: Promise<RunResult>} {
+  /**
+   * Starts the harvest of the Director's last request (the cache keeper offers the slot while the human is awaited). Undefined when something else is
+   * going on: another run, a task in flight, an approval or question waiting or a closed service; a harvest never queues.
+   */
+  startHarvest(harvest: HarvestSource): {runId: string; done: Promise<RunResult>} | undefined {
+    if (this.closed || this.current || this.checking || this.foregroundBusy() || this.interactionPending()) return undefined;
+    return this.begin(harvest.parts.recap ? 'recap' : 'dream', false, harvest);
+  }
+  private begin(kind: RunKind, manual: boolean, harvest?: HarvestSource): {runId: string; done: Promise<RunResult>} {
     const runId = randomUUID();
     // A failure card gives way to the next attempt, so a long outage does not pile cards up.
     if (this.failedCard) {this.store.activities.remove(this.sessionId, this.failedCard); this.failedCard = undefined;}
     const controller = new AbortController();
     this.store.activities.create({sessionId: this.sessionId, activityId: runId, ownerId: ANAMNESIS_OWNER, kind: 'anamnesis',
-      title: 'Anamnesis', status: 'running', stage: RUNNING_STAGE[kind], detail: '', createdAt: this.wall()});
+      title: 'Anamnesis', status: 'running', stage: harvest ? HARVEST_STAGE : RUNNING_STAGE[kind], detail: '', createdAt: this.wall()});
     // Deferring the driver ensures current is installed even when it fails synchronously.
-    const done = Promise.resolve().then(() => this.execute(runId, kind, manual, controller));
-    this.current = {runId, kind, controller, done};
+    const done = Promise.resolve().then(() => this.execute(runId, kind, manual, controller, harvest));
+    this.current = {runId, kind, controller, done, harvest: harvest !== undefined};
     return {runId, done};
   }
   async pause(): Promise<void> {
@@ -133,11 +151,11 @@ export class Anamnesis {
     await run.done;
   }
   private interactionPending(): boolean {return this.store.interactions.list().some(request => request.status === 'pending');}
-  private async execute(runId: string, kind: RunKind, manual: boolean, controller: AbortController): Promise<RunResult> {
+  private async execute(runId: string, kind: RunKind, manual: boolean, controller: AbortController, harvest?: HarvestSource): Promise<RunResult> {
     const {signal} = controller;
     try {
       signal.throwIfAborted();
-      const outcome = await this.driver.run({runId, sessionId: this.sessionId, kind, manual, signal,
+      const outcome = await this.driver.run({runId, sessionId: this.sessionId, kind, manual, signal, ...(harvest ? {harvest} : {}),
         report: (stage, detail = '') => {
           signal.throwIfAborted();
           this.store.activities.update(this.sessionId, runId, {stage, detail});
@@ -153,9 +171,9 @@ export class Anamnesis {
         return {kind, status: 'aborted', reason: signal.reason === 'pause' ? 'pause' : 'close'};
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.failedAt.set(kind, this.clock());
+      this.failedAt.set(harvest ? 'harvest' : kind, this.clock());
       this.failedCard = runId;
-      this.store.activities.update(this.sessionId, runId, {status: 'failed', stage: FAILED_STAGE[kind], detail: message});
+      this.store.activities.update(this.sessionId, runId, {status: 'failed', stage: harvest ? HARVEST_FAILED_STAGE : FAILED_STAGE[kind], detail: message});
       return {kind, status: 'failed', error: message};
     } finally {
       this.current = undefined;

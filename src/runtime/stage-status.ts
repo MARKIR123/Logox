@@ -11,6 +11,8 @@ export interface CacheStatus {
   readonly startedAt: number;
   /** Present while the keep-alive warms this cache: for another actor (`peer`) or for the returning human (`human`, until the away budget ends). */
   readonly keepAlive?: {readonly reason: 'peer' | 'human'; readonly nextWarmAt?: number; readonly until?: number};
+  /** The harvest of this actor's cache (`src/anamnesis/harvest.ts`): `running` while it forks the request, `done` (epoch milliseconds) after it applied, until the actor's next real request. */
+  readonly harvest?: {readonly state: 'running'} | {readonly state: 'done'; readonly at: number};
 }
 /** Display snapshots carry public values only: no credentials, model clients or business callbacks. */
 export interface StageStatus {

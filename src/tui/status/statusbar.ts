@@ -134,11 +134,16 @@ export function formatMinutes(ms: number): string {
 /** A cache with this share of its lifetime (or fewer milliseconds than the second constant) left is about to expire. */
 export const CACHE_WARNING_RATIO = 0.1;
 export const CACHE_WARNING_MS = 60_000;
-export type CacheLook = {kind: 'unknown'} | {kind: 'cold'} | {kind: 'warm' | 'warning' | 'keep'; clock: string; remaining: number};
+/** Local `HH:MM` of an epoch time. */
+export const clockTime = (at: number): string => {const date = new Date(at); return pad2(date.getHours()) + ':' + pad2(date.getMinutes());};
+export type CacheLook = {kind: 'unknown'} | {kind: 'cold'} | {kind: 'harvesting'} | {kind: 'harvested'; at: number} | {kind: 'warm' | 'warning' | 'keep'; clock: string; remaining: number};
 /** What the cache widget shows for the window actor at `now`, from the cache facts alone. */
 export function cacheLook(status: StageStatus, now: number): CacheLook {
   const cache = status.cache;
   if (!cache) return {kind: 'unknown'};
+  // The harvest speaks until the actor's next real request: it is working on the cache, or the cache is spent.
+  if (cache.harvest?.state === 'running') return {kind: 'harvesting'};
+  if (cache.harvest?.state === 'done') return {kind: 'harvested', at: cache.harvest.at};
   const remaining = cache.startedAt + cache.lifetimeMs - now;
   if (remaining <= 0) return {kind: 'cold'};
   const clock = cache.confidence === 'known' ? formatCountdown(remaining) : '~' + formatMinutes(remaining);
@@ -146,13 +151,15 @@ export function cacheLook(status: StageStatus, now: number): CacheLook {
   if (keep) return {kind: 'keep', remaining, clock: keep.reason === 'human' && keep.until !== undefined ? 'keep ' + formatMinutes(keep.until - now) : clock};
   return {kind: remaining <= cache.lifetimeMs * CACHE_WARNING_RATIO || remaining < CACHE_WARNING_MS ? 'warning' : 'warm', clock, remaining};
 }
-/** Hit rate, then the countdown glyph (● warm, ◐ about to expire, ↻ kept alive, ○ expired); an unknown lifetime shows the rate alone. */
+/** Hit rate, then the countdown glyph (● warm, ◐ about to expire, ↻ kept alive, ○ expired, ✦ harvesting, ○ harvested 23:39); an unknown lifetime shows the rate alone. */
 function cacheVariants(status: StageStatus, env: Env): Variant[] {
   const rate = cacheHitRate(status);
   if (rate === undefined) return [];
   const look = cacheLook(status, env.now);
   const label: StatusbarPart = {text: 'cache '}, percent: StatusbarPart = {text: rate + '%', color: palette.fg};
   if (look.kind === 'unknown') return [[label, percent]];
+  if (look.kind === 'harvesting') return [[label, {text: '✦ harvesting', color: palette.fg}], [{text: '✦ harvesting', color: palette.fg}]];
+  if (look.kind === 'harvested') return [[label, {text: '○ harvested ' + clockTime(look.at), color: palette.muted}], [{text: '○ harvested ' + clockTime(look.at), color: palette.muted}]];
   if (look.kind === 'cold') return [[label, {text: '○ cold', color: palette.muted}], [{text: '○ cold', color: palette.muted}]];
   if (look.kind === 'keep') return [[label, {text: '↻ ' + look.clock, color: palette.fg}], [{text: '↻ ' + look.clock, color: palette.fg}]];
   const warning = look.kind === 'warning', glyph = {text: (warning ? '◐ ' : '● ') + look.clock, color: warning ? palette.warning : palette.fg};

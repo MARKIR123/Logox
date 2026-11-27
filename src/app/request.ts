@@ -17,7 +17,8 @@ import type {ContextManager} from '../context/manager.js';
 import type {ProjectExtensions} from '../extensions/runtime.js';
 import {mcpRegistrations} from '../extensions/runtime.js';
 import {agentRequestBase, type AgentAssembly, type createAgent} from '../kernel/agent.js';
-import {CacheKeeper} from '../kernel/cache-keepalive.js';
+import {CacheKeeper, type KeepAliveReason, type KeepAliveWho} from '../kernel/cache-keepalive.js';
+import type {HarvestTiming} from '../kernel/harvest-timing.js';
 import {getActorScratchpadDir, ensureActorScratchpadDir} from '../kernel/scratchpad.js';
 import type {PermissionEngine} from '../permissions/engine.js';
 import {certainToWake, openWork} from '../actors/facts.js';
@@ -48,6 +49,8 @@ export interface RequestAssemblyDeps {
   plans: PlanBoard;
   /** Resolves once the preferred name has loaded. */
   profileReady: Promise<void>;
+  /** The Director's harvest timing (`anamnesis.lifecycle.harvest`): the keeper offers it the last slot of a human wait. */
+  harvest: HarvestTiming;
   /** The Director's open task reports by activity id, written by the ensemble hooks and drained here. */
   directorReports: ReadonlyMap<string, string>;
   configureMeter(ownerId: string): Promise<void>;
@@ -59,7 +62,7 @@ export interface RequestAssemblyDeps {
 
 export function createRequestAssembly(deps: RequestAssemblyDeps) {
   const {session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry, modelPool, actors, actorServices,
-    taskModels, contexts, permissions, extensions, plans, profileReady, directorReports, configureMeter, memoryPrompt, deliverToTask} = deps;
+    taskModels, contexts, permissions, extensions, plans, profileReady, harvest, directorReports, configureMeter, memoryPrompt, deliverToTask} = deps;
   const resources = extensions.resources;
   const environment = new EnvironmentState();
   const automaJournal = (sessionId: string) => join(stateDir, 'sessions', sessionId, 'subagents', 'automa.jsonl');
@@ -103,22 +106,23 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
   store.subscribe(() => {void tools.sweepWorkers();});
   // Replays an idle actor's last request just before its cache expires: while a wake-up by another actor is certain ('peer'), and for the Director
   // awaiting the human within the away budget ('human'). Companions never warm for the human.
+  const certain = (who: KeepAliveWho): KeepAliveReason | false => {
+    const snapshot = store.getSnapshot();
+    if (isDirector(who.ownerId)) {
+      const root = who.rootActivityId ?? who.activityId, work = openWork(snapshot, root, deliveries.snapshot());
+      if (certainToWake(work)) return 'peer';
+      // The human is awaited when the Director's own turn has ended, no companion work is queued or running and nothing else is due to reach the Director.
+      const own = snapshot.activities.find(item => item.activityId === who.activityId);
+      return !(own && ['queued', 'running', 'paused'].includes(own.status)) && !work.activities.some(item => item.status !== 'waiting_input') &&
+        !deliveries.snapshot().some(item => isDirector(item.ownerId) && item.status === 'pending' && !item.deferredUntilHuman && item.rootActivityId === root) ? 'human' : false;
+    }
+    const asks = asksFor(store);
+    return asks.isParked(who.sessionId, who.ownerId) && asks.awaited(who.activityId).some(ask => !ask.ended &&
+      (isDirector(ask.to) || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status)))) ? 'peer' : false;
+  };
+  // The Director's harvest takes the keeper's last slot of a human wait (or its own timer when nothing is warmed).
   const keepAlive = new CacheKeeper({
-    enabled: () => config.kernel.cache_keepalive, pricing: config, awayMs: () => config.kernel.away_keepalive_minutes * 60_000,
-    certain: who => {
-      const snapshot = store.getSnapshot();
-      if (isDirector(who.ownerId)) {
-        const root = who.rootActivityId ?? who.activityId, work = openWork(snapshot, root, deliveries.snapshot());
-        if (certainToWake(work)) return 'peer';
-        // The human is awaited when the Director's own turn has ended, no companion work is queued or running and nothing else is due to reach the Director.
-        const own = snapshot.activities.find(item => item.activityId === who.activityId);
-        return !(own && ['queued', 'running', 'paused'].includes(own.status)) && !work.activities.some(item => item.status !== 'waiting_input') &&
-          !deliveries.snapshot().some(item => isDirector(item.ownerId) && item.status === 'pending' && !item.deferredUntilHuman && item.rootActivityId === root) ? 'human' : false;
-      }
-      const asks = asksFor(store);
-      return asks.isParked(who.sessionId, who.ownerId) && asks.awaited(who.activityId).some(ask => !ask.ended &&
-        (isDirector(ask.to) || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status)))) ? 'peer' : false;
-    },
+    enabled: () => config.kernel.cache_keepalive, pricing: config, awayMs: () => config.kernel.away_keepalive_minutes * 60_000, certain, harvest,
     charge: (who, amount, model) => {void configureMeter(who.ownerId).then(() => contexts.meter(who).chargeUsage(amount, model, 'keepalive'));},
   });
   const requestBase = async (context: Parameters<ReturnType<typeof createAgent>>[1],
@@ -164,5 +168,6 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     }
     return {...base, contextUpdates, ...(restriction ? {refuseTools: TOOLS_RESTRICTED_RESULT} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
   };
+  harvest.attach({awaitingHuman: who => certain(who) === 'human', touchedAt: who => keepAlive.touchedAt(who)});
   return {requestBase, keepAlive};
 }

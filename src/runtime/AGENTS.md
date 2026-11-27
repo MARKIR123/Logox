@@ -36,7 +36,7 @@
 | Session files, transcripts, task checkpoints | `src/store/journal.ts:Journal` | `Journal.checkpoint()`, `Journal.append()`, `Journal.appendSystem()` |
 | Session list, resume, leases, delete | `src/store/sessions.ts:SessionManager` | `src/store/session-trash.ts:SessionTrash` |
 | Cross-process lock or atomic write | `src/store/file-lock.ts:withFileLock()` | `src/store/replace-file.ts:replaceFile()` |
-| Cache keep-alive for an idle actor | `src/kernel/cache-keepalive.ts:CacheKeeper` | `src/kernel/model-turn.ts` (`keepAlive.wake()`), `src/kernel/reply.ts:presentTurn()` (`arm()`), `src/providers/AGENTS.md` |
+| Cache keep-alive for an idle actor (and the Director's harvest slot) | `src/kernel/cache-keepalive.ts:CacheKeeper` | `src/kernel/model-turn.ts` (`keepAlive.wake()`), `src/kernel/reply.ts:presentTurn()` (`arm()`), `src/providers/AGENTS.md` |
 | Scratchpad directory (session tree, per-actor subdirectory) or 32 KB output offload, per-turn 200000-character cap and image files | `src/kernel/scratchpad.ts:getActorScratchpadDir()` | `src/kernel/scratchpad.ts:maybePersistLargeOutput()`, `src/kernel/scratchpad.ts:settleToolResults()` |
 
 ## 3. Common Changes

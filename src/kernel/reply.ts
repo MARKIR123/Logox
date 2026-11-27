@@ -23,7 +23,7 @@ export function presentTurn(run: AgentRun, ready: ReadyRequest, got: Extract<Mod
   // The timeline message keeps the raw `⏵` line while the reply streams (the activity reads it as that reply's own status line); the ledger text never does.
   let storedText = turn.message.text;
   state.turnMetered(prepared ? options.context?.turnUsage(turn, prepared.model) : undefined);
-  if (prepared && usedProvider) void options.keepAlive?.arm(run.context, {request, provider: usedProvider, model: prepared.model.identity, startedAt: requestedAt, usage: turn.usage});
+  if (prepared && usedProvider) void options.keepAlive?.arm(run.context, {request, provider: usedProvider, model: prepared.model.identity, startedAt: requestedAt, usage: turn.usage, reply: turn.message});
   const extracted = extractNarration(turn.message.text);
   if (extracted) {
     // A reply that is only the status line (no tool call, no other text but a synopsis) is the answer itself: it keeps the line's words as its

@@ -31,6 +31,22 @@ export interface KeepAliveTarget {
   /** When that request started: provider cache lifetimes are measured from request start. */
   readonly startedAt: number;
   readonly usage: ModelTurn['usage'];
+  /** What the model answered to that request (without its ledger edits); a harvest fork appends it to the request so the next question reads the warm prefix. */
+  readonly reply?: ModelTurn['message'];
+}
+/**
+ * The harvest (`src/anamnesis/harvest.ts`) rides the keeper's timing instead of duplicating it: the keeper offers the last slot of a human wait (the
+ * last warm-up before the away budget ends, or the first slot when none is planned) and the harvest takes it in place of a 1-token ping.
+ */
+export interface KeepAliveHarvest {
+  /** A real request ended. `warming` is true when the keeper schedules warm-ups for it and will offer a slot; otherwise the harvest keeps its own clock. */
+  armed(who: KeepAliveWho, target: KeepAliveTarget, warming: boolean): void;
+  /** The last slot of a human wait. Resolves true once a harvest started (the keeper then neither pings nor warms again). */
+  slot(who: KeepAliveWho, target: KeepAliveTarget): Promise<boolean>;
+  /** The keeper stopped waiting for this actor without a harvest. A harvest already running is left alone. */
+  released(who: KeepAliveActor): void;
+  /** The actor makes a real request now (or is gone): nothing is scheduled and a running harvest is cancelled. */
+  woke(who: KeepAliveActor): void;
 }
 export interface CacheKeeperOptions {
   enabled(): boolean;
@@ -41,6 +57,8 @@ export interface CacheKeeperOptions {
   pricing: Parameters<typeof costOf>[1];
   /** Records the usage of one warm-up (category `keepalive`). */
   charge(who: KeepAliveWho, usage: NonNullable<ModelTurn['usage']>, model: string): void;
+  /** Takes the last slot of a human wait for a harvest of the Director. */
+  harvest?: KeepAliveHarvest | undefined;
 }
 /** `ttl * 0.9`, or `ttl - 10s` when that is smaller (pi's `getCacheWarmingDelayMs`); undefined when the lifetime is too short to warm. */
 export function warmDelayMs(ttlMs: number): number | undefined {
@@ -88,12 +106,14 @@ export class CacheKeeper {
   private readonly entries = new Map<string, Entry>();
   /** Start of the latest request that refreshed each actor's cache, whether or not it is warmed. */
   private readonly touched = new Map<string, number>();
+  private readonly targets = new Map<string, KeepAliveTarget>();
   /** Set by the host: called whenever `state()` or `touchedAt()` may have changed. */
   onChange: (() => void) | undefined;
   constructor(private readonly options: CacheKeeperOptions) {}
   private static key(who: KeepAliveActor): string {return who.sessionId + '\n' + who.ownerId;}
   /** The actor makes a real request now (or is gone): stop warming and abort a warm-up in flight. */
   wake(who: KeepAliveActor): void {
+    this.options.harvest?.woke(who);
     const entry = this.entries.get(CacheKeeper.key(who));
     if (!entry) return;
     entry.generation++;
@@ -103,11 +123,13 @@ export class CacheKeeper {
   }
   dispose(): void {
     for (const entry of this.entries.values()) {entry.generation++; clearTimeout(entry.timer); entry.abort?.abort();}
-    this.entries.clear(); this.touched.clear();
+    this.entries.clear(); this.touched.clear(); this.targets.clear();
   }
   active(who: KeepAliveActor): boolean {return this.entries.has(CacheKeeper.key(who));}
   /** When the latest request that refreshed the actor's cache started (a real request or a warm-up); undefined before the first one. */
   touchedAt(who: KeepAliveActor): number | undefined {return this.touched.get(CacheKeeper.key(who));}
+  /** The actor's latest real request (with its reply), or undefined before the first one. */
+  lastTarget(who: KeepAliveActor): KeepAliveTarget | undefined {return this.targets.get(CacheKeeper.key(who));}
   /** The warming of the actor's current idle stretch, or undefined when nothing is (or will be) warmed. */
   state(who: KeepAliveActor, now = Date.now()): KeepAliveState | undefined {
     const entry = this.entries.get(CacheKeeper.key(who));
@@ -123,15 +145,16 @@ export class CacheKeeper {
     return reason === 'human' && this.options.awayMs() <= 0 ? false : reason;
   }
   /** A human wait needs a warm-up only while the cache would expire clearly before the away budget ends. */
-  private needsWarm(entry: Entry, until: number): boolean {return until - (entry.startedAt + entry.ttlMs) >= entry.ttlMs * AWAY_TAIL_RATIO;}
+  private needsWarm(entry: Entry, until: number, startedAt = entry.startedAt): boolean {return until - (startedAt + entry.ttlMs) >= entry.ttlMs * AWAY_TAIL_RATIO;}
   /** An actor finished a real request: remember it and, if its cache is worth keeping, schedule the first warm-up. */
   async arm(who: KeepAliveWho, target: KeepAliveTarget): Promise<void> {
     this.wake(who);
     this.touched.set(CacheKeeper.key(who), target.startedAt);
+    this.targets.set(CacheKeeper.key(who), target);
     this.onChange?.();
     const tokens = target.usage?.input ?? 0;
     // Nothing was cached (prompt below the minimum, or caching off): there is nothing to keep.
-    if (!this.options.enabled() || tokens <= 0 || (target.usage?.cacheRead ?? 0) + (target.usage?.cacheWrite ?? 0) <= 0) return;
+    if (!this.options.enabled() || tokens <= 0 || (target.usage?.cacheRead ?? 0) + (target.usage?.cacheWrite ?? 0) <= 0) {this.options.harvest?.armed(who, target, false); return;}
     // Registered before the profile arrives so a `wake` meanwhile cancels this arming.
     const entry: Entry = {generation: 0, who, ttlMs: 0, idleSince: Date.now(), startedAt: target.startedAt, spent: 0};
     this.entries.set(CacheKeeper.key(who), entry);
@@ -139,14 +162,15 @@ export class CacheKeeper {
     try {profile = await target.provider.cacheProfile?.(target.request, AbortSignal.timeout(10_000));} catch {profile = undefined;}
     // A request that cannot be replayed cheaply is never warmed.
     if (entry.generation !== 0 || !profile?.replayable || warmDelayMs(profile.ttlMs) === undefined) {
-      if (entry.generation === 0) this.entries.delete(CacheKeeper.key(who));
+      if (entry.generation === 0) {this.entries.delete(CacheKeeper.key(who)); this.options.harvest?.armed(who, target, false);}
       return;
     }
     entry.ttlMs = profile.ttlMs;
     this.schedule(who, entry, target);
+    this.options.harvest?.armed(who, target, true);
   }
   private stop(who: KeepAliveWho, entry: Entry): void {
-    if (this.entries.get(CacheKeeper.key(who)) === entry) {this.entries.delete(CacheKeeper.key(who)); this.onChange?.();}
+    if (this.entries.get(CacheKeeper.key(who)) === entry) {this.entries.delete(CacheKeeper.key(who)); this.options.harvest?.released(who); this.onChange?.();}
   }
   private schedule(who: KeepAliveWho, entry: Entry, target: KeepAliveTarget): void {
     const generation = entry.generation;
@@ -161,8 +185,20 @@ export class CacheKeeper {
     const now = Date.now(), tokens = target.usage?.input ?? 0;
     entry.fireAt = undefined;
     const reason = this.options.enabled() ? this.reasonFor(entry) : false;
+    const harvest = this.options.harvest;
     // Late timers (sleep, suspended process) mean the entry may already be gone: warming then only pays for a rewrite.
-    if (!reason || now >= target.startedAt + entry.ttlMs) return this.stop(who, entry);
+    if (now >= target.startedAt + entry.ttlMs) return this.stop(who, entry);
+    // The harvest takes the last slot of a human wait in place of a ping: the slot where no further warm-up would be needed (or the first, when the budget plans none).
+    if (harvest && this.options.enabled() && this.options.certain(entry.who) === 'human') {
+      const until = entry.idleSince + Math.max(0, this.options.awayMs());
+      const warmNow = reason === 'human' && now < until && this.needsWarm(entry, until);
+      if (!warmNow || !this.needsWarm(entry, until, now)) {
+        const taken = await harvest.slot(who, target);
+        if (entry.generation !== generation) return;
+        if (taken) return this.stop(who, entry);
+      }
+    }
+    if (!reason) return this.stop(who, entry);
     if (reason === 'human') {
       const until = entry.idleSince + this.options.awayMs();
       if (now >= until || !this.needsWarm(entry, until)) return this.stop(who, entry);

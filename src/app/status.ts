@@ -59,7 +59,7 @@ export function createSessionStatus(deps: SessionStatusDeps) {
           record => {
             usage.record(session, ownerId, record); bumpStatus();
             // Automa turns are stored on their automa.jsonl events; summary and approval calls get an append-only session-level line.
-            if (record.category === 'summary' || record.category === 'approval' || record.category === 'keepalive' || record.category === 'anamnesis') {
+            if (record.category === 'summary' || record.category === 'approval' || record.category === 'keepalive' || record.category === 'anamnesis' || record.category === 'harvest') {
               const turn = turnUsageOf(record, record.model, config);
               if (turn) {
                 const file = join(stateDir, 'sessions', session, 'usage.jsonl');

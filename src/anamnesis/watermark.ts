@@ -21,6 +21,10 @@ export class WatermarkStore {
     catch {return {version: 1, recap: {}, dream: {}};}
   }
   async marks(kind: RunKind): Promise<Marks> {return (await this.read())[kind];}
+  /** Moves only the given owners' marks of one kind (a harvest covers the Director's journal, never a companion's). */
+  async merge(kind: RunKind, marks: Marks): Promise<void> {
+    await this.save(kind, {...(await this.marks(kind)), ...marks});
+  }
   /** Records the marks of a finished run (the other kind keeps its own). */
   async save(kind: RunKind, marks: Marks): Promise<void> {
     await mkdir(this.directory, {recursive: true});

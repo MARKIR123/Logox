@@ -7,7 +7,7 @@ import {permissionModes} from '../../runtime/permission-mode.js';
 import type {NoticeTone} from '../../runtime/notices.js';
 import {palette} from '../appearance/theme.js';
 import {mixHex, windowAccent} from '../appearance/colors.js';
-import {cacheHitRate, cacheLook, contextOver, contextRamp, contextTone, formatCountdown, formatMinutes} from './statusbar.js';
+import {cacheHitRate, cacheLook, clockTime, contextOver, contextRamp, contextTone, formatCountdown, formatMinutes} from './statusbar.js';
 
 /** One styled run of the notification line (row 2 of the footer). */
 export interface NoteSegment {readonly text: string; readonly color?: string; readonly bold?: boolean; readonly italic?: boolean; readonly underline?: boolean}
@@ -81,7 +81,6 @@ function formatLifetime(ms: number): string {
   if (ms % 60_000 === 0) return ms / 60_000 + 'm';
   return Math.round(ms / 1000) + 's';
 }
-const clockTime = (at: number): string => {const date = new Date(at); return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');};
 /**
  * `cache hit 87% · 182k cached of 209k · TTL 1h (known) · warm 3:41 · keep-alive until 23:40`. Variants from longest to shortest; the first that
  * fits `width` wins and none is clipped. Without lifetime facts only the first two groups exist.
@@ -97,6 +96,8 @@ function cacheDetail(status: StageStatus, width: number | undefined, now: number
   const ttl = [dim('TTL '), value(formatLifetime(cache.lifetimeMs)), dim(' (' + cache.confidence + ')')];
   const remaining = cache.startedAt + cache.lifetimeMs - now;
   const state = look.kind === 'cold' ? [value('cold', palette.muted)]
+    : look.kind === 'harvesting' ? [value('harvesting')]
+    : look.kind === 'harvested' ? [dim('harvested '), value(clockTime(look.at), palette.muted)]
     : [dim(look.kind === 'warning' ? 'expires ' : 'warm '), value(estimated ? '~' + formatMinutes(remaining) : formatCountdown(remaining), look.kind === 'warning' ? palette.warning : palette.fg)];
   const keep = cache.keepAlive;
   const keeping = keep ? [dim('keep-alive '), value(keep.reason === 'human' && keep.until !== undefined ? 'until ' + clockTime(keep.until) : 'while peers work')] : [];

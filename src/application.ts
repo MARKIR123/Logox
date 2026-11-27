@@ -301,15 +301,16 @@ export async function createSessionApplication(options: SessionApplicationOption
   const extraTools = [...actorServices.definitionsForValidation(), ...extensions.mcp.definitions()];
   const sessionStatus = createSessionStatus({session, cwd, stateDir, config, store, actors, registry, taskModels, contexts, permissions, statusbar, usage});
   const anamnesis = await createAnamnesis({session, cwd, homeDir, stateDir, config, store, journal, actors, registry, provider: options.provider, busy,
-    configureMeter: sessionStatus.configureMeter, contexts, options: options.anamnesis});
+    configureMeter: sessionStatus.configureMeter, contexts, options: options.anamnesis, postNotice: input => {notices.board.postNotice(input);}});
   const {requestBase, keepAlive} = createRequestAssembly({session, cwd, stateDir, config, state, store, journal, deliveries, tools, toolRegistry, registry,
-    modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, plans, profileReady, directorReports,
+    modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, plans, profileReady, directorReports, harvest: anamnesis.lifecycle.harvest,
     configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt,
     deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'automa', summary, 'queue', {activityId})});
   // The footer's cache widget reads when each cache was last refreshed and how it is kept alive; a keeper change refreshes the footer.
   sessionStatus.options.cache = ownerId => {
     const who = {sessionId: session, ownerId}, state = keepAlive.state(who);
-    return {startedAt: keepAlive.touchedAt(who), ...(state ? {keepAlive: {reason: state.reason, ...(state.nextWarmAt !== undefined ? {nextWarmAt: state.nextWarmAt} : {}), ...(state.until !== undefined ? {until: state.until} : {})}} : {})};
+    const harvest = anamnesis.lifecycle.harvest.phase(who);
+    return {startedAt: keepAlive.touchedAt(who), ...(harvest ? {harvest} : {}), ...(state ? {keepAlive: {reason: state.reason, ...(state.nextWarmAt !== undefined ? {nextWarmAt: state.nextWarmAt} : {}), ...(state.until !== undefined ? {until: state.until} : {})}} : {})};
   };
   keepAlive.onChange = sessionStatus.bumpStatus;
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';

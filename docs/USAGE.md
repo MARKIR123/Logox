@@ -569,6 +569,8 @@ recap_idle_minutes = 5
 dream_idle_minutes = 30
 ```
 
+**缓存临界收割（harvest）**：Director 的提示词缓存即将过期时（寿命的 0.9 倍处，即缓存保活的最后一个时刻），如果你仍不在、没有 companion 或 Automa 在跑、没有待回答的审批或提问，且上次回顾 / 入梦之后有新内容，Anamnesis 不再另起一个冷请求，而是把 Director 自己的最后一个请求原样重放（系统提示、工具、思考与缓存参数、历史、它的最后回复逐字节一致），末尾追加一条回顾指令，让模型一次答出 `<recap>` 与 `<memory>` 两段：前者写成回顾卡片，后者按入梦同样的规则（最多 6 条、过滤密钥、`user` 记录进用户文件夹）写入记忆；因为读的是热缓存，只需为新增的一小段付费。两个自动开关分别控制两段，全关则不收割；开着缓存保活且设了 `away_keepalive_minutes` 时，离开预算内最后一次保活就是这次收割。收割成功后，页脚常驻一条通知 `Harvested 23:39 · recap · 2 memories`（`recap` 跳到卡片，记忆条目打开变更列表：新建、更新前后对比、删除），缓存小部件显示 `✦ harvesting`，之后显示 `○ harvested 23:39`，直到 Director 的下一次真实请求。你一输入就中止，什么都不写；寿命未知的模型没有收割，仍走空闲回顾 / 入梦；一小时内安排了收割时，空闲回顾和入梦会等它，不重复。收割的用量记在 Director 的 `/usage` 的 `harvest` 类别下。手动 `/anamnesis recap` 或 `dream` 在缓存仍热时同样走这条重放路径，缓存已冷则读对话记录。
+
 两个自动开关也可以保存为用户偏好（`~/.logox/anamnesis.json`），优先于配置文件。Anamnesis 的模型默认跟随 Director 当前选择（不改变思考档位）；也可以为它单独选定模型，选定的模型不可用时本次运行失败并提示，不会悄悄换别的模型。它的用量记在 `/usage` 的 `anamnesis` 类别下。
 
 `/anamnesis recap` 和 `/anamnesis dream` 立即开始对应的运行（状态行提示 `Anamnesis is writing a recap.` 或 `Anamnesis is reviewing the session.`，结果显示在卡片上）；有任务在跑时会报错，参数写错时提示 `Usage: /anamnesis [recap|dream]`。输入 `/anamnesis` 打开 Anamnesis 页面，六行每行左边是名称、右边是当前值：

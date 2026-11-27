@@ -63,8 +63,8 @@ export interface ModelRequest {
   cacheKey?: string;
   /** Anthropic-style cache lifetime: the actor's own `cache_retention` (`actor`) beats the model's setting, which beats the role default (`role`). */
   cacheRetention?: {actor?: 'short' | 'long'; role: 'short' | 'long'};
-  /** Cache keep-alive replay: never stored in history; only labels the request dump. */
-  purpose?: 'keepalive';
+  /** Cache keep-alive replay or harvest fork: never stored in history; only labels the request dump and the fingerprint. */
+  purpose?: 'keepalive' | 'harvest';
   /** Directory that receives the serialized request body when `LOGOX_DUMP_REQUESTS=1`. */
   dumpDir?: string;
   /** Where the always-on request fingerprint (`providers/fingerprint.ts`) is appended; absent when `kernel.request_fingerprints` is off or the caller is not an actor turn. */
