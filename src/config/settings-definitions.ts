@@ -8,9 +8,9 @@ import {
 /** `/settings` is data-driven: every row of the page is one definition below, and `tests/settings-definitions.test.ts` checks each has a group, a description, a default and a working persistence path. */
 export type SettingValue = string | number | boolean;
 export type SettingKind = 'boolean' | 'select' | 'number' | 'text';
-export type SettingGroupId = 'appearance' | 'splash' | 'conversation' | 'pages';
+export type SettingGroupId = 'appearance' | 'splash' | 'conversation' | 'runtime' | 'pages';
 export const settingGroups: readonly {readonly id: SettingGroupId; readonly label: string}[] = [
-  {id: 'appearance', label: 'Appearance'}, {id: 'splash', label: 'Splash'}, {id: 'conversation', label: 'Conversation'}, {id: 'pages', label: 'Pages'},
+  {id: 'appearance', label: 'Appearance'}, {id: 'splash', label: 'Splash'}, {id: 'conversation', label: 'Conversation'}, {id: 'runtime', label: 'Runtime'}, {id: 'pages', label: 'Pages'},
 ];
 export const cursorChoices = ['Block █', 'Underline _', 'Bar |'] as const;
 
@@ -26,6 +26,10 @@ export interface SettingsEnv {
   permissionMode(): string;
   permissionModes(): readonly string[];
   savePermissionMode(mode: string): Promise<void>;
+  /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`). */
+  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number};
+  /** Persists a kernel option (`~/.logox/kernel-preferences.json`, which wins over the TOML files) and applies it to the running session. */
+  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number}): Promise<void>;
 }
 
 export interface SettingDefinition {
@@ -133,6 +137,14 @@ export const settingDefinitions: readonly SettingDefinition[] = [
     description: 'Permission mode for tool calls (the same as /permissions): default asks, auto reviews, creative allows after danger filtering.',
     read: env => env.permissionMode(),
     write: (env, value) => env.savePermissionMode(String(value))},
+  {key: 'cacheKeepalive', label: 'Keep cache warm', group: 'runtime', kind: 'boolean', default: true,
+    description: 'Replay an idle actor\'s last request just before its prompt cache expires, while it is certain to wake again. [kernel] cache_keepalive',
+    read: env => env.kernel().cacheKeepalive,
+    write: (env, value) => env.saveKernel({cacheKeepalive: value === true})},
+  {key: 'awayKeepalive', label: 'Keep cache while away', group: 'runtime', kind: 'number', default: 60, min: 0, max: 240, step: 15,
+    description: 'Minutes to keep the Director\'s prompt cache warm after your last message while you are away; 0 never warms it. [kernel] away_keepalive_minutes',
+    read: env => env.kernel().awayKeepaliveMinutes,
+    write: (env, value) => env.saveKernel({awayKeepaliveMinutes: Number(value)})},
 ];
 const byKey = new Map(settingDefinitions.map(definition => [definition.key, definition]));
 export function settingDefinition(key: string): SettingDefinition | undefined {return byKey.get(key);}

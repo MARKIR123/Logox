@@ -11,6 +11,7 @@ export async function settingsFixture() {
   const root = await mkdtemp(join(tmpdir(), 'logox-settings-'));
   const state = {
     name: undefined as string | undefined, effort: 'auto', mode: 'default',
+    kernel: {cacheKeepalive: true, awayKeepaliveMinutes: 60},
     appliedCursors: [] as string[], savedModes: [] as string[], savedEfforts: [] as string[],
   };
   const ui = new UiPreferences(root), statusbar = new StatusbarPreferences(join(root, '.logox', 'statusbar.json'));
@@ -25,6 +26,8 @@ export async function settingsFixture() {
     permissionMode: () => state.mode,
     permissionModes: () => ['default', 'auto', 'creative'],
     savePermissionMode: async mode => {state.mode = mode; state.savedModes.push(mode);},
+    kernel: () => state.kernel,
+    saveKernel: async patch => {state.kernel = {...state.kernel, ...patch};},
   };
   const items = (): SettingsItem[] => settingDefinitions.map(definition => ({
     key: definition.key, label: definition.label, description: definition.description, group: definition.group, kind: definition.kind,

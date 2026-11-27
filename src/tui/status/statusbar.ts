@@ -120,13 +120,51 @@ export function cacheHitRate(status: StageStatus): number | undefined {
   const total = usage.input + usage.cached;
   return total > 0 ? Math.round(usage.cached / total * 100) : undefined;
 }
+const pad2 = (value: number): string => String(value).padStart(2, '0');
+/** Exact countdown: `m:ss`, and `h:mm:ss` from one hour on. Rounds up, so 0:00 only shows once the cache is gone. */
+export function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000)), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = total % 60;
+  return hours ? hours + ':' + pad2(minutes) + ':' + pad2(seconds) : minutes + ':' + pad2(seconds);
+}
+/** Rough duration in whole minutes: `6m`, `1h05m`, `2h`. */
+export function formatMinutes(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000)), hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return hours ? hours + 'h' + (rest ? pad2(rest) + 'm' : '') : minutes + 'm';
+}
+/** A cache with this share of its lifetime (or fewer milliseconds than the second constant) left is about to expire. */
+export const CACHE_WARNING_RATIO = 0.1;
+export const CACHE_WARNING_MS = 60_000;
+export type CacheLook = {kind: 'unknown'} | {kind: 'cold'} | {kind: 'warm' | 'warning' | 'keep'; clock: string; remaining: number};
+/** What the cache widget shows for the window actor at `now`, from the cache facts alone. */
+export function cacheLook(status: StageStatus, now: number): CacheLook {
+  const cache = status.cache;
+  if (!cache) return {kind: 'unknown'};
+  const remaining = cache.startedAt + cache.lifetimeMs - now;
+  if (remaining <= 0) return {kind: 'cold'};
+  const clock = cache.confidence === 'known' ? formatCountdown(remaining) : '~' + formatMinutes(remaining);
+  const keep = cache.keepAlive;
+  if (keep) return {kind: 'keep', remaining, clock: keep.reason === 'human' && keep.until !== undefined ? 'keep ' + formatMinutes(keep.until - now) : clock};
+  return {kind: remaining <= cache.lifetimeMs * CACHE_WARNING_RATIO || remaining < CACHE_WARNING_MS ? 'warning' : 'warm', clock, remaining};
+}
+/** Hit rate, then the countdown glyph (● warm, ◐ about to expire, ↻ kept alive, ○ expired); an unknown lifetime shows the rate alone. */
+function cacheVariants(status: StageStatus, env: Env): Variant[] {
+  const rate = cacheHitRate(status);
+  if (rate === undefined) return [];
+  const look = cacheLook(status, env.now);
+  const label: StatusbarPart = {text: 'cache '}, percent: StatusbarPart = {text: rate + '%', color: palette.fg};
+  if (look.kind === 'unknown') return [[label, percent]];
+  if (look.kind === 'cold') return [[label, {text: '○ cold', color: palette.muted}], [{text: '○ cold', color: palette.muted}]];
+  if (look.kind === 'keep') return [[label, {text: '↻ ' + look.clock, color: palette.fg}], [{text: '↻ ' + look.clock, color: palette.fg}]];
+  const warning = look.kind === 'warning', glyph = {text: (warning ? '◐ ' : '● ') + look.clock, color: warning ? palette.warning : palette.fg};
+  return [[label, percent, {text: ' '}, glyph], [glyph]];
+}
 function compactCount(value: number): string {return new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1}).format(value);}
 function unique(values: readonly string[]): string[] {return [...new Set(values.map(clean).filter(Boolean))];}
 /** Trailing date or channel suffixes carry little at a glance (`claude-sonnet-4-5-20250929` reads `claude-sonnet-4-5`). */
 function shortModel(model: string): string {return model.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2}|latest|preview)$/u, '');}
 type Variant = readonly StatusbarPart[];
 const plain = (text: string): Variant => [{text}];
-interface Env {readonly cells: number; readonly actor: string}
+interface Env {readonly cells: number; readonly actor: string; /** Epoch milliseconds the plan is drawn at; the cache countdown is measured against it. */ readonly now: number}
 interface Descriptor {
   readonly icon: string;
   readonly token: ThemeColorKey | ((status: StageStatus) => ThemeColorKey);
@@ -153,10 +191,7 @@ const registry: Readonly<Record<StatusbarId, Descriptor>> = {
     return mode && Object.hasOwn(permissionModes, mode) ? permissionModes[mode as keyof typeof permissionModes].colorToken : 'muted';
   }, build: status => [plain('Permission ' + (status.permission ?? 'none')), plain(status.permission ?? 'none')]},
   context: {icon: '', token: 'muted', build: contextVariants},
-  cache: {icon: '', token: 'muted', build: status => {
-    const rate = cacheHitRate(status);
-    return rate === undefined ? [] : [[{text: 'cache '}, {text: rate + '%', color: palette.fg}]];
-  }},
+  cache: {icon: '', token: 'muted', build: cacheVariants},
   state: {icon: '', token: status => /fail|error/i.test(status.state) ? 'error' : /wait|paus|queue/i.test(status.state) ? 'warning' : 'success',
     build: status => [plain(stateLabels[status.state] ?? status.state)]},
   tokens: {icon: '', token: 'effortMedium', build: status => {
@@ -182,11 +217,13 @@ const registry: Readonly<Record<StatusbarId, Descriptor>> = {
 /** Narrow-width priority: role first, then permission, the gauge, model, effort, cache, state, git, session, project and finally tokens and cost. */
 export const statusbarPriority: readonly StatusbarId[] = ['role', 'permission', 'context', 'model', 'effort', 'cache', 'state', 'git', 'session', 'project', 'tokens', 'cost'];
 
-export function statusbarText(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}): string {
-  return statusbarParts(status, width, modules, appearance).map(part => part.text).join('');
+/** `hovered` tints one widget; `now` (epoch milliseconds, default the wall clock) is the instant countdowns are drawn at. */
+export interface StatusbarOptions {readonly hovered?: StatusbarId | null; readonly now?: number}
+export function statusbarText(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}, options: StatusbarOptions = {}): string {
+  return statusbarParts(status, width, modules, appearance, options).map(part => part.text).join('');
 }
-export function statusbarParts(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}): StatusbarPart[] {
-  return statusbarLayout(status, width, modules, appearance).parts;
+export function statusbarParts(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar, appearance: Partial<StatusbarAppearance> = {}, options: StatusbarOptions = {}): StatusbarPart[] {
+  return statusbarLayout(status, width, modules, appearance, options).parts;
 }
 
 /**
@@ -195,14 +232,14 @@ export function statusbarParts(status: StageStatus, width: number, modules: read
  * priority order while room remains, and finally drawn in the user's module order.
  */
 export function statusbarLayout(status: StageStatus, width: number, modules: readonly StatusbarModule[] = defaultStatusbar,
-  appearance: Partial<StatusbarAppearance> = {}, options: {readonly hovered?: StatusbarId | null} = {}): StatusbarLayout {
+  appearance: Partial<StatusbarAppearance> = {}, options: StatusbarOptions = {}): StatusbarLayout {
   if (!Number.isFinite(width) || width < 1) return {parts: [], regions: [], width: 0};
   const limit = Math.floor(width), starship = appearance.style === 'starship';
   const decorative = appearance.colorScheme === 'gruvbox' || appearance.colorScheme === 'dracula';
   const scheme = decorative ? schemes[appearance.colorScheme as 'gruvbox' | 'dracula'] : {};
   const colors = {...palette, ...scheme};
   const actor = windowAccent(status.ownerId, hexColorSchema.safeParse(status.color).data);
-  const env: Env = {cells: Math.max(8, Math.min(40, Math.floor(appearance.gaugeCells ?? defaultGaugeCells))), actor};
+  const env: Env = {cells: Math.max(8, Math.min(40, Math.floor(appearance.gaugeCells ?? defaultGaugeCells))), actor, now: options.now ?? Date.now()};
   const enabled = modules.filter((module, index) => module.enabled && Object.hasOwn(registry, module.id) && modules.findIndex(other => other.id === module.id) === index);
   const candidates = new Map<StatusbarId, {variants: Variant[]; icon: string; chosen: number}>();
   const widthOf = (id: StatusbarId, index: number): number => {

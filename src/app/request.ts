@@ -101,15 +101,23 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
   actorServices.setBriefCheck((input, context) => tools.runBriefCheck(input, context));
   // Finished workers end with their dispatcher's task: any store change may be that task settling, and the sweep is cheap while none waits.
   store.subscribe(() => {void tools.sweepWorkers();});
-  // Replays an idle actor's last request just before its short cache expires, only while a wake-up is certain (never while the human is awaited).
+  // Replays an idle actor's last request just before its cache expires: while a wake-up by another actor is certain ('peer'), and for the Director
+  // awaiting the human within the away budget ('human'). Companions never warm for the human.
   const keepAlive = new CacheKeeper({
-    enabled: () => config.kernel.cache_keepalive, pricing: config,
+    enabled: () => config.kernel.cache_keepalive, pricing: config, awayMs: () => config.kernel.away_keepalive_minutes * 60_000,
     certain: who => {
       const snapshot = store.getSnapshot();
-      if (isDirector(who.ownerId)) return certainToWake(openWork(snapshot, who.rootActivityId ?? who.activityId, deliveries.snapshot()));
+      if (isDirector(who.ownerId)) {
+        const root = who.rootActivityId ?? who.activityId, work = openWork(snapshot, root, deliveries.snapshot());
+        if (certainToWake(work)) return 'peer';
+        // The human is awaited when the Director's own turn has ended, no companion work is queued or running and nothing else is due to reach the Director.
+        const own = snapshot.activities.find(item => item.activityId === who.activityId);
+        return !(own && ['queued', 'running', 'paused'].includes(own.status)) && !work.activities.some(item => item.status !== 'waiting_input') &&
+          !deliveries.snapshot().some(item => isDirector(item.ownerId) && item.status === 'pending' && !item.deferredUntilHuman && item.rootActivityId === root) ? 'human' : false;
+      }
       const asks = asksFor(store);
       return asks.isParked(who.sessionId, who.ownerId) && asks.awaited(who.activityId).some(ask => !ask.ended &&
-        (isDirector(ask.to) || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status))));
+        (isDirector(ask.to) || snapshot.activities.some(item => item.sessionId === who.sessionId && item.ownerId === ask.to && ['queued', 'running'].includes(item.status)))) ? 'peer' : false;
     },
     charge: (who, amount, model) => {void configureMeter(who.ownerId).then(() => contexts.meter(who).chargeUsage(amount, model, 'keepalive'));},
   });

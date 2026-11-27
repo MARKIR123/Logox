@@ -8,7 +8,7 @@ import {loadConfig, modelSettings, type ModelSettings} from '../src/config/confi
 import {createProvider} from '../src/providers/http.js';
 import {anthropicRetention, openAiRetentionFields, roleCacheRetention} from '../src/providers/cache.js';
 import {costOf, turnUsageOf} from '../src/context/cost.js';
-import {CacheKeeper, MAX_WARM_MS, warmDelayMs, warmSavings, type KeepAliveWho} from '../src/kernel/cache-keepalive.js';
+import {CacheKeeper, warmDelayMs, warmSavings, type KeepAliveReason, type KeepAliveWho} from '../src/kernel/cache-keepalive.js';
 import {parseActor} from '../src/actors/definitions.js';
 import {usageRows} from '../src/context/usage.js';
 import {TokenMeter} from '../src/context/budget.js';
@@ -142,8 +142,8 @@ function fixture(profile: CacheProfile | undefined = {ttlMs: 300_000, replayable
     async cacheProfile() {return profile;},
     async respond(req) {calls.push(req); return {message: {role: 'assistant', text: ''}, stop: 'length', ...(usage ? {usage} : {})};},
   };
-  const state = {certain: true, enabled: true};
-  const keeper = new CacheKeeper({enabled: () => state.enabled, certain: () => state.certain, pricing, charge: (_who, amount) => {charges.push(amount);}});
+  const state = {certain: 'peer' as KeepAliveReason | false, enabled: true, awayMs: 3_600_000};
+  const keeper = new CacheKeeper({enabled: () => state.enabled, certain: () => state.certain, awayMs: () => state.awayMs, pricing, charge: (_who, amount) => {charges.push(amount);}});
   const arm = (tokens = 100_000) => keeper.arm(who, {request: request({cacheKey: 'k'}), provider, model: MODEL, startedAt: Date.now(),
     usage: {input: tokens, output: 5, cacheRead: tokens}});
   return {calls, charges, keeper, state, arm, provider};
@@ -183,7 +183,7 @@ test('keep-alive replays the last request with maxTokens 1 while a wake-up is ce
   keeper.dispose();
 }));
 
-test('keep-alive stops when the actor wakes, when the work ends, and after one hour', withClock(async () => {
+test('keep-alive stops when the actor wakes, when the work ends, and when the stretch has cost one cache miss', withClock(async () => {
   const woken = fixture();
   await woken.arm();
   woken.keeper.wake(who);
@@ -202,20 +202,17 @@ test('keep-alive stops when the actor wakes, when the work ends, and after one h
 
   const hour = fixture();
   await hour.arm();
-  for (let elapsed = 0; elapsed < MAX_WARM_MS + 600_000; elapsed += 30_000) await advance(30_000);
+  for (let elapsed = 0; elapsed < 4_000_000; elapsed += 30_000) await advance(30_000);
   const count = hour.calls.length;
-  assert.ok(count >= 12 && count <= 14, 'about one warm-up every 4.5 minutes for an hour, got ' + count);
-  await advance(MAX_WARM_MS);
-  assert.equal(hour.calls.length, count, 'nothing after the first hour');
+  assert.equal(count, 11, 'a peer wait warms every 4.5 minutes, past the first hour, until the warm-ups would cost more than one miss');
+  await advance(3_600_000);
+  assert.equal(hour.calls.length, count, 'nothing after that');
 }));
 
-test('keep-alive skips non-replayable requests, long caches, tiny prompts, unknown prices, uncached prompts and the disabled setting', withClock(async () => {
+test('keep-alive skips non-replayable requests, tiny prompts, unknown prices, uncached prompts and the disabled setting', withClock(async () => {
   const blocked = fixture({ttlMs: 300_000, replayable: false});
   await blocked.arm(); await advance(600_000);
   assert.equal(blocked.calls.length, 0, 'budget thinking cannot be replayed with maxTokens 1');
-  const long = fixture({ttlMs: 3_600_000, replayable: true});
-  await long.arm(); await advance(4_000_000);
-  assert.equal(long.calls.length, 0, 'a 1h cache already outlives the wait');
   const none = fixture(undefined);
   await none.arm(); await advance(600_000);
   assert.equal(none.calls.length, 0, 'providers without a short cache are never warmed');

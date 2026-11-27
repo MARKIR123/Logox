@@ -4,7 +4,7 @@ import stringWidth from 'string-width';
 import {allocateContext, categoryWeights, contextCategories, weightText} from '../src/context/breakdown.js';
 import {defaultStatusbar, statusbarIds, statusbarLabels, type StatusbarModule} from '../src/config/statusbar-preferences.js';
 import type {StageStatus} from '../src/runtime/stage-status.js';
-import {cacheHitRate, contextRamp, gaugeCells, gaugeTrack, statusbarLayout, statusbarParts, statusbarPriority, statusbarText} from '../src/tui/status/statusbar.js';
+import {cacheHitRate, cacheLook, formatCountdown, formatMinutes, contextRamp, gaugeCells, gaugeTrack, statusbarLayout, statusbarParts, statusbarPriority, statusbarText} from '../src/tui/status/statusbar.js';
 import {footerHints, notificationSegments, pillDetail, widgetCommand, widgetDetail, formatTokens} from '../src/tui/status/notification-line.js';
 import {computeActivePills, FAILED_PILL_MS, PILL_GLYPHS} from '../src/tui/status/actor-pills.js';
 import {palette} from '../src/tui/appearance/theme.js';
@@ -199,7 +199,7 @@ test('hover details name each widget in full', () => {
   assert.match(model, /claude-opus-5-5.*anthropic.*window 200k.*max out 64k.*\$5 \/ \$25 per M.*cache read \$0\.5.*click to change/);
   assert.doesNotMatch(flat('model', {...status, modelInfo: {window: 8000}}), /per M|max out/, 'unknown facts are omitted');
   assert.match(flat('permission'), /^auto — .*review.*click to change/i);
-  assert.match(flat('cache'), /cache hit 90%.*900 cached of 1k input tokens/);
+  assert.match(flat('cache'), /cache hit 90%.*900 cached of 1k$/);
   assert.match(flat("tokens"), /session in 1.20M out 80k cached 3M.*this window in 100 out 50 cached 900/);
   assert.match(flat('cost'), /session cost USD 12\.5000/);
   assert.match(flat('cost', {...status, costPartial: true, modelInfo: {subscription: true}}), /~USD.*API-equivalent.*partial/);
@@ -285,4 +285,87 @@ test('pill hit regions match the drawn layout, also when pills overflow', () => 
   assert.ok(narrow.length > 0 && narrow.every(pill => pill.compact), 'overflow compacts to glyph-only pills');
   const tiny = computeActivePills(activities, 's', roles, 0, 20, [], {maxWidth: 12});
   assert.ok(tiny.length < 3 && tiny.at(-1)?.ownerId === 'aletheia', 'the oldest pills give way first');
+});
+
+// ---- cache widget: countdown, keep-alive and expiry ----
+const NOW = 1_700_000_000_000;
+const withCache = (cache: StageStatus['cache']): StageStatus => ({...status, ...(cache ? {cache} : {})});
+const cacheAt = (s: StageStatus, width = 140) => statusbarLayout(s, width, all(['cache']), {}, {now: NOW});
+const cacheText = (s: StageStatus, width = 140) => text(cacheAt(s, width).parts);
+const warm = (leftMs: number, extra: Partial<NonNullable<StageStatus['cache']>> = {}) => withCache({lifetimeMs: 300_000, confidence: 'known', ...extra, startedAt: NOW + leftMs - (extra.lifetimeMs ?? 300_000)});
+
+test('cache countdown formats: m:ss, h:mm:ss above an hour, whole minutes for estimates', () => {
+  assert.equal(formatCountdown(221_000), '3:41');
+  assert.equal(formatCountdown(24_000), '0:24');
+  assert.equal(formatCountdown(24_001), '0:25', 'rounds up so 0:00 means gone');
+  assert.equal(formatCountdown(3_723_000), '1:02:03');
+  assert.equal(formatMinutes(6 * 60_000), '6m');
+  assert.equal(formatMinutes(65 * 60_000), '1h05m');
+  assert.equal(formatMinutes(120 * 60_000), '2h');
+});
+
+test('cache widget: warm known, warm estimated, about to expire, kept alive, cold and unknown lifetime', () => {
+  assert.equal(cacheText(warm(221_000)), 'cache 90% ● 3:41');
+  assert.equal(cacheText(warm(3_723_000, {lifetimeMs: 4 * 3_600_000})), 'cache 90% ● 1:02:03');
+  assert.equal(cacheText(warm(6 * 60_000, {lifetimeMs: 1_800_000, confidence: 'estimated'})), 'cache 90% ● ~6m');
+  assert.equal(cacheText(warm(24_000)), 'cache 90% ◐ 0:24');
+  assert.equal(cacheText(warm(45_000, {lifetimeMs: 3_600_000})), 'cache 90% ◐ 0:45', 'under 60 seconds');
+  assert.equal(cacheText(warm(100_000, {lifetimeMs: 3_600_000})), 'cache 90% ◐ 1:40', 'the last tenth of a long lifetime');
+  assert.equal(cacheText(warm(200_000, {keepAlive: {reason: 'peer', nextWarmAt: NOW + 20_000}})), 'cache ↻ 3:20');
+  assert.equal(cacheText(warm(200_000, {keepAlive: {reason: 'human', until: NOW + 41 * 60_000 - 10_000}})), 'cache ↻ keep 41m');
+  assert.equal(cacheText(warm(-1_000)), 'cache ○ cold');
+  assert.equal(cacheText(warm(-1_000, {keepAlive: {reason: 'peer'}})), 'cache ○ cold', 'a kept-alive cache that is gone is cold');
+  assert.equal(cacheText(withCache(undefined)), 'cache 90%', 'unknown lifetime: no countdown');
+  assert.equal(cacheText(noUsage), '', 'no usage: the widget is hidden as before');
+});
+
+test('cache widget: shorter variants at narrow widths, never truncated, and the warning tone', () => {
+  const s = warm(221_000);
+  assert.equal(cacheText(s, 16), 'cache 90% ● 3:41');
+  assert.equal(cacheText(s, 15), '● 3:41', 'the label and rate go first');
+  assert.equal(cacheText(s, 6), '● 3:41');
+  assert.equal(cacheText(s, 5), '');
+  assert.equal(cacheText(warm(-1), 12), 'cache ○ cold');
+  assert.equal(cacheText(warm(-1), 11), '○ cold');
+  assert.equal(cacheText(warm(100_000, {keepAlive: {reason: 'human', until: NOW + 41 * 60_000}}), 13), '↻ keep 41m');
+  for (let width = 1; width <= 24; width++) for (const item of [s, warm(24_000), warm(-1), warm(60_000, {confidence: 'estimated', lifetimeMs: 1_800_000})]) {
+    assert.ok(stringWidth(cacheText(item, width)) <= width, 'fits ' + width);
+    assert.ok(!cacheText(item, width).includes('…'));
+  }
+  const tone = (item: StageStatus) => cacheAt(item).parts.find(part => /[●◐]/u.test(part.text))!.color;
+  assert.equal(tone(warm(24_000)), palette.warning);
+  assert.notEqual(tone(warm(221_000)), palette.warning);
+  assert.equal(cacheLook(warm(24_000), NOW).kind, 'warning');
+  assert.equal(cacheLook(warm(221_000), NOW).kind, 'warm');
+  assert.equal(cacheLook(withCache(undefined), NOW).kind, 'unknown');
+  const regions = cacheAt(warm(221_000)).regions;
+  assert.deepEqual(regions.map(region => region.id), ['cache']);
+  assert.equal(regions[0]!.endX - regions[0]!.startX, stringWidth('cache 90% ● 3:41'));
+});
+
+test('cache widget ticks: the same status reads differently one second later', () => {
+  const s = warm(221_000);
+  const at = (now: number) => text(statusbarLayout(s, 140, all(['cache']), {}, {now}).parts);
+  assert.equal(at(NOW), 'cache 90% ● 3:41');
+  assert.equal(at(NOW + 1000), 'cache 90% ● 3:40');
+  assert.equal(at(NOW + 197_000), 'cache 90% ◐ 0:24');
+  assert.equal(at(NOW + 222_000), 'cache ○ cold');
+});
+
+test('cache hover detail: lifetime with confidence, countdown, keep-alive, degrading by width', () => {
+  const detail = (s: StageStatus, width?: number) => widgetDetail('cache', s, undefined, width, NOW).map(segment => segment.text).join('');
+  const until = NOW + 41 * 60_000, hhmm = (at: number) => {const d = new Date(at); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');};
+  const s = warm(221_000, {keepAlive: {reason: 'human', until}});
+  const full = 'cache hit 90% · 900 cached of 1k · TTL 5m (known) · warm 3:41 · keep-alive until ' + hhmm(until);
+  assert.equal(detail(s), full);
+  assert.equal(detail(s, stringWidth(full) - 1), 'cache hit 90% · 900 cached of 1k · TTL 5m (known) · warm 3:41');
+  assert.equal(detail(s, 45), 'cache hit 90% · 900 cached of 1k · warm 3:41');
+  assert.equal(detail(s, 30), 'cache hit 90% · warm 3:41');
+  assert.equal(detail(s, 10), 'cache hit 90%');
+  assert.match(detail(warm(6 * 60_000, {lifetimeMs: 1_800_000, confidence: 'estimated'})), /TTL 30m [(]estimated[)] · warm ~6m/);
+  assert.match(detail(warm(200_000, {keepAlive: {reason: 'peer'}})), /keep-alive while peers work/);
+  assert.match(detail(warm(24_000)), /expires 0:24/);
+  assert.match(detail(warm(-5_000)), /TTL 5m [(]known[)] · cold/);
+  assert.equal(detail(withCache(undefined)), 'cache hit 90% · 900 cached of 1k', 'no lifetime facts: only what is measured');
+  assert.equal(detail(noUsage), 'No cache data yet');
 });

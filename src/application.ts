@@ -302,6 +302,12 @@ export async function createSessionApplication(options: SessionApplicationOption
     modelPool, actors, actorServices, taskModels, contexts, permissions, extensions, plans, profileReady, directorReports,
     configureMeter: sessionStatus.configureMeter, memoryPrompt: anamnesis.lifecycle.memoryPrompt,
     deliverToTask: (ownerId, activityId, text, summary) => ensemble.injectTaskMessage(ownerId, text, 'automa', summary, 'queue', {activityId})});
+  // The footer's cache widget reads when each cache was last refreshed and how it is kept alive; a keeper change refreshes the footer.
+  sessionStatus.options.cache = ownerId => {
+    const who = {sessionId: session, ownerId}, state = keepAlive.state(who);
+    return {startedAt: keepAlive.touchedAt(who), ...(state ? {keepAlive: {reason: state.reason, ...(state.nextWarmAt !== undefined ? {nextWarmAt: state.nextWarmAt} : {}), ...(state.until !== undefined ? {until: state.until} : {})}} : {})};
+  };
+  keepAlive.onChange = sessionStatus.bumpStatus;
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,

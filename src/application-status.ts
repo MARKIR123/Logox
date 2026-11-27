@@ -9,7 +9,8 @@ import type {PermissionEngine} from './permissions/engine.js';
 import type {ProviderRegistry} from './providers/registry.js';
 import type {RuntimeStore} from './runtime/store.js';
 import {modelTable} from './providers/model-table.js';
-import type {GitStatus, StageStatus, TokenTotals} from './runtime/stage-status.js';
+import type {CacheStatus, GitStatus, StageStatus, TokenTotals} from './runtime/stage-status.js';
+import {cacheLifetime, roleCacheRetention, type CacheLifetime} from './providers/cache.js';
 
 const states = {queued: 'Queued', running: 'Running', waiting_input: 'Awaiting answer', paused: 'Paused',
   completed: 'Completed', failed: 'Failed', cancelled: 'Stopped'};
@@ -25,6 +26,16 @@ export interface StageStatusOptions {
   /** Providers billed by subscription (OAuth sign-in); their cost is never shown. */
   subscriptions?: () => ReadonlySet<string>;
   git?: () => GitStatus | undefined;
+  /** What the cache keeper knows of one actor: when its cache was last refreshed and how it is being kept alive. */
+  cache?: (ownerId: string) => {startedAt?: number | undefined; keepAlive?: NonNullable<CacheStatus['keepAlive']> | undefined} | undefined;
+}
+/** Lifetime of the actor's cache for its selected model, as the request it would send sets it; undefined when unknown or the model cannot be resolved. */
+function cacheLifetimeOf(registry: ProviderRegistry, actors: ActorCatalog, selected: TaskModelSelection, ownerId: string): CacheLifetime | undefined {
+  try {
+    const actor = actors.find(ownerId);
+    return cacheLifetime(registry.configuredSettings(selected.provider, selected.model),
+      {cacheRetention: {role: roleCacheRetention(ownerId), ...(actor?.cacheRetention ? {actor: actor.cacheRetention} : {})}});
+  } catch {return undefined;}
 }
 /** Run state of one window: the live activity, else what the window's companions are doing, else how its latest activity ended. */
 export function windowState(store: RuntimeStore, ownerId: string): string {
@@ -67,6 +78,9 @@ export function stageStatus(options: StageStatusOptions, ownerId: string): Stage
   const actor = actors.find(ownerId);
   const git = options.git?.();
   const hit = modelTable.resolve(selected.provider, selected.model, {catalogs: config.catalogs}), price = modelPrice(config, selected.provider, selected.model);
+  const lifetime = cacheLifetimeOf(registry, actors, selected, ownerId), known = options.cache?.(ownerId);
+  const cache: CacheStatus | undefined = lifetime && known?.startedAt !== undefined
+    ? {lifetimeMs: lifetime.ms, confidence: lifetime.confidence, startedAt: known.startedAt, ...(known.keepAlive ? {keepAlive: known.keepAlive} : {})} : undefined;
   const window = reading?.window ?? hit?.model.window;
   const modelInfo = {...(window ? {window} : {}), ...(hit?.model.maxOutput ? {maxOutput: hit.model.maxOutput} : {}),
     ...(price ? {currency: price.currency, ...(price.input !== undefined ? {input: price.input} : {}), ...(price.output !== undefined ? {output: price.output} : {}),
@@ -77,7 +91,7 @@ export function stageStatus(options: StageStatusOptions, ownerId: string): Stage
       ...(reading.categories ? {categories: reading.categories} : {})}} : {}),
     tokens: session.input + session.output, usage: {window: windowTotals, session},
     ...(cost ? {cost: cost.amount, costCurrency: cost.currency, ...(cost.partial ? {costPartial: true} : {})} : {}),
-    ...(git ? {git} : {}), session: sessionId, project: cwd};
+    ...(cache ? {cache} : {}), ...(git ? {git} : {}), session: sessionId, project: cwd};
 }
 /** Tokens and cost of one actor's window in this session (the /ensemble "This session" block). */
 export function actorUsage(options: StageStatusOptions, ownerId: string): {input: number; output: number; cost?: string} {

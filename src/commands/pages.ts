@@ -4,14 +4,15 @@
  * open. The slash command behind the open tabbed page (`activeCommandPage`) lives in the shared session state; the page
  * content itself comes from `createCommandTabsFor` and the command-context builder, never from here.
  */
+import {join} from 'node:path';
 import {z} from 'zod';
 import type {ActorCatalog} from '../actors/catalog.js';
 import type {ActorServices} from '../actors/services.js';
 import {createCommandTabsFor, type ApplicationCommandContext} from '../application-commands.js';
 import type {SessionState} from '../app/state.js';
 import type {SessionStatus} from '../app/status.js';
-import {themeSchema, type Config} from '../config/config.js';
-import {effortSchema} from '../config/model-preferences.js';
+import {kernelPreferenceSchema, themeSchema, type Config} from '../config/config.js';
+import {effortSchema, StateFile} from '../config/model-preferences.js';
 import {settingDefinition, settingDefinitions, settingOptions, settingsPages, saveSettings, type SettingsEnv} from '../config/settings-definitions.js';
 import type {StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {applyThemePreset, applyCursorStyle, DEFAULT_THEME, loadThemePresets, resolveTheme, themeListing, type CursorStyleName} from '../config/theme-presets.js';
@@ -133,6 +134,13 @@ export function createPages(deps: PagesDeps) {
     permissionMode: () => permissions.mode,
     permissionModes: () => Object.keys(permissionModes),
     savePermissionMode: mode => permissions.setMode(permissionModeSchema.parse(mode)),
+    kernel: () => ({cacheKeepalive: config.kernel.cache_keepalive, awayKeepaliveMinutes: config.kernel.away_keepalive_minutes}),
+    saveKernel: async patch => {
+      const next = {...(patch.cacheKeepalive !== undefined ? {cache_keepalive: patch.cacheKeepalive} : {}),
+        ...(patch.awayKeepaliveMinutes !== undefined ? {away_keepalive_minutes: patch.awayKeepaliveMinutes} : {})};
+      await new StateFile(join(homeDir, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).update(current => ({...current, ...next, version: 1 as const}));
+      Object.assign(config.kernel, next);
+    },
   };
   const settingsItems = (): SettingsItem[] => settingDefinitions.map(definition => ({
     key: definition.key, label: definition.label, description: definition.description, group: definition.group, kind: definition.kind,

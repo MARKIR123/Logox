@@ -33,6 +33,27 @@ export function cacheLifetimeMs(settings: Pick<ModelSettings, 'kind' | 'cacheRet
   if (settings.cacheTtlMs !== undefined) return settings.cacheTtlMs;
   return settings.kind === 'anthropic' ? anthropicRetention(settings, request) === 'long' ? LONG_CACHE_MS : SHORT_CACHE_MS : undefined;
 }
+export interface CacheLifetime {
+  readonly ms: number;
+  /** `known`: the user configured it or LOGOX itself sets it on the request (Anthropic). `estimated`: a conservative reading of the provider's public documentation. */
+  readonly confidence: 'known' | 'estimated';
+}
+/**
+ * `cacheLifetimeMs()` plus how far the value can be trusted; undefined when the lifetime is unknown. Known values may be counted down exactly and
+ * warmed; estimates (GPT models, the conservative end of the published range, source at `openAiRetentionFields`) are only shown with `~` and never warmed:
+ * - GPT-5.6 and later: 30 minutes by default, 12 hours with `cache_retention = "long"`.
+ * - Earlier GPT models: 5 minutes (the documented 5-10 minutes are not guaranteed), 24 hours with `long`.
+ */
+export function cacheLifetime(settings: Pick<ModelSettings, 'kind' | 'cacheRetention' | 'cacheTtlMs' | 'model'> & {readonly baseUrl?: string | undefined}, request: Pick<ModelRequest, 'cacheRetention'>): CacheLifetime | undefined {
+  const known = cacheLifetimeMs(settings, request);
+  if (known !== undefined) return {ms: known, confidence: 'known'};
+  if (settings.kind === 'anthropic') return undefined;
+  const match = /^gpt-(\d+)(?:\.(\d+))?/i.exec(settings.model);
+  if (!match) return undefined;
+  const major = Number(match[1]), minor = Number(match[2] ?? 0), long = settings.cacheRetention === 'long';
+  const modern = major > 5 || major === 5 && minor >= 6;
+  return {ms: modern ? (long ? 12 * 3_600_000 : 30 * 60_000) : (long ? 24 * 3_600_000 : SHORT_CACHE_MS), confidence: 'estimated'};
+}
 /** Omitting `ttl` keeps the default 5 minutes; `"1h"` costs 2x on writes instead of 1.25x. */
 export function cacheControl(retention: CacheRetention): {type: 'ephemeral'; ttl?: '1h'} {
   return retention === 'long' ? {type: 'ephemeral', ttl: '1h'} : {type: 'ephemeral'};

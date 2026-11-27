@@ -111,9 +111,11 @@ const schema = z.object({
     max_retries: z.number().int().nonnegative().max(10).default(3),
     /** Replay an idle actor's last request shortly before its short prompt cache expires, only while it is certain to wake again. */
     cache_keepalive: z.boolean().default(true),
+    /** Minutes after the last real request that the Director's cache is kept warm for a returning human (0 never warms for the human). Waits for another actor are not limited by it. */
+    away_keepalive_minutes: z.number().nonnegative().max(24 * 60).default(60),
     /** Record one small hash-and-size line per model request (`<session>/requests/<actor>.fingerprints.jsonl`) so cache misses can be explained afterwards. Never message text. */
     request_fingerprints: z.boolean().default(true),
-  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true, request_fingerprints: true}),
+  }).default({max_iterations: 0, max_retries: 3, cache_keepalive: true, away_keepalive_minutes: 60, request_fingerprints: true}),
   providers: z.record(z.string(), z.object({
     tool_discovery: toolDiscoverySchema.optional(),
     prompt_cache_key: z.boolean().optional(),
@@ -204,6 +206,9 @@ function merge(left: Record<string, unknown>, right: Record<string, unknown>): R
   }
   return result;
 }
+/** `/settings` choices that live beside the TOML files (`~/.logox/kernel-preferences.json`); the keys are the `[kernel]` keys they override. */
+export const kernelPreferenceSchema = z.strictObject({version: z.literal(1), cache_keepalive: z.boolean().optional(), away_keepalive_minutes: z.number().nonnegative().max(24 * 60).optional()});
+export type KernelPreference = z.infer<typeof kernelPreferenceSchema>;
 export async function loadConfig(cwd: string, overrides: Record<string, unknown> = {},
   env: NodeJS.ProcessEnv = process.env, home = homedir(), projectBoundary?: string,
   diagnostic: (message: string) => void = message => {process.stderr.write(message + '\n');}): Promise<Config> {
@@ -256,6 +261,12 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
       raw = candidate;
     }
   } catch {diagnostic('The last model selection is unreadable or invalid; using config instead. The original state file is preserved.');}
+  // Kernel switches saved from /settings win over the TOML files (like the last model selection) and lose to the environment and overrides.
+  try {
+    const kernel = await new StateFile(join(home, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).read();
+    if (kernel) raw = merge(raw, {kernel: {...(kernel.cache_keepalive !== undefined ? {cache_keepalive: kernel.cache_keepalive} : {}),
+      ...(kernel.away_keepalive_minutes !== undefined ? {away_keepalive_minutes: kernel.away_keepalive_minutes} : {})}});
+  } catch {diagnostic('The saved kernel settings are unreadable or invalid; using config instead. The original state file is preserved.');}
   let environment: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(env)) {
     if (!key.startsWith('LOGOX__') || value === undefined) continue;

@@ -22,12 +22,12 @@ test('every definition names a known group, a description, a label, a default an
   const f = await settingsFixture();
   try {
     const groups = new Set(settingGroups.map(group => group.id));
-    assert.deepEqual(settingGroups.map(group => group.id), ['appearance', 'splash', 'conversation', 'pages']);
+    assert.deepEqual(settingGroups.map(group => group.id), ['appearance', 'splash', 'conversation', 'runtime', 'pages']);
     assert.equal(new Set(settingDefinitions.map(definition => definition.key)).size, settingDefinitions.length, 'keys are unique');
     for (const definition of settingDefinitions) {
       const label = definition.key;
       assert.ok(groups.has(definition.group), label + ' group');
-      assert.ok(definition.label.trim() && definition.description.trim().endsWith('.'), label + ' label and description');
+      assert.ok(definition.label.trim() && /\.( \[[a-z]+\] [a-z_]+)?$/.test(definition.description.trim()), label + ' label and description');
       assert.ok(kinds.has(definition.kind), label + ' kind');
       assert.notEqual(definition.default, undefined, label + ' default');
       assert.equal(typeof definition.default, definition.kind === 'boolean' ? 'boolean' : definition.kind === 'number' ? 'number' : 'string', label + ' default type');

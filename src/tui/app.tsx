@@ -14,6 +14,7 @@ import type {StageStatus} from '../runtime/stage-status.js';
 import type {SubmitDelivery} from '../application.js';
 import type {StatusbarId, StatusbarPreferences} from '../config/statusbar-preferences.js';
 import {statusbarLayout, type WidgetRegion} from './status/statusbar.js';
+import {useFooterClock} from './status/use-footer-clock.js';
 import {calculatePillsWidth} from './status/actor-pills.js';
 import {MouseHost, type MouseSubscriber, type SgrMouseEvent} from './terminal/mouse.js';
 import {LoginDialog} from './login/login.js';
@@ -305,10 +306,14 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
     : liveWindowTasks.length === 1 ? liveWindowTasks[0] : undefined;
   const steerTarget = selectedSteerTask && ['running', 'waiting_input'].includes(selectedSteerTask.status) ? selectedSteerTask : undefined;
   const own = !isDirector(currentView);
+  // The footer's shared one-second clock: it re-reads the status (cache refresh times and keep-alive state change without a store update) and
+  // redraws the cache countdown, and only runs while the cache widget has a countdown to show.
+  const [footerClock, setFooterClock] = useState(() => Date.now());
   const cachedStageStatus = useMemo(() => {
     if (!getStatus) return undefined;
     return getStatus(currentView);
-  }, [getStatus, currentView, snapshot.revision, themeVersion]);
+  }, [getStatus, currentView, snapshot.revision, themeVersion, footerClock]);
+  useFooterClock(Boolean(cachedStageStatus?.cache) && Boolean(layout?.modules.some(module => module.id === 'cache' && module.enabled)), setFooterClock);
   const statusLeft = statusLeftText({notice, cachedStageStatus, width, layout, demoScene, own, currentView, roles, request, scenario, pending, activities, scene});
   const statusLeftColor = notice
     ? palette.accent
@@ -372,9 +377,9 @@ export function App({store, plans, authentication, surfaces, getCommandContext, 
   const noticeInline = Boolean(notice) && (!getStatus || footerHeight < 2);
   // The same layout draws row 1 and answers hover and click hit tests.
   const footerLayout = useMemo(() => footerStatus
-    ? statusbarLayout(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined, {hovered: hoveredWidget})
+    ? statusbarLayout(footerStatus, footerStatusWidth, layout?.modules, layout ?? undefined, {hovered: hoveredWidget, now: footerClock})
     : {parts: [], regions: [] as WidgetRegion[], width: 0},
-  [footerStatus, footerStatusWidth, layout, hoveredWidget, themeVersion]);
+  [footerStatus, footerStatusWidth, layout, hoveredWidget, themeVersion, footerClock]);
   const footerStatusParts = footerLayout.parts;
   const footerStatusText = footerStatus && !noticeInline ? footerStatusParts.map(part => part.text).join('') : clipLine(statusLeft, footerStatusWidth);
   const queuedHere = pendingAll.length;

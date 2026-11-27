@@ -5,7 +5,7 @@ import type {StageStatus} from '../../runtime/stage-status.js';
 import {permissionModes} from '../../runtime/permission-mode.js';
 import {palette} from '../appearance/theme.js';
 import {mixHex, windowAccent} from '../appearance/colors.js';
-import {cacheHitRate, contextOver, contextRamp, contextTone} from './statusbar.js';
+import {cacheHitRate, cacheLook, contextOver, contextRamp, contextTone, formatCountdown, formatMinutes} from './statusbar.js';
 
 /** One styled run of the notification line (row 2 of the footer). */
 export interface NoteSegment {readonly text: string; readonly color?: string; readonly bold?: boolean; readonly italic?: boolean}
@@ -73,6 +73,34 @@ function contextDetail(status: StageStatus, actor: string, width?: number): Note
   variants.push(join([[dim('ctx '), value(tilde + percent)], compacts(false)]));
   return (width === undefined ? variants[0] : variants.find(variant => flatWidth(variant) <= width) ?? variants[variants.length - 1])!;
 }
+/** `1h`, `30m`, `90s`: a lifetime in its natural unit. */
+function formatLifetime(ms: number): string {
+  if (ms % 3_600_000 === 0) return ms / 3_600_000 + 'h';
+  if (ms % 60_000 === 0) return ms / 60_000 + 'm';
+  return Math.round(ms / 1000) + 's';
+}
+const clockTime = (at: number): string => {const date = new Date(at); return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');};
+/**
+ * `cache hit 87% · 182k cached of 209k · TTL 1h (known) · warm 3:41 · keep-alive until 23:40`. Variants from longest to shortest; the first that
+ * fits `width` wins and none is clipped. Without lifetime facts only the first two groups exist.
+ */
+function cacheDetail(status: StageStatus, width: number | undefined, now: number): NoteSegment[] {
+  const usage = status.usage?.window, rate = cacheHitRate(status);
+  if (!usage || rate === undefined) return [dim('No cache data yet')];
+  const hit = [dim('cache hit '), value(rate + '%')];
+  const cached = [dim(formatTokens(usage.cached) + ' cached of ' + formatTokens(usage.input + usage.cached))];
+  const cache = status.cache;
+  if (!cache) return join([hit, cached]);
+  const look = cacheLook(status, now), estimated = cache.confidence === 'estimated';
+  const ttl = [dim('TTL '), value(formatLifetime(cache.lifetimeMs)), dim(' (' + cache.confidence + ')')];
+  const remaining = cache.startedAt + cache.lifetimeMs - now;
+  const state = look.kind === 'cold' ? [value('cold', palette.muted)]
+    : [dim(look.kind === 'warning' ? 'expires ' : 'warm '), value(estimated ? '~' + formatMinutes(remaining) : formatCountdown(remaining), look.kind === 'warning' ? palette.warning : palette.fg)];
+  const keep = cache.keepAlive;
+  const keeping = keep ? [dim('keep-alive '), value(keep.reason === 'human' && keep.until !== undefined ? 'until ' + clockTime(keep.until) : 'while peers work')] : [];
+  const variants = [join([hit, cached, ttl, state, keeping]), join([hit, cached, ttl, state]), join([hit, cached, state]), join([hit, state]), join([hit])];
+  return (width === undefined ? variants[0] : variants.find(variant => flatWidth(variant) <= width) ?? variants[variants.length - 1])!;
+}
 function modelDetail(status: StageStatus): NoteSegment[] {
   if (!status.model) return [dim('No model selected'), dot(), click('click to change')];
   const info = status.modelInfo;
@@ -113,7 +141,7 @@ function gitDetail(status: StageStatus): NoteSegment[] {
 }
 
 /** Row-2 detail of the hovered status widget. Click actions are named here and executed by `widgetCommand`. */
-export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = windowAccent(status.ownerId, status.color), width?: number): NoteSegment[] {
+export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string = windowAccent(status.ownerId, status.color), width?: number, now: number = Date.now()): NoteSegment[] {
   switch (id) {
     case 'context': return contextDetail(status, actor, width);
     case 'model': return modelDetail(status);
@@ -122,11 +150,7 @@ export function widgetDetail(id: StatusbarId, status: StageStatus, actor: string
       return join([[value(mode ?? 'none', known ? palette[known.colorToken] : palette.fg), ...(known ? [dim(' — ' + known.description)] : [])], [click('click to change')]]);
     }
     case 'effort': return join([[dim('thinking effort '), value(status.effort ?? 'unsupported')], [click('click to change')]]);
-    case 'cache': {
-      const usage = status.usage?.window, rate = cacheHitRate(status);
-      return !usage || rate === undefined ? [dim('No cache data yet')]
-        : join([[dim('cache hit '), value(rate + '%')], [dim(formatTokens(usage.cached) + ' cached of ' + formatTokens(usage.input + usage.cached) + ' input tokens in this window')]]);
-    }
+    case 'cache': return cacheDetail(status, width, now);
     case 'tokens': return tokensDetail(status);
     case 'cost': return costDetail(status);
     case 'git': return gitDetail(status);
