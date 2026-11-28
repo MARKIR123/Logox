@@ -24,6 +24,10 @@ export interface EnsembleSources {
   readonly tools: (ownerId: string) => readonly ResolvedTool[];
   readonly mcp?: () => readonly McpFolder[];
   readonly skills: (actor: ActorDefinition) => readonly SkillResource[];
+  /** Skills the curator moved to `.archive/` that the actor would see if they were live. */
+  readonly archived?: (actor: ActorDefinition) => readonly SkillResource[];
+  /** Names of live skills the curator marked stale. */
+  readonly stale?: () => ReadonlySet<string>;
   readonly snapshot: () => RuntimeSnapshot;
   readonly usage: (ownerId: string) => {input: number; output: number; cost?: string};
   /** Injectable for tests; defaults to `fs.existsSync`. */
@@ -88,16 +92,19 @@ export function toolsFor(actor: ActorDefinition, sources: EnsembleSources, names
 export function skillScope(path: string, cwd: string, home: string): {scope: EnsembleSkill['scope']; folder: string[]} {
   const roots: [EnsembleSkill['scope'], string][] = [['project', join(cwd, '.logox', 'skills')], ['user', join(home, '.logox', 'skills')]];
   for (const [scope, root] of roots) {
-    const rel = relative(resolve(root), resolve(path)).replaceAll('\\', '/');
+    // An archived skill sits in `<root>/.archive/<same path>`: it keeps the scope and the folders it had.
+    const rel = relative(resolve(root), resolve(path)).replaceAll('\\', '/').replace(/^\.archive\//, '');
     if (rel && !rel.startsWith('..') && !/^[a-zA-Z]:/.test(rel)) return {scope, folder: rel.split('/').slice(0, -1)};
   }
   const parts = resolve(path).replaceAll('\\', '/').split('/'), at = parts.findIndex(part => part.toLowerCase() === 'builtin-skills');
   return {scope: 'built-in', folder: at >= 0 ? parts.slice(at + 1, -1) : []};
 }
-export function skillsFor(actor: ActorDefinition, sources: EnsembleSources): EnsembleSkill[] {
-  return sources.skills(actor).map(skill => {
+export function skillsFor(actor: ActorDefinition, sources: EnsembleSources, archived = false): EnsembleSkill[] {
+  const stale = archived ? new Set<string>() : sources.stale?.() ?? new Set<string>();
+  return (archived ? sources.archived?.(actor) ?? [] : sources.skills(actor)).map(skill => {
     const {scope, folder} = skillScope(skill.path, sources.cwd, sources.home);
-    return {name: skill.name, description: skill.description, path: skill.path, scope, folder};
+    return {name: skill.name, description: skill.description, path: skill.path, scope, folder,
+      ...(skill.pinned ? {pinned: true as const} : {}), ...(stale.has(skill.name) ? {stale: true as const} : {})};
   }).sort((a, b) => a.scope.localeCompare(b.scope) || a.folder.join('/').localeCompare(b.folder.join('/')) || a.name.localeCompare(b.name));
 }
 
@@ -108,7 +115,7 @@ const promptFiles: readonly {id: EnsemblePrompt['id']; heading: string; file: st
   {id: 'memory', heading: 'Memory priorities', file: 'compression.md', read: actor => actor.compression},
 ];
 
-export function buildEnsemble(sources: EnsembleSources, initial?: string): EnsembleData {
+export function buildEnsemble(sources: EnsembleSources, initial?: string, initialRoute?: EnsembleData['initialRoute']): EnsembleData {
   const exists = sources.exists ?? existsSync;
   const catalog = sources.actors();
   const names = new Map(catalog.map(actor => [actor.id, actor.name]));
@@ -136,12 +143,12 @@ export function buildEnsemble(sources: EnsembleSources, initial?: string): Ensem
       model: {text: model, source: actor.defaultModel ? 'set' : 'follows'},
       context: contextSentence(policy, status.modelInfo?.window ?? status.context?.window),
       userPath, ...(projectLayer ? {projectPath: projectLayer} : {}),
-      tools: toolsFor(actor, sources, names), skills: skillsFor(actor, sources),
+      tools: toolsFor(actor, sources, names), skills: skillsFor(actor, sources), archivedSkills: skillsFor(actor, sources, true),
       stats: {completed: own.filter(activity => activity.status === 'completed').length, failed: own.filter(activity => activity.status === 'failed').length,
         toolCalls: calls.length, toolsFailed: calls.filter(message => message.step?.state === 'failed').length,
         approvals: snapshot.interactions.filter(item => item.kind === 'permission' && item.ownerId === id).length,
         tokensIn: usage.input, tokensOut: usage.output, ...(usage.cost ? {cost: usage.cost} : {})},
       prompts};
   });
-  return {actors, ...(initial ? {initial} : {})};
+  return {actors, ...(initial ? {initial} : {}), ...(initialRoute ? {initialRoute} : {})};
 }

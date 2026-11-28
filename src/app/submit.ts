@@ -201,6 +201,7 @@ export function createSubmit(deps: SubmitDeps) {
     state.pageOwner = source;
     if (text === '/settings' || text === '/animations') {pages.openSettings(); return;}
     if (text === '/ensemble') {pages.openEnsemble(source); return;}
+    if (text === '/skills') {pages.openEnsemble(source, 'skills'); return;}
     if (text === '/theme') {pages.openTheme(); return;}
     if (text === '/notices') {surfaces.openNotices(); return;}
     if (text === '/jobs') {await jobsCommand.open(); return;}

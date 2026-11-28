@@ -27,7 +27,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'undo', usage: '/undo', description: 'Undo file changes made in the latest turn', argument: 'none'},
   {name: 'permissions', usage: '/permissions', description: 'Open permissions page to view and toggle mode or manage rules', argument: 'none'},
   {name: 'reload', usage: '/reload', description: 'Reload personas, guidelines, skills, and template commands', argument: 'none'},
-  {name: 'skills', usage: '/skills', description: 'View available skill names, descriptions, and file paths', argument: 'none'},
+  {name: 'skills', usage: '/skills', description: 'Browse skills as a tree (stale, pinned and archived ones marked; restore with r)', argument: 'none'},
   {name: 'ensemble', usage: '/ensemble', description: 'One tab per actor: model, context, tools, skills, session figures and prompts', argument: 'none'},
   {name: 'team', usage: '/team [show|hide|toggle]', description: 'Team stage sidebar: the task graph one act at a time with the team replayed on stage; click the act header for the programme', argument: 'none'},
   {name: 'sidebar', usage: '/sidebar [team|changes|usage] [show|hide|toggle]', description: 'Sidebar tabs: the team stage, files changed in this session, tokens and cost per actor; without a tab it only shows or hides the sidebar', argument: 'none'},

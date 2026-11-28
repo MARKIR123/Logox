@@ -24,7 +24,6 @@ import type {RuntimeStore} from '../runtime/store.js';
 import type {Tools} from '../tools/tools.js';
 import {palette} from '../tui/appearance/theme.js';
 import type {ProvidersPage} from './providers-page.js';
-import type {SkillsPage} from './skills-page.js';
 import {row} from './tab-rows.js';
 
 export interface CommandContextDeps {
@@ -33,7 +32,6 @@ export interface CommandContextDeps {
   contexts: ContextManager; taskModels: TaskModels; status: Pick<SessionStatus, 'status' | 'sessionUsageRecords' | 'options'>;
   actors: Pick<ActorCatalog, 'list' | 'find'>;
   providersPage: Pick<ProvidersPage, 'rows'>;
-  skillsPage: Pick<SkillsPage, 'content'>;
   /** The session selection (provider, model, base URL). */
   selection(): ReturnType<ProviderRegistry['selection']>;
 }
@@ -41,7 +39,7 @@ export interface CommandContextDeps {
 export type CommandContextBuilder = () => ApplicationCommandContext;
 
 export function createCommandContext(deps: CommandContextDeps): CommandContextBuilder {
-  const {session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels, status, providersPage, skillsPage, selection} = deps;
+  const {session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels, status, providersPage, selection} = deps;
   const resources = extensions.resources;
   const contextRows = (): TabLine[] => {
     const identity = {sessionId: session, ownerId: state.pageOwner};
@@ -151,7 +149,6 @@ export function createCommandContext(deps: CommandContextDeps): CommandContextBu
         return {session: sessionUsageRows(input), ...(plan ? {plan} : {})};
       })(),
       providersLines: providersPage.rows(),
-      skillsPage: skillsPage.content(),
       commandsLines: [...commandHelp().split('\n').map(line => row.text(line)), ...resources.snapshot().commands.map(item => row.text('/' + item.name + ': ' + item.description))],
     };
   };

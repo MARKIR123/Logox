@@ -438,8 +438,8 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 ## 资源与扩展
 
 - 规范：按目录加载 `LOGOX.md`、`AGENTS.md`，或你自备的 `CLAUDE.md`。
-- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取，模型也可以用 `Skill` 工具搜索和加载。`/skills` 打开技能页（见下）。
-- 技能园丁（归档）：长期不用的技能会被自动收起，永远不会被删除。闲置按活跃天数计（有会话的日子，不是自然日）：连续 14 个活跃日未使用，技能在 `/skills` 里标 `[stale]`；再过 16 个活跃日（共 30 个）则移到所在技能根目录下的 `.archive/`，保留相对路径（例如 `~/.logox/skills/.archive/techne/eng/x.md`）。检查每次启动会话时运行一次。从未用过的技能从第一次被看到那天起计时，新装的技能不会当天被归档。在 frontmatter 写 `pinned: true` 可永远保留某个技能；自学习的技能和你自己装的技能都会被归档，内置技能通过它们的种子副本归档，之后不会被重新种回来。归档后提示词只多一行 `N archived skills — searchable with Skill search`。找回的方式有三种：模型用 `Skill` 工具 `search`（结果标 `archived`）再 `load`，加载即自动恢复；`/skills` 页的 Archived 标签页里用 `n` / `p` 选择、`r` 恢复（页脚的按钮可以点击）；或者直接输入 `/<技能名>`。恢复会把闲置计时清零，同一个技能恢复到第二次时会收到一条通知，建议加上 `pinned: true`。恢复后的技能立刻可用，但要到下次 `/reload` 或启动才重新出现在提示词里。
+- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取，模型也可以用 `Skill` 工具搜索和加载。`/skills` 直接打开 `/ensemble` 里当前角色（Director 或你正在看的角色窗口）的 Skills 树（见「角色总览」）。
+- 技能园丁（归档）：长期不用的技能会被自动收起，永远不会被删除。闲置按活跃天数计（有会话的日子，不是自然日）：连续 14 个活跃日未使用，技能在 `/skills` 树里标 `stale`；再过 16 个活跃日（共 30 个）则移到所在技能根目录下的 `.archive/`，保留相对路径（例如 `~/.logox/skills/.archive/techne/eng/x.md`）。检查每次启动会话时运行一次。从未用过的技能从第一次被看到那天起计时，新装的技能不会当天被归档。在 frontmatter 写 `pinned: true` 可永远保留某个技能；自学习的技能和你自己装的技能都会被归档，内置技能通过它们的种子副本归档，之后不会被重新种回来。归档后提示词只多一行 `N archived skills — searchable with Skill search`。找回的方式有三种：模型用 `Skill` 工具 `search`（结果标 `archived`）再 `load`，加载即自动恢复；`/skills` 树里每个来源下的 `Archived · N` 分支（默认折叠，N 大于 0 才出现，行显示为暗色）列出已归档技能，`Enter` 或点击打开详情，按 `r` 或点击页脚的 `r restore` 恢复，恢复后树刷新、技能回到原来的位置；或者直接输入 `/<技能名>`。恢复会把闲置计时清零，同一个技能恢复到第二次时会收到一条通知，建议加上 `pinned: true`。恢复后的技能立刻可用，但要到下次 `/reload` 或启动才重新出现在提示词里。
 - 命令模板：在用户或项目的 `.logox/commands/` 下定义，展开成任务输入，不直接执行 Shell。
 - `/reload`：空闲时重新加载规范、技能、模板和角色定义；不会替换运行中的提供商，也不会重启 MCP。
 - MCP：目前支持 stdio 子进程，首次使用时启动，调用要经过 schema 与权限检查。
@@ -525,16 +525,18 @@ playwright = false
 
 ### 角色总览 /ensemble
 
-每个角色（Logox、Kalon、Techne、Aletheia，不含 Automa）一个标签页，标签与页面边线使用该角色的颜色。`←` `→` / `Tab` 或点击标签切换角色。每页是一张可滚动的页面（`↑` `↓`、`PgUp` `PgDn`、滚轮）：
+每个角色（Logox、Kalon、Techne、Aletheia，不含 Automa）一个标签页，标签与页面边线使用该角色的颜色。`←` `→` / `Tab` 或点击标签切换角色，在 Tools / Skills 树里也一样。每页是一张可滚动的页面（`↑` `↓`、`PgUp` `PgDn`、滚轮）：
 
 - **参数**：模型（`<model> · <thinking>`，标明 `set for <Name>` 或 `follows session`；`m` 或点击打开 `/model <actor>`）、上下文（用真实窗口和水位写成一句话，例如 `keeps 0 rounds and 2 tool results · compacts at 84% (167k)`）、角色档案路径（项目层扩展用户层时标 `+ project` 并列出两处路径）。
-- **Tools · N / Skills · N**：以 `›` 结尾的两行，`Enter` 或点击进入子页，`Esc` 返回。
+- **Tools · N / Skills · N**：以 `›` 结尾的两行，`Enter` 或点击进入对应的树，`Esc` 返回。`/skills` 直接落在当前角色的 Skills 树上。
 - **This session**：仅当前会话的任务、工具调用、审批、Token 与费用。
 - **提示词**：Persona、Execution、Collaboration、Memory priorities 完整渲染为 Markdown，各带文件名；项目层角色档案存在时，Persona 显示合并后的生效内容并标 `+ project`。
 
-工具子页与 `src/tools` 目录同构：根层是该角色实际可用的核心工具（`名称  简述`），再是每个分类目录一行（`▸ coordination · 3`）和每个 MCP 服务一行（`▸ mcp:playwright · N`，工具清单在该服务首次被列出后才有）。`Enter` 进入目录（面包屑 `Tools › coordination`），再按 `Enter` 打开工具详情：模型实际看到的完整描述、参数表（名称、类型、必填、说明）以及角色、加载方式和可见性。技能子页按来源（Built-in / User / Project）和目录分组，详情页渲染技能文件并显示来源路径。
+Tools 与 Skills 是同一种可折叠的树。文件夹行写作 `▸ kalon · 6`（折叠）或 `▾ kalon · 6`（展开），数字是其下的技能或工具数；叶子行是名称加一行暗色简述（按宽度截断），技能行还可能带暗色的 `stale` 或 `pinned` 标记。`↑` `↓` 移动选中项；`Space` 或 `Enter` 展开或折叠文件夹，在叶子上按 `Space` 折叠它所在的文件夹并选中该文件夹；`Enter` 打开叶子的详情，`Esc` 回到树且选中项和展开状态都保留，树上再按 `Esc` 回到主页。鼠标同样完整：点文件夹行切换展开，点叶子打开详情，滚轮滚动，悬停高亮；每个角色各自记住自己的展开状态，直到关闭页面。
 
-`e` 用外部编辑器打开当前视野内的文件（提示词所在文件，或技能文件）：先 `$VISUAL`，再 `$EDITOR`，否则用系统默认打开方式（`start` / `open` / `xdg-open`）；编辑从不发生在界面内，终端内编辑器（如 vim）不适用。资源没有文件监听，保存后运行 `/reload` 才会生效。页脚提示 `←→ actor · ↑↓ scroll · Enter open · m model · e edit · Esc back` 可逐项点击，窄屏按重要性丢弃，子页里只显示适用的提示。
+工具树与 `src/tools` 目录同构：根层是该角色实际可用的核心工具，再是每个分类目录（`▸ coordination · 3`）和每个 MCP 服务（`▸ mcp:playwright · N`，工具清单在该服务首次被列出后才有），默认全部折叠；详情页是模型实际看到的完整描述、参数表（名称、类型、必填、说明）以及角色、加载方式和可见性。技能树的根是来源（Built-in / User / Project，只显示存在的），默认展开；其下是角色文件夹（如 `kalon`、`public`）、再是分类，默认折叠，最后是技能。每个来源下如有已归档的技能，末尾多一个折叠的 `Archived · N` 分支，里面保持同样的文件夹结构，行为暗色；详情页渲染技能文件并显示来源路径，已归档的技能还有页脚动作 `r restore`。
+
+`e` 用外部编辑器打开当前视野内的文件（提示词所在文件，或技能文件）：先 `$VISUAL`，再 `$EDITOR`，否则用系统默认打开方式（`start` / `open` / `xdg-open`）；编辑从不发生在界面内，终端内编辑器（如 vim）不适用。资源没有文件监听，保存后运行 `/reload` 才会生效。页脚提示 `←→ actor · ↑↓ scroll · Enter open · m model · e edit · Esc back` 可逐项点击，窄屏按重要性丢弃，树和详情页里只显示适用的提示（树：`←→ actor · ↑↓ choose · Space fold · Enter open · Esc back`）。
 
 `/statusbar` 打开状态栏编辑器，`/settings` 的 Pages 分组里的 Status bar 是同一个入口（Esc 回到设置页）。可以选择风格（Pipes：彩色字段加竖线和上下文仪表；Starship：彩色底段加 Powerline 连接符），并独立选择 theme / gruvbox / dracula 配色和上下文仪表宽度，开关各模块并调整显示顺序。默认显示角色、模型、思考档位、权限、上下文仪表和缓存命中率，Git 与费用需要手动打开。
 
@@ -623,7 +625,7 @@ dream = true             # 收割时更新记忆与 skill
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |
 | | `/compact`、`/rewind`、`/undo` | 整理上下文、回退、撤销文件改动 |
 | | `/fold keep\|restore [角色]` | 缓存临界压缩的通知按钮所用：生效前保留完整上下文，生效后恢复完整上下文 |
-| 资源与权限 | `/skills` | 技能页：Skills 标签页列出可用技能（stale 与 pinned 有标记），Archived 标签页列出已归档技能并可恢复 |
+| 资源与权限 | `/skills` | 打开 `/ensemble` 当前角色的 Skills 树（stale 与 pinned 有标记，已归档技能在 `Archived · N` 分支下，详情页 `r` 恢复） |
 | | `/reload` | 重新加载规范、技能、模板和角色 |
 | | `/permissions`、`/permissions mode [mode]` | 查看规则并切换模式 |
 | | `/permissions add ...`、`/permissions revoke <id>` | 添加或撤销规则 |

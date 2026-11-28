@@ -17,16 +17,20 @@ const readTextFile = (path: string): string | undefined => {try {return readFile
 const WHEEL_LINES = 3;
 
 /**
- * /ensemble: one tab per actor; each tab is a single scrolling page (profile, parameters, session figures, prompts) with Tools and Skills sub-pages.
+ * /ensemble: one tab per actor; each tab is a single scrolling page (profile, parameters, session figures, prompts) with Tools and Skills trees
+ * (folders open and close by Space, Enter and a click). `/skills` opens the page straight on the Skills tree.
  * Keyboard, mouse and the footer buttons all run the same commands (`stepEnsemble`); editing is delegated to the host (`onEdit`), never done here.
  */
-export function EnsemblePage({data, width, height, y = 0, notice = '', home = homedir(), readText = readTextFile, onClose, onModel, onEdit, onNotice}: {
+export function EnsemblePage({data, width, height, y = 0, notice = '', home = homedir(), readText = readTextFile, onClose, onModel, onEdit, onNotice, onRestore}: {
   data: EnsembleData; width: number; height: number; /** Screen row of the page's top rule. */ y?: number; notice?: string; home?: string;
   readText?: (path: string) => string | undefined;
   onClose(): void; onModel(actorId: string): void; onEdit(path: string): void; onNotice?(text: string): void;
+  /** Moves an archived skill back; the host refreshes `data` afterwards. */
+  onRestore?(name: string): void;
 }): ReactElement {
   const start = Math.max(0, data.actors.findIndex(actor => actor.id === data.initial));
-  const view = useRef<EnsembleState>(initialState(start));
+  const view = useRef<EnsembleState>(initialState(start, data.initialRoute === 'skills' ? {kind: 'skills'} : {kind: 'main'}));
+  const dataRef = useRef(data); dataRef.current = data;
   const [, rerender] = useState(0);
   const pointer = usePointer();
   const plan = ensembleLayout({data, state: view.current, width, height, y, pointer, home, readText, notice});
@@ -38,10 +42,11 @@ export function EnsemblePage({data, width, height, y = 0, notice = '', home = ho
     if (effect.kind === 'close') onClose();
     else if (effect.kind === 'model') onModel(effect.actorId);
     else if (effect.kind === 'edit') onEdit(effect.path);
+    else if (effect.kind === 'restore') onRestore?.(effect.name);
     else onNotice?.(effect.text);
   };
   const run = (command: EnsembleCommand) => {
-    const result = stepEnsemble(view.current, command, latest.current, data);
+    const result = stepEnsemble(view.current, command, latest.current, dataRef.current);
     view.current = result.state;
     rerender(count => count + 1);
     apply(result.effect);
@@ -51,6 +56,8 @@ export function EnsemblePage({data, width, height, y = 0, notice = '', home = ho
     if (key.eventType === 'release') return;
     if (key.escape) {run({kind: 'back'}); return;}
     if (key.ctrl || key.meta) return;
+    // Space folds and unfolds in a Tools or Skills tree; ← and → always switch the actor.
+    if (input === ' ' && (view.current.route.kind === 'tools' || view.current.route.kind === 'skills')) {run({kind: 'fold'}); return;}
     if (key.leftArrow || (key.tab && key.shift)) {run({kind: 'tabStep', delta: -1}); return;}
     if (key.rightArrow || key.tab) {run({kind: 'tabStep', delta: 1}); return;}
     if (key.upArrow) {run({kind: 'move', delta: -1}); return;}
@@ -60,6 +67,7 @@ export function EnsemblePage({data, width, height, y = 0, notice = '', home = ho
     if (key.return) {run({kind: 'open', index: -1}); return;}
     if (input === 'm') {run({kind: 'model'}); return;}
     if (input === 'e') run({kind: 'edit'});
+    else if (input === 'r') run({kind: 'restore'});
   });
 
   const actions: readonly FooterAction[] = plan.footer.actions.map(item => ({label: item.label, run: () => run(item.command)}));

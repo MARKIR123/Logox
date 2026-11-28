@@ -34,7 +34,6 @@ import {openInEditor} from './editor.js';
 import type {ModelSelection} from './model-selection.js';
 import {modelsRows} from './models-page.js';
 import type {ProvidersPage} from './providers-page.js';
-import type {SkillsPage} from './skills-page.js';
 import {shortcutRows} from './shortcuts.js';
 import {tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, ThemeActions} from './surfaces.js';
@@ -68,7 +67,6 @@ export interface PagesDeps {
   registry: ProviderRegistry; modelPool: ModelPool;
   modelSelection: Pick<ModelSelection, 'saveEffort' | 'openModels'>;
   providersPage: Pick<ProvidersPage, 'action'>;
-  skillsPage: Pick<SkillsPage, 'action'>;
   status: Pick<SessionStatus, 'status' | 'actorUsage'>;
   /** The data record the tabbed pages render from. */
   buildContext(): ApplicationCommandContext;
@@ -78,7 +76,7 @@ export interface PagesDeps {
 
 export function createPages(deps: PagesDeps) {
   const {session, cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry, extensions,
-    registry, modelPool, modelSelection, providersPage, skillsPage, status, buildContext, profileReady} = deps;
+    registry, modelPool, modelSelection, providersPage, status, buildContext, profileReady} = deps;
   const resources = extensions.resources;
   const pageIsOpen = () => {const open = surfaces.getSnapshot(); return open?.kind === 'page' || open?.kind === 'settings' && open.sub !== undefined;};
   const refreshCurrentPage = () => {
@@ -115,7 +113,6 @@ export function createPages(deps: PagesDeps) {
         return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
       }
       if (tabId === 'providers') return providersPage.action(action);
-      if (tabId === 'archived') return skillsPage.action(action);
       return {};
     },
   });
@@ -203,15 +200,30 @@ export function createPages(deps: PagesDeps) {
       openPage: settingsSubPage,
     });
   };
-  /** /ensemble: a read-only snapshot per actor; `m` leaves for the model picker and `e` hands a file to the external editor. */
-  const openEnsemble = (initial?: string) => {
-    const data = buildEnsemble({actors: () => actors.list(), cwd, home: homeDir, status: status.status, policy: id => actorServices.policy(id),
-      tools: id => toolRegistry.resolveForActor(id, mcpRegistrations(extensions.mcp)), mcp: () => extensions.mcp.folders(),
-      skills: actor => resources.skillsFor({actorId: actor.id, skills: actor.skills}), snapshot: () => store.getSnapshot(),
-      usage: id => status.actorUsage(id)}, initial);
+  /**
+   * /ensemble: a snapshot per actor; `m` leaves for the model picker and `e` hands a file to the external editor. `/skills` opens it on the
+   * Skills tree of the viewed window (`route: 'skills'`); restoring an archived skill is the one write, and it rebuilds the snapshot.
+   */
+  const ensembleData = (initial?: string, route?: 'skills') => buildEnsemble({actors: () => actors.list(), cwd, home: homeDir, status: status.status, policy: id => actorServices.policy(id),
+    tools: id => toolRegistry.resolveForActor(id, mcpRegistrations(extensions.mcp)), mcp: () => extensions.mcp.folders(),
+    skills: actor => resources.skillsFor({actorId: actor.id, skills: actor.skills}),
+    archived: actor => resources.archivedFor({actorId: actor.id, skills: actor.skills}), stale: () => resources.curator?.stale() ?? new Set<string>(),
+    snapshot: () => store.getSnapshot(), usage: id => status.actorUsage(id)}, initial, route);
+  const openEnsemble = (initial?: string, route?: 'skills') => {
+    const data = ensembleData(initial, route);
     surfaces.openEnsemble(data, {
       model: async id => {const actor = actors.find(id); if (!actor) return; if (isDirector(actor.id)) modelSelection.openModels(actor.name); else await actorServices.management.openDefaultModel(actor.id, surfaces);},
       edit: path => openInEditor(path),
+      // The curator moves the file back, restarts its idle clock, counts the restore and (second time) posts the pin suggestion through `onRestored`.
+      restore: async name => {
+        if (!resources.curator) return {ok: false, message: 'Skill archive is not available.'};
+        try {
+          await resources.curator.restore(name);
+          return {ok: true, message: 'Restored skill ' + name, data: ensembleData(initial)};
+        } catch (error) {
+          return {ok: false, message: 'Could not restore ' + name + ': ' + (error instanceof Error ? error.message : 'failed')};
+        }
+      },
     });
   };
   return {pageActions, openSettings, openTheme, openEnsemble, pageIsOpen, refreshCurrentPage};

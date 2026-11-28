@@ -21,6 +21,10 @@ export interface EnsembleSkill {
   readonly scope: 'built-in' | 'user' | 'project';
   /** Folders between the scope root and the file (`['techne', 'browser']`). */
   readonly folder: readonly string[];
+  /** `pinned: true` in the frontmatter: the curator never archives it. */
+  readonly pinned?: true;
+  /** Idle long enough to be marked stale (archived later if still unused). */
+  readonly stale?: true;
 }
 export interface EnsemblePrompt {
   readonly id: 'persona' | 'execution' | 'collaboration' | 'memory';
@@ -44,7 +48,13 @@ export interface EnsembleActor {
   readonly userPath: string; readonly projectPath?: string;
   readonly tools: readonly EnsembleTool[];
   readonly skills: readonly EnsembleSkill[];
+  /** Skills the curator moved to `.archive/` that this actor would see if they were live; `path` is the archived file. */
+  readonly archivedSkills: readonly EnsembleSkill[];
   readonly stats: EnsembleStats;
   readonly prompts: readonly EnsemblePrompt[];
 }
-export interface EnsembleData {readonly actors: readonly EnsembleActor[]; readonly initial?: string}
+export interface EnsembleData {
+  readonly actors: readonly EnsembleActor[]; readonly initial?: string;
+  /** Open the page on a list instead of the main page (`/skills`). */
+  readonly initialRoute?: 'skills';
+}

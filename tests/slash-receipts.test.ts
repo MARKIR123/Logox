@@ -250,6 +250,19 @@ test('long command queries open matching read-only result surfaces and cancellat
   assert.deepEqual(await f.app.journal.loadRaw(f.app.sessionId, 'logox'), []);
 }));
 
+test('/skills opens the Skills view of the ensemble page on the current actor, writes no receipt and never runs a task', async () => withFixture(async f => {
+  await f.app.submit('/skills');
+  const page = f.app.surfaces.getSnapshot();
+  assert.ok(page?.kind === 'ensemble', '/skills is the ensemble page, not a tabbed page.');
+  assert.equal(page.data.initialRoute, 'skills');
+  assert.equal(page.data.initial, 'logox');
+  f.app.surfaces.cancel();
+  assert.equal(f.app.surfaces.getSnapshot(), null);
+  assertEmptyTimeline(f);
+  assert.equal(f.requests.length, 0);
+  await f.app.close();
+}));
+
 test('undo with real snapshot changes opens a result panel without changing model history; empty undo flashes a receipt', async () => withFixture(async f => {
   await f.app.submit('Create an isolated task boundary');
   await waitForSnapshot(f.app.store, snapshot => snapshot.activities.at(-1)?.status === 'completed');

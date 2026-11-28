@@ -19,6 +19,8 @@ export type PickerSpec = Pick<Extract<CommandSurface, {kind: 'picker'}>, 'title'
 export interface EnsembleActions {
   model(actorId: string): void | Promise<void>;
   edit(path: string): Promise<{readonly ok: boolean; readonly message: string}>;
+  /** Moves an archived skill back and returns the page data rebuilt after the move (absent on failure). */
+  restore(name: string): Promise<{readonly ok: boolean; readonly message: string; readonly data?: import('../runtime/ensemble-view.js').EnsembleData}>;
 }
 export interface PickerActions {readonly deleteLabel: string; onDelete(id: string): void | Promise<void>}
 /** Lets a model list edit the marks of its rows: `change` persists an edit, `resolve` reads the marks a row's `markKey` stands for. */
@@ -302,6 +304,17 @@ export class CommandSurfaces {
     const state = this.state, actions = this.ensembleActions;
     if (state?.kind !== 'ensemble' || state.id !== surfaceId || !actions) return {ok: false, message: 'The page is closed.'};
     return actions.edit(path);
+  }
+  /** Restores one archived skill; on success the open page gets the rebuilt data, so the skill shows in its normal place. */
+  async ensembleRestore(surfaceId: string, name: string): Promise<{readonly ok: boolean; readonly message: string}> {
+    const state = this.state, actions = this.ensembleActions;
+    if (state?.kind !== 'ensemble' || state.id !== surfaceId || !actions) return {ok: false, message: 'The page is closed.'};
+    let result: Awaited<ReturnType<EnsembleActions['restore']>>;
+    try {result = await actions.restore(name);}
+    catch (error) {return {ok: false, message: 'Could not restore ' + name + ': ' + (error instanceof Error ? error.message : 'failed')};}
+    const current = this.state;
+    if (result.data && current?.kind === 'ensemble' && current.id === surfaceId) this.publish({...current, data: result.data});
+    return {ok: result.ok, message: result.message};
   }
   /** Live preview of one draft; failures are the page's own concern, not an error state. */
   previewSetting(surfaceId: string, key: string, value: string | number | boolean): void {

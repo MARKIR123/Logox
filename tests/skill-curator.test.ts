@@ -6,7 +6,8 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {ActorContext} from '../src/actors/ensemble.js';
 import {createApplication} from '../src/application.js';
-import {createSkillsPage} from '../src/commands/skills-page.js';
+import {builtinActors} from '../src/actors/builtins.js';
+import {skillsFor, type EnsembleSources} from '../src/commands/ensemble-model.js';
 import {synopsisBlock} from '../src/context/synopsis.js';
 import {projectDataDir} from '../src/config/project-data.js';
 import {PermissionEngine} from '../src/permissions/engine.js';
@@ -306,7 +307,7 @@ test('restore refuses to overwrite a skill that stands at the original place', a
   } finally {await f.done();}
 });
 
-test('the /skills page marks stale and pinned skills and restores from the Archived tab', async () => {
+test('the ensemble data marks stale and pinned skills and lists the archived ones with their folders', async () => {
   const f = await world();
   try {
     await writeFile(join(f.userRoot, 'techne', 'eng', 'dusty.md'), skillText('dusty'));
@@ -314,21 +315,20 @@ test('the /skills page marks stale and pinned skills and restores from the Archi
     await writeFile(join(f.userRoot, 'techne', 'eng', 'always.md'), skillText('always', 'pinned: true\n'));
     await f.writeUsage({activeDays: [LONG_AGO, ...activeDays(40)], seen: {dusty: activeDays(40)[20]!, always: LONG_AGO, gone: LONG_AGO}});
     await f.run();
-    let refreshed = 0;
-    const page = createSkillsPage({resources: f.resources, actors: {find: () => undefined}, pageOwner: () => 'techne', refreshPage: () => {refreshed++;}});
-    const content = page.content();
-    const skills = content.skills.map(line => typeof line === 'string' ? line : 'label' in line ? line.label + ': ' + line.value : 'text' in line ? line.text : '');
-    assert.ok(skills.some(line => line.startsWith('dusty [stale]: ')), skills.join('\n'));
-    assert.ok(skills.some(line => line.startsWith('always [pinned]: ')));
-    assert.ok(!skills.some(line => line.startsWith('gone')));
-    assert.deepEqual(content.archivedActions.map(action => action.key), ['n', 'p', 'r']);
-    assert.ok(JSON.stringify(content.archived).includes('❯ gone'));
-    const result = await page.action('restore');
-    assert.equal(result.message, 'Restored skill gone');
-    assert.equal(refreshed, 1);
+    const sources = {cwd: f.cwd, home: f.home, skills: () => f.resources.skillsFor({actorId: 'techne'}), archived: () => f.resources.archivedFor({actorId: 'techne'}),
+      stale: () => f.curator.stale()} as unknown as EnsembleSources;
+    const techne = builtinActors.find(actor => actor.id === 'techne')!;
+    const liveSkills = skillsFor(techne, sources), archived = skillsFor(techne, sources, true);
+    assert.equal(liveSkills.find(skill => skill.name === 'dusty')?.stale, true);
+    assert.equal(liveSkills.find(skill => skill.name === 'always')?.pinned, true);
+    assert.equal(liveSkills.some(skill => skill.name === 'gone'), false);
+    assert.deepEqual(archived.map(skill => skill.scope + '/' + skill.folder.join('/') + '/' + skill.name), ['user/techne/eng/gone']);
+    assert.equal(archived[0]!.path, join(f.userRoot, '.archive', 'techne', 'eng', 'gone.md'));
+    // The restore the page calls moves the skill back and the rebuilt data lists it in its normal place.
+    await f.curator.restore('gone');
     assert.ok(existsSync(join(f.userRoot, 'techne', 'eng', 'gone.md')));
-    assert.deepEqual(page.content().archivedActions, []);
-    assert.ok(JSON.stringify(page.content().skills).includes('gone'));
+    assert.deepEqual(skillsFor(techne, sources, true), []);
+    assert.ok(skillsFor(techne, sources).some(skill => skill.name === 'gone' && skill.folder.join('/') === 'techne/eng'));
   } finally {await f.done();}
 });
 
@@ -343,25 +343,44 @@ test('application: the session start archives idle skills, /<name> restores one,
     await writeFile(join(skills, 'logox', 'eng', 'ancient.md'), skillText('ancient'));
     await writeFile(join(skills, 'logox', 'eng', 'pinned-old.md'), skillText('pinned-old', 'pinned: true\n'));
     await writeFile(join(skills, 'logox', 'eng', 'middling.md'), skillText('middling'));
+    await writeFile(join(skills, 'logox', 'eng', 'forgotten.md'), skillText('forgotten'));
     await writeFile(join(skills, '.usage.json'), JSON.stringify({version: 1, activeDays: [LONG_AGO, ...activeDays(40)], skills: {},
-      seen: {ancient: LONG_AGO, 'pinned-old': LONG_AGO, middling: activeDays(40)[20]!}, archive: {ancient: {restores: 1}}}) + '\n');
+      seen: {ancient: LONG_AGO, forgotten: LONG_AGO, 'pinned-old': LONG_AGO, middling: activeDays(40)[20]!}, archive: {ancient: {restores: 1}}}) + '\n');
     app = await createApplication({cwd, env: {}, resourceOptions: {home, boundary: root}, authPath: join(home, '.logox', 'auth.json'),
       statusbarPath: join(home, '.logox', 'statusbar.json'),
       provider: {async respond() {return {message: {role: 'assistant' as const, text: 'ok\n\n' + synopsisBlock({title: 'Done', summary: 'Round outcome.'})}, stop: 'complete' as const};}}});
     assert.ok(!existsSync(join(skills, 'logox', 'eng', 'ancient.md')), 'archived at session start');
     assert.ok(existsSync(join(skills, '.archive', 'logox', 'eng', 'ancient.md')));
     assert.ok(existsSync(join(skills, 'logox', 'eng', 'pinned-old.md')));
+    // /skills is the Skills view of the /ensemble page, on the Director's tab.
     await app.submit('/skills');
     const surface = app.surfaces.getSnapshot();
-    assert.equal(surface?.kind, 'page');
-    if (surface?.kind !== 'page') return;
-    assert.deepEqual(surface.tabs.map(tab => tab.id), ['skills', 'archived']);
-    assert.ok(surface.tabs[0]!.lines.some(line => line.startsWith('middling [stale]: ')));
-    assert.ok(surface.tabs[1]!.lines.some(line => line.includes('ancient')));
-    assert.deepEqual(surface.tabs[1]!.actions?.map(action => action.id), ['archived_next', 'archived_prev', 'restore']);
+    assert.equal(surface?.kind, 'ensemble');
+    if (surface?.kind !== 'ensemble') return;
+    assert.equal(surface.data.initialRoute, 'skills');
+    assert.equal(surface.data.initial, 'logox');
+    const director = surface.data.actors.find(actor => actor.id === 'logox')!;
+    assert.equal(director.skills.find(skill => skill.name === 'middling')?.stale, true);
+    assert.equal(director.skills.find(skill => skill.name === 'pinned-old')?.pinned, true);
+    assert.deepEqual(director.archivedSkills.map(skill => skill.name).sort(), ['ancient', 'forgotten']);
+    assert.deepEqual(director.archivedSkills.find(skill => skill.name === 'ancient')?.folder, ['logox', 'eng']);
+    // The restore of the detail page: moves the file back, counts it (the second one posts the notice) and refreshes the open page.
+    const restored = await app.surfaces.ensembleRestore(surface.id, 'ancient');
+    assert.deepEqual(restored, {ok: true, message: 'Restored skill ancient'});
+    assert.ok(existsSync(join(skills, 'logox', 'eng', 'ancient.md')));
+    const refreshed = app.surfaces.getSnapshot();
+    assert.equal(refreshed?.kind === 'ensemble' && refreshed.id === surface.id, true, 'the same page stays open');
+    if (refreshed?.kind === 'ensemble') {
+      const after = refreshed.data.actors.find(actor => actor.id === 'logox')!;
+      assert.ok(after.skills.some(skill => skill.name === 'ancient'));
+      assert.deepEqual(after.archivedSkills.map(skill => skill.name), ['forgotten']);
+    }
+    assert.equal((await app.surfaces.ensembleRestore(surface.id, 'ancient')).ok, false, 'a skill that is not archived cannot be restored again');
+    assert.equal(app.notices.getSnapshot().some(item => item.id === 'skill-pin:forgotten'), false);
     app.surfaces.cancel();
-    await app.submit('/ancient');
-    assert.ok(existsSync(join(skills, 'logox', 'eng', 'ancient.md')), '/<name> restores the archived skill');
+    await app.submit('/forgotten');
+    assert.ok(existsSync(join(skills, 'logox', 'eng', 'forgotten.md')), '/<name> restores the archived skill');
+    assert.equal(app.notices.getSnapshot().some(item => item.id === 'skill-pin:forgotten'), false, 'the first restore posts no notice');
     const flagged = app.notices.getSnapshot().find(item => item.id === 'skill-pin:ancient');
     assert.ok(flagged, 'the second restore posts a read notice');
     assert.match(flagged.parts[0]!.text, /Restored ancient twice — add `pinned: true` to keep it/);

@@ -7,6 +7,7 @@ import {clipLine} from '../terminal/text.js';
 import {inRegion, type Pointer, type Region} from '../terminal/mouse.js';
 import {panePadding, panelRows} from '../components/panel-frame.js';
 import {layoutMarkdown} from '../timeline/markdown.js';
+import {buildTree, folderIndex, foldStep, leafIndex, revealed, withOpen, type Overrides, type TreeItem, type TreeRow} from './ensemble-tree.js';
 
 /**
  * The /ensemble page is drawn and hit-tested from this one plan: `ensembleLayout` returns the styled rows and every region they were built from.
@@ -15,26 +16,32 @@ import {layoutMarkdown} from '../timeline/markdown.js';
 export interface Seg {readonly text: string; readonly color: string; readonly bold?: boolean; readonly italic?: boolean; readonly bg?: string}
 export type Route =
   | {readonly kind: 'main'}
-  | {readonly kind: 'tools'; readonly path: readonly string[]}
-  | {readonly kind: 'skills'; readonly path: readonly string[]}
+  | {readonly kind: 'tools'}
+  | {readonly kind: 'skills'}
   | {readonly kind: 'tool'; readonly path: readonly string[]; readonly name: string}
   | {readonly kind: 'skill'; readonly path: readonly string[]; readonly name: string};
-export interface EnsembleState {readonly tab: number; readonly route: Route; readonly scroll: number; readonly selected: number}
-export const initialState = (tab = 0): EnsembleState => ({tab, route: {kind: 'main'}, scroll: 0, selected: 0});
+export interface EnsembleState {
+  readonly tab: number; readonly route: Route; readonly scroll: number; readonly selected: number;
+  /** Open and closed folders of the Tools and Skills trees (`ensemble-tree.ts`); kept per actor and list while the page is open. */
+  readonly tree: Overrides;
+  /** A restored skill to select once the refreshed data lists it in its normal place. */
+  readonly reveal?: {readonly path: readonly string[]; readonly name: string};
+}
+export const initialState = (tab = 0, route: Route = {kind: 'main'}): EnsembleState => ({tab, route, scroll: 0, selected: 0, tree: {}});
 export type EnsembleCommand =
   | {readonly kind: 'tab'; readonly index: number} | {readonly kind: 'tabStep'; readonly delta: number}
   | {readonly kind: 'move'; readonly delta: number} | {readonly kind: 'scroll'; readonly delta: number} | {readonly kind: 'page'; readonly delta: number}
   | {readonly kind: 'edge'; readonly end: boolean}
   | {readonly kind: 'select'; readonly index: number} | {readonly kind: 'open'; readonly index: number}
+  | {readonly kind: 'fold'} | {readonly kind: 'restore'}
   | {readonly kind: 'back'} | {readonly kind: 'crumb'; readonly depth: number}
   | {readonly kind: 'model'} | {readonly kind: 'edit'};
 export type EnsembleEffect =
   | {readonly kind: 'close'} | {readonly kind: 'model'; readonly actorId: string}
-  | {readonly kind: 'edit'; readonly path: string} | {readonly kind: 'notice'; readonly text: string};
+  | {readonly kind: 'edit'; readonly path: string} | {readonly kind: 'notice'; readonly text: string} | {readonly kind: 'restore'; readonly name: string};
 export interface EnsembleHit {readonly region: Region; readonly command: EnsembleCommand}
-export interface ListEntry {
-  readonly kind: 'folder' | 'item'; readonly name: string; readonly label: string; readonly detail: string; readonly count?: number;
-}
+/** One leaf of the Tools or Skills tree: what its row shows. */
+export interface Leaf extends TreeItem {readonly detail: string; readonly marks: string; readonly dim: boolean}
 export interface EnsemblePlan {
   readonly actor: EnsembleActor; readonly color: string;
   readonly tabs: readonly Seg[];
@@ -44,7 +51,8 @@ export interface EnsemblePlan {
   readonly state: EnsembleState;
   /** Body rows below the breadcrumb, the number of lines of the page, and the furthest scroll offset. */
   readonly viewHeight: number; readonly total: number; readonly maxScroll: number;
-  readonly entries: readonly ListEntry[];
+  /** The visible rows of the Tools or Skills tree the route belongs to (empty on the main page). */
+  readonly tree: readonly TreeRow<Leaf>[];
   /** Line offsets of the three main-page rows (Model, Tools, Skills). */
   readonly actionable: readonly number[];
   readonly sections: readonly {readonly id: string; readonly from: number; readonly to: number; readonly path?: string}[];
@@ -53,7 +61,9 @@ export interface EnsemblePlan {
 
 interface Line {readonly segs: readonly Seg[]; readonly hit?: EnsembleCommand; readonly selected?: boolean; readonly hover?: boolean}
 const LABEL = 11;
-export const hintOrder = ['←→ actor', '↑↓ scroll', '↑↓ choose', 'Enter open', 'm model', 'e edit', 'Esc back'] as const;
+export const hintOrder = ['←→ actor', '↑↓ scroll', '↑↓ choose', 'Space fold', 'Enter open', 'm model', 'e edit', 'r restore', 'Esc back'] as const;
+/** The folder name an archived skill's branch uses; real folders never start with a dot (skill scans skip them). */
+export const ARCHIVE = '.archive';
 
 const scopeLabels: Record<EnsembleSkill['scope'], string> = {'built-in': 'Built-in', user: 'User', project: 'Project'};
 const scopeOrder = ['Built-in', 'User', 'Project'];
@@ -62,41 +72,37 @@ export const homeShort = (path: string, home: string): string => {
   return h && a.toLowerCase().startsWith(h.toLowerCase() + '/') ? '~' + a.slice(h.length) : a;
 };
 
-/** Entries of one directory level: leaves first, then one `▸` folder per sub-category. */
-export function listAt<T extends {readonly path: readonly string[]}>(items: readonly T[], at: readonly string[]): {leaves: T[]; folders: {name: string; count: number}[]} {
-  const leaves: T[] = [], folders = new Map<string, number>();
-  for (const item of items) {
-    if (item.path.length < at.length || at.some((segment, index) => item.path[index] !== segment)) continue;
-    if (item.path.length === at.length) leaves.push(item);
-    else {const name = item.path[at.length]!; folders.set(name, (folders.get(name) ?? 0) + 1);}
-  }
-  const order = (name: string) => at.length === 0 && scopeOrder.includes(name) ? scopeOrder.indexOf(name) : 0;
-  return {leaves, folders: [...folders].map(([name, count]) => ({name, count})).sort((a, b) => order(a.name) - order(b.name) || a.name.localeCompare(b.name))};
-}
-const toolItems = (actor: EnsembleActor) => actor.tools.map(tool => ({path: tool.folder, tool}));
-const skillItems = (actor: EnsembleActor) => actor.skills.map(skill => ({path: [scopeLabels[skill.scope], ...skill.folder], skill}));
-export function entriesFor(actor: EnsembleActor, route: Route): ListEntry[] {
-  if (route.kind === 'tools') {
-    const {leaves, folders} = listAt(toolItems(actor), route.path);
-    return [...leaves.map(({tool}): ListEntry => ({kind: 'item', name: tool.name, label: tool.name, detail: tool.summary})),
-      ...folders.map((folder): ListEntry => ({kind: 'folder', name: folder.name, label: '▸ ' + folder.name, detail: '· ' + folder.count, count: folder.count}))];
-  }
-  if (route.kind === 'skills') {
-    const {leaves, folders} = listAt(skillItems(actor), route.path);
-    return [...leaves.map(({skill}): ListEntry => ({kind: 'item', name: skill.name, label: skill.name, detail: skill.description})),
-      ...folders.map((folder): ListEntry => ({kind: 'folder', name: folder.name, label: '▸ ' + folder.name, detail: '· ' + folder.count, count: folder.count}))];
-  }
-  return [];
+type List = 'tools' | 'skills';
+const listOf = (route: Route): List | undefined =>
+  route.kind === 'tools' || route.kind === 'tool' ? 'tools' : route.kind === 'skills' || route.kind === 'skill' ? 'skills' : undefined;
+const skillPath = (skill: EnsembleSkill, archived: boolean): string[] => [scopeLabels[skill.scope], ...(archived ? [ARCHIVE] : []), ...skill.folder];
+const leaves = (actor: EnsembleActor, list: List): Leaf[] => list === 'tools'
+  ? actor.tools.map(tool => ({path: tool.folder, name: tool.name, detail: tool.summary, marks: '', dim: false}))
+  : [...actor.skills.map(skill => ({path: skillPath(skill, false), name: skill.name, detail: skill.description, marks: skill.stale ? 'stale' : skill.pinned ? 'pinned' : '', dim: false})),
+    ...actor.archivedSkills.map(skill => ({path: skillPath(skill, true), name: skill.name, detail: skill.description, marks: skill.pinned ? 'pinned' : '', dim: true}))];
+const treeScope = (actor: EnsembleActor, list: List) => actor.id + ':' + list;
+/** The visible rows of one actor's Tools or Skills tree: scope roots open, everything deeper closed until toggled; archived skills hang under a trailing `Archived` branch of their scope. */
+export function treeFor(actor: EnsembleActor, list: List, overrides: Overrides): TreeRow<Leaf>[] {
+  return buildTree(leaves(actor, list), overrides, list === 'skills'
+    ? {scope: treeScope(actor, list), defaultOpen: depth => depth === 0, rootOrder: scopeOrder, trailing: ARCHIVE, label: name => name === ARCHIVE ? 'Archived' : name}
+    : {scope: treeScope(actor, list), defaultOpen: () => false});
 }
 const findTool = (actor: EnsembleActor, route: Route): EnsembleTool | undefined => route.kind === 'tool' ? actor.tools.find(tool => tool.name === route.name && tool.folder.join('/') === route.path.join('/')) : undefined;
-const findSkill = (actor: EnsembleActor, route: Route): EnsembleSkill | undefined => route.kind === 'skill' ? actor.skills.find(skill => skill.name === route.name && [scopeLabels[skill.scope], ...skill.folder].join('/') === route.path.join('/')) : undefined;
+const findSkill = (actor: EnsembleActor, route: Route): {readonly skill: EnsembleSkill; readonly archived: boolean} | undefined => {
+  if (route.kind !== 'skill') return undefined;
+  for (const archived of [false, true]) {
+    const skill = (archived ? actor.archivedSkills : actor.skills).find(item => item.name === route.name && skillPath(item, archived).join('/') === route.path.join('/'));
+    if (skill) return {skill, archived};
+  }
+  return undefined;
+};
 
-/** Sub-page title chain (`Tools › coordination`), one entry per clickable crumb. */
+/** Sub-page title chain (`Skills › User › kalon › palette`), one entry per clickable crumb. */
 function crumbs(route: Route): string[] {
   if (route.kind === 'main') return [];
   const root = route.kind === 'tools' || route.kind === 'tool' ? 'Tools' : 'Skills';
-  const detail = route.kind === 'tool' || route.kind === 'skill' ? [route.name] : [];
-  return [root, ...route.path, ...detail];
+  if (route.kind === 'tools' || route.kind === 'skills') return [root];
+  return [root, ...route.path.map(name => name === ARCHIVE ? 'Archived' : name), route.name];
 }
 
 /** The text of a skill file without its frontmatter. */
@@ -190,24 +196,27 @@ function mainContent(actor: EnsembleActor, columns: number, pad: number, home: s
   return {lines, actionable, sections};
 }
 
-function listContent(actor: EnsembleActor, route: Route, columns: number, pad: number, selected: number, entries: readonly ListEntry[]): Content {
-  const lines: Line[] = [], margin: Seg = {text: ' '.repeat(pad), color: palette.fg};
-  if (!entries.length) {
-    lines.push({segs: [margin, {text: route.kind === 'tools' ? 'No tools are available to ' + actor.name + '.' : 'No skills are available to ' + actor.name + '.', color: palette.muted, italic: true}]});
+function treeContent(actor: EnsembleActor, list: List, columns: number, pad: number, selected: number, rows: readonly TreeRow<Leaf>[]): Content {
+  const lines: Line[] = [], margin: Seg = {text: ' '.repeat(pad), color: palette.fg}, faint = faintColor();
+  if (!rows.length) {
+    lines.push({segs: [margin, {text: 'No ' + list + ' are available to ' + actor.name + '.', color: palette.muted, italic: true}]});
     return {lines, actionable: [], sections: []};
   }
-  const nameWidth = Math.min(Math.max(...entries.filter(entry => entry.kind === 'item').map(entry => stringWidth(entry.label)), 8), Math.floor(columns / 2) - 2);
-  entries.forEach((entry, index) => {
-    const active = index === selected;
-    const label = clipLine(entry.label, entry.kind === 'folder' ? columns - 2 : nameWidth);
+  const indent = (depth: number) => '  '.repeat(depth);
+  const nameWidth = Math.min(Math.max(...rows.map(row => row.kind === 'leaf' ? stringWidth(indent(row.depth) + row.name) : 0), 8), Math.max(8, Math.floor(columns / 2) - 2));
+  rows.forEach((row, index) => {
+    const active = index === selected, flags = {hit: {kind: 'open', index} as EnsembleCommand, hover: true, ...(active ? {selected: true} : {})};
     const lead: Seg = {text: active ? '❯ ' : '  ', color: actor.color, bold: true};
-    if (entry.kind === 'folder') {
-      lines.push({segs: [margin, lead, {text: label, color: palette.fg, bold: active}, {text: ' ' + entry.detail, color: palette.muted}], hit: {kind: 'open', index}, hover: true, ...(active ? {selected: true} : {})});
+    if (row.kind === 'folder') {
+      lines.push({segs: [margin, lead, {text: clipLine(indent(row.depth) + (row.open ? '▾ ' : '▸ ') + row.label, columns - 2), color: palette.fg, bold: active}, {text: ' · ' + row.count, color: palette.muted}], ...flags});
       return;
     }
-    const room = columns - 2 - nameWidth - 2;
-    lines.push({segs: [margin, lead, {text: label + ' '.repeat(Math.max(0, nameWidth - stringWidth(label))), color: palette.fg, bold: active},
-      ...(room >= 6 ? [{text: '  ' + clipLine(entry.detail, room), color: palette.muted}] : [])], hit: {kind: 'open', index}, hover: true, ...(active ? {selected: true} : {})});
+    const {item} = row, name = clipLine(indent(row.depth) + row.name, nameWidth), marks = item.marks;
+    const room = columns - 2 - nameWidth - 2, markWidth = marks ? stringWidth(marks) + 2 : 0;
+    const detail = room - markWidth >= 6 ? clipLine(item.detail, room - markWidth) : '';
+    lines.push({segs: [margin, lead, {text: name + ' '.repeat(Math.max(0, nameWidth - stringWidth(name))), color: item.dim ? palette.muted : palette.fg, bold: active},
+      ...(detail ? [{text: '  ' + detail + ' '.repeat(Math.max(0, room - markWidth - stringWidth(detail))), color: item.dim ? faint : palette.muted}] : []),
+      ...(marks && (detail || room >= markWidth) ? [{text: '  ' + marks, color: faint}] : [])], ...flags});
   });
   return {lines, actionable: [], sections: []};
 }
@@ -238,10 +247,11 @@ function toolContent(actor: EnsembleActor, tool: EnsembleTool, columns: number, 
   return {lines, actionable: [], sections: []};
 }
 
-function skillContent(actor: EnsembleActor, skill: EnsembleSkill, text: string, columns: number, pad: number, home: string): Content {
+function skillContent(actor: EnsembleActor, skill: EnsembleSkill, archived: boolean, text: string, columns: number, pad: number, home: string): Content {
   const lines: Line[] = [], faint = faintColor(), margin: Seg = {text: ' '.repeat(pad), color: palette.fg};
   const push = (...segs: Seg[]) => {lines.push({segs: [margin, ...segs]});};
-  push({text: skill.name, color: palette.fg, bold: true}, {text: '  ' + scopeLabels[skill.scope], color: faint});
+  push({text: skill.name, color: palette.fg, bold: true}, {text: '  ' + scopeLabels[skill.scope], color: faint},
+    ...(archived ? [{text: '  Archived · r restores it', color: palette.warning}] : []), ...(skill.stale ? [{text: '  stale', color: faint}] : []), ...(skill.pinned ? [{text: '  pinned', color: faint}] : []));
   for (const part of wrap(skill.description, columns)) push({text: part, color: palette.muted});
   for (const part of wrap(homeShort(skill.path, home), columns)) push({text: part, color: faint, italic: true});
   lines.push({segs: [margin]});
@@ -270,7 +280,7 @@ function tabsRow(data: EnsembleData, tab: number, width: number, y: number, poin
 }
 
 function fitHints(parts: readonly string[], columns: number): string[] {
-  const kept = [...parts], drop = ['e edit', 'm model', '↑↓ scroll', '↑↓ choose', 'Enter open', '←→ actor'];
+  const kept = [...parts], drop = ['e edit', 'm model', '↑↓ scroll', 'Space fold', '↑↓ choose', 'Enter open', '←→ actor'];
   while (kept.join(' · ').length > columns) {
     const victim = drop.find(label => kept.includes(label));
     if (!victim) break;
@@ -279,7 +289,7 @@ function fitHints(parts: readonly string[], columns: number): string[] {
   return kept;
 }
 const hintCommand: Record<string, EnsembleCommand> = {
-  '←→ actor': {kind: 'tabStep', delta: 1}, '↑↓ scroll': {kind: 'scroll', delta: 1}, '↑↓ choose': {kind: 'move', delta: 1}, 'Enter open': {kind: 'open', index: -1},
+  '←→ actor': {kind: 'tabStep', delta: 1}, 'Space fold': {kind: 'fold'}, 'r restore': {kind: 'restore'}, '↑↓ scroll': {kind: 'scroll', delta: 1}, '↑↓ choose': {kind: 'move', delta: 1}, 'Enter open': {kind: 'open', index: -1},
   'm model': {kind: 'model'}, 'e edit': {kind: 'edit'}, 'Esc back': {kind: 'back'},
 };
 
@@ -294,23 +304,28 @@ export function ensembleLayout(input: LayoutInput): EnsemblePlan {
   const pad = panePadding(width), columns = Math.max(1, width - 2 * pad), frame = panelRows(height);
   const route = input.state.route, crumbChain = crumbs(route), showCrumbs = crumbChain.length > 0 && frame.bodyHeight >= 3;
   const viewHeight = Math.max(1, frame.bodyHeight - (showCrumbs ? 1 : 0));
-  const entries = entriesFor(actor, route);
-  const listRoute = route.kind === 'tools' || route.kind === 'skills';
+  const list = listOf(route), listRoute = route.kind === 'tools' || route.kind === 'skills';
 
-  let selected = input.state.selected;
+  let selected = input.state.selected, overrides = input.state.tree, reveal = input.state.reveal;
+  let tree = list ? treeFor(actor, list, overrides) : [];
+  if (reveal && list === 'skills') {
+    // A restored skill is selected in its normal place as soon as the refreshed data lists it there.
+    const opened = revealed(overrides, treeScope(actor, 'skills'), reveal.path), rows = treeFor(actor, 'skills', opened), at = leafIndex(rows, reveal.path, reveal.name);
+    if (at >= 0) {overrides = opened; tree = rows; selected = at; reveal = undefined;}
+  }
   let content: Content;
   if (route.kind === 'main') {
     selected = Math.max(0, Math.min(2, selected));
     content = mainContent(actor, columns, pad, home, selected);
   } else if (listRoute) {
-    selected = Math.max(0, Math.min(Math.max(0, entries.length - 1), selected));
-    content = listContent(actor, route, columns, pad, selected, entries);
+    selected = Math.max(0, Math.min(Math.max(0, tree.length - 1), selected));
+    content = treeContent(actor, route.kind, columns, pad, selected, tree);
   } else if (route.kind === 'tool') {
     const tool = findTool(actor, route);
     content = tool ? toolContent(actor, tool, columns, pad) : {lines: [{segs: [{text: ' '.repeat(pad) + 'This tool is no longer available.', color: palette.muted, italic: true}]}], actionable: [], sections: []};
   } else {
-    const skill = findSkill(actor, route);
-    content = skill ? skillContent(actor, skill, input.readText(skill.path) ?? '*Could not read this file.*', columns, pad, home)
+    const found = findSkill(actor, route);
+    content = found ? skillContent(actor, found.skill, found.archived, input.readText(found.skill.path) ?? '*Could not read this file.*', columns, pad, home)
       : {lines: [{segs: [{text: ' '.repeat(pad) + 'This skill is no longer available.', color: palette.muted, italic: true}]}], actionable: [], sections: []};
   }
   const total = content.lines.length, maxScroll = Math.max(0, total - viewHeight);
@@ -358,17 +373,17 @@ export function ensembleLayout(input: LayoutInput): EnsemblePlan {
   const editPath = editTarget(actor, route, content, scroll, viewHeight, input.readText);
   let labels: string[];
   if (route.kind === 'main') labels = ['←→ actor', '↑↓ scroll', 'Enter open', 'm model', 'e edit', 'Esc back'];
-  else if (listRoute) labels = ['←→ actor', '↑↓ choose', 'Enter open', 'Esc back'];
-  else labels = ['←→ actor', '↑↓ scroll', ...(route.kind === 'skill' ? ['e edit'] : []), 'Esc back'];
+  else if (listRoute) labels = ['←→ actor', '↑↓ choose', 'Space fold', 'Enter open', 'Esc back'];
+  else labels = ['←→ actor', '↑↓ scroll', ...(route.kind === 'skill' ? [...(findSkill(actor, route)?.archived ? ['r restore'] : []), 'e edit'] : []), 'Esc back'];
   const shown = fitHints(labels, columns);
   const footer = {text: input.notice || shown.join(' · '), actions: input.notice ? [] : shown.map(label => ({label, command: hintCommand[label]!}))};
-  return {actor, color, tabs: tabs.segs, rows, hits, footer, state: {tab: tabIndex, route, scroll, selected}, viewHeight, total, maxScroll, entries, actionable: content.actionable, sections: content.sections,
+  return {actor, color, tabs: tabs.segs, rows, hits, footer, state: {tab: tabIndex, route, scroll, selected, tree: overrides, ...(reveal ? {reveal} : {})}, viewHeight, total, maxScroll, tree, actionable: content.actionable, sections: content.sections,
     ...(editPath ? {editPath} : {})};
 }
 
 /** The file `e` opens: the skill on a skill page, else the prompt section at the top of the viewport (the first one in view while the top is still above them). */
 function editTarget(actor: EnsembleActor, route: Route, content: Content, scroll: number, viewHeight: number, _read: (path: string) => string | undefined): string | undefined {
-  if (route.kind === 'skill') return findSkill(actor, route)?.path;
+  if (route.kind === 'skill') return findSkill(actor, route)?.skill.path;
   if (route.kind !== 'main' || !content.sections.length) return undefined;
   const containing = content.sections.find(section => section.from <= scroll && scroll < section.to);
   const target = containing ?? content.sections.find(section => section.from >= scroll && section.from < scroll + viewHeight) ?? content.sections[0]!;
@@ -377,23 +392,23 @@ function editTarget(actor: EnsembleActor, route: Route, content: Content, scroll
 
 export interface StepResult {readonly state: EnsembleState; readonly effect?: EnsembleEffect}
 /** Applies one command to the state the plan was drawn from. */
-export function stepEnsemble(state: EnsembleState, command: EnsembleCommand, plan: EnsemblePlan, data: EnsembleData): StepResult {
-  const actor = plan.actor, route = state.route, count = data.actors.length;
+export function stepEnsemble(from: EnsembleState, command: EnsembleCommand, plan: EnsemblePlan, data: EnsembleData): StepResult {
+  // A pending reveal belongs to the restore that set it; any other command forgets it.
+  const {reveal: _pending, ...rest} = from, state: EnsembleState = command.kind === 'restore' ? from : rest;
+  const actor = plan.actor, route = state.route, count = data.actors.length, rows = plan.tree, overrides = plan.state.tree;
   const clampScroll = (value: number) => Math.max(0, Math.min(plan.maxScroll, value));
   const listRoute = route.kind === 'tools' || route.kind === 'skills';
+  const last = Math.max(0, rows.length - 1);
   const switchTab = (tab: number): StepResult => {
-    const root: Route = route.kind === 'tools' || route.kind === 'tool' ? {kind: 'tools', path: []} : route.kind === 'skills' || route.kind === 'skill' ? {kind: 'skills', path: []} : {kind: 'main'};
-    return {state: {tab, route: root, scroll: 0, selected: 0}};
+    const list = listOf(route);
+    return {state: {tab, route: list ? {kind: list} : {kind: 'main'}, scroll: 0, selected: 0, tree: overrides}};
   };
   switch (command.kind) {
     case 'tab': return command.index >= 0 && command.index < count && command.index !== state.tab ? switchTab(command.index) : {state};
     case 'tabStep': return count > 1 ? switchTab((state.tab + command.delta + count * 2) % count) : {state};
     case 'scroll': case 'move': {
       const delta = command.delta;
-      if (listRoute) {
-        const max = Math.max(0, plan.entries.length - 1);
-        return {state: {...state, selected: Math.max(0, Math.min(max, plan.state.selected + delta))}};
-      }
+      if (listRoute) return {state: {...state, tree: overrides, selected: Math.max(0, Math.min(last, plan.state.selected + delta))}};
       if (route.kind === 'main' && command.kind === 'move') {
         const next = plan.state.selected + delta, line = plan.actionable[next];
         const visible = line !== undefined && line >= plan.state.scroll && line < plan.state.scroll + plan.viewHeight;
@@ -403,48 +418,57 @@ export function stepEnsemble(state: EnsembleState, command: EnsembleCommand, pla
     }
     case 'page': {
       const step = Math.max(1, plan.viewHeight - 1) * command.delta;
-      if (listRoute) return {state: {...state, selected: Math.max(0, Math.min(Math.max(0, plan.entries.length - 1), plan.state.selected + step))}};
+      if (listRoute) return {state: {...state, tree: overrides, selected: Math.max(0, Math.min(last, plan.state.selected + step))}};
       return {state: {...state, scroll: clampScroll(plan.state.scroll + step)}};
     }
     case 'edge':
-      if (listRoute) return {state: {...state, selected: command.end ? Math.max(0, plan.entries.length - 1) : 0}};
+      if (listRoute) return {state: {...state, tree: overrides, selected: command.end ? last : 0}};
       return {state: {...state, scroll: command.end ? plan.maxScroll : 0}};
     case 'select': return {state: {...state, selected: Math.max(0, command.index)}};
+    case 'fold': {
+      if (!listRoute) return {state};
+      const result = foldStep(rows, plan.state.selected, overrides);
+      return result ? {state: {...state, tree: result.overrides, selected: result.selected}} : {state};
+    }
     case 'open': {
       const index = command.index < 0 ? plan.state.selected : command.index;
       if (route.kind === 'main') {
         if (index === 0) return {state, effect: {kind: 'model', actorId: actor.id}};
-        if (index === 1) return {state: {...state, route: {kind: 'tools', path: []}, scroll: 0, selected: 0}};
-        if (index === 2) return {state: {...state, route: {kind: 'skills', path: []}, scroll: 0, selected: 0}};
+        if (index === 1) return {state: {...state, route: {kind: 'tools'}, scroll: 0, selected: 0}};
+        if (index === 2) return {state: {...state, route: {kind: 'skills'}, scroll: 0, selected: 0}};
         return {state};
       }
       if (listRoute) {
-        const entry = plan.entries[index];
-        if (!entry) return {state};
-        if (entry.kind === 'folder') return {state: {...state, route: {kind: route.kind, path: [...route.path, entry.name]}, scroll: 0, selected: 0}};
-        return {state: {...state, route: {kind: route.kind === 'tools' ? 'tool' : 'skill', path: route.path, name: entry.name}, scroll: 0, selected: index}};
+        const row = rows[index];
+        if (!row) return {state};
+        // A folder toggles in place (selection and scroll stay); a leaf opens its detail page.
+        if (row.kind === 'folder') return {state: {...state, tree: withOpen(overrides, row.key, !row.open), selected: index, scroll: plan.state.scroll}};
+        return {state: {...state, tree: overrides, route: {kind: route.kind === 'tools' ? 'tool' : 'skill', path: row.path, name: row.name}, scroll: 0, selected: index}};
       }
       return {state};
     }
     case 'crumb': {
       if (route.kind === 'main') return {state};
-      const kind = route.kind === 'tools' || route.kind === 'tool' ? 'tools' : 'skills';
-      return {state: {...state, route: {kind, path: route.path.slice(0, command.depth)}, scroll: 0, selected: 0}};
+      const list = listOf(route)!, folder = route.kind === 'tool' || route.kind === 'skill' ? route.path.slice(0, command.depth) : [];
+      // The root crumb is Esc (back to where the page was); a folder crumb lands on that folder.
+      const selected = command.depth > 0 ? folderIndex(rows, folder) : route.kind === 'tool' || route.kind === 'skill' ? leafIndex(rows, route.path, route.name) : 0;
+      return {state: {...state, tree: overrides, route: {kind: list}, scroll: 0, selected: Math.max(0, selected)}};
     }
     case 'back': {
       if (route.kind === 'main') return {state, effect: {kind: 'close'}};
       if (route.kind === 'tool' || route.kind === 'skill') {
-        const kind = route.kind === 'tool' ? 'tools' : 'skills', list = {kind, path: route.path} as Route;
-        const index = entriesFor(actor, list).findIndex(entry => entry.kind === 'item' && entry.name === route.name);
-        return {state: {...state, route: list, scroll: 0, selected: Math.max(0, index)}};
-      }
-      if (route.path.length > 0) {
-        const left = route.path.at(-1)!, parent = {kind: route.kind, path: route.path.slice(0, -1)} as Route;
-        return {state: {...state, route: parent, scroll: 0, selected: Math.max(0, entriesFor(actor, parent).findIndex(entry => entry.kind === 'folder' && entry.name === left))}};
+        return {state: {...state, tree: overrides, route: {kind: route.kind === 'tool' ? 'tools' : 'skills'}, scroll: 0, selected: Math.max(0, leafIndex(rows, route.path, route.name))}};
       }
       return {state: {...state, route: {kind: 'main'}, scroll: 0, selected: route.kind === 'tools' ? 1 : 2}};
     }
     case 'model': return route.kind === 'main' ? {state, effect: {kind: 'model', actorId: actor.id}} : {state};
+    case 'restore': {
+      const found = findSkill(actor, route);
+      if (!found?.archived || route.kind !== 'skill') return {state};
+      // Back to the tree at once; the refreshed data puts the skill in its normal place and `reveal` selects it there.
+      return {state: {...state, tree: overrides, route: {kind: 'skills'}, scroll: 0, selected: 0, reveal: {path: route.path.filter(name => name !== ARCHIVE), name: route.name}},
+        effect: {kind: 'restore', name: found.skill.name}};
+    }
     case 'edit': return plan.editPath ? {state, effect: {kind: 'edit', path: plan.editPath}}
       : {state, effect: {kind: 'notice', text: route.kind === 'tool' || listRoute ? 'Nothing to edit here.' : 'No file to edit for this section.'}};
   }

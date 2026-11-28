@@ -55,6 +55,7 @@ export function overlayPage(ctx: ShellContext): ReactElement | null {
   if (surface?.kind === 'ensemble' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><EnsemblePage key={surface.id} data={surface.data} width={width} height={screenRows} notice={notice}
     onClose={() => surfaces.cancel()} onModel={actorId => {void surfaces.ensembleModel(surface.id, actorId).catch(error => flash(error instanceof Error ? error.message : String(error), 3500, 'error'));}}
     onNotice={text => flash(text, 3500, 'info')}
+    onRestore={name => {void surfaces.ensembleRestore(surface.id, name).then(result => flash(result.message, 3500, result.ok ? 'success' : 'error'));}}
     onEdit={path => {void surfaces.ensembleEdit(surface.id, path).then(result => flash(result.message, 5000, result.ok ? 'success' : 'error'));}}/></MouseHost>;
   if (surface?.kind === 'page' && surfaces) return <MouseHost subscribe={subscribeMouse} color={windowColor}><TabbedPage key={surface.id} title={surface.title} tabs={surface.tabs}
     initialTab={surface.initialTab} width={width} height={screenRows} onClose={() => surfaces.cancel()}
