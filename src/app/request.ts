@@ -168,6 +168,12 @@ export function createRequestAssembly(deps: RequestAssemblyDeps) {
     }
     return {...base, contextUpdates, ...(restriction ? {refuseTools: TOOLS_RESTRICTED_RESULT} : {}), ...(role.cacheRetention ? {cacheRetention: role.cacheRetention} : {})};
   };
-  harvest.attach({awaitingHuman: who => certain(who) === 'human', touchedAt: who => keepAlive.touchedAt(who)});
+  // Settled for a harvest: the Director awaits the human with nothing else open; a companion has no open activity and no wake-up certain (a peer wait is never harvested).
+  const settled = (who: KeepAliveWho): boolean => {
+    if (isDirector(who.ownerId)) return certain(who) === 'human';
+    return !certain(who) && !store.getSnapshot().activities.some(item => item.sessionId === who.sessionId && item.ownerId === who.ownerId && item.kind !== 'anamnesis' &&
+      ['queued', 'running', 'paused', 'waiting_input'].includes(item.status));
+  };
+  harvest.attach({settled, touchedAt: who => keepAlive.touchedAt(who)});
   return {requestBase, keepAlive};
 }

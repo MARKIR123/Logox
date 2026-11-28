@@ -48,6 +48,7 @@
 - **Guidelines are bounded**: per-file and total size caps, real-path de-duplication, invalid files reported and skipped, paths containing a `legacy` segment ignored. Enforced by `tests/resources.test.ts`.
 - **Custom commands cannot shadow built-ins**: names in `commandCatalog` are rejected with an issue. Enforced by `tests/resources.test.ts`.
 - **Usage counts never live in the project**: user and built-in skills count in `~/.logox/skills/.usage.json`, project skills in `<project data>/skill-usage.json`; a skill counts once per activity (worker reads included), `agent.md` and failed reads never. Writes are fire-and-forget and never fail a tool call. Enforced by `tests/skill-usage.test.ts`.
+- **Learned skills are written by the harvest, never by `reload()`**: `src/anamnesis/skills.ts:SkillStore` creates `<root>/<actor>/<category>/<name>.md` (frontmatter `origin: learned`, `learned_at`, `learned_by`, built by the runtime) and registers a new category under `categories:` of `<root>/<actor>/agent.md` through the yaml document API (comments and other keys survive; a missing agent.md is created with only that frontmatter). Nothing here reloads: `Resources` reads them on the next `/reload` or start, which is why the prompt prefix never changes mid-session; a name that already exists (built-in included) is never overwritten, and only `origin: learned` skills may be patched. Enforced by `tests/harvest-skills.test.ts`.
 - **Resource roots are `~/.logox/` and `<cwd>/.logox/` only**: no other legacy home directory is read. *Unenforced*.
 
 ## 5. Dependencies

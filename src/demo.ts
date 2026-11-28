@@ -80,7 +80,6 @@ export function createDemo(sessionId: string, cwd: string, home: string = homedi
     });
   });
   const dream = new Anamnesis(sessionId, store, {
-    material: async () => false,
     async run(context) {
       for (const stage of ['Review materials', 'Research topics', 'Verify candidates']) {
         context.report(stage, 'Lifecycle demo: no project materials were read and no memory was committed.');
@@ -99,12 +98,10 @@ export function createDemo(sessionId: string, cwd: string, home: string = homedi
     await dream.foregroundSubmitted();
     if (raw.startsWith('/cast ')) {
       const handles = ensemble.dispatchBatch(['aletheia', 'techne', 'kalon'].map(ownerId => ({ownerId: ownerId as ActorId, prompt: raw.slice(6)})));
-      for (const handle of handles) void handle.done.finally(() => dream.foregroundFinished());
       return;
     }
     const ownerId = match ? match[1]!.toLowerCase() as ActorId : source;
     const handle = ensemble.dispatch(ownerId, match?.[2] ?? raw, source);
-    void handle.done.finally(() => dream.foregroundFinished());
   };
   const close = async () => {
     store.interactions.close();

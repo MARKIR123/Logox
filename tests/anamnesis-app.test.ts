@@ -169,14 +169,14 @@ test('the automatic switches persist in the user home, override the config, and 
   const f = await fixture();
   try {
     const app = await f.open();
-    assert.deepEqual(app.anamnesis.settings(), {recap: true, dream: true, recapIdleMinutes: 5, dreamIdleMinutes: 30});
+    assert.deepEqual(app.anamnesis.settings(), {recap: true, dream: true});
     await app.anamnesis.setAuto('dream', false);
     assert.deepEqual(JSON.parse(await readFile(join(f.home, '.logox', 'anamnesis.json'), 'utf8')), {version: 1, dream: false});
     await app.anamnesis.setAuto('recap', false);
     assert.equal(app.anamnesis.settings().recap, false);
     await app.close();
     const again = await f.open({}, 'again');
-    assert.deepEqual(again.anamnesis.settings(), {recap: false, dream: false, recapIdleMinutes: 5, dreamIdleMinutes: 30});
+    assert.deepEqual(again.anamnesis.settings(), {recap: false, dream: false});
     await speak(again, 'material for a manual run');
     assert.equal((await again.anamnesis.runNow('recap').done).status, 'completed');
     await again.anamnesis.setAuto('recap', true);
@@ -184,39 +184,7 @@ test('the automatic switches persist in the user home, override the config, and 
   } finally {await f.close();}
 });
 
-test('the idle interval starts only when asked: an injected clock and interval run the recap after idle time and submitting stops it', async () => {
-  const f = await fixture();
-  try {
-    let now = 0;
-    // The application activates itself when it opens, which is when the interval starts.
-    const app = await f.open({anamnesis: {clock: () => now, tickMs: 5, recapIdleMs: 1000, dreamIdleMs: 5000}});
-    await speak(app, 'what is the plan for the uploader');
-    now = 500; await delay(30);
-    assert.equal(f.seen.filter(isAnamnesis).length, 0, 'not idle long enough');
-    app.noteDraft();
-    now = 1400; await delay(30);
-    assert.equal(f.seen.filter(isAnamnesis).length, 0, 'a keystroke restarted the idle clock');
-    now = 1600;
-    await waitFor(() => app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis'), card => card?.status === 'completed', {label: 'recap card'});
-    const card = app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis')!;
-    assert.deepEqual([card.stage, card.detail], ['Uploader retries done', 'Done: retries\n\nOpen: nothing\n\nNext: ship']);
-    assert.equal(f.seen.filter(isAnamnesis).length, 1);
-    now = 6000; await delay(30);
-    await waitFor(() => app.anamnesis.memories(), records => records.length === 2, {label: 'the dream on its own clock'});
-    assert.equal(f.seen.filter(isAnamnesis).length, 2);
-
-    // A held run is aborted by the next submit and applies nothing.
-    f.control.hold = true;
-    await speak(app, 'one more thing to do');
-    now = 20_000;
-    await waitFor(() => f.seen.filter(isAnamnesis).length, count => count >= 3, {label: 'held request'});
-    const before = (await app.anamnesis.memories()).length;
-    await app.submit('stop that');
-    assert.equal(f.control.aborted >= 1, true, 'the in-flight request was aborted');
-    assert.equal((await app.anamnesis.memories()).length, before);
-    assert.deepEqual(app.store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis' && activity.status === 'running'), [], 'the interrupted run left no card');
-  } finally {await f.close();}
-});
+// The idle interval (a recap after idle time, a dream after more, aborted by the next submit) was retired: automatic work is a harvest, see tests/anamnesis-harvest.test.ts.
 
 test('an Automa worker request carries no memory section even when records exist', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'logox-anamnesis-automa-'));

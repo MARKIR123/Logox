@@ -66,7 +66,7 @@ import {createRequestAssembly} from './app/request.js';
 import {createPlans} from './app/plans.js';
 import {createInput} from './app/input.js';
 import {createSubmit} from './app/submit.js';
-import {ANAMNESIS_TICK_MS, createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
+import {createAnamnesis, type AnamnesisAppOptions} from './app/anamnesis.js';
 import {recoverCheckpoints, replaySession} from './app/restore.js';
 import {createNotices} from './app/notices.js';
 import {createShellJobs} from './app/shell-jobs.js';
@@ -87,7 +87,7 @@ export interface ApplicationOptions {
   extensions?: ProjectExtensions;
   approveExtension?: ExtensionApproval;
   statusbarPath?: string;
-  /** Test hook: clocks, idle thresholds and the idle-check interval of Anamnesis (no interval runs in tests unless `tickMs` is given). */
+  /** Test hook: the card clock, the date shown to the model and the headless switch of Anamnesis. */
   anamnesis?: AnamnesisAppOptions;
   /** False for embedded adapters: no terminal onboarding, notifications or other TTY-only side effects. */
   interactive?: boolean;
@@ -313,6 +313,7 @@ export async function createSessionApplication(options: SessionApplicationOption
     return {startedAt: keepAlive.touchedAt(who), ...(harvest ? {harvest} : {}), ...(state ? {keepAlive: {reason: state.reason, ...(state.nextWarmAt !== undefined ? {nextWarmAt: state.nextWarmAt} : {}), ...(state.until !== undefined ? {until: state.until} : {})}} : {})};
   };
   keepAlive.onChange = sessionStatus.bumpStatus;
+  anamnesis.lifecycle.harvest.onChange = sessionStatus.bumpStatus;
   const dumpRequests = process.env.LOGOX_DUMP_REQUESTS === '1';
   const ensemble = new DynamicEnsemble(session, store, journal, observeTasks(extensions.hooks, createAgent({
     cwd, store, tools, context: contexts, taskModels, requestBase, provider: () => options.provider ?? registry.provider(), keepAlive,
@@ -368,7 +369,7 @@ export async function createSessionApplication(options: SessionApplicationOption
       const text = `Direct conversation with ${result.ownerId} (${result.activityId}) settled as ${result.status}. Use ReadActor for details if needed.`;
       notice(text, 'task_notice', DIRECTOR_ID);
     },
-    settled: async (activityId, status) => {directorReports.delete(activityId); anamnesis.lifecycle.foregroundFinished(); await actorServices.settled(activityId, status);},
+    settled: async (activityId, status) => {directorReports.delete(activityId); await actorServices.settled(activityId, status);},
   });
   // Background Shell jobs belong to the session: their exit notice goes into the starting actor's task while it is open, else to the Director.
   const shellJobs = createShellJobs({sessionId: session, nameOf: id => actors.list().find(item => item.id === id)?.name ?? id, closed: () => state.closed,
@@ -467,8 +468,6 @@ export async function createSessionApplication(options: SessionApplicationOption
       extensions.hooks.emit('session_start', {session_id: session, model: modelSelection.current().model});
       const isTest = typeof (globalThis as any).IS_REACT_ACT_ENVIRONMENT !== 'undefined' ||
         process.execArgv.some(arg => arg.startsWith('--test'));
-      // The idle check is a real timer: tests start it only by giving `tickMs`.
-      anamnesis.lifecycle.start(isTest ? undefined : ANAMNESIS_TICK_MS);
       const onboardingPrefs = readOnboardingPrefs(homeDir);
       if (interactive && shouldOfferOnboarding(onboardingPrefs) && !modelSelection.current().model && !checkpoints.length && session !== 'demo' && !isTest && Boolean(process.stdout.isTTY)) {
         void (async () => {

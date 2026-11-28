@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {MemoryStore} from '../src/anamnesis/memory.js';
 import {changesPage, harvestRequest, parseHarvestAnswer, type HarvestSource} from '../src/anamnesis/harvest.js';
-import {HARVEST_INSTRUCTION_BOTH, HARVEST_INSTRUCTION_MEMORY, HARVEST_INSTRUCTION_RECAP} from '../src/anamnesis/prompts.js';
+import {HARVEST_INSTRUCTIONS, HARVEST_INSTRUCTION_BOTH, HARVEST_INSTRUCTION_MEMORY, HARVEST_INSTRUCTION_RECAP} from '../src/anamnesis/prompts.js';
 import type {ResolvedModel} from '../src/anamnesis/model.js';
 import {AnamnesisRunner} from '../src/anamnesis/runner.js';
 import {Anamnesis, type AnamnesisDriver} from '../src/anamnesis/service.js';
@@ -53,7 +53,6 @@ function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; a
   const lifetimeMs = options.lifetimeMs === null ? undefined : options.lifetimeMs ?? options.ttlMs;
   const timing = new HarvestTiming({
     lifetime: () => lifetimeMs === undefined ? undefined : {ms: lifetimeMs, confidence: 'known'},
-    awayMs: () => state.away * MINUTE,
     async start() {
       if (options.decline) return undefined;
       starts.push(Date.now());
@@ -61,7 +60,7 @@ function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; a
     },
   });
   const keeper = new CacheKeeper({enabled: () => true, certain: () => state.certain, awayMs: () => state.away * MINUTE, pricing: options.pricing ?? cheapRead, charge: () => {}, harvest: timing});
-  timing.attach({awaitingHuman: () => state.certain === 'human', touchedAt: actor => keeper.touchedAt(actor)});
+  timing.attach({settled: () => state.certain === 'human', touchedAt: actor => keeper.touchedAt(actor)});
   const arm = () => keeper.arm(who, {request: request(), provider, model: MODEL, startedAt: Date.now(), usage: {input: 100_000, output: 5, cacheRead: 100_000}, reply: REPLY});
   return {pings, starts, cancelled, state, timing, keeper, arm};
 }
@@ -69,7 +68,6 @@ function timingRig(options: {ttlMs: number; certain?: KeepAliveReason | false; a
 test('no away warm-ups: the harvest fires at the cache cliff (0.9 x lifetime) and nothing is pinged', withClock(async () => {
   const r = timingRig({ttlMs: 5 * MINUTE, awayMinutes: 0});
   await r.arm();
-  assert.equal(r.timing.pending(), true, 'a harvest is scheduled');
   await run(4 * MINUTE);
   assert.deepEqual(r.starts, []);
   await run(MINUTE);
@@ -79,7 +77,6 @@ test('no away warm-ups: the harvest fires at the cache cliff (0.9 x lifetime) an
   r.state.finish!(true);
   await settle();
   assert.deepEqual(r.timing.phase(who), {state: 'done', at: Date.now()});
-  assert.equal(r.timing.pending(), false);
 }));
 
 test('a provider the keeper cannot replay keeps its own timer at the same cliff', withClock(async () => {
@@ -121,7 +118,6 @@ test('while a companion works (peer wait) nothing is harvested and the keeper ke
   await standalone.arm();
   await run(10 * MINUTE);
   assert.deepEqual(standalone.starts, [], 'the standalone timer also sees that the human is not the one awaited');
-  assert.equal(standalone.timing.pending(), false, 'and stops expecting a harvest');
 }));
 
 test('the keeper giving up early on cost is a cliff too: the harvest runs at that slot instead of the cache dying', withClock(async () => {
@@ -156,7 +152,6 @@ test('a harvest that declines leaves the keeper to ping as before', withClock(as
 test('an unknown lifetime schedules nothing: no harvest, nothing pending', withClock(async () => {
   const r = timingRig({ttlMs: 5 * MINUTE, lifetimeMs: null});
   await r.arm();
-  assert.equal(r.timing.pending(), false);
   await run(120 * MINUTE);
   assert.deepEqual(r.starts, []);
 }));
@@ -168,7 +163,6 @@ test('a real request of the Director cancels a scheduled harvest, a running one 
   early.keeper.wake(who);
   await run(10 * MINUTE);
   assert.deepEqual(early.starts, [], 'woken before the cliff');
-  assert.equal(early.timing.pending(), false);
 
   const running = timingRig({ttlMs: 5 * MINUTE, replayable: false});
   await running.arm();
@@ -193,37 +187,29 @@ test('a reply that still carries tool calls is never harvested', withClock(async
   const r = timingRig({ttlMs: 5 * MINUTE, replayable: false});
   await r.keeper.arm(who, {request: request(), provider: {async respond() {throw new Error('unused');}}, model: MODEL, startedAt: Date.now(),
     usage: {input: 100_000, output: 5, cacheRead: 100_000}, reply: {role: 'assistant', text: '', toolCalls: [{id: 'c', name: 'Read', arguments: '{}'}]}});
-  assert.equal(r.timing.pending(), false);
   await run(10 * MINUTE);
   assert.deepEqual(r.starts, []);
-}));
-
-test('the idle recap and dream wait while a harvest is planned soon, and not for one planned beyond an hour', withClock(async () => {
-  const soon = timingRig({ttlMs: 5 * MINUTE, replayable: false});
-  await soon.arm();
-  assert.equal(soon.timing.pending(), true);
-  const late = timingRig({ttlMs: 12 * 60 * MINUTE, replayable: false});
-  await late.arm();
-  assert.equal(late.timing.pending(), false, 'a 12-hour cache would silence the idle paths for hours; the watermarks prevent repeats instead');
 }));
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // The service: idle clocks defer to a planned harvest; a harvest never queues.
 // ---------------------------------------------------------------------------------------------------------------------------------------------
-test('the idle recap and dream do not start while a harvest is planned, and a harvest does not start over another run or a pending question', async () => {
+test('a harvest never queues: not over another run, not twice for one actor, not after close; a companion harvest ignores a busy foreground', async () => {
   const store = new RuntimeStore();
-  let now = 0, deferred = true, runs = 0;
-  const driver: AnamnesisDriver = {async material() {return true;}, async run() {runs++; return {stage: 'x', detail: ''};}};
-  const service = new Anamnesis('s', store, driver, () => false, {clock: () => now, recapIdleMs: 5 * MINUTE, dreamIdleMs: 30 * MINUTE, deferred: () => deferred});
-  now = 6 * MINUTE;
-  await service.tick();
-  assert.equal(runs, 0, 'deferred to the harvest');
-  deferred = false;
-  await service.tick(); while (service.running()) await delay(1);
-  assert.equal(runs, 1, 'a model with no harvest keeps its idle recap');
+  let busy = false;
+  const driver: AnamnesisDriver = {async run(context) {await delay(5, undefined, {signal: context.signal}); return {stage: 'x', detail: ''};}};
+  const service = new Anamnesis('s', store, driver, () => busy, {});
   const source = {request: request(), reply: REPLY, provider: {async respond() {throw new Error('unused');}} as Provider, model: MODEL, parts: {recap: true, memory: false}};
-  assert.ok(service.startHarvest(source), 'free to start');
-  assert.equal(service.startHarvest(source), undefined, 'single flight: no second run');
+  const first = service.startHarvest(source);
+  assert.ok(first, 'free to start');
+  assert.equal(service.startHarvest(source), undefined, 'one harvest per actor');
+  const companion = service.startHarvest({...source, owner: 'techne', ownerName: 'Techne', parts: {recap: false, memory: true}});
+  assert.ok(companion, 'another actor harvests at the same time');
+  await Promise.all([first.done, companion.done]);
+  busy = true;
+  assert.equal(service.startHarvest(source), undefined, 'the Director waits for its tasks');
+  const second = service.startHarvest({...source, owner: 'kalon', ownerName: 'Kalon', parts: {recap: false, memory: true}});
+  assert.ok(second, 'a companion does not');
   await service.pause();
   await service.close();
   assert.equal(service.startHarvest(source), undefined, 'a closed service starts nothing');
@@ -244,7 +230,7 @@ interface Rig {
   root: string; journal: Journal; memory: MemoryStore; watermarks: WatermarkStore; requests: ModelRequest[]; charged: {usage: ModelTurn['usage']; identity: string}[];
   answer: {message: ModelTurn['message']; wait?: Promise<void>};
   runner(): AnamnesisRunner;
-  source(parts: {recap: boolean; memory: boolean}): HarvestSource;
+  source(parts: HarvestSource['parts']): HarvestSource;
   close(): Promise<void>;
 }
 async function rig(): Promise<Rig> {
@@ -273,7 +259,7 @@ test('the fork is the last request untouched plus the reply and one instruction 
   const r = await rig();
   try {
     await r.journal.append(human('logox', 'Add a retry'));
-    const source = r.source({recap: true, memory: true});
+    const source = r.source({recap: true, memory: true, skills: false});
     await r.runner().run(context(r, source));
     const sent = r.requests[0]!;
     assert.equal(sent.system, source.request.system);
@@ -403,17 +389,17 @@ test('the parts of a harvest follow the switches and the new material of each', 
   const r = await rig();
   try {
     const runner = r.runner();
-    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: false, memory: false}, 'an empty session has nothing to harvest');
+    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: false, memory: false, skills: false}, 'an empty session has nothing to harvest');
     await r.journal.append(human('logox', 'Add a retry'));
-    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: true, memory: true});
-    assert.deepEqual(await runner.harvestParts({recap: false, memory: true}), {recap: false, memory: true});
-    assert.deepEqual(await runner.harvestParts({recap: false, memory: false}), {recap: false, memory: false}, 'both switches off: no harvest');
+    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: true, memory: true, skills: false});
+    assert.deepEqual(await runner.harvestParts({recap: false, memory: true}), {recap: false, memory: true, skills: false});
+    assert.deepEqual(await runner.harvestParts({recap: false, memory: false, skills: false}), {recap: false, memory: false, skills: false}, 'both switches off: no harvest');
     await r.watermarks.save('recap', {logox: 1});
-    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: false, memory: true}, 'the recap already covers it');
+    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: false, memory: true, skills: false}, 'the recap already covers it');
     await r.watermarks.merge('dream', {logox: 1});
     await r.journal.append(said('techne', 'A companion report'));
-    assert.deepEqual(await runner.harvestParts({recap: false, memory: true}), {recap: false, memory: false}, 'companion material is the dream path, not the Director harvest');
-    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: true, memory: false}, 'but it is new to the session-level recap');
+    assert.deepEqual(await runner.harvestParts({recap: false, memory: true}), {recap: false, memory: false, skills: false}, 'companion material is the dream path, not the Director harvest');
+    assert.deepEqual(await runner.harvestParts({recap: true, memory: true}), {recap: true, memory: false, skills: false}, 'but it is new to the session-level recap');
   } finally {await r.close();}
 });
 
@@ -460,12 +446,13 @@ async function appFixture(options: {ttl?: number; hold?: boolean; auto?: Record<
   const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072, ...(options.ttl ? {cache_ttl_seconds: options.ttl} : {})},
     ...(options.auto ? {anamnesis: options.auto} : {})}, {}, home, root);
   const seen: ModelRequest[] = [];
-  const control = {answer: ANSWER, hold: options.hold ?? false, aborted: 0, toolOnly: false};
+  const gate = {open: undefined as (() => void) | undefined};
+  const control = {answer: ANSWER, hold: options.hold ?? false, aborted: 0, toolOnly: false, answerFor: undefined as ((req: ModelRequest) => string | undefined) | undefined, release: () => {control.hold = false; gate.open?.();}};
   const provider: Provider = {async respond(req, _delta, signal) {
     seen.push(req);
     if (req.purpose === 'harvest') {
-      if (control.hold) await new Promise((_, reject) => signal.addEventListener('abort', () => {control.aborted++; reject(signal.reason);}, {once: true}));
-      return {message: control.toolOnly ? {role: 'assistant', text: '', toolCalls: [{id: 'x', name: 'Write', arguments: '{}'}]} : {role: 'assistant', text: control.answer}, stop: 'complete', usage: {input: 2200, output: 80, cacheRead: 2000}};
+      if (control.hold) await new Promise<void>((resolve, reject) => {gate.open = resolve; signal.addEventListener('abort', () => {control.aborted++; reject(signal.reason);}, {once: true});});
+      return {message: control.toolOnly ? {role: 'assistant', text: '', toolCalls: [{id: 'x', name: 'Write', arguments: '{}'}]} : {role: 'assistant', text: control.answerFor?.(req) ?? control.answer}, stop: 'complete', usage: {input: 2200, output: 80, cacheRead: 2000}};
     }
     if (isTranscriptRun(req)) return {message: {role: 'assistant', text: 'Transcript recap\n\nDone: x\nOpen: nothing\nNext: y'}, stop: 'complete', usage: {input: 400, output: 60}};
     return {message: {role: 'assistant', text: 'Understood, noted.'}, stop: 'complete', usage: {input: 2000, output: 20, cacheRead: 1800}};
@@ -533,7 +520,7 @@ test('a manual dream forks too and applies the memory; the notice lists the chan
     await speak(app, 'Please always use tabs.');
     const result = await app.anamnesis.runNow('dream').done;
     assert.equal(result.status, 'completed');
-    assert.ok(harvests(f.seen)[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTION_MEMORY));
+    assert.ok(harvests(f.seen)[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['memory+skills']!), 'a dream asks for the memory and the skills');
     assert.deepEqual((await app.anamnesis.memories()).map(record => record.name), ['prefers-tabs']);
     const [notice] = notices(app);
     assert.deepEqual(notice!.parts.map(part => part.text).slice(1), ['1 memory']);
@@ -543,17 +530,17 @@ test('a manual dream forks too and applies the memory; the notice lists the chan
   } finally {await f.close();}
 });
 
-test('a cold cache (no lifetime known, or past it) uses the transcript path as before', async () => {
+test('a cold cache (past its lifetime) or an unknown lifetime uses the transcript path for a manual run', async () => {
   const unknown = await appFixture();
   try {
     const app = await unknown.open();
     await speak(app, 'Please add a retry to the uploader.');
     const result = await app.anamnesis.runNow('recap').done;
     assert.equal(result.status, 'completed');
-    assert.equal(harvests(unknown.seen).length, 0);
+    assert.equal(harvests(unknown.seen).length, 0, 'a manual run never forks on an assumed lifetime');
     assert.equal(unknown.seen.filter(isTranscriptRun).length, 1);
     assert.deepEqual(notices(app), [], 'only a harvest posts the notice');
-    assert.equal(app.status('logox').cache, undefined, 'an unknown lifetime shows no countdown or harvest state');
+    assert.equal(app.status('logox').cache, undefined, 'an unknown lifetime shows no countdown');
   } finally {await unknown.close();}
   mock.timers.enable({apis: ['Date'], now: Date.now()});
   const expired = await appFixture({ttl: 300});
@@ -622,7 +609,7 @@ test('automatic: at the cliff of an idle Director the harvest forks its request,
     await waitFor(() => app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis'), card => card?.status === 'completed', {label: 'harvest card'});
     const fork = harvests(f.seen);
     assert.equal(fork.length, 1);
-    assert.ok(fork[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTION_BOTH));
+    assert.ok(fork[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['recap+memory+skills']!));
     assert.deepEqual(fork[0]!.messages.slice(0, real(f.seen).at(-1)!.messages.length), real(f.seen).at(-1)!.messages);
     assert.equal(f.seen.filter(isTranscriptRun).length, 0);
     const card = app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis')!;
@@ -669,43 +656,53 @@ test('automatic: the recap switch alone asks for the recap, the dream switch alo
     await speak(dream.app, 'Please always use tabs.');
     mock.timers.tick(290_000); await sleepers();
     await waitFor(() => harvests(dream.f.seen).length, count => count === 1, {label: 'memory-only harvest'});
-    assert.ok(harvests(dream.f.seen)[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTION_MEMORY));
+    assert.ok(harvests(dream.f.seen)[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['memory+skills']!));
   } finally {await quiet(dream.f);}
 });
 
-test('automatic: a lifetime that is unknown plans no harvest, so the idle recap path keeps working for that model', async () => {
+test('automatic: a lifetime that is unknown is harvested at the assumed 5 minutes cliff; there is no idle recap any more', async () => {
   mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_900_000_000_000});
   const f = await appFixture();
   try {
-    let now = 0;
-    const app = await f.open({anamnesis: {clock: () => now, tickMs: 5, recapIdleMs: 1000, dreamIdleMs: 5000}});
+    const app = await f.open();
     await speak(app, 'what is the plan for the uploader');
-    now = 1600;
-    mock.timers.tick(20); await sleepers();
-    await waitFor(() => f.seen.filter(isTranscriptRun).length, count => count >= 1, {label: 'the idle recap'});
-    assert.equal(harvests(f.seen).length, 0);
+    mock.timers.tick(280_000); await sleepers();
+    await waitFor(() => harvests(f.seen).length, count => count === 1, {label: 'the harvest at the assumed cliff'});
+    mock.timers.tick(20 * 60_000); await sleepers();
+    assert.equal(f.seen.filter(isTranscriptRun).length, 0, 'no transcript request, however long the session is idle');
+    await waitFor(() => app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis'), card => card?.status === 'completed', {label: 'card'});
   } finally {await quiet(f);}
 });
 
-test('automatic: while a harvest is planned the idle recap does not fire for the same material', async () => {
-  mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_900_000_000_000});
-  const f = await appFixture({ttl: 300});
+test('typing never aborts, cancels or postpones a harvest; only a sent message stops a running one and nothing is applied', async () => {
+  const typed = await autoApp({auto: {recap: true, dream: true}});
   try {
-    let now = 0;
-    const app = await f.open({anamnesis: {clock: () => now, tickMs: 5, recapIdleMs: 1000, dreamIdleMs: 5000}});
-    await speak(app, 'what is the plan for the uploader');
-    now = 1600;
-    mock.timers.tick(20); await sleepers();
-    assert.equal(f.seen.filter(isTranscriptRun).length, 0, 'the idle recap waits for the harvest');
-    now = 9000;
-    mock.timers.tick(20); await sleepers();
-    assert.equal(f.seen.filter(isTranscriptRun).length, 0, 'and so does the dream');
-    mock.timers.tick(270_000); await sleepers();
-    await waitFor(() => harvests(f.seen).length, count => count === 1, {label: 'the harvest at the cliff'});
-    now = 20_000;
-    mock.timers.tick(20); await sleepers();
-    assert.equal(f.seen.filter(isTranscriptRun).length, 0, 'the harvest covered the material; the watermarks leave nothing for the idle paths');
-  } finally {await quiet(f);}
+    await speak(typed.app, 'Please always use tabs.');
+    typed.f.control.hold = true;
+    typed.app.noteDraft();
+    mock.timers.tick(100_000); typed.app.noteDraft(); await sleepers();
+    mock.timers.tick(180_000); await sleepers();
+    await waitFor(() => harvests(typed.f.seen).length, count => count === 1, {label: 'the harvest starts at its cliff although the user kept typing'});
+    for (let i = 0; i < 30; i++) {typed.app.noteDraft(); await sleepers();}
+    assert.equal(typed.f.control.aborted, 0, 'keystrokes do not abort it');
+    assert.equal(typed.app.status('logox').cache?.harvest?.state, 'running');
+    // The answer arrives although the user typed meanwhile: it is applied.
+    typed.f.control.release();
+    await waitFor(() => typed.app.store.getSnapshot().activities.find(activity => activity.kind === 'anamnesis'), card => card?.status === 'completed', {label: 'the typed-over harvest completes'});
+    assert.deepEqual((await typed.app.anamnesis.memories()).map(record => record.name), ['prefers-tabs']);
+  } finally {await quiet(typed.f);}
+  const sent = await autoApp({auto: {recap: true, dream: true}});
+  try {
+    await speak(sent.app, 'Please always use tabs.');
+    sent.f.control.hold = true;
+    mock.timers.tick(280_000); await sleepers();
+    await waitFor(() => harvests(sent.f.seen).length, count => count === 1, {label: 'the harvest is in flight'});
+    mock.timers.reset();
+    await sent.app.submit('stop that');
+    assert.equal(sent.f.control.aborted, 1, 'a sent message aborts it');
+    assert.deepEqual(await sent.f.memory.list(), []);
+    assert.deepEqual(sent.app.store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis'), []);
+  } finally {mock.timers.reset(); await sent.f.close();}
 });
 
 async function findFile(root: string, name: string): Promise<string> {
@@ -722,3 +719,130 @@ async function findFile(root: string, name: string): Promise<string> {
   if (!found) throw new Error(name + ' not found under ' + root);
   return found;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Companion harvests (step 4b).
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+const techneWho: KeepAliveWho = {sessionId: 's', ownerId: 'techne', activityId: 't1', rootActivityId: 'a'};
+function companionRig(options: {replayable?: boolean} = {}) {
+  const starts: number[] = [], cancelled: number[] = [], pings: number[] = [];
+  const state = {certain: false as KeepAliveReason | false, open: false};
+  const provider: Provider = {
+    async cacheProfile() {return options.replayable === false ? undefined : {ttlMs: 5 * MINUTE, replayable: true};},
+    async respond() {pings.push(Date.now()); return {message: {role: 'assistant', text: ''}, stop: 'length', usage: {input: 100_000, output: 1, cacheRead: 100_000}};},
+  };
+  const timing = new HarvestTiming({
+    lifetime: () => ({ms: 5 * MINUTE, confidence: 'known'}),
+    async start() {starts.push(Date.now()); return {finished: new Promise<boolean>(() => {}), cancel() {cancelled.push(Date.now());}} satisfies HarvestRun;},
+  });
+  const keeper = new CacheKeeper({enabled: () => true, certain: () => state.certain, awayMs: () => 60 * MINUTE, pricing: cheapRead, charge: () => {}, harvest: timing});
+  timing.attach({settled: () => !state.certain && !state.open, touchedAt: actor => keeper.touchedAt(actor)});
+  const arm = () => keeper.arm(techneWho, {request: request(), provider, model: MODEL, startedAt: Date.now(), usage: {input: 100_000, output: 5, cacheRead: 100_000}, reply: REPLY});
+  return {starts, cancelled, pings, state, timing, keeper, arm};
+}
+
+test('a settled companion is harvested at its own cliff, with the keeper able to warm it or not', withClock(async () => {
+  for (const replayable of [true, false]) {
+    const r = companionRig({replayable});
+    const origin = Date.now();
+    await r.arm();
+    await run(4 * MINUTE);
+    assert.deepEqual(r.starts, []);
+    await run(MINUTE);
+    assert.deepEqual(r.starts.map(at => at - origin), [270_000], 'once, at 0.9 x lifetime (replayable ' + replayable + ')');
+    assert.deepEqual(r.pings, [], 'a companion is never warmed for the human');
+    r.keeper.wake(techneWho);
+  }
+}));
+
+test('a companion is not harvested while it has an open activity or is certain to wake, and its own new request cancels a running harvest', withClock(async () => {
+  const open = companionRig();
+  open.state.open = true;
+  await open.arm();
+  await run(6 * MINUTE);
+  assert.deepEqual(open.starts, [], 'an open activity of the actor means it is not settled');
+
+  const peer = companionRig();
+  peer.state.certain = 'peer';
+  await peer.arm();
+  await run(40 * MINUTE);
+  assert.deepEqual(peer.starts, [], 'a peer wait is never harvested: the actor is certain to wake');
+  assert.ok(peer.pings.length > 0, 'the keeper warms it for the peer as before');
+
+  const own = companionRig();
+  await own.arm();
+  await run(5 * MINUTE);
+  assert.equal(own.starts.length, 1);
+  own.keeper.wake(techneWho);
+  assert.equal(own.cancelled.length, 1, 'a new real request of that actor cancels its harvest');
+  assert.equal(own.timing.phase(techneWho), undefined);
+
+  const early = companionRig();
+  await early.arm();
+  await run(2 * MINUTE);
+  early.keeper.wake(techneWho);
+  await run(10 * MINUTE);
+  assert.deepEqual(early.starts, [], 'woken before the cliff');
+}));
+
+test('a sent message aborts every running harvest and applies nothing; a single actor can be cancelled alone; typing changes nothing', async () => {
+  const store = new RuntimeStore();
+  let applied = 0;
+  const driver: AnamnesisDriver = {async run(context) {await delay(60_000, undefined, {signal: context.signal}); applied++; return {stage: 'x', detail: ''};}};
+  const service = new Anamnesis('s', store, driver, () => true, {});
+  const base = {request: request(), reply: REPLY, provider: {async respond() {throw new Error('unused');}} as Provider, model: MODEL, parts: {recap: false, memory: true}};
+  const a = service.startHarvest({...base, owner: 'techne', ownerName: 'Techne'})!, b = service.startHarvest({...base, owner: 'kalon', ownerName: 'Kalon'})!;
+  const cards = () => store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis');
+  assert.deepEqual(cards().map(card => card.stage).sort(), ['Kalon: Harvesting the session', 'Techne: Harvesting the session'], 'one card per harvest, naming the actor');
+  service.noteDraft(); service.noteDraft();
+  assert.equal(cards().length, 2, 'typing leaves both running');
+  service.cancel(a.runId);
+  assert.equal((await a.done).status, 'aborted');
+  assert.equal(cards().length, 1, 'only that harvest left');
+  await service.foregroundSubmitted();
+  assert.equal((await b.done).status, 'aborted');
+  assert.deepEqual(cards(), []);
+  assert.equal(applied, 0);
+});
+
+test('companion and Director harvests that finish together share one notice: names, recap, memories and skills', async () => {
+  mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_900_000_000_000});
+  const f = await appFixture({ttl: 300});
+  try {
+    const app = await f.open();
+    const techneAnswer = '<memory>' + JSON.stringify([{op: 'save', scope: 'project', type: 'project', name: 'parser-quirk', description: 'Parser quirk', content: 'It trims.'}]) +
+      '</memory><skills>' + JSON.stringify([{op: 'create', actor: 'techne', scope: 'user', category: 'test-running', name: 'run-fast', description: 'Run one file', body: 'Run it.', category_description: 'Running tests'}]) + '</skills>';
+    f.control.answerFor = req => req.messages.at(-1)!.text.includes('<recap>') ? undefined : techneAnswer;
+    await speak(app, 'Please always use tabs.');
+    await speak(app, '@techne look at the parser');
+    mock.timers.tick(290_000); await sleepers();
+    await waitFor(() => harvests(f.seen).length, count => count === 2, {label: 'both actors were harvested'});
+    await waitFor(() => notices(app), found => found.length === 1 && found[0]!.parts.some(part => part.text === '1 skill') && found[0]!.parts.some(part => part.text === 'recap'), {label: 'one merged notice'});
+    const [notice] = notices(app);
+    const texts = notice!.parts.map(part => part.text);
+    assert.match(texts[0]!, /^Harvested \d\d:\d\d$/);
+    assert.deepEqual(texts[1]!.split(', ').sort(), ['Logox', 'Techne']);
+    assert.deepEqual(texts.slice(2), ['recap', '2 memories', '1 skill']);
+    const memoryAction = notice!.parts.find(part => part.text === '2 memories')!.action;
+    assert.equal(memoryAction?.kind === 'open-page' && /# Logox[\s\S]*# Techne|# Techne[\s\S]*# Logox/.test(memoryAction.text), true, 'the page names each actor');
+    assert.equal(notice!.parts.find(part => part.text === '1 skill')!.action?.kind, 'open-page');
+    const fork = harvests(f.seen).find(req => !req.messages.at(-1)!.text.includes('<recap>'))!;
+    assert.ok(fork.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['memory+skills']!), 'a companion never gets the recap part');
+    assert.ok(await readFile(await findFile(join(f.home, '.logox', 'skills'), 'run-fast.md'), 'utf8').then(text => text.includes('learned_by: techne')));
+    const techne = app.contexts.sessionMeters(app.sessionId).get('techne')!;
+    assert.equal(techne.usageRecords().filter(record => record.category === 'harvest').length, 1, 'charged to the companion\'s own meter');
+    const marks = JSON.parse(await readFile(await findFile(f.root, 'anamnesis.json'), 'utf8')) as {dream: Record<string, number>};
+    assert.deepEqual(Object.keys(marks.dream).sort(), ['logox', 'techne']);
+    const cards = app.store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis');
+    assert.equal(cards.length, 2, 'one card per harvest');
+    assert.ok(cards.some(card => card.stage.startsWith('Techne: ')), 'the companion card names the actor');
+  } finally {await quiet(f);}
+});
+
+test('config files that still carry the retired idle clocks load; only the two switches remain', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'logox-harvest-config-')));
+  try {
+    const config = await loadConfig(root, {anamnesis: {recap: false, recap_idle_minutes: 7, dream_idle_minutes: 9}}, {}, root, root);
+    assert.deepEqual(config.anamnesis, {recap: false, dream: true});
+  } finally {await rm(root, {recursive: true, force: true});}
+});

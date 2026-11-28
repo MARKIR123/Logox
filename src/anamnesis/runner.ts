@@ -11,6 +11,7 @@ import type {ResolvedModel} from './model.js';
 import {applyOperations, dreamDetail, dreamStage, parseDreamAnswer} from './operations.js';
 import {harvestMessage, harvestRequest, memoryChanges, parseHarvestAnswer, type HarvestParts, type HarvestSource, type MemoryChange} from './harvest.js';
 import {DIRECTOR_ID} from '../runtime/director-id.js';
+import {SKILL_ACTORS, skillsDetail, type SkillResult, type SkillStore} from './skills.js';
 import {DREAM_MAX_TOKENS, DREAM_SYSTEM_PROMPT, RECAP_MAX_TOKENS, RECAP_SYSTEM_PROMPT, RECORD_CONTENT_CAP} from './prompts.js';
 import type {AnamnesisDriver, RunContext, RunKind, RunOutcome} from './service.js';
 import {DREAM_TRANSCRIPT_CAP, RECAP_TRANSCRIPT_CAP, buildTranscript, hasNewMaterial, marksOf, type OwnerEntries} from './transcript.js';
@@ -44,8 +45,10 @@ export interface RunnerDeps {
   model(): Promise<ResolvedModel>;
   /** Records the usage of one request under the owner `anamnesis`. */
   charge(usage: ModelTurn['usage'], identity: string): Promise<void> | void;
-  /** Records the usage of one harvest fork on the Director's meter (category `harvest`). */
-  chargeHarvest?(usage: ModelTurn['usage'], identity: string): Promise<void> | void;
+  /** Records the usage of one harvest fork on the meter of the actor that was harvested (category `harvest`). */
+  chargeHarvest?(usage: ModelTurn['usage'], identity: string, ownerId: string): Promise<void> | void;
+  /** Skill operations of a harvest; without it the skills part is never asked for. */
+  skills?: SkillStore;
   gitStatus?(cwd: string): Promise<string>;
   /** `YYYY-MM-DD` of today. */
   today?(): string;
@@ -77,42 +80,62 @@ export class AnamnesisRunner implements AnamnesisDriver {
     return context.kind === 'recap' ? this.recap(context) : this.dream(context);
   }
   /**
-   * The parts a harvest asks for now: each enabled part with something new to cover (recap: any journal beyond the recap marks; memory: the
-   * Director's journal beyond its dream mark). Both false means there is nothing to harvest.
+   * The parts a harvest of one actor asks for now: each enabled part with something new to cover. The Director: recap against every journal beyond the
+   * recap marks, memory and skills against its own journal beyond its dream mark. A companion: memory and skills only, against its own journal.
+   * Skills follow the memory switch. Nothing true means nothing to harvest.
    */
-  async harvestParts(enabled: HarvestParts): Promise<HarvestParts> {
-    const owners = await this.load(), director = owners.filter(owner => owner.ownerId === DIRECTOR_ID);
-    return {recap: enabled.recap && hasNewMaterial(owners, await this.deps.watermarks.marks('recap')),
-      memory: enabled.memory && hasNewMaterial(director, await this.deps.watermarks.marks('dream'))};
+  async harvestParts(enabled: HarvestParts, ownerId: string = DIRECTOR_ID): Promise<HarvestParts> {
+    const owners = await this.load(), own = owners.filter(owner => owner.ownerId === ownerId);
+    const fresh = enabled.memory && hasNewMaterial(own, await this.deps.watermarks.marks('dream'));
+    return {recap: ownerId === DIRECTOR_ID && enabled.recap && hasNewMaterial(owners, await this.deps.watermarks.marks('recap')), memory: fresh, skills: fresh && Boolean(this.deps.skills)};
+  }
+  /** Effects of harvests of different actors never interleave: each applies its answer in turn. */
+  private applying: Promise<unknown> = Promise.resolve();
+  private serially<T>(work: () => Promise<T>): Promise<T> {
+    const turn = this.applying.then(work, work);
+    this.applying = turn.catch(() => {});
+    return turn;
   }
   /**
-   * Forks the Director's last request (`harvest.ts:harvestRequest()`), reads the recap and the memory operations out of the one answer and applies them
-   * only after it arrived: an abort or an unreadable answer leaves memory and the watermarks alone. Tool calls are never run.
+   * Forks one actor's last request (`harvest.ts:harvestRequest()`), reads the recap, the memory operations and the skill operations out of the one answer
+   * and applies them (in turn with other harvests) only after it arrived: an abort or an unreadable answer leaves memory, skills and the watermarks alone.
+   * Tool calls are never run. Each actor's harvest moves only that actor's dream mark.
    */
   private async harvest(context: RunContext, source: HarvestSource): Promise<RunOutcome> {
-    const {parts} = source, owners = await this.load();
+    const {parts} = source, ownerId = source.owner ?? DIRECTOR_ID, ownerName = source.ownerName ?? ownerId, owners = await this.load();
     const records = parts.memory ? await this.deps.memory.list() : [];
     const git = parts.recap ? await (this.deps.gitStatus ?? getGitStatus)(this.deps.cwd) : '';
     const today = this.deps.today?.() ?? new Date().toISOString().slice(0, 10);
+    const skills = parts.skills && this.deps.skills ? await this.deps.skills.describeFor(SKILL_ACTORS.includes(ownerId as never) ? ownerId : 'public') : '';
     context.signal.throwIfAborted();
-    const turn = await source.provider.respond(harvestRequest(source, harvestMessage(parts, {today, git, records, recordCap: RECORD_CONTENT_CAP})), () => {}, context.signal);
-    await this.deps.chargeHarvest?.(turn.usage, source.model);
+    const turn = await source.provider.respond(harvestRequest(source, harvestMessage(parts, {today, git, records, recordCap: RECORD_CONTENT_CAP, skills})), () => {}, context.signal);
+    await this.deps.chargeHarvest?.(turn.usage, source.model, ownerId);
     const answer = parseHarvestAnswer(turn.message.text, parts);
     if (!answer) throw new Error('Anamnesis could not read the harvest answer; this part of the session will be reviewed again.');
-    // The model has answered: from here the run finishes without yielding to an abort, so a harvest never half-applies.
-    context.signal.throwIfAborted();
-    const note = answer.recap ? splitRecap(answer.recap) : undefined;
-    let changes: MemoryChange[] = [], dream: Awaited<ReturnType<typeof applyOperations>> | undefined;
-    if (answer.memory) {
-      dream = await applyOperations(this.deps.memory, answer.memory);
-      changes = memoryChanges(records, await this.deps.memory.list(), dream);
-    }
-    if (note?.stage) await this.deps.watermarks.save('recap', marksOf(owners));
-    if (answer.memory) await this.deps.watermarks.merge('dream', marksOf(owners.filter(owner => owner.ownerId === DIRECTOR_ID)));
-    const report = {at: Date.now(), recap: Boolean(note?.stage), changes};
-    const memoryText = dream ? dreamDetail(dream) : '';
-    if (note?.stage) return {...note, detail: [note.detail, memoryText].filter(Boolean).join('\n\n'), harvest: report};
-    return {stage: dream ? dreamStage(dream) : 'Nothing new to remember', detail: memoryText, empty: !changes.length, harvest: report};
+    return this.serially(async () => {
+      // Waiting for the turn is still abortable; once the effects begin the run finishes without yielding, so a harvest never half-applies.
+      context.signal.throwIfAborted();
+      const note = answer.recap ? splitRecap(answer.recap) : undefined;
+      let changes: MemoryChange[] = [], dream: Awaited<ReturnType<typeof applyOperations>> | undefined, learned: SkillResult | undefined;
+      if (answer.memory) {
+        const before = await this.deps.memory.list();
+        dream = await applyOperations(this.deps.memory, answer.memory);
+        changes = memoryChanges(before, await this.deps.memory.list(), dream);
+      }
+      if (answer.skills && this.deps.skills) learned = await this.deps.skills.apply(answer.skills, ownerId);
+      if (note?.stage) await this.deps.watermarks.save('recap', marksOf(owners));
+      // A missing skills block is an empty one; an unreadable memory block leaves the material to be reviewed again.
+      const covered = answer.memory !== undefined || (!parts.memory && answer.skills !== undefined);
+      if (covered) await this.deps.watermarks.merge('dream', marksOf(owners.filter(owner => owner.ownerId === ownerId)));
+      const skillChanges = learned?.changes ?? [];
+      const report = {at: Date.now(), recap: Boolean(note?.stage), changes, owner: ownerId, ownerName, skills: skillChanges};
+      const detail = [note?.detail, dream ? dreamDetail(dream) : '', learned ? skillsDetail(learned) : ''].filter(Boolean).join('\n\n');
+      if (note?.stage) return {stage: note.stage, detail, harvest: report};
+      const memoryStage = dream ? dreamStage(dream) : 'Nothing new to remember';
+      const learnedText = skillChanges.length ? 'learned ' + skillChanges.length + (skillChanges.length === 1 ? ' skill' : ' skills') : '';
+      const stage = !learnedText ? memoryStage : memoryStage === 'Nothing new to remember' ? learnedText[0]!.toUpperCase() + learnedText.slice(1) : memoryStage + ', ' + learnedText;
+      return {stage, detail, empty: !changes.length && !skillChanges.length && !(learned?.refused.length), harvest: report};
+    });
   }
   /** One plain request: the system prompt, one user message, no tools. Thinking stays off unless the chosen model carries an effort of its own. */
   private async ask(system: string, text: string, maxTokens: number, signal: AbortSignal): Promise<string> {

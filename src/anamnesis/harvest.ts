@@ -5,12 +5,13 @@
  * Pure helpers here (request, instruction, answer, change list); the run itself is `runner.ts:AnamnesisRunner.harvest()`.
  */
 import type {ModelMessage, ModelRequest, Provider} from '../runtime/messages.js';
-import {HARVEST_INSTRUCTION_BOTH, HARVEST_INSTRUCTION_MEMORY, HARVEST_INSTRUCTION_RECAP} from './prompts.js';
+import {HARVEST_INSTRUCTIONS} from './prompts.js';
+import type {SkillChange} from './skills.js';
 import type {MemoryRecord, MemoryScope, MemoryType} from './memory.js';
 import {parseDreamAnswer, type DreamResult} from './operations.js';
 
-/** Which of the two answers a harvest asks for. Skills and compaction join here later. */
-export interface HarvestParts {readonly recap: boolean; readonly memory: boolean}
+/** Which answers a harvest asks for. Only the Director writes a recap; skills follow the dream switch like memory. Compaction joins here later. */
+export interface HarvestParts {readonly recap: boolean; readonly memory: boolean; readonly skills?: boolean}
 /** Everything a harvest needs from the actor's last real request. */
 export interface HarvestSource {
   /** The request exactly as it was sent. */
@@ -22,16 +23,20 @@ export interface HarvestSource {
   /** Model identity as usage records carry it. */
   readonly model: string;
   readonly parts: HarvestParts;
+  /** The actor whose request this is (default the Director) and its display name. */
+  readonly owner?: string;
+  readonly ownerName?: string;
 }
 
 export const harvestInstruction = (parts: HarvestParts): string =>
-  parts.recap && parts.memory ? HARVEST_INSTRUCTION_BOTH : parts.recap ? HARVEST_INSTRUCTION_RECAP : HARVEST_INSTRUCTION_MEMORY;
+  HARVEST_INSTRUCTIONS[[parts.recap && 'recap', parts.memory && 'memory', parts.skills && 'skills'].filter(Boolean).join('+')] ?? HARVEST_INSTRUCTIONS['memory']!;
 /** The appended user message: the static instruction, then what the model cannot see in its history (today, the working tree, the memory records' text). */
-export function harvestMessage(parts: HarvestParts, data: {today: string; git: string; records: readonly MemoryRecord[]; recordCap: number}): string {
+export function harvestMessage(parts: HarvestParts, data: {today: string; git: string; records: readonly MemoryRecord[]; recordCap: number; skills?: string}): string {
   const lines = [harvestInstruction(parts), 'Today: ' + data.today];
   if (parts.recap && data.git) lines.push('Working tree:\n' + data.git);
   if (parts.memory) lines.push('Current memory records:\n' + (data.records.length
     ? data.records.map(record => '## ' + record.scope + '/' + record.name + ' (' + record.type + ')\n' + record.description + '\n' + record.content.slice(0, data.recordCap)).join('\n\n') : '(none)'));
+  if (parts.skills && data.skills) lines.push(data.skills);
   return lines.join('\n\n');
 }
 /**
@@ -56,14 +61,16 @@ function memoryOperations(raw: string): unknown[] | undefined {
   }
   return parseDreamAnswer(unfenced);
 }
-export interface HarvestAnswer {readonly recap?: string; readonly memory?: unknown[]}
+export interface HarvestAnswer {readonly recap?: string; readonly memory?: unknown[]; readonly skills?: unknown[]}
 /** The blocks the run asked for that could be read; undefined when none could (an answer of only tool calls has no text and lands here). */
 export function parseHarvestAnswer(text: string, parts: HarvestParts): HarvestAnswer | undefined {
   const recap = parts.recap ? tagged(text, 'recap') : undefined;
   const raw = parts.memory ? tagged(text, 'memory') : undefined;
   const memory = raw === undefined ? undefined : memoryOperations(raw);
-  if (!recap && memory === undefined) return undefined;
-  return {...(recap ? {recap} : {}), ...(memory !== undefined ? {memory} : {})};
+  const rawSkills = parts.skills ? tagged(text, 'skills') : undefined;
+  const skills = rawSkills === undefined ? undefined : memoryOperations(rawSkills);
+  if (!recap && memory === undefined && skills === undefined) return undefined;
+  return {...(recap ? {recap} : {}), ...(memory !== undefined ? {memory} : {}), ...(skills !== undefined ? {skills} : {})};
 }
 
 /** One memory change of a harvest, with the text before and after so the person can read what happened. */
@@ -102,4 +109,9 @@ export function changesPage(changes: readonly MemoryChange[]): string {
   }).join('\n\n');
 }
 /** What a finished harvest reports to the application: when it ended, whether it wrote a recap, and which memory records changed. */
-export interface HarvestReport {readonly at: number; readonly recap: boolean; readonly changes: readonly MemoryChange[]}
+export interface HarvestReport {
+  readonly at: number; readonly recap: boolean; readonly changes: readonly MemoryChange[];
+  /** The actor that was harvested and its display name. */
+  readonly owner: string; readonly ownerName: string;
+  readonly skills: readonly SkillChange[];
+}

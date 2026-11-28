@@ -18,7 +18,7 @@ import type {CommandSurfaces, PageActions} from './surfaces.js';
 
 export const ANAMNESIS_USAGE = 'Usage: /anamnesis [recap|dream]';
 export const RUN_RECEIPTS = {recap: 'Anamnesis is writing a recap.', dream: 'Anamnesis is reviewing the session.'} as const;
-export const NO_RECORDS_TEXT = 'No records yet. Anamnesis saves them while the session is idle, and you can ask any actor to remember something.';
+export const NO_RECORDS_TEXT = 'No records yet. Anamnesis saves them when a prompt cache is about to expire, and you can ask any actor to remember something.';
 export const FOLLOW_LOGOX_LABEL = 'Follow Logox (default)';
 type Kind = keyof typeof RUN_RECEIPTS;
 
@@ -119,8 +119,8 @@ export function createAnamnesisCommand(deps: AnamnesisPageDeps) {
       {id: 'dream', label: 'Dream now', description: running ? 'Running…' : 'Review the session and update memory'},
       {id: 'records', label: 'Memory records', description: records.length ? project + ' in this project · ' + user + ' for this user' : 'None yet'},
       {id: 'model', label: 'Model', description: model.text, ...(model.warning ? {valueTone: 'warning' as const} : {})},
-      {id: 'auto-recap', label: 'Recap when idle', description: settings.recap ? 'On · after ' + settings.recapIdleMinutes + ' min' : 'Off'},
-      {id: 'auto-dream', label: 'Dream when idle', description: settings.dream ? 'On · after ' + settings.dreamIdleMinutes + ' min' : 'Off'},
+      {id: 'auto-recap', label: 'Recap when the cache expires', description: settings.recap ? 'On' : 'Off'},
+      {id: 'auto-dream', label: 'Dream when the cache expires', description: settings.dream ? 'On' : 'Off'},
     ];
     await open({title: 'Anamnesis', description: 'Enter runs, opens or toggles a row · Esc closes', current: '', ...(focus ? {focus} : {}), items},
       async () => ({items}), async (id): Promise<CommandResult> => {

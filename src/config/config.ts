@@ -99,13 +99,15 @@ const schema = z.object({
     timeout: z.number().positive().default(600),
   }).default({thinking_effort: 'auto', name: 'openai', model: '', temperature: 0.2, max_tokens: 16384, timeout: 600}),
   automa: automaConfigSchema.default({max_parallel: 4, max_per_dispatch: 16, max_running: 24, max_forks_running: 3}),
-  /** Anamnesis, the idle-time memory keeper: `recap` writes a note for the returning user, `dream` reviews the transcript into memory records. The switches only gate the automatic trigger. */
+  /**
+   * Anamnesis, the memory keeper: `recap` writes a note for the returning user, `dream` keeps memory and learned skills. Both run only as a harvest of an actor's
+   * prompt cache just before it expires; the switches gate the parts of that harvest. `recap_idle_minutes` and `dream_idle_minutes` of earlier versions
+   * (the retired idle clocks) are accepted and ignored.
+   */
   anamnesis: z.object({
     recap: z.boolean().default(true),
     dream: z.boolean().default(true),
-    recap_idle_minutes: z.number().positive().default(5),
-    dream_idle_minutes: z.number().positive().default(30),
-  }).default({recap: true, dream: true, recap_idle_minutes: 5, dream_idle_minutes: 30}),
+  }).default({recap: true, dream: true}),
   kernel: z.object({
     max_iterations: z.number().int().nonnegative().default(0),
     max_retries: z.number().int().nonnegative().max(10).default(3),

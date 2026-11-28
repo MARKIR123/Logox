@@ -9,40 +9,38 @@ import type {ActorCatalog} from '../actors/catalog.js';
 import type {ActorModel} from '../actors/definitions.js';
 import {ANAMNESIS_ID, anamnesisModel, bindAnamnesisModel, resolveModel, type AnamnesisModel} from '../anamnesis/model.js';
 import {MemoryStore, type MemoryRecord, type MemoryScope} from '../anamnesis/memory.js';
-import {changesPage, type HarvestParts, type HarvestSource} from '../anamnesis/harvest.js';
+import {changesPage, type HarvestParts, type HarvestReport, type HarvestSource} from '../anamnesis/harvest.js';
+import {SkillStore, skillsPage} from '../anamnesis/skills.js';
+import {builtinSkillsRoot} from '../resources/manager.js';
+import {SHORT_CACHE_MS} from '../providers/cache.js';
 import {AnamnesisRunner} from '../anamnesis/runner.js';
 import {Anamnesis, type RunKind, type RunResult} from '../anamnesis/service.js';
 import {WatermarkStore} from '../anamnesis/watermark.js';
 import type {Config} from '../config/config.js';
 import {StateFile} from '../config/model-preferences.js';
 import type {ContextManager} from '../context/manager.js';
-import {HarvestTiming, type HarvestRun} from '../kernel/harvest-timing.js';
+import {HarvestTiming, type HarvestLifetime, type HarvestRun} from '../kernel/harvest-timing.js';
 import type {KeepAliveTarget, KeepAliveWho} from '../kernel/cache-keepalive.js';
 import {memorySection} from '../prompts/memory.js';
 import type {ProviderRegistry} from '../providers/registry.js';
 import type {Provider} from '../runtime/messages.js';
 import type {NoticeInput} from '../runtime/notices.js';
 import {cacheLifetimeFor, modelOfIdentity} from './cache-lifetime.js';
-import {DIRECTOR_ID} from '../runtime/director-id.js';
+import {DIRECTOR_ID, isDirector} from '../runtime/director-id.js';
 import type {RuntimeStore} from '../runtime/store.js';
 import type {Journal} from '../store/journal.js';
 
-/** How often the idle check runs when the application is activated. */
-export const ANAMNESIS_TICK_MS = 15_000;
-/** Test and embedding hooks: every clock, the interval and the idle thresholds can be replaced. An interval is only started when one is given or the process is not a test. */
+/** Harvests that finish within this long of each other share one notice. */
+export const NOTICE_COALESCE_MS = 3000;
+/** Test and embedding hooks. */
 export interface AnamnesisAppOptions {
-  clock?: () => number;
   wall?: () => number;
-  /** Interval of the idle check; without it `activate()` uses `ANAMNESIS_TICK_MS` outside tests and starts nothing inside them. */
-  tickMs?: number;
-  /** A headless run: no automatic recap or dream and no idle interval (a manual `runNow` still works). */
+  /** A headless run: no automatic harvest (a manual `runNow` still works). */
   disabled?: boolean;
-  recapIdleMs?: number;
-  dreamIdleMs?: number;
   /** `YYYY-MM-DD` shown to the dream as today. */
   today?: () => string;
 }
-export interface AnamnesisSettings {recap: boolean; dream: boolean; recapIdleMinutes: number; dreamIdleMinutes: number}
+export interface AnamnesisSettings {recap: boolean; dream: boolean}
 const settingsSchema = z.strictObject({version: z.literal(1), recap: z.boolean().optional(), dream: z.boolean().optional()});
 
 export interface AnamnesisAppDeps {
@@ -68,7 +66,7 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
   let preferences: z.infer<typeof settingsSchema> | undefined;
   try {preferences = await preferenceFile.read();} catch {preferences = undefined;}
   const settings = (): AnamnesisSettings => ({recap: preferences?.recap ?? config.anamnesis.recap, dream: preferences?.dream ?? config.anamnesis.dream,
-    recapIdleMinutes: config.anamnesis.recap_idle_minutes, dreamIdleMinutes: config.anamnesis.dream_idle_minutes});
+  });
 
   // The memory section is read once per session (and on /reload) and kept as one string, so the prompt prefix never changes underneath the cache.
   const folders = {project: memory.dirFor('project'), user: memory.dirFor('user')};
@@ -82,6 +80,7 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
 
   // Usage lands on the meter of the owner `anamnesis` (restored from the usage ledger like any other owner), so `/usage` lists it.
   void deps.configureMeter(ANAMNESIS_ID).catch(() => {});
+  const skills = new SkillStore({user: join(homeDir, '.logox', 'skills'), project: join(cwd, '.logox', 'skills'), builtin: builtinSkillsRoot()}, options.today);
   const runner = new AnamnesisRunner({
     sessionId: session, cwd, journal, memory, watermarks,
     owners: async () => [DIRECTOR_ID, ...actors.list().map(actor => actor.id), ...(await journal.activeTasks(session)).map(task => task.ownerId)],
@@ -90,60 +89,75 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
       await deps.configureMeter(ANAMNESIS_ID);
       contexts.meter({sessionId: session, ownerId: ANAMNESIS_ID}).chargeUsage(usage, identity, 'anamnesis');
     },
-    // A harvest rides the Director's own request, so its tokens belong to the Director's meter, in a category of their own.
-    chargeHarvest: async (usage, identity) => {
-      await deps.configureMeter(DIRECTOR_ID);
-      contexts.meter({sessionId: session, ownerId: DIRECTOR_ID}).chargeUsage(usage, identity, 'harvest');
+    // A harvest rides the harvested actor's own request, so its tokens belong to that actor's meter, in a category of their own.
+    chargeHarvest: async (usage, identity, ownerId) => {
+      await deps.configureMeter(ownerId);
+      contexts.meter({sessionId: session, ownerId}).chargeUsage(usage, identity, 'harvest');
     },
+    skills,
     ...(options.today ? {today: options.today} : {}),
   });
-  // The harvest of the Director's last request (see `anamnesis/harvest.ts`): `harvest` owns its timing, `service` its single flight and card.
+  // The harvest of one actor's last request (see `anamnesis/harvest.ts`): `harvest` owns its timing, `service` its runs and cards.
+  const lifetimeOf = (who: KeepAliveWho, target: KeepAliveTarget): HarvestLifetime => {
+    const model = modelOfIdentity(target.model);
+    // A model whose cache lifetime is unknown is harvested automatically as if it were the 5 minutes `providers/http.ts` assumes for keep-alive.
+    // A manual run still reads the transcript for it (`HarvestTiming.warm()` ignores an assumed lifetime).
+    return (model ? cacheLifetimeFor(registry, actors, model.provider, model.model, who.ownerId) : undefined) ?? {ms: SHORT_CACHE_MS, confidence: 'estimated', assumed: true};
+  };
   const harvest: HarvestTiming = new HarvestTiming({
-    lifetime: (who, target) => {const model = modelOfIdentity(target.model); return model ? cacheLifetimeFor(registry, actors, model.provider, model.model, who.ownerId) : undefined;},
-    awayMs: () => config.kernel.away_keepalive_minutes * 60_000,
+    lifetime: lifetimeOf,
     start: (who, target) => startHarvest(who, target),
   });
+  const nameOf = (ownerId: string) => actors.find(ownerId)?.name ?? ownerId;
+  // Harvests that finish close together share one notice (replaced by id): `Harvested 23:39 · Logox, Techne · recap · 3 memories · 1 skill`.
+  interface Finished {report: HarvestReport; runId: string}
+  let group: {id: string; last: number; items: Finished[]} | undefined;
+  const announce = (finished: Finished, startedAt: number): void => {
+    const {report} = finished;
+    if (!report.recap && !report.changes.length && !report.skills.length) return;
+    if (!group || report.at - group.last > NOTICE_COALESCE_MS) group = {id: 'harvest:' + session + ':' + startedAt, last: report.at, items: []};
+    group.items.push(finished); group.last = report.at;
+    const items = group.items, names = [...new Set(items.map(item => item.report.ownerName))], many = names.length > 1;
+    const changes = items.flatMap(item => item.report.changes.map(change => ({item, change}))), learned = items.flatMap(item => item.report.skills.map(change => ({item, change})));
+    const page = <T,>(entries: {item: Finished; change: T}[], render: (changes: T[]) => string) => many
+      ? names.map(name => ({name, own: entries.filter(entry => entry.item.report.ownerName === name).map(entry => entry.change)})).filter(each => each.own.length)
+        .map(each => '# ' + each.name + '\n\n' + render(each.own)).join('\n\n')
+      : render(entries.map(entry => entry.change));
+    const recap = items.find(item => item.report.recap);
+    const count = (n: number, one: string, more: string) => n + ' ' + (n === 1 ? one : more);
+    deps.postNotice({kind: 'read', tone: 'info', id: group.id, parts: [
+      {text: 'Harvested ' + clock(report.at)},
+      ...(many || items.some(item => !isDirector(item.report.owner)) ? [{text: names.join(', ')}] : []),
+      ...(recap ? [{text: 'recap', action: {kind: 'jump-activity' as const, activityId: recap.runId}}] : []),
+      ...(changes.length ? [{text: count(changes.length, 'memory', 'memories'), action: {kind: 'open-page' as const, title: 'Harvested memory', text: page(changes, changesPage), markdown: true}}] : []),
+      ...(learned.length ? [{text: count(learned.length, 'skill', 'skills'), action: {kind: 'open-page' as const, title: 'Learned skills', text: page(learned, skillsPage), markdown: true}}] : [])]});
+  };
   /** One harvest or manual fork in flight as the timing sees it: `finished` also posts the notice. */
   const follow = (started: {runId: string; done: Promise<RunResult>}, startedAt: number): HarvestRun => ({
-    cancel: () => {void service.pause();},
+    cancel: () => service.cancel(started.runId),
     finished: started.done.then(result => {
       if (result.status !== 'completed') return false;
-      const report = result.outcome.harvest;
-      if (report && (report.recap || report.changes.length)) {
-        const count = report.changes.length;
-        deps.postNotice({kind: 'read', tone: 'info', id: 'harvest:' + session + ':' + startedAt, parts: [
-          {text: 'Harvested ' + clock(report.at)},
-          ...(report.recap ? [{text: 'recap', action: {kind: 'jump-activity' as const, activityId: started.runId}}] : []),
-          ...(count ? [{text: count + (count === 1 ? ' memory' : ' memories'), action: {kind: 'open-page' as const, title: 'Harvested memory', text: changesPage(report.changes), markdown: true}}] : [])]});
-      }
+      if (result.outcome.harvest) announce({report: result.outcome.harvest, runId: started.runId}, startedAt);
       return true;
     }, () => false),
   });
-  const sourceOf = (target: KeepAliveTarget, parts: HarvestParts): HarvestSource | undefined =>
-    target.reply && !target.reply.toolCalls?.length ? {request: target.request, reply: target.reply, provider: target.provider, model: target.model, parts} : undefined;
-  async function startHarvest(_who: KeepAliveWho, target: KeepAliveTarget): Promise<HarvestRun | undefined> {
+  const sourceOf = (target: KeepAliveTarget, parts: HarvestParts, owner: string): HarvestSource | undefined =>
+    target.reply && !target.reply.toolCalls?.length ? {request: target.request, reply: target.reply, provider: target.provider, model: target.model, parts, owner, ownerName: nameOf(owner)} : undefined;
+  async function startHarvest(who: KeepAliveWho, target: KeepAliveTarget): Promise<HarvestRun | undefined> {
     const current = settings();
     if (options.disabled || (!current.recap && !current.dream)) return undefined;
-    const parts = await runner.harvestParts({recap: current.recap, memory: current.dream});
-    const source = parts.recap || parts.memory ? sourceOf(target, parts) : undefined;
+    const parts = await runner.harvestParts({recap: current.recap, memory: current.dream}, who.ownerId);
+    const source = parts.recap || parts.memory ? sourceOf(target, parts, who.ownerId) : undefined;
     const started = source && service.startHarvest(source);
     return started ? follow(started, target.startedAt) : undefined;
   }
-  const service = new Anamnesis(session, store, runner, deps.busy, {
-    deferred: () => harvest.pending(),
-    ...(options.clock ? {clock: options.clock} : {}), ...(options.wall ? {wall: options.wall} : {}),
-    recapIdleMs: options.recapIdleMs ?? config.anamnesis.recap_idle_minutes * 60_000,
-    dreamIdleMs: options.dreamIdleMs ?? config.anamnesis.dream_idle_minutes * 60_000,
-    auto: () => {const current = settings(); return options.disabled ? {recap: false, dream: false} : {recap: current.recap, dream: current.dream};},
-  });
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const service = new Anamnesis(session, store, runner, deps.busy, {...(options.wall ? {wall: options.wall} : {})});
 
   const api = {
-    /** Starts a run now, whatever the idle clock says; throws while tasks run. `done` settles with the outcome and never rejects. */
+    /** Starts a run now; throws while tasks run. `done` settles with the outcome and never rejects. While the Director's cache is warm it forks its request, otherwise it reads the transcript. */
     runNow(kind: RunKind): {runId: string; done: Promise<RunResult>} {
-      // While the Director's cache is still warm the run forks its request (the part the kind names); a cold one reads the transcript.
       const warm = harvest.warm(session, DIRECTOR_ID);
-      const source = warm && sourceOf(warm.target, {recap: kind === 'recap', memory: kind === 'dream'});
+      const dream = kind === 'dream', source = warm && sourceOf(warm.target, {recap: kind === 'recap', memory: dream, skills: dream}, DIRECTOR_ID);
       if (!warm || !source) return service.runNow(kind);
       const started = service.runNow(kind, source);
       harvest.follow(warm.who, follow(started, warm.target.startedAt));
@@ -159,35 +173,26 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     folders: (): {project: string; user: string} => ({...folders}),
     /** The binding of Anamnesis, or the Director's selection (`inherited: true`). */
     anamnesisModel: (): AnamnesisModel => anamnesisModel(registry, actors.modelStorage),
-    /** Binds a model, or with `undefined` goes back to following the Director. The next run uses it. */
+    /** Binds a model, or with `undefined` goes back to following the Director. The next transcript run uses it (a harvest uses the harvested actor's own model). */
     setAnamnesisModel: (binding: ActorModel | undefined): Promise<void> => bindAnamnesisModel(actors.modelStorage, binding),
-    /** The automatic switches (user preference over `[anamnesis]` config) and the idle thresholds. */
+    /** The two switches (user preference over `[anamnesis]` config): they gate the parts of an automatic harvest. */
     settings,
-    /** Persists one automatic switch in `~/.logox/anamnesis.json`; it never affects `runNow`. */
+    /** Persists one switch in `~/.logox/anamnesis.json`; it never affects `runNow`. */
     async setAuto(kind: RunKind, enabled: boolean): Promise<void> {
       await preferenceFile.update(current => ({...current, version: 1 as const, [kind]: enabled}));
       preferences = {...preferences, version: 1, [kind]: enabled};
     },
   };
   const lifecycle = {
+    /** A keystroke: nothing happens (only a sent message interrupts a run). */
     noteDraft: () => service.noteDraft(),
     foregroundSubmitted: () => service.foregroundSubmitted(),
-    foregroundFinished: () => service.foregroundFinished(),
     /** The static memory section for the system prompt of every actor. */
     memoryPrompt: () => section,
     refreshMemory,
-    /** Timing of the Director's harvest: the cache keeper offers it the last slot of a human wait (`kernel/harvest-timing.ts`). */
+    /** Timing of every actor's harvest: the cache keeper offers the Director the last slot of a human wait, a companion has its own timer (`kernel/harvest-timing.ts`). */
     harvest,
-    /** Starts the idle interval (unref'd); `fallbackMs` applies when the options give none. Does nothing without an interval. */
-    start(fallbackMs?: number) {
-      const every = options.tickMs ?? fallbackMs;
-      if (timer || every === undefined || options.disabled) return;
-      timer = setInterval(() => {void service.tick().catch(() => {});}, every);
-      timer.unref();
-    },
-    tick: () => service.tick(),
     async close() {
-      if (timer) {clearInterval(timer); timer = undefined;}
       harvest.dispose();
       await service.close();
     },

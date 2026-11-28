@@ -118,9 +118,9 @@ test('the page lists six rows whose values follow the state: inherited, bound, u
     await app.submit('/anamnesis');
     const page = picker(app);
     assert.equal(page.title, 'Anamnesis');
-    assert.deepEqual(page.items.map(item => item.label), ['Recap now', 'Dream now', 'Memory records', 'Model', 'Recap when idle', 'Dream when idle']);
+    assert.deepEqual(page.items.map(item => item.label), ['Recap now', 'Dream now', 'Memory records', 'Model', 'Recap when the cache expires', 'Dream when the cache expires']);
     assert.deepEqual(rows(app), {'Recap now': 'Write a note on where the work stands', 'Dream now': 'Review the session and update memory', 'Memory records': 'None yet',
-      Model: 'Follows Logox (openai / fixture)', 'Recap when idle': 'On · after 5 min', 'Dream when idle': 'On · after 30 min'});
+      Model: 'Follows Logox (openai / fixture)', 'Recap when the cache expires': 'On', 'Dream when the cache expires': 'On'});
     app.surfaces.cancel();
 
     await f.memory.save({name: 'prefers-tabs', description: 'The user wants tabs', type: 'feedback', content: 'Tabs.'}, 'project');
@@ -131,7 +131,7 @@ test('the page lists six rows whose values follow the state: inherited, bound, u
     await app.submit('/anamnesis');
     assert.equal(rows(app)['Memory records'], '2 in this project · 1 for this user');
     assert.equal(rows(app).Model, 'openai / model-a · high');
-    assert.equal(rows(app)['Recap when idle'], 'Off');
+    assert.equal(rows(app)['Recap when the cache expires'], 'Off');
     assert.equal(picker(app).items.find(item => item.id === 'model')!.valueTone, undefined);
     app.surfaces.cancel();
 
@@ -160,7 +160,7 @@ test('the page lists six rows whose values follow the state: inherited, bound, u
   } finally {await f.close();}
 });
 
-test('rows 1 and 2 start the run and close the page; the idle rows toggle, persist and keep the page open', async () => {
+test('rows 1 and 2 start the run and close the page; the switch rows toggle, persist and keep the page open', async () => {
   const f = await fixture();
   try {
     const app = await f.open();
@@ -178,13 +178,13 @@ test('rows 1 and 2 start the run and close the page; the idle rows toggle, persi
     await app.submit('/anamnesis');
     await app.surfaces.choose(picker(app).id, 'auto-dream');
     assert.equal(picker(app).title, 'Anamnesis', 'the page stays');
-    assert.equal(rows(app)['Dream when idle'], 'Off');
+    assert.equal(rows(app)['Dream when the cache expires'], 'Off');
     assert.equal(picker(app).focus, 'auto-dream', 'and keeps the row you changed');
     assert.deepEqual(JSON.parse(await readFile(join(f.home, '.logox', 'anamnesis.json'), 'utf8')), {version: 1, dream: false});
     await app.surfaces.choose(picker(app).id, 'auto-recap');
-    assert.equal(rows(app)['Recap when idle'], 'Off');
+    assert.equal(rows(app)['Recap when the cache expires'], 'Off');
     await app.surfaces.choose(picker(app).id, 'auto-recap');
-    assert.equal(rows(app)['Recap when idle'], 'On · after 5 min');
+    assert.equal(rows(app)['Recap when the cache expires'], 'On');
     assert.equal(app.anamnesis.settings().dream, false);
     app.surfaces.cancel();
     assert.equal(surface(app), null);
@@ -232,7 +232,7 @@ test('the record list shows two-line rows, a record page deletes after confirmat
     await app.surfaces.choose(picker(app).id, 'records');
     assert.equal(picker(app).title, 'Memory records');
     assert.deepEqual(picker(app).items, []);
-    assert.equal(picker(app).emptyText, 'No records yet. Anamnesis saves them while the session is idle, and you can ask any actor to remember something.');
+    assert.equal(picker(app).emptyText, 'No records yet. Anamnesis saves them when a prompt cache is about to expire, and you can ask any actor to remember something.');
     await back(app, 'Anamnesis');
     app.surfaces.cancel();
 
@@ -296,15 +296,15 @@ test('with the real screen every level works with the mouse: click to activate r
     assert.match(screen(), /Memory records\s+1 in this project · 1 for this user/);
 
     // Level 1: the first click selects the row, the second activates it (as in every picker); the toggle keeps the page.
-    await click('Recap when idle');
-    assert.match(screen(), /❯ Recap when idle/);
-    await click('Recap when idle');
-    await waitFor(() => screen(), text => /Recap when idle\s+Off/.test(text), {label: 'toggle through the mouse'});
+    await click('Recap when the cache expires');
+    assert.match(screen(), /❯ Recap when the cache expires/);
+    await click('Recap when the cache expires');
+    await waitFor(() => screen(), text => /Recap when the cache expires\s+Off/.test(text), {label: 'toggle through the mouse'});
     assert.equal(app.anamnesis.settings().recap, false);
     // Hover moves nothing but colours; the wheel moves the highlight.
-    const rowAt = find('Dream when idle');
+    const rowAt = find('Dream when the cache expires');
     await send(`\x1b[<65;${rowAt.x + 1};${rowAt.y + 1}M`);
-    assert.match(screen(), /❯ Dream when idle/, 'the wheel moved the highlight');
+    assert.match(screen(), /❯ Dream when the cache expires/, 'the wheel moved the highlight');
 
     // Level 2: the record list, two lines per record.
     await click('Memory records'); await click('Memory records');

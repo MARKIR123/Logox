@@ -60,6 +60,11 @@ async function collectSkillFiles(dir: string): Promise<string[]> {
   } catch {}
   return files;
 }
+/** The folder the shipped skills are read from: the built copy beside this module, else the source tree. */
+export function builtinSkillsRoot(): string {
+  const dist = resolve(dirname(fileURLToPath(import.meta.url)), 'builtin-skills');
+  return existsSync(dist) ? dist : resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'resources', 'builtin-skills');
+}
 export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkillsDir: string, seedMissing = true): Promise<void> {
   try {
     if (!existsSync(builtinSkillsDir)) return;
@@ -298,9 +303,7 @@ export class Resources {
     const skills = new Map<string, SkillResource>(), commands = new Map<string, CommandResource>();
     const builtins = new Set<string>(commandCatalog.map(item => item.name));
 
-    const distBuiltinSkills = resolve(dirname(fileURLToPath(import.meta.url)), 'builtin-skills');
-    const srcBuiltinSkills = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'resources', 'builtin-skills');
-    const builtinSkillsDir = existsSync(distBuiltinSkills) ? distBuiltinSkills : srcBuiltinSkills;
+    const builtinSkillsDir = builtinSkillsRoot();
 
     // Scan order: Builtin -> User global -> Project private (so project overrides user, user overrides builtin)
     const allowBuiltin = !this.options.boundary || builtinSkillsDir.toLowerCase().startsWith(this.options.boundary.toLowerCase());
