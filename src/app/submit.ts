@@ -264,6 +264,13 @@ export function createSubmit(deps: SubmitDeps) {
       receipt('Current provider: ' + modelSelection.current().provider + '\nModel: ' + (modelSelection.current().model || 'Select with /model'), 'status', undefined, source); return;
     }
     if (text === '/check-provider') {await checkProvider(source); return;}
+    const fold = /^\/fold(?:\s+(keep|restore)(?:\s+([a-z][a-z0-9_-]*))?)?$/.exec(text);
+    if (fold) {
+      if (!fold[1]) throw new InputRejected('Usage: /fold keep|restore [actor]');
+      const identity = {sessionId: session, ownerId: fold[2] ?? source};
+      receipt(await (fold[1] === 'keep' ? contexts.keepFullContext(identity) : contexts.restoreFullContext(identity)), 'status', undefined, source);
+      return;
+    }
     if (text === '/compact') {
       requireIdle();
       const activityId = randomUUID(), controller = new AbortController();

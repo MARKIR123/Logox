@@ -238,6 +238,14 @@ export async function createSessionApplication(options: SessionApplicationOption
     modelPool,
   });
   const contexts = new ContextManager({journal, pricing: config, cwd,
+    // A cliff compaction is neither requested nor applied while the owner waits on peers: any companion activity of the session for the Director, an open ask for any actor.
+    peerWork: identity => {
+      const snapshot = store.getSnapshot(), asks = asksFor(store);
+      const own = snapshot.activities.filter(item => item.sessionId === identity.sessionId && item.ownerId === identity.ownerId);
+      if (asks.isParked(identity.sessionId, identity.ownerId) || own.some(item => asks.awaited(item.activityId).some(ask => !ask.ended))) return true;
+      return isDirector(identity.ownerId) && (snapshot.activities.some(item => item.sessionId === identity.sessionId && !isDirector(item.ownerId) && item.kind === 'actor' &&
+        ['queued', 'running', 'waiting_input'].includes(item.status)) || deliveries.snapshot().some(item => isDirector(item.ownerId) && item.status === 'pending'));
+    },
     cacheLifetimeMs: identity => {
       const selection = taskModels.selection(identity), actor = actors.find(identity.ownerId);
       return cacheLifetimeMs(registry.configuredSettings(selection.provider, selection.model),
@@ -511,7 +519,8 @@ export async function createSessionApplication(options: SessionApplicationOption
     },
     async submit(raw: string, source = DIRECTOR_ID, inputDelivery: SubmitDelivery = {mode: 'queue'}): Promise<void> {
       // The user spoke: a running recap or dream stops (and applies nothing) before the task starts.
-      if (raw.trim()) await anamnesis.lifecycle.foregroundSubmitted();
+      // A `/fold` click on a harvest notice is not a message: it never stops a harvest.
+      if (raw.trim() && !/^\/fold(\s|$)/.test(raw.trim())) await anamnesis.lifecycle.foregroundSubmitted();
       await submitCommand(raw, source, inputDelivery);
     },
   };

@@ -22,7 +22,7 @@ test('every definition names a known group, a description, a label, a default an
   const f = await settingsFixture();
   try {
     const groups = new Set(settingGroups.map(group => group.id));
-    assert.deepEqual(settingGroups.map(group => group.id), ['appearance', 'splash', 'conversation', 'runtime', 'pages']);
+    assert.deepEqual(settingGroups.map(group => group.id), ['appearance', 'splash', 'conversation', 'context', 'runtime', 'pages']);
     assert.equal(new Set(settingDefinitions.map(definition => definition.key)).size, settingDefinitions.length, 'keys are unique');
     for (const definition of settingDefinitions) {
       const label = definition.key;

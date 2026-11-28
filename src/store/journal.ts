@@ -10,7 +10,7 @@ import {inputKindSchema} from '../runtime/provenance.js';
 import {deliverySchema, type Delivery} from '../runtime/delivery.js';
 import {systemEventSchema, type SystemEvent} from '../runtime/system-events.js';
 import {readNoticeSchema, type ReadNotice} from '../runtime/notices.js';
-import {contextStateSchema, deliberateStopLabel, isActionLine, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
+import {contextStateSchema, deliberateStopLabel, isActionLine, pendingFoldSchema, roundSchema, stripLeadingActionLines, summarizeRound, type ContextState, type PendingFold, type RoundRecord, type RoundStatus, type RoundSummary} from '../context/contracts.js';
 import {digest} from '../context/budget.js';
 import {contextSnapshot} from '../context/continuity.js';
 import {runtimeRoundSummary, synopsisRoundMemory, type RoundMemory} from '../context/round-memory.js';
@@ -449,6 +449,19 @@ export class Journal implements HistoryStore {
       if (content !== JSON.stringify({call, result}) || content === undefined || createHash('sha256').update(content).digest('hex') !== archive.hash) return undefined;
     }
     return state;
+  }
+  /** The cliff compaction staged for one owner (any status), or undefined when none was staged or the file is unreadable. */
+  async loadPendingFold(sessionId: string, ownerId: string): Promise<PendingFold | undefined> {
+    const raw = await this.read(await this.statePath(sessionId, ownerId, 'fold'));
+    if (raw === undefined) return undefined;
+    try {
+      const fold = pendingFoldSchema.parse(JSON.parse(raw));
+      return fold.sessionId === sessionId && fold.ownerId === ownerId ? fold : undefined;
+    } catch {return undefined;}
+  }
+  async savePendingFold(fold: PendingFold): Promise<void> {
+    pendingFoldSchema.parse(fold);
+    await atomicWrite(await this.statePath(fold.sessionId, fold.ownerId, 'fold'), Buffer.from(JSON.stringify(fold)));
   }
   async saveContext(state: ContextState): Promise<void> {
     contextStateSchema.parse(state);

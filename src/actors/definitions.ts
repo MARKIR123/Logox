@@ -15,6 +15,7 @@ const actorContextSchema = z.strictObject({...contextPolicySchema.shape,
   reserve_tokens: contextPolicySchema.shape.reserve_tokens.removeDefault().optional(),
   low_watermark_ratio: contextPolicySchema.shape.low_watermark_ratio.removeDefault().optional(),
   high_watermark_ratio: contextPolicySchema.shape.high_watermark_ratio.removeDefault().optional(),
+  cliff_compaction: contextPolicySchema.shape.cliff_compaction.removeDefault().optional(),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
 /** Profiles written before these keys were retired still parse: the keys are dropped, never an error. */

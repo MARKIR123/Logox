@@ -7,11 +7,12 @@
 import type {ModelMessage, ModelRequest, Provider} from '../runtime/messages.js';
 import {HARVEST_INSTRUCTIONS} from './prompts.js';
 import type {SkillChange} from './skills.js';
+import type {CliffPlan} from '../context/manager.js';
 import type {MemoryRecord, MemoryScope, MemoryType} from './memory.js';
 import {parseDreamAnswer, type DreamResult} from './operations.js';
 
 /** Which answers a harvest asks for. Only the Director writes a recap; skills follow the dream switch like memory. Compaction joins here later. */
-export interface HarvestParts {readonly recap: boolean; readonly memory: boolean; readonly skills?: boolean}
+export interface HarvestParts {readonly recap: boolean; readonly memory: boolean; readonly skills?: boolean; /** A cliff compaction of the older closed rounds (`context/manager.ts:ContextManager.cliffPlan()` said it is worthwhile). */ readonly compaction?: boolean}
 /** Everything a harvest needs from the actor's last real request. */
 export interface HarvestSource {
   /** The request exactly as it was sent. */
@@ -26,17 +27,20 @@ export interface HarvestSource {
   /** The actor whose request this is (default the Director) and its display name. */
   readonly owner?: string;
   readonly ownerName?: string;
+  /** What the compaction part covers; present exactly when `parts.compaction` is. */
+  readonly fold?: CliffPlan;
 }
 
 export const harvestInstruction = (parts: HarvestParts): string =>
-  HARVEST_INSTRUCTIONS[[parts.recap && 'recap', parts.memory && 'memory', parts.skills && 'skills'].filter(Boolean).join('+')] ?? HARVEST_INSTRUCTIONS['memory']!;
+  HARVEST_INSTRUCTIONS[[parts.recap && 'recap', parts.memory && 'memory', parts.skills && 'skills', parts.compaction && 'compaction'].filter(Boolean).join('+')] ?? HARVEST_INSTRUCTIONS['memory']!;
 /** The appended user message: the static instruction, then what the model cannot see in its history (today, the working tree, the memory records' text). */
-export function harvestMessage(parts: HarvestParts, data: {today: string; git: string; records: readonly MemoryRecord[]; recordCap: number; skills?: string}): string {
+export function harvestMessage(parts: HarvestParts, data: {today: string; git: string; records: readonly MemoryRecord[]; recordCap: number; skills?: string; compaction?: string}): string {
   const lines = [harvestInstruction(parts), 'Today: ' + data.today];
   if (parts.recap && data.git) lines.push('Working tree:\n' + data.git);
   if (parts.memory) lines.push('Current memory records:\n' + (data.records.length
     ? data.records.map(record => '## ' + record.scope + '/' + record.name + ' (' + record.type + ')\n' + record.description + '\n' + record.content.slice(0, data.recordCap)).join('\n\n') : '(none)'));
   if (parts.skills && data.skills) lines.push(data.skills);
+  if (parts.compaction && data.compaction) lines.push(data.compaction);
   return lines.join('\n\n');
 }
 /**
@@ -61,7 +65,7 @@ function memoryOperations(raw: string): unknown[] | undefined {
   }
   return parseDreamAnswer(unfenced);
 }
-export interface HarvestAnswer {readonly recap?: string; readonly memory?: unknown[]; readonly skills?: unknown[]}
+export interface HarvestAnswer {readonly recap?: string; readonly memory?: unknown[]; readonly skills?: unknown[]; /** The overview, only when the block is there and not empty; a malformed one is simply absent. */ readonly compaction?: string}
 /** The blocks the run asked for that could be read; undefined when none could (an answer of only tool calls has no text and lands here). */
 export function parseHarvestAnswer(text: string, parts: HarvestParts): HarvestAnswer | undefined {
   const recap = parts.recap ? tagged(text, 'recap') : undefined;
@@ -70,7 +74,9 @@ export function parseHarvestAnswer(text: string, parts: HarvestParts): HarvestAn
   const rawSkills = parts.skills ? tagged(text, 'skills') : undefined;
   const skills = rawSkills === undefined ? undefined : memoryOperations(rawSkills);
   if (!recap && memory === undefined && skills === undefined) return undefined;
-  return {...(recap ? {recap} : {}), ...(memory !== undefined ? {memory} : {}), ...(skills !== undefined ? {skills} : {})};
+  // The overview rides along: an empty or missing block means the mechanical folds stay in charge, never a failed harvest.
+  const compaction = parts.compaction ? tagged(text, 'compaction')?.replace(/^```[a-z]*\s*|\s*```$/gi, '').trim() : undefined;
+  return {...(recap ? {recap} : {}), ...(memory !== undefined ? {memory} : {}), ...(skills !== undefined ? {skills} : {}), ...(compaction ? {compaction} : {})};
 }
 
 /** One memory change of a harvest, with the text before and after so the person can read what happened. */
@@ -114,4 +120,6 @@ export interface HarvestReport {
   /** The actor that was harvested and its display name. */
   readonly owner: string; readonly ownerName: string;
   readonly skills: readonly SkillChange[];
+  /** The compaction staged by this harvest (percentages of the model window before and after), when it wrote one. */
+  readonly fold?: {readonly before: number; readonly after: number; readonly window: number};
 }

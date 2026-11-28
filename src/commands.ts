@@ -18,6 +18,7 @@ export const commandCatalog: readonly CommandDefinition[] = [
   {name: 'theme', usage: '/theme', description: 'Pick a colour theme with a live preview and a legibility check', argument: 'none'},
   {name: 'config', usage: '/config', description: 'Inspect effective model and execution configuration (read-only)', argument: 'none'},
   {name: 'cast', usage: '/cast task', description: 'Dispatch task across actor ensemble', argument: 'text'},
+  {name: 'fold', usage: '/fold keep|restore [actor]', description: 'After a harvest compacted a context: keep the full one before it is applied, or restore it after', argument: 'text'},
   {name: 'compact', usage: '/compact', description: 'Compact current role context while preserving ledgers', argument: 'none'},
   {name: 'new', usage: '/new', description: 'Create and switch to a new session', argument: 'none'},
   {name: 'resume', usage: '/resume [session-id]', description: 'Select or resume a session from history', argument: 'none'},

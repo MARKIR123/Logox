@@ -49,6 +49,8 @@ export const contextPolicySchema = z.object({
   target_budget_tokens: z.number().int().positive().optional(),
   summary_provider: z.string().min(1).optional(),
   summary_model: z.string().min(1).optional(),
+  /** Let the harvest fork write an overview of the older closed rounds just before the prompt cache expires; applied only once the cache really expired. */
+  cliff_compaction: z.boolean().default(true),
 }).refine(policy => !policy.max_budget_tokens || !policy.target_budget_tokens || policy.target_budget_tokens < policy.max_budget_tokens,
   'target_budget_tokens must be less than max_budget_tokens');
 export type ContextPolicy = z.infer<typeof contextPolicySchema>;
@@ -77,7 +79,7 @@ const schema = z.object({
   mcp: z.object({playwright: z.boolean().default(true), servers: z.record(z.string().min(1), mcpServerSchema).default({})})
     .default({playwright: true, servers: {}}),
   hooks: hooksSchema.default({enabled: false, timeout_s: 5, entries: []}),
-  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5}),
+  context: contextPolicySchema.default({keep_recent_rounds: 2, keep_recent_tools: 2, reserve_tokens: 32768, high_watermark_ratio: 0.8, low_watermark_ratio: 0.5, cliff_compaction: true}),
   models: z.record(z.string(), capacitySchema).default({}),
   catalogs: z.record(z.string().min(1), catalogSchema).default({}),
   provider: z.object({
@@ -212,8 +214,8 @@ function merge(left: Record<string, unknown>, right: Record<string, unknown>): R
   }
   return result;
 }
-/** `/settings` choices that live beside the TOML files (`~/.logox/kernel-preferences.json`); the keys are the `[kernel]` keys they override. */
-export const kernelPreferenceSchema = z.strictObject({version: z.literal(1), cache_keepalive: z.boolean().optional(), away_keepalive_minutes: z.number().nonnegative().max(24 * 60).optional(), shell_auto_background_seconds: z.number().nonnegative().max(3600).optional(), check_after_minutes: z.number().nonnegative().max(24 * 60).optional()});
+/** `/settings` choices that live beside the TOML files (`~/.logox/kernel-preferences.json`); the keys are the `[kernel]` keys they override, plus `cliff_compaction`, which overrides `[context] cliff_compaction`. */
+export const kernelPreferenceSchema = z.strictObject({version: z.literal(1), cliff_compaction: z.boolean().optional(), cache_keepalive: z.boolean().optional(), away_keepalive_minutes: z.number().nonnegative().max(24 * 60).optional(), shell_auto_background_seconds: z.number().nonnegative().max(3600).optional(), check_after_minutes: z.number().nonnegative().max(24 * 60).optional()});
 export type KernelPreference = z.infer<typeof kernelPreferenceSchema>;
 export async function loadConfig(cwd: string, overrides: Record<string, unknown> = {},
   env: NodeJS.ProcessEnv = process.env, home = homedir(), projectBoundary?: string,
@@ -270,6 +272,7 @@ export async function loadConfig(cwd: string, overrides: Record<string, unknown>
   // Kernel switches saved from /settings win over the TOML files (like the last model selection) and lose to the environment and overrides.
   try {
     const kernel = await new StateFile(join(home, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).read();
+    if (kernel?.cliff_compaction !== undefined) raw = merge(raw, {context: {cliff_compaction: kernel.cliff_compaction}});
     if (kernel) raw = merge(raw, {kernel: {...(kernel.cache_keepalive !== undefined ? {cache_keepalive: kernel.cache_keepalive} : {}),
       ...(kernel.away_keepalive_minutes !== undefined ? {away_keepalive_minutes: kernel.away_keepalive_minutes} : {}),
       ...(kernel.shell_auto_background_seconds !== undefined ? {shell_auto_background_seconds: kernel.shell_auto_background_seconds} : {}),

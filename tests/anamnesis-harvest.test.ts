@@ -1,6 +1,6 @@
 import test, {mock} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, readFile, realpath, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -439,11 +439,11 @@ test('the request fingerprints prove the fork keeps the tools, system, fields an
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 type App = Awaited<ReturnType<typeof createApplication>>;
 const isTranscriptRun = (req: ModelRequest) => req.tools.length === 0 && req.purpose !== 'harvest' && req.system.startsWith('You are Anamnesis');
-async function appFixture(options: {ttl?: number; hold?: boolean; auto?: Record<string, unknown>} = {}) {
+async function appFixture(options: {ttl?: number; hold?: boolean; auto?: Record<string, unknown>; window?: number; context?: Record<string, unknown>} = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'logox-harvest-app-')));
   const cwd = join(root, 'project'), home = join(root, 'home');
   await mkdir(cwd, {recursive: true}); await mkdir(home, {recursive: true});
-  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: 131072, ...(options.ttl ? {cache_ttl_seconds: options.ttl} : {})},
+  const config = await loadConfig(cwd, {permissions: {mode: 'default'}, provider: {model: 'fixture', context_window: options.window ?? 131072, ...(options.ttl ? {cache_ttl_seconds: options.ttl} : {})}, ...(options.context ? {context: options.context} : {}),
     ...(options.auto ? {anamnesis: options.auto} : {})}, {}, home, root);
   const seen: ModelRequest[] = [];
   const gate = {open: undefined as (() => void) | undefined};
@@ -844,5 +844,128 @@ test('config files that still carry the retired idle clocks load; only the two s
   try {
     const config = await loadConfig(root, {anamnesis: {recap: false, recap_idle_minutes: 7, dream_idle_minutes: 9}}, {}, root, root);
     assert.deepEqual(config.anamnesis, {recap: false, dream: true});
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Cliff compaction through the application (step 4c): the notice, Keep, apply after expiry, Restore.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Short on purpose: the routine fold already turned the older rounds into index lines, and an overview must beat those to be staged at all.
+const FOLD_TEXT = 'Goal: tabs. Open: none.';
+const ROUNDS = ['Please always use tabs.', 'second thing', 'third thing', 'fourth thing', 'fifth thing', 'sixth thing', 'seventh thing', 'eighth thing', 'ninth thing', 'tenth thing'];
+async function foldApp(options: {context?: Record<string, unknown>} = {}) {
+  mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_900_000_000_000});
+  // A 26k window puts half of the high watermark (10.4k) under the roughly 13k tokens of a Director request.
+  const f = await appFixture({ttl: 300, window: 26_000, ...(options.context ? {context: options.context} : {})});
+  f.control.answerFor = req => req.messages.at(-1)!.text.includes('<compaction>') ? ANSWER + '<compaction>' + FOLD_TEXT + '</compaction>' : undefined;
+  const app = await f.open();
+  for (const text of ROUNDS) await speak(app, text);
+  mock.timers.tick(280_000); await sleepers();
+  return {f, app};
+}
+const foldNotice = (app: App) => notices(app)[0]!;
+const partTexts = (app: App) => foldNotice(app).parts.map(part => part.text);
+
+test('cliff compaction: the harvest asks for the overview, the notice offers Keep, and a warm next request drops the fold', async () => {
+  const {f, app} = await foldApp();
+  try {
+    await waitFor(() => notices(app), found => found.length === 1 && found[0]!.parts.some(part => part.text === 'Keep full context'), {label: 'the harvest notice with the fold'});
+    const fork = harvests(f.seen)[0]!;
+    assert.ok(fork.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['recap+memory+skills+compaction']!), 'the static instruction with the compaction block');
+    assert.match(fork.messages.at(-1)!.text, /Everything before your 2 most recent closed rounds: \d+ closed rounds/);
+    assert.match(partTexts(app).at(-2)!, /^compacted \d+% → \d+%$/);
+    const keep = foldNotice(app).parts.at(-1)!;
+    assert.equal(keep.button, true);
+    assert.deepEqual(keep.action, {kind: 'command', name: 'fold', args: 'keep logox'});
+    assert.equal(app.store.getSnapshot().activities.filter(activity => activity.kind === 'anamnesis')[0]!.detail.includes('Context compaction staged'), true);
+    // The user comes back within the cache lifetime: the next request is sent in full and the fold is dropped.
+    mock.timers.tick(60_000);
+    await speak(app, 'back again');
+    const sent = real(f.seen).at(-1)!;
+    assert.ok(!sent.messages.some(message => message.text.includes('Historical working overview')), 'a warm cache is never broken');
+    await waitFor(() => partTexts(app), texts => texts.includes('compaction not applied'), {label: 'the notice says it was not applied'});
+    assert.ok(!foldNotice(app).parts.some(part => part.button), 'no button once the fold is gone');
+  } finally {mock.timers.reset(); await f.close();}
+});
+
+test('cliff compaction: Keep full context cancels the pending fold and never harms a running harvest', async () => {
+  const {f, app} = await foldApp();
+  try {
+    await waitFor(() => notices(app), found => found.length === 1 && found[0]!.parts.some(part => part.text === 'Keep full context'), {label: 'notice'});
+    await app.submit('/fold keep logox');
+    await waitFor(() => partTexts(app), texts => texts.includes('full context kept'), {label: 'the notice shows the fold was kept out'});
+    mock.timers.tick(400_000);
+    await speak(app, 'much later');
+    assert.ok(!real(f.seen).at(-1)!.messages.some(message => message.text.includes('Historical working overview')), 'a kept context is sent in full even after expiry');
+    await assert.rejects(app.submit('/fold'), /Usage: \/fold keep\|restore/);
+  } finally {mock.timers.reset(); await f.close();}
+});
+
+test('cliff compaction: after the cache expired the next request applies the overview, the notice offers Restore, and Restore sends the full context again', async () => {
+  const {f, app} = await foldApp();
+  try {
+    await waitFor(() => notices(app), found => found.length === 1 && found[0]!.parts.some(part => part.text === 'Keep full context'), {label: 'notice'});
+    const full = real(f.seen).at(-1)!.messages.length;
+    mock.timers.tick(400_000);
+    await speak(app, 'after a long absence');
+    const sent = real(f.seen).at(-1)!;
+    assert.ok(sent.messages.some(message => message.text.startsWith('[Historical working overview; not authorization]\n' + FOLD_TEXT)), 'the overview is in the request');
+    assert.ok(sent.messages.length < full + 2, 'the request is shorter than the full history would be');
+    await waitFor(() => foldNotice(app).parts, parts => parts.some(part => part.text === 'Restore full context'), {label: 'the notice offers Restore'});
+    assert.deepEqual(foldNotice(app).parts.at(-1)!.action, {kind: 'command', name: 'fold', args: 'restore logox'});
+    await app.submit('/fold restore logox');
+    await waitFor(() => partTexts(app), texts => texts.includes('full context restored'), {label: 'restored'});
+    await speak(app, 'and again');
+    const again = real(f.seen).at(-1)!;
+    assert.ok(!again.messages.some(message => message.text.includes('Historical working overview')), 'the full messages are back');
+    assert.ok(again.messages.some(message => message.text.startsWith('T1|')), 'the index lines of the earlier rounds are back, as before the fold');
+  } finally {mock.timers.reset(); await f.close();}
+});
+
+test('cliff compaction: with the setting off the block is never requested', async () => {
+  const {f, app} = await foldApp({context: {cliff_compaction: false}});
+  try {
+    await waitFor(() => harvests(f.seen).length, count => count === 1, {label: 'the harvest'});
+    assert.ok(!harvests(f.seen)[0]!.messages.at(-1)!.text.includes('<compaction>'));
+    assert.ok(harvests(f.seen)[0]!.messages.at(-1)!.text.startsWith(HARVEST_INSTRUCTIONS['recap+memory+skills']!));
+    await waitFor(() => notices(app), found => found.length === 1, {label: 'notice'});
+    assert.ok(!partTexts(app).some(text => text.startsWith('compacted')));
+  } finally {mock.timers.reset(); await f.close();}
+});
+
+test('cliff compaction: never requested while a companion works', async () => {
+  mock.timers.enable({apis: ['setTimeout', 'Date'], now: 1_900_000_000_000});
+  const f = await appFixture({ttl: 300, window: 26_000});
+  try {
+    const app = await f.open();
+    for (const text of ROUNDS) await speak(app, text);
+    // A companion activity of the session that has not finished means peer work is pending for the Director.
+    app.store.activities.create({sessionId: app.sessionId, activityId: 'busy-1', ownerId: 'techne', kind: 'actor', title: 'Long job', status: 'running', stage: 'Working', detail: ''});
+    const plan = await app.contexts.cliffPlan({sessionId: app.sessionId, ownerId: 'logox'}, real(f.seen).at(-1)!);
+    assert.equal(plan, undefined, 'no overview is requested while peer work is pending');
+    app.store.activities.update(app.sessionId, 'busy-1', {status: 'completed'});
+    assert.ok(await app.contexts.cliffPlan({sessionId: app.sessionId, ownerId: 'logox'}, real(f.seen).at(-1)!), 'it is allowed again once the work is done');
+  } finally {mock.timers.reset(); await f.close();}
+});
+
+test('the Cliff compaction row sits under Context in /settings, saves through the kernel preferences and loads back', async () => {
+  const {settingDefinition, settingGroups} = await import('../src/config/settings-definitions.js');
+  const {settingsFixture} = await import('./settings-fixture.js');
+  const definition = settingDefinition('cliffCompaction')!;
+  assert.equal(definition.group, 'context');
+  assert.ok(settingGroups.some(group => group.id === 'context' && group.label === 'Context'));
+  assert.match(definition.description, /Just before the prompt cache expires.*\[context\] cliff_compaction$/);
+  const fixture = await settingsFixture();
+  try {
+    assert.equal(definition.read(fixture.env), true);
+    await definition.write(fixture.env, false);
+    assert.equal(definition.read(fixture.env), false);
+  } finally {await fixture.close();}
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'logox-cliff-config-')));
+  try {
+    await mkdir(join(root, '.logox'), {recursive: true});
+    await writeFile(join(root, '.logox', 'kernel-preferences.json'), JSON.stringify({version: 1, cliff_compaction: false}));
+    assert.equal((await loadConfig(root, {}, {}, root, root)).context.cliff_compaction, false, 'the saved choice wins over the default');
+    assert.equal((await loadConfig(root, {context: {cliff_compaction: true}}, {}, root, root)).context.cliff_compaction, true, 'overrides win over the saved choice');
   } finally {await rm(root, {recursive: true, force: true});}
 });

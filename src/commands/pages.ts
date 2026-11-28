@@ -134,14 +134,16 @@ export function createPages(deps: PagesDeps) {
     permissionMode: () => permissions.mode,
     permissionModes: () => Object.keys(permissionModes),
     savePermissionMode: mode => permissions.setMode(permissionModeSchema.parse(mode)),
-    kernel: () => ({cacheKeepalive: config.kernel.cache_keepalive, awayKeepaliveMinutes: config.kernel.away_keepalive_minutes, shellAutoBackgroundSeconds: config.kernel.shell_auto_background_seconds, checkAfterMinutes: config.kernel.check_after_minutes}),
+    kernel: () => ({cliffCompaction: config.context.cliff_compaction, cacheKeepalive: config.kernel.cache_keepalive, awayKeepaliveMinutes: config.kernel.away_keepalive_minutes, shellAutoBackgroundSeconds: config.kernel.shell_auto_background_seconds, checkAfterMinutes: config.kernel.check_after_minutes}),
     saveKernel: async patch => {
+      const cliff = patch.cliffCompaction;
       const next = {...(patch.cacheKeepalive !== undefined ? {cache_keepalive: patch.cacheKeepalive} : {}),
         ...(patch.awayKeepaliveMinutes !== undefined ? {away_keepalive_minutes: patch.awayKeepaliveMinutes} : {}),
         ...(patch.shellAutoBackgroundSeconds !== undefined ? {shell_auto_background_seconds: patch.shellAutoBackgroundSeconds} : {}),
         ...(patch.checkAfterMinutes !== undefined ? {check_after_minutes: patch.checkAfterMinutes} : {})};
-      await new StateFile(join(homeDir, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).update(current => ({...current, ...next, version: 1 as const}));
+      await new StateFile(join(homeDir, '.logox', 'kernel-preferences.json'), kernelPreferenceSchema).update(current => ({...current, ...next, ...(cliff !== undefined ? {cliff_compaction: cliff} : {}), version: 1 as const}));
       Object.assign(config.kernel, next);
+      if (cliff !== undefined) config.context.cliff_compaction = cliff;
     },
   };
   const settingsItems = (): SettingsItem[] => settingDefinitions.map(definition => ({

@@ -33,6 +33,25 @@ export const contextStateSchema = z.strictObject({
   superseded: z.record(z.string(), z.string()).optional(),
 });
 export type ContextState = z.infer<typeof contextStateSchema>;
+/**
+ * A cliff compaction (`manager.ts:ContextManager.stageFold()`): the overview a harvest fork wrote for the closed rounds before ledger index `end`, kept
+ * beside the saved view and not yet part of it. It becomes the view's `memo` only at the actor's next real request, and only if the prompt cache has
+ * expired by then, so a warm cache is never broken. `previous` is the saved view before it was applied: `Restore full context` puts it back.
+ */
+export const pendingFoldSchema = z.strictObject({
+  version: z.literal(1), sessionId: z.string(), ownerId: z.string(),
+  status: z.enum(['pending', 'applied', 'kept', 'discarded', 'restored']),
+  end: z.number().int().positive(), text: z.string().min(1),
+  /** Estimated request tokens before and after the fold, and the model window they are measured against (for `compacted 52% → 21%`). */
+  before: z.number().int().nonnegative(), after: z.number().int().nonnegative(), window: z.number().int().positive(),
+  /** When the fork that wrote it refreshed the cache, and when it was staged (epoch milliseconds). */
+  touchedAt: z.number(), stagedAt: z.number(),
+  sourceLength: z.number().int().nonnegative(), sourceHash: z.string(),
+  previous: contextStateSchema.optional(), appliedAt: z.number().optional(),
+});
+export type PendingFold = z.infer<typeof pendingFoldSchema>;
+/** What happened to a pending fold; the application keeps the harvest notice in step. */
+export type FoldEvent = 'staged' | 'applied' | 'discarded' | 'kept' | 'restored';
 export interface ModelCapacity {
   identity: string;
   window: number;

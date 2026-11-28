@@ -8,9 +8,9 @@ import {
 /** `/settings` is data-driven: every row of the page is one definition below, and `tests/settings-definitions.test.ts` checks each has a group, a description, a default and a working persistence path. */
 export type SettingValue = string | number | boolean;
 export type SettingKind = 'boolean' | 'select' | 'number' | 'text';
-export type SettingGroupId = 'appearance' | 'splash' | 'conversation' | 'runtime' | 'pages';
+export type SettingGroupId = 'appearance' | 'splash' | 'conversation' | 'context' | 'runtime' | 'pages';
 export const settingGroups: readonly {readonly id: SettingGroupId; readonly label: string}[] = [
-  {id: 'appearance', label: 'Appearance'}, {id: 'splash', label: 'Splash'}, {id: 'conversation', label: 'Conversation'}, {id: 'runtime', label: 'Runtime'}, {id: 'pages', label: 'Pages'},
+  {id: 'appearance', label: 'Appearance'}, {id: 'splash', label: 'Splash'}, {id: 'conversation', label: 'Conversation'}, {id: 'context', label: 'Context'}, {id: 'runtime', label: 'Runtime'}, {id: 'pages', label: 'Pages'},
 ];
 export const cursorChoices = ['Block █', 'Underline _', 'Bar |'] as const;
 
@@ -27,9 +27,9 @@ export interface SettingsEnv {
   permissionModes(): readonly string[];
   savePermissionMode(mode: string): Promise<void>;
   /** The `[kernel]` cache keep-alive options in effect (`cache_keepalive`, `away_keepalive_minutes`, `shell_auto_background_seconds`, `check_after_minutes`). */
-  kernel(): {readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number; readonly shellAutoBackgroundSeconds: number; readonly checkAfterMinutes: number};
+  kernel(): {readonly cliffCompaction: boolean; readonly cacheKeepalive: boolean; readonly awayKeepaliveMinutes: number; readonly shellAutoBackgroundSeconds: number; readonly checkAfterMinutes: number};
   /** Persists a kernel option (`~/.logox/kernel-preferences.json`, which wins over the TOML files) and applies it to the running session. */
-  saveKernel(patch: {readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number; readonly shellAutoBackgroundSeconds?: number; readonly checkAfterMinutes?: number}): Promise<void>;
+  saveKernel(patch: {readonly cliffCompaction?: boolean; readonly cacheKeepalive?: boolean; readonly awayKeepaliveMinutes?: number; readonly shellAutoBackgroundSeconds?: number; readonly checkAfterMinutes?: number}): Promise<void>;
 }
 
 export interface SettingDefinition {
@@ -137,6 +137,10 @@ export const settingDefinitions: readonly SettingDefinition[] = [
     description: 'Permission mode for tool calls (the same as /permissions): default asks, auto reviews, creative allows after danger filtering.',
     read: env => env.permissionMode(),
     write: (env, value) => env.savePermissionMode(String(value))},
+  {key: 'cliffCompaction', label: 'Cliff compaction', group: 'context', kind: 'boolean', default: true,
+    description: 'Just before the prompt cache expires, let the model rewrite older context into a shorter session record, applied only if the cache really expired (undoable). Off: fold old rounds into their synopses. [context] cliff_compaction',
+    read: env => env.kernel().cliffCompaction,
+    write: (env, value) => env.saveKernel({cliffCompaction: value === true})},
   {key: 'cacheKeepalive', label: 'Keep cache warm', group: 'runtime', kind: 'boolean', default: true,
     description: 'Replay an idle actor\'s last request just before its prompt cache expires, while it is certain to wake again. [kernel] cache_keepalive',
     read: env => env.kernel().cacheKeepalive,

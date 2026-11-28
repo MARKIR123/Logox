@@ -18,7 +18,7 @@ import {Anamnesis, type RunKind, type RunResult} from '../anamnesis/service.js';
 import {WatermarkStore} from '../anamnesis/watermark.js';
 import type {Config} from '../config/config.js';
 import {StateFile} from '../config/model-preferences.js';
-import type {ContextManager} from '../context/manager.js';
+import type {CliffPlan, ContextManager} from '../context/manager.js';
 import {HarvestTiming, type HarvestLifetime, type HarvestRun} from '../kernel/harvest-timing.js';
 import type {KeepAliveTarget, KeepAliveWho} from '../kernel/cache-keepalive.js';
 import {memorySection} from '../prompts/memory.js';
@@ -95,6 +95,10 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
       contexts.meter({sessionId: session, ownerId}).chargeUsage(usage, identity, 'harvest');
     },
     skills,
+    stageFold: async (ownerId, plan, text, request, touchedAt) => {
+      const staged = await contexts.stageFold({sessionId: session, ownerId}, plan, text, request, touchedAt);
+      return staged && {before: staged.before, after: staged.after, window: staged.window};
+    },
     ...(options.today ? {today: options.today} : {}),
   });
   // The harvest of one actor's last request (see `anamnesis/harvest.ts`): `harvest` owns its timing, `service` its runs and cards.
@@ -109,28 +113,54 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
     start: (who, target) => startHarvest(who, target),
   });
   const nameOf = (ownerId: string) => actors.find(ownerId)?.name ?? ownerId;
-  // Harvests that finish close together share one notice (replaced by id): `Harvested 23:39 · Logox, Techne · recap · 3 memories · 1 skill`.
-  interface Finished {report: HarvestReport; runId: string}
-  let group: {id: string; last: number; items: Finished[]} | undefined;
-  const announce = (finished: Finished, startedAt: number): void => {
-    const {report} = finished;
-    if (!report.recap && !report.changes.length && !report.skills.length) return;
-    if (!group || report.at - group.last > NOTICE_COALESCE_MS) group = {id: 'harvest:' + session + ':' + startedAt, last: report.at, items: []};
-    group.items.push(finished); group.last = report.at;
-    const items = group.items, names = [...new Set(items.map(item => item.report.ownerName))], many = names.length > 1;
+  // Harvests that finish close together share one notice (replaced by id): `Harvested 23:39 · Logox, Techne · recap · 3 memories · 1 skill · compacted 52% → 21%  [Keep full context]`.
+  type FoldStatus = 'pending' | 'applied' | 'kept' | 'discarded' | 'restored';
+  interface Finished {report: HarvestReport; runId: string; fold?: {status: FoldStatus; before: number; after: number; window: number}}
+  interface Group {id: string; last: number; items: Finished[]}
+  let group: Group | undefined;
+  /** The harvest that staged the latest cliff compaction of each actor: its notice follows the fold's fate. */
+  const folds = new Map<string, {item: Finished; group: Group}>();
+  const render = (current: Group, at: number): void => {
+    const items = current.items, names = [...new Set(items.map(item => item.report.ownerName))], many = names.length > 1;
     const changes = items.flatMap(item => item.report.changes.map(change => ({item, change}))), learned = items.flatMap(item => item.report.skills.map(change => ({item, change})));
-    const page = <T,>(entries: {item: Finished; change: T}[], render: (changes: T[]) => string) => many
+    const page = <T,>(entries: {item: Finished; change: T}[], draw: (changes: T[]) => string) => many
       ? names.map(name => ({name, own: entries.filter(entry => entry.item.report.ownerName === name).map(entry => entry.change)})).filter(each => each.own.length)
-        .map(each => '# ' + each.name + '\n\n' + render(each.own)).join('\n\n')
-      : render(entries.map(entry => entry.change));
+        .map(each => '# ' + each.name + '\n\n' + draw(each.own)).join('\n\n')
+      : draw(entries.map(entry => entry.change));
     const recap = items.find(item => item.report.recap);
     const count = (n: number, one: string, more: string) => n + ' ' + (n === 1 ? one : more);
-    deps.postNotice({kind: 'read', tone: 'info', id: group.id, parts: [
-      {text: 'Harvested ' + clock(report.at)},
+    const folded = items.filter(item => item.fold), several = folded.length > 1;
+    const percent = (tokens: number, window: number) => Math.round(tokens / window * 100) + '%';
+    const foldParts = folded.flatMap(item => {
+      const fold = item.fold!, who = several ? ' (' + item.report.ownerName + ')' : '', label = (several ? item.report.ownerName + ' ' : '') + 'compacted ' + percent(fold.before, fold.window) + ' → ' + percent(fold.after, fold.window);
+      const button = (text: string, op: 'keep' | 'restore') => ({text: text + who, button: true as const, action: {kind: 'command' as const, name: 'fold', args: op + ' ' + item.report.owner}});
+      if (fold.status === 'pending') return [{text: label}, button('Keep full context', 'keep')];
+      if (fold.status === 'applied') return [{text: label}, button('Restore full context', 'restore')];
+      return [{text: (several ? item.report.ownerName + ': ' : '') + (fold.status === 'kept' ? 'full context kept' : fold.status === 'restored' ? 'full context restored' : 'compaction not applied')}];
+    });
+    deps.postNotice({kind: 'read', tone: 'info', id: current.id, parts: [
+      {text: 'Harvested ' + clock(at)},
       ...(many || items.some(item => !isDirector(item.report.owner)) ? [{text: names.join(', ')}] : []),
       ...(recap ? [{text: 'recap', action: {kind: 'jump-activity' as const, activityId: recap.runId}}] : []),
       ...(changes.length ? [{text: count(changes.length, 'memory', 'memories'), action: {kind: 'open-page' as const, title: 'Harvested memory', text: page(changes, changesPage), markdown: true}}] : []),
-      ...(learned.length ? [{text: count(learned.length, 'skill', 'skills'), action: {kind: 'open-page' as const, title: 'Learned skills', text: page(learned, skillsPage), markdown: true}}] : [])]});
+      ...(learned.length ? [{text: count(learned.length, 'skill', 'skills'), action: {kind: 'open-page' as const, title: 'Learned skills', text: page(learned, skillsPage), markdown: true}}] : []),
+      ...foldParts]});
+  };
+  const announce = (finished: Finished, startedAt: number): void => {
+    const {report} = finished;
+    if (!report.recap && !report.changes.length && !report.skills.length && !report.fold) return;
+    if (!group || report.at - group.last > NOTICE_COALESCE_MS) group = {id: 'harvest:' + session + ':' + startedAt, last: report.at, items: []};
+    if (report.fold) finished.fold = {status: 'pending', ...report.fold};
+    group.items.push(finished); group.last = report.at;
+    if (finished.fold) folds.set(report.owner, {item: finished, group});
+    render(group, report.at);
+  };
+  // The context manager tells what became of a staged compaction; the notice that offered it changes its button.
+  contexts.foldListener = (identity, event) => {
+    const entry = folds.get(identity.ownerId);
+    if (!entry?.item.fold || event === 'staged') return;
+    entry.item.fold.status = event;
+    render(entry.group, entry.item.report.at);
   };
   /** One harvest or manual fork in flight as the timing sees it: `finished` also posts the notice. */
   const follow = (started: {runId: string; done: Promise<RunResult>}, startedAt: number): HarvestRun => ({
@@ -141,13 +171,15 @@ export async function createAnamnesis(deps: AnamnesisAppDeps) {
       return true;
     }, () => false),
   });
-  const sourceOf = (target: KeepAliveTarget, parts: HarvestParts, owner: string): HarvestSource | undefined =>
-    target.reply && !target.reply.toolCalls?.length ? {request: target.request, reply: target.reply, provider: target.provider, model: target.model, parts, owner, ownerName: nameOf(owner)} : undefined;
+  const sourceOf = (target: KeepAliveTarget, parts: HarvestParts, owner: string, fold?: CliffPlan): HarvestSource | undefined =>
+    target.reply && !target.reply.toolCalls?.length ? {request: target.request, reply: target.reply, provider: target.provider, model: target.model, parts, owner, ownerName: nameOf(owner), ...(fold ? {fold} : {})} : undefined;
   async function startHarvest(who: KeepAliveWho, target: KeepAliveTarget): Promise<HarvestRun | undefined> {
     const current = settings();
     if (options.disabled || (!current.recap && !current.dream)) return undefined;
     const parts = await runner.harvestParts({recap: current.recap, memory: current.dream}, who.ownerId);
-    const source = parts.recap || parts.memory ? sourceOf(target, parts, who.ownerId) : undefined;
+    // The overview of the older closed rounds rides along when the setting is on, the context is large enough and no peer work is pending (never otherwise).
+    const fold = parts.recap || parts.memory ? await contexts.cliffPlan({sessionId: session, ownerId: who.ownerId}, target.request) : undefined;
+    const source = parts.recap || parts.memory ? sourceOf(target, fold ? {...parts, compaction: true} : parts, who.ownerId, fold) : undefined;
     const started = source && service.startHarvest(source);
     return started ? follow(started, target.startedAt) : undefined;
   }

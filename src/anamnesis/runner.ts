@@ -5,12 +5,13 @@
 import {promisify} from 'node:util';
 import {execFile as execFileCb} from 'node:child_process';
 import type {Journal} from '../store/journal.js';
-import type {ModelTurn} from '../runtime/messages.js';
+import type {ModelRequest, ModelTurn} from '../runtime/messages.js';
 import type {MemoryRecord, MemoryStore} from './memory.js';
 import type {ResolvedModel} from './model.js';
 import {applyOperations, dreamDetail, dreamStage, parseDreamAnswer} from './operations.js';
 import {harvestMessage, harvestRequest, memoryChanges, parseHarvestAnswer, type HarvestParts, type HarvestSource, type MemoryChange} from './harvest.js';
 import {DIRECTOR_ID} from '../runtime/director-id.js';
+import type {CliffPlan} from '../context/manager.js';
 import {SKILL_ACTORS, skillsDetail, type SkillResult, type SkillStore} from './skills.js';
 import {DREAM_MAX_TOKENS, DREAM_SYSTEM_PROMPT, RECAP_MAX_TOKENS, RECAP_SYSTEM_PROMPT, RECORD_CONTENT_CAP} from './prompts.js';
 import type {AnamnesisDriver, RunContext, RunKind, RunOutcome} from './service.js';
@@ -49,6 +50,8 @@ export interface RunnerDeps {
   chargeHarvest?(usage: ModelTurn['usage'], identity: string, ownerId: string): Promise<void> | void;
   /** Skill operations of a harvest; without it the skills part is never asked for. */
   skills?: SkillStore;
+  /** Stores the overview a harvest wrote as a pending fold of the actor's context (`context/manager.ts:ContextManager.stageFold()`); undefined when it cannot be used. */
+  stageFold?(ownerId: string, plan: CliffPlan, text: string, request: ModelRequest, touchedAt: number): Promise<{before: number; after: number; window: number} | undefined>;
   gitStatus?(cwd: string): Promise<string>;
   /** `YYYY-MM-DD` of today. */
   today?(): string;
@@ -107,8 +110,10 @@ export class AnamnesisRunner implements AnamnesisDriver {
     const git = parts.recap ? await (this.deps.gitStatus ?? getGitStatus)(this.deps.cwd) : '';
     const today = this.deps.today?.() ?? new Date().toISOString().slice(0, 10);
     const skills = parts.skills && this.deps.skills ? await this.deps.skills.describeFor(SKILL_ACTORS.includes(ownerId as never) ? ownerId : 'public') : '';
+    const compaction = parts.compaction && source.fold ? source.fold.scope + (source.fold.contract ? '\n\nRole memory focus (guidance for the overview):\n' + source.fold.contract : '') : '';
     context.signal.throwIfAborted();
-    const turn = await source.provider.respond(harvestRequest(source, harvestMessage(parts, {today, git, records, recordCap: RECORD_CONTENT_CAP, skills})), () => {}, context.signal);
+    const touchedAt = Date.now();
+    const turn = await source.provider.respond(harvestRequest(source, harvestMessage(parts, {today, git, records, recordCap: RECORD_CONTENT_CAP, skills, compaction})), () => {}, context.signal);
     await this.deps.chargeHarvest?.(turn.usage, source.model, ownerId);
     const answer = parseHarvestAnswer(turn.message.text, parts);
     if (!answer) throw new Error('Anamnesis could not read the harvest answer; this part of the session will be reviewed again.');
@@ -123,18 +128,23 @@ export class AnamnesisRunner implements AnamnesisDriver {
         changes = memoryChanges(before, await this.deps.memory.list(), dream);
       }
       if (answer.skills && this.deps.skills) learned = await this.deps.skills.apply(answer.skills, ownerId);
+      // The overview is only staged here: it becomes the actor's view at its next real request, and only if the cache expired by then.
+      let fold: {before: number; after: number; window: number} | undefined;
+      if (answer.compaction && source.fold) {try {fold = await this.deps.stageFold?.(ownerId, source.fold, answer.compaction, source.request, touchedAt);} catch {fold = undefined;}}
       if (note?.stage) await this.deps.watermarks.save('recap', marksOf(owners));
       // A missing skills block is an empty one; an unreadable memory block leaves the material to be reviewed again.
       const covered = answer.memory !== undefined || (!parts.memory && answer.skills !== undefined);
       if (covered) await this.deps.watermarks.merge('dream', marksOf(owners.filter(owner => owner.ownerId === ownerId)));
       const skillChanges = learned?.changes ?? [];
-      const report = {at: Date.now(), recap: Boolean(note?.stage), changes, owner: ownerId, ownerName, skills: skillChanges};
-      const detail = [note?.detail, dream ? dreamDetail(dream) : '', learned ? skillsDetail(learned) : ''].filter(Boolean).join('\n\n');
+      const report = {at: Date.now(), recap: Boolean(note?.stage), changes, owner: ownerId, ownerName, skills: skillChanges, ...(fold ? {fold} : {})};
+      const percent = (tokens: number, window: number) => Math.round(tokens / window * 100) + '%';
+      const folded = fold ? 'Context compaction staged (' + percent(fold.before, fold.window) + ' to ' + percent(fold.after, fold.window) + ' of the window). It applies at the next request only if the prompt cache has expired by then; otherwise it is dropped.' : '';
+      const detail = [note?.detail, dream ? dreamDetail(dream) : '', learned ? skillsDetail(learned) : '', folded].filter(Boolean).join('\n\n');
       if (note?.stage) return {stage: note.stage, detail, harvest: report};
       const memoryStage = dream ? dreamStage(dream) : 'Nothing new to remember';
       const learnedText = skillChanges.length ? 'learned ' + skillChanges.length + (skillChanges.length === 1 ? ' skill' : ' skills') : '';
       const stage = !learnedText ? memoryStage : memoryStage === 'Nothing new to remember' ? learnedText[0]!.toUpperCase() + learnedText.slice(1) : memoryStage + ', ' + learnedText;
-      return {stage, detail, empty: !changes.length && !skillChanges.length && !(learned?.refused.length), harvest: report};
+      return {stage, detail, empty: !changes.length && !skillChanges.length && !(learned?.refused.length) && !fold, harvest: report};
     });
   }
   /** One plain request: the system prompt, one user message, no tools. Thinking stays off unless the chosen model carries an effort of its own. */

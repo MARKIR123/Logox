@@ -573,6 +573,8 @@ dream = true             # 收割时更新记忆与 skill
 
 **每个角色各自收割、各自学习**：被唤醒过、自己的账本里有新内容的 companion，在各自的缓存临界点（寿命的 0.9 倍）也会收割（只出记忆与 skill，不写回顾）；条件是它没有未结束的活动、没有确定会唤醒它的等待（正在等另一个角色时不收割）、没有待回答的审批或提问，Director 忙不影响。多个角色的收割可同时发给模型，但写入记忆、skill 与水位线一律排队串行；每个收割一张卡片（companion 的卡片写明角色名）。3 秒内先后完成的收割合并成一条通知 `Harvested 23:39 · Logox, Techne · recap · 3 memories · 1 skill`，点击 `N skills` 查看新建 skill 的全文或修改前后的对比。
 
+**缓存临界压缩（cliff compaction）**：`/settings` 的 Context 分组里有 “Cliff compaction”（`[context] cliff_compaction`，默认开）。开着时，如果某个角色的上下文已经够大（至少到高水位的一半）、最近 `keep_recent_rounds` 轮之前还有已结束的轮次、且它没有在等 companion、Automa 或 `SendMessage` 回复，收割的同一次 fork 会多要一个 `<compaction>` 段：由模型把这些旧轮次改写成一份会话状态概述（保留仍有效的约束、证据与验证状态、未完成工作和账本行号引用）。概述先作为“待生效折叠”存起来，不改当前视图；该角色的下一次真实请求若发现缓存确实已过期才应用（缓存仍热，说明你很快回来了，就直接丢弃，绝不打破热缓存），原始账本始终保留。通知里会多一段 `compacted 52% → 21%` 和 `[Keep full context]`（生效前点它取消折叠）；生效后按钮变成 `[Restore full context]`，点它恢复折叠前的视图，下一次请求重新发送完整上下文（缓存重写一次）。也可以直接输入 `/fold keep|restore [角色]`。答复里的 `<compaction>` 为空或格式不对时静默回退到原有的机械折叠。关闭该设置后收割指令里不再出现这一段。
+
 **自学习的 skill**：收割答复里的 `<skills>` 段最多 2 项，`create`（角色或 `public`、`user` 或 `project` 范围、分类、名称、描述、正文，新分类需附分类描述）与对已学会 skill 的 `patch`（精确替换且只出现一次）。文件写在 `~/.logox/skills/<角色>/<分类>/<名称>.md` 或 `<项目>/.logox/skills/…`，frontmatter（`origin: learned`、`learned_at`、`learned_by`）由运行时写入；正文超过 8 KiB、像密钥、重名（含内置）、分类名为 `learned`、`misc` 之类的泛称都会被拒绝并显示在卡片上；新分类自动登记到该角色 `agent.md` 的 `categories:`（保留原有注释）。为保住提示词缓存，新 skill 要到下次 `/reload` 或启动才出现在提示词里。手动 `/anamnesis recap` 或 `dream` 在缓存仍热时同样走这条重放路径，缓存已冷则读对话记录。
 
 两个自动开关也可以保存为用户偏好（`~/.logox/anamnesis.json`），优先于配置文件。Anamnesis 的模型默认跟随 Director 当前选择（不改变思考档位）；也可以为它单独选定模型，选定的模型不可用时本次运行失败并提示，不会悄悄换别的模型。它的用量记在 `/usage` 的 `anamnesis` 类别下。
@@ -619,6 +621,7 @@ dream = true             # 收割时更新记忆与 skill
 | | `@actor <task>` | 交给指定角色 |
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |
 | | `/compact`、`/rewind`、`/undo` | 整理上下文、回退、撤销文件改动 |
+| | `/fold keep\|restore [角色]` | 缓存临界压缩的通知按钮所用：生效前保留完整上下文，生效后恢复完整上下文 |
 | 资源与权限 | `/skills` | 查看技能 |
 | | `/reload` | 重新加载规范、技能、模板和角色 |
 | | `/permissions`、`/permissions mode [mode]` | 查看规则并切换模式 |

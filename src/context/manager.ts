@@ -7,7 +7,7 @@ import {inputMessage} from '../runtime/provenance.js';
 import {Journal, storedMessage, type HistoryEntry, type TaskCheckpoint} from '../store/journal.js';
 import {digest, estimateMessage, estimateRequest, estimateText, TokenMeter, watermarks} from './budget.js';
 import {supersededReads} from './supersession.js';
-import {summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type ModelCapacity, type RoundRecord} from './contracts.js';
+import {clampText, summarizeRound, memoryFocusInstruction, HISTORY_MEMO_INSTRUCTION, type ContextState, type FoldEvent, type ModelCapacity, type PendingFold, type RoundRecord} from './contracts.js';
 import {PROGRESS_FORK_INSTRUCTION, supersededReadText} from '../prompts/compaction.js';
 import {ROUND_MARKERS, formatRoundIndex, omitInternalToolPairs, isLegacyFinishRound} from './round-memory.js';
 import {canonicalToolName} from '../tools/types.js';
@@ -38,12 +38,27 @@ export interface ContextOptions {
   cacheLifetimeMs?(identity: Identity): number | undefined | Promise<number | undefined>;
   /** Clock for the cache-expiry check; tests inject it. */
   now?(): number;
+  /** True while the owner waits on peer work (companions or Automa it dispatched, open `SendMessage` waits): a cliff compaction is neither requested nor applied then. */
+  peerWork?(identity: Identity): boolean;
   /** Working directory that relative `Read` paths resolve against when deciding which reads a later read supersedes; defaults to the process directory. */
   cwd?: string;
   /** Source of list prices for the cost stored with each turn's usage (see `cost.ts:costOf`). */
   pricing?: Parameters<typeof costOf>[1];
 }
 export class ContextBudgetError extends Error {}
+/** Whether a cliff compaction is worth asking for now, and what it would cover (`ContextManager.cliffPlan()`). */
+export interface CliffPlan {
+  /** Ledger index the overview covers up to (a round boundary). */
+  readonly end: number;
+  /** Estimated tokens of the request the plan was made for. */
+  readonly tokens: number;
+  /** One sentence telling the model which closed rounds the overview replaces. */
+  readonly scope: string;
+  /** The role's memory focus (`compression.md`), for the model to follow. */
+  readonly contract: string;
+}
+/** Applied at the next real request only when the cache has expired; the assumed lifetime of a model whose lifetime is unknown is the 5 minutes keep-alive assumes. */
+const ASSUMED_LIFETIME_MS = 5 * 60_000;
 /** What a routine fold at the start of a round may do: `keepLast` leaves the latest closed round in full (the new task continues its root task). */
 export interface RoundStartFold {keepLast: boolean}
 /** Upper bound for a model-written overview or progress summary. */
@@ -159,6 +174,83 @@ export class ContextManager {
         output: Math.max(0, Math.floor(Math.min(this.options.maxOutput, model.maxOutput ?? Infinity, model.window - input - marks.safety)))});
     } catch {}
   }
+  /** Called after every change of a pending fold: staged, applied, discarded, kept, restored. */
+  foldListener?: (identity: Identity, event: FoldEvent, fold: PendingFold) => void;
+  /**
+   * Is a cliff compaction worth asking for? Only when `cliff_compaction` is on, no peer work is pending, the request that the harvest forks is at least half
+   * way to the high watermark (the bar of the routine fold) and there are closed rounds older than the `keep_recent_rounds` most recent ones that no stopped
+   * round pins. Undefined means no.
+   */
+  async cliffPlan(identity: Identity, request: ModelRequest): Promise<CliffPlan | undefined> {
+    const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
+    if (!policy.cliff_compaction || this.options.peerWork?.(identity)) return undefined;
+    try {
+      const marks = watermarks(this.options.model(identity), policy), tokens = estimateRequest(request);
+      if (tokens < marks.high / 2) return undefined;
+      const {journal} = this.options;
+      const entries = await journal.load(identity.sessionId, identity.ownerId);
+      const rounds = splitRounds(entries, await journal.rounds(identity.sessionId, identity.ownerId, entries));
+      const closed = rounds.filter(round => round.closed), held = await this.pinnedStarts(identity, rounds);
+      const older = closed.slice(0, Math.max(0, closed.length - policy.keep_recent_rounds));
+      const covered: Round[] = [];
+      for (const round of older) {if (held.has(round.start)) break; covered.push(round);}
+      const last = covered.at(-1);
+      if (!last) return undefined;
+      const state = await journal.loadContext(identity.sessionId, identity.ownerId, entries).catch(() => undefined);
+      if (state?.memo && state.memo.end >= last.end) return undefined;
+      const lines = journal.sourceLines(identity.sessionId, identity.ownerId, 0, last.end);
+      const title = last.record?.memory?.title ?? last.record?.summary.title ?? '';
+      return {end: last.end, tokens, contract: this.summaryContract(identity),
+        scope: (policy.keep_recent_rounds ? 'Everything before your ' + policy.keep_recent_rounds + ' most recent closed rounds: ' : 'Every closed round: ') + covered.length + ' closed round' + (covered.length === 1 ? '' : 's') +
+          ', through' + (last.record?.ordinal ? ' round T' + last.record.ordinal : ' the round') + (title ? ' "' + clampText(title, 80) + '"' : '') + ' (ledger lines ' + lines.start + '-' + lines.end + ').'};
+    } catch {return undefined;}
+  }
+  /**
+   * Stores the overview a harvest wrote as a pending fold. Nothing about the saved view changes: the fold is applied by `prepare()` at the owner's next real
+   * request, only when the cache has expired by then. Undefined (the caller then does nothing, so the mechanical paths stay in charge) when the text is
+   * empty, too long or would not make the request smaller.
+   */
+  async stageFold(identity: Identity, plan: CliffPlan, text: string, request: ModelRequest, touchedAt: number): Promise<PendingFold | undefined> {
+    const overview = text.trim();
+    if (!overview || estimateText(overview) > SUMMARY_TOKENS) return undefined;
+    try {
+      const view = await this.buildView(identity, request);
+      const candidate: ContextState = {...structuredClone(view.state), memo: {end: plan.end, text: overview}};
+      if (candidate.working && candidate.working.start < plan.end) delete candidate.working;
+      const before = estimateRequest(view.requestFor(view.state)), after = estimateRequest(view.requestFor(candidate));
+      if (after >= before) return undefined;
+      const fold: PendingFold = {version: 1, sessionId: identity.sessionId, ownerId: identity.ownerId, status: 'pending', end: plan.end, text: overview,
+        before, after, window: view.model.window, touchedAt, stagedAt: this.options.now?.() ?? Date.now(), sourceLength: view.entries.length, sourceHash: digest(view.entries)};
+      await this.options.journal.savePendingFold(fold);
+      this.foldListener?.(identity, 'staged', fold);
+      return fold;
+    } catch {return undefined;}
+  }
+  /** `[Keep full context]` before the fold is applied: the pending fold is cancelled and the view stays as it is. */
+  async keepFullContext(identity: Identity): Promise<string> {
+    const fold = await this.options.journal.loadPendingFold(identity.sessionId, identity.ownerId);
+    if (fold?.status !== 'pending') return 'No cliff compaction is waiting for ' + identity.ownerId + '.';
+    const next: PendingFold = {...fold, status: 'kept'};
+    await this.options.journal.savePendingFold(next);
+    this.foldListener?.(identity, 'kept', next);
+    return 'Keeping the full context of ' + identity.ownerId + '; the pending compaction was cancelled.';
+  }
+  /** `[Restore full context]` after the fold was applied: the saved view from before it comes back, and the next request sends the full messages again (the cache is written once more). */
+  async restoreFullContext(identity: Identity): Promise<string> {
+    const {journal} = this.options;
+    const fold = await journal.loadPendingFold(identity.sessionId, identity.ownerId);
+    if (fold?.status !== 'applied' || !fold.previous) return 'No applied cliff compaction to restore for ' + identity.ownerId + '.';
+    const entries = await journal.load(identity.sessionId, identity.ownerId);
+    const current = await journal.loadContext(identity.sessionId, identity.ownerId, entries).catch(() => undefined);
+    if (current?.memo?.text !== fold.text) return 'The context of ' + identity.ownerId + ' changed after the compaction; it can no longer be restored.';
+    await journal.saveContext(fold.previous);
+    const next: PendingFold = {...fold, status: 'restored'};
+    await journal.savePendingFold(next);
+    this.meter(identity).invalidate();
+    this.options.folded?.(identity);
+    this.foldListener?.(identity, 'restored', next);
+    return 'Restored the full context of ' + identity.ownerId + '; the next request sends it in full.';
+  }
   summaryContract(identity: Identity): string {return this.options.contract?.(identity)?.trim() ?? "";}
   requestBase(_identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>): Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'> {
     return base;
@@ -203,11 +295,8 @@ export class ContextManager {
     }
     return pinned;
   }
-  /** `appendOnly` (the provider binds replayed thinking to every earlier message) forbids rewriting any sent message, so superseded reads stay in full. */
-  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, routine?: RoundStartFold, appendOnly = false):
-    Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
-    signal.throwIfAborted();
-    base = this.requestBase(identity, base);
+  /** The request projection of one owner at this moment: its ledger, rounds, saved view and the closures that turn a candidate view into messages. */
+  private async buildView(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>) {
     const model = this.options.model(identity), {journal} = this.options;
     const policy = typeof this.options.policy === 'function' ? this.options.policy(identity) : this.options.policy;
     const marks = watermarks(model, policy);
@@ -228,7 +317,6 @@ export class ContextManager {
     const empty: ContextState = {version: 1, sessionId: identity.sessionId, ownerId: identity.ownerId, sourceLength: entries.length, sourceHash: digest(entries), folded: [], archives: []};
     state ??= empty;
     if (rounds.some(round => !round.closed && (state!.folded.includes(round.start) || state!.memo && round.start < state!.memo.end))) state = empty;
-    let original = state;
     const closed = rounds.filter(round => round.closed);
     const protectedPairs = new Set((policy.keep_recent_tools ? pairs.slice(-policy.keep_recent_tools) : []).map(pair => pair.resultIndex));
     const pairByCall = new Map(pairs.map(pair => [pair.call.id, pair]));
@@ -311,6 +399,16 @@ export class ContextManager {
         ? [createRuntimeContextMessage('ledger', `Round ledger (${identity.ownerId}): ${ledger}`)] : [];
       return {...base, messages: [...projected(candidate), ...omitInternalToolPairs(anchors), ...coordinates]};
     };
+    return {model, journal, policy, marks, entries, rounds, pairs, sourceMessages, closed, protectedPairs, projected, requestFor, state, empty, base};
+  }
+  /** `appendOnly` (the provider binds replayed thinking to every earlier message) forbids rewriting any sent message, so superseded reads stay in full. */
+  async prepare(identity: Identity, base: Pick<ModelRequest, 'system' | 'tools' | 'toolDiscovery'>, signal: AbortSignal, force = false, routine?: RoundStartFold, appendOnly = false):
+    Promise<{request: ModelRequest; model: ModelCapacity; compacted: boolean}> {
+    signal.throwIfAborted();
+    base = this.requestBase(identity, base);
+    const view = await this.buildView(identity, base);
+    const {model, journal, policy, marks, entries, rounds, pairs, sourceMessages, closed, protectedPairs, projected, requestFor} = view;
+    let state = view.state, original = view.state;
     // A request over the model's image limit gets its oldest images turned into `[image: <path>]` text in one batch, down to half the
     // limit, and the decision is saved in the view, so later requests stay byte-identical until the limit is reached again.
     const forcedImages = this.imageForced.delete(this.key(identity));
@@ -355,6 +453,43 @@ export class ContextManager {
     const cwd = this.options.cwd ?? process.cwd();
     const unseen = (value: ContextState): Record<string, string> => appendOnly ? {} :
       Object.fromEntries([...supersededReads(sourceMessages, cwd)].filter(([id]) => !value.superseded?.[id]));
+    // A cliff compaction a harvest staged is applied by the first request after the cache expired; a request that still finds the cache warm drops it, so a warm cache is never broken.
+    if (!force) {
+      let staged: PendingFold | undefined;
+      try {staged = await journal.loadPendingFold(identity.sessionId, identity.ownerId);} catch {staged = undefined;}
+      if (staged?.status === 'pending') {
+        const fold = staged;
+        const settle = async (status: 'applied' | 'discarded', event: FoldEvent, extra: Partial<PendingFold> = {}) => {
+          const next: PendingFold = {...fold, status, ...extra};
+          try {await journal.savePendingFold(next);} catch {}
+          this.foldListener?.(identity, event, next);
+        };
+        let lifetime: number | undefined;
+        try {lifetime = await this.options.cacheLifetimeMs?.(identity);} catch {lifetime = undefined;}
+        const now = this.options.now?.() ?? Date.now();
+        const valid = fold.sourceLength <= entries.length && digest(entries.slice(0, fold.sourceLength)) === fold.sourceHash && (fold.end === entries.length || entries[fold.end]?.role === 'user') &&
+          !(state.memo && state.memo.end >= fold.end) && !rounds.some(round => !round.closed && round.start < fold.end);
+        if (!valid || !policy.cliff_compaction || this.options.peerWork?.(identity) || now - fold.touchedAt < (lifetime ?? ASSUMED_LIFETIME_MS)) await settle('discarded', 'discarded');
+        else {
+          const next: ContextState = {...structuredClone(state), ...contextSnapshot(sourceMessages), thinkingCut: entries.length, memo: {end: fold.end, text: fold.text}, sourceLength: entries.length, sourceHash: digest(entries)};
+          if (next.working && next.working.start < fold.end) delete next.working;
+          try {
+            const after = estimateRequest(requestFor(next));
+            if (after >= before) await settle('discarded', 'discarded');
+            else {
+              await journal.saveContext(next);
+              signal.throwIfAborted();
+              const previous = state;
+              state = next; original = next; meter.invalidate();
+              this.options.folded?.(identity);
+              this.options.report?.(identity, `[Context] Applied the cliff compaction (~${before} to ~${after} tokens). Raw ledger retained.`);
+              before = after;
+              await settle('applied', 'applied', {previous, appliedAt: now, after});
+            }
+          } catch (error) {signal.throwIfAborted();}
+        }
+      }
+    }
     if (routine && !force) {
       let due = !isDirector(identity.ownerId);
       if (!due) due = await cacheCold() || before >= marks.high / 2;

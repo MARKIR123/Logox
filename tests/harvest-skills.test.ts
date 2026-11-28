@@ -179,7 +179,7 @@ test('the skills block is parsed with the others and the instruction tells how t
     assert.ok(text.includes(clause), clause);
   }
   assert.ok(!HARVEST_INSTRUCTIONS['recap']!.includes('<skills>') && !HARVEST_INSTRUCTIONS['memory']!.includes('<skills>'));
-  assert.deepEqual(Object.keys(HARVEST_INSTRUCTIONS).sort(), ['memory', 'memory+skills', 'recap', 'recap+memory', 'recap+memory+skills', 'recap+skills', 'skills']);
+  assert.deepEqual(Object.keys(HARVEST_INSTRUCTIONS).filter(key => !key.includes('compaction')).sort(), ['memory', 'memory+skills', 'recap', 'recap+memory', 'recap+memory+skills', 'recap+skills', 'skills']);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------
