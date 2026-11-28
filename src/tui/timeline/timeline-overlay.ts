@@ -57,10 +57,11 @@ function merge(parts: readonly SceneSegment[]): SceneSegment[] {
   }
   return out;
 }
-/** What the plane draws for a row: the rail cell and the body, with the row's own background baked into every segment. */
-function flatten(raw: Row): SceneSegment[] {
+/** What the plane draws for a row: the rail cell (on the canvas, never the row background) and the body with the row's own background baked in; `bodyOnly` leaves the rail to the plane. */
+function flatten(raw: Row, bodyOnly = false): SceneSegment[] {
   const row = raw as SceneRow;
-  return [...(row.gutterCols > 0 ? [railCell(row)] : []), ...rowSegments(row)].map(segment => row.bg && !segment.bg ? {...segment, bg: row.bg} : segment);
+  const body = rowSegments(row).map(segment => row.bg && !segment.bg ? {...segment, bg: row.bg} : segment);
+  return [...(row.gutterCols > 0 && !bodyOnly ? [railCell(row)] : []), ...body];
 }
 /** Display columns `[from, to)` of a segment list; a wide glyph cut by an edge becomes a space. */
 export function sliceSegments(segments: readonly SceneSegment[], from: number, to: number): SceneSegment[] {
@@ -127,16 +128,20 @@ function bgAt(segments: readonly SceneSegment[], column: number): string | undef
 }
 
 function pillRows(box: NonNullable<OverlayInfo['pill']>, view: TimelineView): Row[] {
-  const under = view.rows[box.y];
-  const flat = under ? flatten(under) : [];
-  const left = pad(sliceSegments(flat, 0, box.x), box.x);
-  const right = sliceSegments(flat, box.x + box.width, Infinity);
-  const rowBg = (under as SceneRow | undefined)?.bg;
-  const covered = {left: bgAt(flat, box.x) ?? rowBg, mid: bgAt(flat, box.x + Math.floor(box.width / 2)) ?? rowBg, right: bgAt(flat, box.x + box.width - 1) ?? rowBg};
+  const under = view.rows[box.y] as SceneRow | undefined;
+  // The covered row keeps its rail: the plane paints it on the canvas background with the focus easing, exactly as on that row.
+  // Only the body is rebuilt (in body columns), so a card's background never spills into the gutter.
+  const gutter = under && under.gutterCols > 0 && under.gutterCols <= box.x ? under.gutterCols : 0;
+  const flat = under ? flatten(under, gutter > 0) : [];
+  const x = box.x - gutter;
+  const left = pad(sliceSegments(flat, 0, x), x);
+  const right = sliceSegments(flat, x + box.width, Infinity);
+  const rowBg = under?.bg;
+  const covered = {left: bgAt(flat, x) ?? rowBg, mid: bgAt(flat, x + Math.floor(box.width / 2)) ?? rowBg, right: bgAt(flat, x + box.width - 1) ?? rowBg};
   const paint = (level: number): readonly SceneSegment[] => merge([...left, ...pillChip(box.label, level, covered), ...right]);
   const action: SceneAction = {kind: 'jump_bottom'};
   return [{
-    messageId: JUMP_ID, line: 0, text: '', railColor: '', gutterCols: 0, softWrap: false, noSelect: true, tone: 'body',
+    messageId: JUMP_ID, line: 0, text: '', railColor: gutter > 0 ? under!.railColor : '', gutterCols: gutter, softWrap: false, noSelect: true, tone: 'body',
     ...(rowBg ? {bg: rowBg} : {}),
     segments: paint(0), hover: {foldId: JUMP_ID, startCol: box.x, endCol: box.x + box.width},
     hits: [{startCol: box.x, endCol: box.x + box.width, action}], glow: {id: JUMP_ID, paint},

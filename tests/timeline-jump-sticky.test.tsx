@@ -51,6 +51,26 @@ test('the jump pill shows only while the reading position is above the end, a on
   assert.equal(pillBox(40, 5, 0)!.y, 4, 'flush when the timeline is short');
 });
 
+test('the pill over a card row keeps that row\'s rail and never spreads the card background into the gutter', () => {
+  const rows = rowsOf(conversation()), height = 20, width = 80;
+  const anchor = at(rows, 0, height), plain = viewport(rows, height, anchor).rows;
+  const pill = overlayView({rows, height, width, anchor}).overlay.pill!;
+  const under = plain[pill.y] as SceneRow;
+  assert.ok(under.gutterCols > 0, 'the fixture row has a rail');
+  const card = {...under, bg: '#223344'} as SceneRow;
+  const covered = [...rows];
+  covered[rows.indexOf(under)] = card;
+  const view = overlayView({rows: covered, height, width, anchor});
+  const row = view.rows[pill.y] as SceneRow;
+  assert.equal(row.gutterCols, under.gutterCols, 'the rail stays the plane\'s, with its focus easing');
+  assert.equal(row.railColor, under.railColor);
+  assert.equal(encodeRow(row, 0, null, width).split('│')[0], encodeRow(card, 0, null, width).split('│')[0], 'the rail cell is painted exactly as on the covered row');
+  const first = row.segments!.findIndex(segment => segment.text === '▐');
+  assert.equal(stripWidth(row.segments!.slice(0, first)) + row.gutterCols, pill.x, 'the body starts after the rail and the chip sits where it should');
+  assert.deepEqual(row.hits![0], {startCol: pill.x, endCol: pill.x + pill.width, action: {kind: 'jump_bottom'}}, 'hits stay in row columns');
+});
+const stripWidth = (segments: readonly {text: string}[]) => segments.reduce((sum, segment) => sum + [...segment.text].length, 0);
+
 test('the label counts new messages, shortens with the width and drops out when nothing fits', () => {
   assert.equal(pillLabel(0, 80), '↓ Latest  End');
   assert.equal(pillLabel(3, 80), '↓ 3 new  End');
@@ -289,7 +309,7 @@ test('over a tinted row the chip takes the covered background: caps blend into i
   const fill = a.segments.find(s => /Latest/.test(s.text))!.bg;
   assert.notEqual(fill, tint, 'the chip itself is still visibly a chip'); assert.notEqual(fill, undefined);
   const first = a.segments.findIndex(s => s.text === '▐'), last = a.segments.findIndex(s => s.text === '▌');
-  assert.equal(widthOfText(a.segments.slice(0, first)), a.box.x, 'nothing is painted left of the chip');
+  assert.equal(widthOfText(a.segments.slice(0, first)) + a.row.gutterCols, a.box.x, 'nothing is painted left of the chip; the rail is drawn by the plane');
   assert.equal(widthOfText(a.segments.slice(first, last + 1)), a.box.width, 'the chip is exactly label plus caps');
   assert.ok(a.segments.slice(last + 1).every(s => s.bg === tint || s.bg === undefined), 'the row to the right keeps its own background');
   const b = chip(plain as SceneRow[]);
