@@ -1,6 +1,6 @@
 import type {Resources, ResourceSnapshot} from './manager.js';
 
-const promptRevision = (snapshot: ResourceSnapshot) => JSON.stringify({guidelines: snapshot.guidelines, skills: snapshot.skills, categories: snapshot.categories, ranks: snapshot.ranks});
+const promptRevision = (snapshot: ResourceSnapshot) => JSON.stringify({guidelines: snapshot.guidelines, skills: snapshot.skills, categories: snapshot.categories, ranks: snapshot.ranks, archived: snapshot.archivedSkills.length});
 export async function reloadResources(resources: Resources, validateConfig: () => Promise<unknown>) {
   const before = promptRevision(resources.snapshot());
   const snapshot = await resources.reload();

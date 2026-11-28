@@ -28,6 +28,7 @@ import {PermissionEngine} from './permissions/engine.js';
 import {StateFile, preferenceSchema} from './config/model-preferences.js';
 import {UsageLedger} from './context/usage.js';
 import {SkillUsage} from './resources/skill-usage.js';
+import {SkillCurator} from './resources/skill-curator.js';
 import {ProjectExtensions, observeTools} from './extensions/runtime.js';
 import type {ExtensionApproval} from './extensions/mcp.js';
 import {loadUiPreferences} from './commands/pages.js';
@@ -115,7 +116,10 @@ export class ProjectHost {
       const skillUsage = new SkillUsage({home, cwd, dataDir: dataMigration.dataDir, resources: projectExtensions.resources});
       tools.onSkillRead = (path, context) => skillUsage.read(path, context);
       tools.shellAutoBackgroundMs = () => config.kernel.shell_auto_background_seconds * 1000;
-      tools.skills = {visible: actorId => projectExtensions.resources.skillsFor({actorId}), uses: skills => skillUsage.entriesFor(skills)};
+      const curator = projectExtensions.resources.curator = new SkillCurator({usage: skillUsage, resources: projectExtensions.resources,
+        onError: error => host?.noticeSink('Skill curator: ' + (error instanceof Error ? error.message : 'failed'))});
+      tools.skills = {visible: actorId => projectExtensions.resources.skillsFor({actorId}), uses: skills => skillUsage.entriesFor(skills),
+        archived: actorId => projectExtensions.resources.archivedFor({actorId}), restore: name => curator.restore(name)};
       projectExtensions.resources.usage = skills => skillUsage.entriesFor(skills);
       const statusbar = new StatusbarPreferences(options.statusbarPath ?? join(home, '.logox', 'statusbar.json'));
       let statusbarIssue: string | undefined;
@@ -151,6 +155,11 @@ export class ProjectHost {
   async createSession(options: HostSessionOptions): Promise<SessionApplication> {
     if (this.closed) throw new Error('Project host is closed');
     this.skillUsage.recordDay();
+    // Once per session start, after the active day is recorded: idle skills turn stale or move to .archive/ (never deleted).
+    try {
+      const run = await this.extensions.resources.curator?.run();
+      if (run?.archived.length) this.noticeSink('Archived ' + run.archived.length + ' unused skill' + (run.archived.length === 1 ? '' : 's') + ': ' + run.archived.join(', ') + '. Restore them from /skills.');
+    } catch (error) {this.noticeSink('Skill curator: ' + (error instanceof Error ? error.message : 'failed'));}
     return this.factory({...this.options, cwd: this.cwd, config: this.config, sessionId: options.sessionId, dataDir: this.dataDir,
       registry: this.registry, tools: this.tools, preferences: this.preferences, permissions: this.permissions, usage: this.usage,
       extensions: this.extensions, actors: this.actors, sessionCommand: options.sessionCommand, beforeTask: options.beforeTask,

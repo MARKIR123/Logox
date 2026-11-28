@@ -216,9 +216,6 @@ export function createSubmit(deps: SubmitDeps) {
 
       surfaces.openPage(pageSpec.title, pageSpec.tabs, pageSpec.initialTab, pages.pageActions(pageSpec.tabs.filter(tab => tab.toggles).length <= 1)); return;
     }
-    if (text === '/skills') {
-      receipt(resources.skillsFor({actorId: source, skills: actors.find(source)?.skills ?? []}).map(item => item.name + ': ' + item.description + '\n' + item.path).join('\n\n') || 'No skills found', 'panel', 'Skills'); return;
-    }
     if (text === '/reload') {
       requireIdle();
       state.reloadTask = queryResult(source, 'Resource reload', async () => {
@@ -323,6 +320,13 @@ export function createSubmit(deps: SubmitDeps) {
     if (text.startsWith('/')) {
       const match = /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i.exec(text);
       const expanded = match ? resources.expand(match[1]!, match[2] ?? '') : undefined;
+      // `/<name>` of an archived skill brings it back (the template commands of the same name win).
+      const archived = !expanded && match ? resources.archived().find(item => item.name === match[1]!.toLowerCase()) : undefined;
+      if (archived && resources.curator) {
+        try {await resources.curator.restore(archived.name);}
+        catch (error) {throw new InputRejected('Could not restore ' + archived.name + ': ' + (error instanceof Error ? error.message : 'failed'));}
+        receipt('Restored skill ' + archived.name + '; it is available to the Skill tool again.', 'status', undefined, source); return;
+      }
       if (!expanded) throw new InputRejected('Unknown command. Run /help to view available commands.');
       await beginTask();
       await dispatchInput(source, expanded, isDirector(source) ? source : 'direct'); return;

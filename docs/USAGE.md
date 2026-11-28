@@ -438,7 +438,8 @@ Logox 向角色正式派工后，各角色的结果通过持久化的优先队�
 ## 资源与扩展
 
 - 规范：按目录加载 `LOGOX.md`、`AGENTS.md`，或你自备的 `CLAUDE.md`。
-- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取，模型也可以用 `Skill` 工具搜索和加载。`/skills` 列出可用技能。
+- 技能：内置库、用户 `.logox/skills/`、项目 `.logox/skills/` 按名称覆盖。支持递归的 Markdown、角色目录和 `agent.md` 分类路标，正文按需读取，模型也可以用 `Skill` 工具搜索和加载。`/skills` 打开技能页（见下）。
+- 技能园丁（归档）：长期不用的技能会被自动收起，永远不会被删除。闲置按活跃天数计（有会话的日子，不是自然日）：连续 14 个活跃日未使用，技能在 `/skills` 里标 `[stale]`；再过 16 个活跃日（共 30 个）则移到所在技能根目录下的 `.archive/`，保留相对路径（例如 `~/.logox/skills/.archive/techne/eng/x.md`）。检查每次启动会话时运行一次。从未用过的技能从第一次被看到那天起计时，新装的技能不会当天被归档。在 frontmatter 写 `pinned: true` 可永远保留某个技能；自学习的技能和你自己装的技能都会被归档，内置技能通过它们的种子副本归档，之后不会被重新种回来。归档后提示词只多一行 `N archived skills — searchable with Skill search`。找回的方式有三种：模型用 `Skill` 工具 `search`（结果标 `archived`）再 `load`，加载即自动恢复；`/skills` 页的 Archived 标签页里用 `n` / `p` 选择、`r` 恢复（页脚的按钮可以点击）；或者直接输入 `/<技能名>`。恢复会把闲置计时清零，同一个技能恢复到第二次时会收到一条通知，建议加上 `pinned: true`。恢复后的技能立刻可用，但要到下次 `/reload` 或启动才重新出现在提示词里。
 - 命令模板：在用户或项目的 `.logox/commands/` 下定义，展开成任务输入，不直接执行 Shell。
 - `/reload`：空闲时重新加载规范、技能、模板和角色定义；不会替换运行中的提供商，也不会重启 MCP。
 - MCP：目前支持 stdio 子进程，首次使用时启动，调用要经过 schema 与权限检查。
@@ -622,7 +623,7 @@ dream = true             # 收割时更新记忆与 skill
 | 会话与上下文 | `/new`、`/resume [id]`、`/clear` | 新建、恢复、清屏 |
 | | `/compact`、`/rewind`、`/undo` | 整理上下文、回退、撤销文件改动 |
 | | `/fold keep\|restore [角色]` | 缓存临界压缩的通知按钮所用：生效前保留完整上下文，生效后恢复完整上下文 |
-| 资源与权限 | `/skills` | 查看技能 |
+| 资源与权限 | `/skills` | 技能页：Skills 标签页列出可用技能（stale 与 pinned 有标记），Archived 标签页列出已归档技能并可恢复 |
 | | `/reload` | 重新加载规范、技能、模板和角色 |
 | | `/permissions`、`/permissions mode [mode]` | 查看规则并切换模式 |
 | | `/permissions add ...`、`/permissions revoke <id>` | 添加或撤销规则 |

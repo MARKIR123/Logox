@@ -5,7 +5,12 @@ import {StateFile} from '../config/model-preferences.js';
 import type {SkillResource} from './manager.js';
 
 const entrySchema = z.strictObject({count: z.number().int().nonnegative(), lastUsedAt: z.number().nonnegative(), lastUsedDay: z.string()});
-const usageSchema = z.strictObject({version: z.literal(1), activeDays: z.array(z.string()).default([]), skills: z.record(z.string(), entrySchema).default({})});
+/** The curator's record of a skill: when it was archived (absent while it is live) and how many times it was restored. */
+const archiveSchema = z.strictObject({archivedAt: z.number().nonnegative().optional(), restores: z.number().int().nonnegative()});
+/** `seen` is the day a skill's idle clock started (first seen, or last restored); `archive` is the curator's record. Older files without them read as empty. */
+const usageSchema = z.strictObject({version: z.literal(1), activeDays: z.array(z.string()).default([]), skills: z.record(z.string(), entrySchema).default({}),
+  seen: z.record(z.string(), z.string()).default({}), archive: z.record(z.string(), archiveSchema).default({})});
+export type SkillArchiveRecord = z.infer<typeof archiveSchema>;
 export type SkillUsageEntry = z.infer<typeof entrySchema>;
 export type SkillUsageFile = z.infer<typeof usageSchema>;
 export type SkillScope = 'user' | 'project';
@@ -22,7 +27,7 @@ export interface SkillUsageOptions {
   readonly onError?: (error: unknown) => void;
 }
 const keepDays = 400;
-const emptyUsage = (): SkillUsageFile => ({version: 1, activeDays: [], skills: {}});
+const emptyUsage = (): SkillUsageFile => ({version: 1, activeDays: [], skills: {}, seen: {}, archive: {}});
 const inside = (root: string, path: string) => {const rel = relative(root, path); return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);};
 const withDay = (days: readonly string[], day: string) => [...new Set([...days, day])].sort().slice(-keepDays);
 /** The local calendar day (`YYYY-MM-DD`) of an epoch-ms time. */
@@ -58,6 +63,13 @@ export class SkillUsage {
     }).catch(error => this.fail(error));
     this.chains.set(file.path, next);
     void next.then(() => {if (this.chains.get(file.path) === next) this.chains.delete(file.path);});
+  }
+  /** The canonical user and project skill roots (`~/.logox/skills`, `<project>/.logox/skills`). */
+  roots(): Promise<{user: string; project: string}> {return this.scopes();}
+  /** Changes one scope's stored file (the curator's seen days and archive records) and resolves once it is written. */
+  async update(scope: SkillScope, change: (current: SkillUsageFile) => SkillUsageFile): Promise<void> {
+    this.enqueue(scope === 'user' ? this.userFile : this.projectFile, change);
+    await this.idle();
   }
   private scopes(): Promise<{user: string; project: string}> {
     const real = (path: string) => realpath(path).catch(() => resolve(path));
@@ -106,9 +118,11 @@ export class SkillUsage {
     return result;
   }
   /** Both scopes as stored; only the user file carries the active days. */
-  async usage(): Promise<{activeDays: readonly string[]; user: Readonly<Record<string, SkillUsageEntry>>; project: Readonly<Record<string, SkillUsageEntry>>}> {
+  async usage(): Promise<{activeDays: readonly string[]; user: Readonly<Record<string, SkillUsageEntry>>; project: Readonly<Record<string, SkillUsageEntry>>;
+    seen: Readonly<Record<SkillScope, Readonly<Record<string, string>>>>; archive: Readonly<Record<SkillScope, Readonly<Record<string, SkillArchiveRecord>>>>}> {
     await this.idle();
     const [user, project] = await Promise.all([this.userFile.read(), this.projectFile.read()]);
-    return {activeDays: user?.activeDays ?? [], user: user?.skills ?? {}, project: project?.skills ?? {}};
+    return {activeDays: user?.activeDays ?? [], user: user?.skills ?? {}, project: project?.skills ?? {},
+      seen: {user: user?.seen ?? {}, project: project?.seen ?? {}}, archive: {user: user?.archive ?? {}, project: project?.archive ?? {}}};
   }
 }

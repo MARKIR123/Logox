@@ -8,6 +8,8 @@ import {basename, dirname, join, resolve, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {commandCatalog} from '../commands.js';
 import {parseDocument} from 'yaml';
+import type {SkillCurator} from './skill-curator.js';
+import {ARCHIVE_DIR, collectSkillFiles, describeSkill, metadata, forbiddenPath} from './skill-archive.js';
 import {actorIdSchema} from '../actors/definitions.js';
 
 export type ResourceKind = 'guidelines' | 'skills' | 'commands';
@@ -21,6 +23,8 @@ export interface SkillResource {
   readonly public?: true;
   readonly level?: 'core' | 'domain';
   readonly category?: string;
+  /** `pinned: true` in the frontmatter: the curator never archives it. */
+  readonly pinned?: true;
 }
 export interface DomainCategorySignpost {
   readonly actor: string;
@@ -36,30 +40,15 @@ export interface ResourceSnapshot {
   readonly issues: readonly ResourceIssue[];
   /** Each skill's position by usage (0 is the most used) as of this load: frozen until the next reload so the prompt never changes mid-session. */
   readonly ranks: Readonly<Record<string, number>>;
+  /** The skills the curator archived (user and project roots), found in `.archive/` folders as of this load; never listed in the prompt, searchable with `Skill`. */
+  readonly archivedSkills: readonly SkillResource[];
 }
 export interface ResourcePromptSections {readonly guidelines: readonly TextResource[]; readonly skills: string}
 export interface ResourceOptions {home?: string; boundary?: string}
 export interface SkillVisibility {readonly actorId: string; readonly skills?: readonly string[]}
 const maxBytes = 64 * 1024;
 const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
-const forbidden = (path: string) => path.split(/[\\/]/).some(part => part.toLowerCase() === 'legacy');
-
-async function collectSkillFiles(dir: string): Promise<string[]> {
-  const files: string[] = [];
-  try {
-    const entries = await readdir(dir, {withFileTypes: true});
-    for (const entry of entries) {
-      if (entry.name.startsWith('.') || forbidden(entry.name)) continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        files.push(...await collectSkillFiles(full));
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        files.push(full);
-      }
-    }
-  } catch {}
-  return files;
-}
+const forbidden = forbiddenPath;
 /** The folder the shipped skills are read from: the built copy beside this module, else the source tree. */
 export function builtinSkillsRoot(): string {
   const dist = resolve(dirname(fileURLToPath(import.meta.url)), 'builtin-skills');
@@ -72,6 +61,8 @@ export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkill
     for (const file of files) {
       const rel = relative(builtinSkillsDir, file);
       const target = join(userSkillsDir, rel);
+      // The curator archived this shipped skill: it must not be seeded back.
+      if (existsSync(join(userSkillsDir, ARCHIVE_DIR, rel))) continue;
       if (!existsSync(target)) {
         if (!seedMissing) continue;
         await mkdir(dirname(target), {recursive: true});
@@ -85,16 +76,6 @@ export async function ensureUserSkillsSeeded(userSkillsDir: string, builtinSkill
       }
     }
   } catch {}
-}
-function metadata(text: string) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-  const fields: Record<string, string> = Object.create(null) as Record<string, string>;
-  if (match) for (const line of match[1]!.split(/\r?\n/)) {
-    const field = /^([\w-]+):\s*(.*)$/.exec(line);
-    if (field) fields[field[1]!] = field[2]!.replace(/^(['"])(.*)\1$/, '$2').trim();
-  }
-  const body = match ? text.slice(match[0].length).trim() : text.trim();
-  return {fields, body, description: (fields.description || body.split(/\r?\n/).find(line => line.trim())?.replace(/^#+\s*/, '') || '').slice(0, 500)};
 }
 async function ancestors(cwd: string, boundary?: string) {
   const canonicalCwd = await realpath(cwd).catch(() => resolve(cwd));
@@ -112,6 +93,7 @@ async function ancestors(cwd: string, boundary?: string) {
 }
 const SKILL_DISCOVERY_LINE = 'Find a domain skill with the Skill tool (action "search" by topic, then "load" by name); Read on a skill path works too.';
 const LISTED_PER_CATEGORY = 5;
+const ARCHIVED_SKILLS_LINE = '{count} archived skills — searchable with Skill search';
 const oneLine = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
@@ -134,9 +116,11 @@ function categoryListing(skills: readonly SkillResource[], ranks: Readonly<Recor
 export class Resources {
   private readonly assignments = new Map<string, Set<string>>();
   private readonly categoriesMap = new Map<string, Map<string, string>>();
-  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: [], ranks: {}});
+  private value: ResourceSnapshot = Object.freeze({guidelines: [], skills: [], categories: [], commands: [], issues: [], ranks: {}, archivedSkills: []});
   /** Usage of the given skills by name, read during `reload()` to order each category's listing; a failure leaves the name order. */
   usage: ((skills: readonly SkillResource[]) => Promise<Readonly<Record<string, {readonly count: number; readonly lastUsedAt: number}>>>) | undefined;
+  /** The curator that archives idle skills and restores them; wired by the project host (src/project-host.ts). */
+  curator: SkillCurator | undefined;
   constructor(readonly cwd: string, readonly options: ResourceOptions = {}) {}
   snapshot(): ResourceSnapshot {return this.value;}
   /** Explicit assignment changes only this Resources instance; borrowing is supplied by one-off task input and never written to the assignment table. */
@@ -147,20 +131,39 @@ export class Resources {
     if (assigned) actors.add(actorId); else actors.delete(actorId);
     if (actors.size) this.assignments.set(name, actors); else this.assignments.delete(name);
   }
-  private indexed: {readonly skills: readonly SkillResource[]; readonly byPath: Map<string, SkillResource>} | undefined;
+  /** Skills the curator restored since the last load: usable and counted at once, but left out of the prompt until the next reload so the prompt prefix never changes mid-session. */
+  private restored: readonly SkillResource[] = [];
+  private indexed: {readonly skills: readonly SkillResource[]; readonly restored: readonly SkillResource[]; readonly byPath: Map<string, SkillResource>} | undefined;
   /** The loaded skill whose file is `path` (an `agent.md` signpost or any other file is none); paths compare canonically. */
   skillAt(path: string): SkillResource | undefined {
     const skills = this.value.skills;
-    if (this.indexed?.skills !== skills) this.indexed = {skills, byPath: new Map(skills.map(skill => [key(resolve(skill.path)), skill]))};
+    if (this.indexed?.skills !== skills || this.indexed.restored !== this.restored) {
+      this.indexed = {skills, restored: this.restored, byPath: new Map([...skills, ...this.restored].map(skill => [key(resolve(skill.path)), skill]))};
+    }
     return this.indexed.byPath.get(key(resolve(path)));
   }
-  skillsFor(input: SkillVisibility): readonly SkillResource[] {
+  private visibleOf(skills: readonly SkillResource[], input: SkillVisibility): readonly SkillResource[] {
     actorIdSchema.parse(input.actorId);
-    return Object.freeze(this.value.skills.filter(skill => {
+    return Object.freeze(skills.filter(skill => {
       const explicit = input.skills?.includes(skill.name) || this.assignments.get(skill.name)?.has(input.actorId);
       return explicit || skill.public || skill.actors?.includes(input.actorId)
         || (isDirector(input.actorId) && skill.actors === undefined);
     }));
+  }
+  skillsFor(input: SkillVisibility): readonly SkillResource[] {
+    return this.visibleOf([...this.value.skills, ...this.restored.filter(item => !this.value.skills.some(skill => skill.name === item.name))], input);
+  }
+  /** The archived skills one actor would see if they were live. */
+  archivedFor(input: SkillVisibility): readonly SkillResource[] {
+    return this.visibleOf(this.archived(), input);
+  }
+  /** Every archived skill of this load that is still in the archive. */
+  archived(): readonly SkillResource[] {
+    return this.value.archivedSkills.filter(item => !this.restored.some(done => done.name === item.name));
+  }
+  /** Makes a skill the curator just moved back usable now; the prompt follows at the next reload. */
+  adopt(skill: SkillResource): void {
+    this.restored = Object.freeze([...this.restored.filter(item => item.name !== skill.name), skill]);
   }
   categoriesFor(actorId: string, domainSkills?: readonly SkillResource[]): readonly DomainCategorySignpost[] {
     const result: DomainCategorySignpost[] = [];
@@ -208,7 +211,7 @@ export class Resources {
     return Object.freeze(result.sort((a, b) => a.category.localeCompare(b.category)));
   }
   promptSections(visibility: SkillVisibility = {actorId: DIRECTOR_ID}): ResourcePromptSections {
-    const skills = this.skillsFor(visibility);
+    const skills = this.visibleOf(this.value.skills, visibility);
     const coreSkills = skills.filter(item => item.level !== 'domain');
     const actorCategories = this.categoriesFor(visibility.actorId, skills.filter(item => item.level === 'domain'));
     const sections: string[] = [];
@@ -225,6 +228,8 @@ export class Resources {
       SKILL_DISCOVERY_LINE,
       `See skills/${visibility.actorId}/agent.md for category boundaries.`,
     ].join('\n'));
+    const archivedCount = this.value.archivedSkills.length;
+    if (archivedCount) sections.push(ARCHIVED_SKILLS_LINE.replace('{count}', String(archivedCount)));
     return {guidelines: this.value.guidelines, skills: sections.join('\n\n')};
   }
   prompt(visibility: SkillVisibility = {actorId: DIRECTOR_ID}): {context: string} {
@@ -356,67 +361,32 @@ export class Resources {
           }
           continue;
         }
+        // A shipped skill whose seeded copy the curator archived stays archived.
+        if (directory === builtinSkillsDir && existsSync(join(userSkillsDir, ARCHIVE_DIR, relative(directory, filePath)))) continue;
         const resource = await read(filePath, 'skills');
         if (!resource) continue;
-        const meta = metadata(resource.text);
-
-        const rawName = meta.fields.name || (basename(filePath).toLowerCase() === 'skill.md'
-          ? basename(dirname(filePath))
-          : basename(filePath, '.md'));
-        const name = rawName.toLowerCase();
-        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
-          issue('skills', filePath, 'Invalid name');
-          continue;
-        }
-
-        // Infer default actors from directory path: e.g. skills/kalon/... -> ['kalon']
-        let defaultActors: readonly string[] | undefined;
-        const rel = relative(directory, filePath).replaceAll('\\', '/');
-        const segments = rel.split('/');
-        const firstSegment = segments[0]?.toLowerCase();
-        if (firstSegment && ['kalon', 'techne', 'aletheia', 'logox'].includes(firstSegment)) {
-          defaultActors = Object.freeze([firstSegment]);
-        } else if (firstSegment === 'public') {
-          defaultActors = Object.freeze(['logox', 'techne', 'kalon', 'aletheia']);
-        }
-
-        let level: 'core' | 'domain' = 'domain';
-        let category: string | undefined;
-        if (segments.length <= 2) {
-          level = 'core';
-        } else {
-          level = 'domain';
-          category = segments[1]?.toLowerCase();
-        }
-
-        let actors = defaultActors;
-        let publicSkill = firstSegment === 'public';
         try {
-          const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(resource.text);
-          if (header) {
-            const document = parseDocument(header[1]!, {uniqueKeys: true});
-            if (document.errors.length) throw new Error('Invalid skill frontmatter');
-            const fields: unknown = document.toJS({maxAliasCount: 0});
-            if (fields && typeof fields === 'object' && Object.hasOwn(fields, 'actors')) {
-              publicSkill = false;
-              const raw: unknown = (fields as Record<string, unknown>).actors;
-              if (!Array.isArray(raw) || raw.length > 256) throw new Error('actors must be a list of actor IDs');
-              actors = Object.freeze([...new Set(raw.map(value => actorIdSchema.parse(String(value))))]);
-            }
-          }
-
-          const item: SkillResource = {
-            name,
-            description: meta.description || name,
-            path: resource.path,
-            level,
-            ...(category ? {category} : {}),
-            ...(publicSkill ? {public: true as const} : {}),
-            ...(actors ? {actors} : {}),
-          };
-          skills.set(name, Object.freeze(item));
+          const item = describeSkill(directory, filePath, resource);
+          skills.set(item.name, item);
         } catch (error) {
           issue('skills', filePath, error instanceof Error ? error.message : 'Invalid skill actor declaration');
+        }
+      }
+    }
+
+    // Archived skills (the curator's `.archive/` folders): only listed for search and recovery, never loaded as skills.
+    const archivedSkills = new Map<string, SkillResource>();
+    for (const root of new Set([userSkillsDir, join(this.cwd, '.logox', 'skills')])) {
+      const archive = join(root, ARCHIVE_DIR);
+      for (const filePath of await collectSkillFiles(archive)) {
+        if (basename(filePath).toLowerCase() === 'agent.md') continue;
+        const resource = await read(filePath, 'skills');
+        if (!resource) continue;
+        try {
+          const item = describeSkill(archive, filePath, resource);
+          archivedSkills.set(item.name, item);
+        } catch (error) {
+          issue('skills', filePath, error instanceof Error ? error.message : 'Invalid archived skill');
         }
       }
     }
@@ -456,7 +426,8 @@ export class Resources {
     const loaded = Object.freeze([...skills.values()]);
     this.value = Object.freeze({guidelines: Object.freeze(guidelines),
       skills: loaded, categories: Object.freeze(categoriesList), commands: Object.freeze([...commands.values()]), issues: Object.freeze(issues),
-      ranks: Object.freeze(await usageRanks(loaded, this.usage))});
+      ranks: Object.freeze(await usageRanks(loaded, this.usage)), archivedSkills: Object.freeze([...archivedSkills.values()])});
+    this.restored = Object.freeze([]);
     return this.value;
   }
 }

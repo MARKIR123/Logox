@@ -103,7 +103,7 @@ test('slash commands can be viewed, opened, and executed while tasks are activel
 
     // 9. /skills should work while busy
     await app.submit('/skills');
-    assert.equal(app.surfaces.getSnapshot()?.kind, 'result');
+    assert.equal(app.surfaces.getSnapshot()?.kind, 'page');
     app.surfaces.cancel();
 
     // Finally complete the task

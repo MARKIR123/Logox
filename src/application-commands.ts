@@ -2,6 +2,7 @@ import type {CommandTab, CommandToggle, TabLine, PermissionsPageData} from './ru
 import {row, tabContent} from './commands/tab-rows.js';
 import type {StatusbarAppearance} from './config/statusbar-preferences.js';
 import type {StageStatus} from './runtime/stage-status.js';
+import type {SkillsPageContent} from './commands/skills-page.js';
 
 export interface ApplicationCommandContext {
   readonly session: string;
@@ -26,6 +27,8 @@ export interface ApplicationCommandContext {
   /** The `/usage` page: the Session tab, and the Plan tab only while a subscription provider is in use. */
   readonly usagePage?: {readonly session: readonly TabLine[]; readonly plan?: readonly TabLine[] | undefined} | undefined;
   readonly providersLines: readonly TabLine[];
+  /** The `/skills` page: the Skills tab and the Archived tab with its restore actions. */
+  readonly skillsPage?: SkillsPageContent | undefined;
   readonly commandsLines: readonly TabLine[];
 }
 
@@ -115,6 +118,16 @@ export function createCommandTabsFor(
         ...tabContent(context.providersLines),
       }],
       initialTab: 'providers',
+    };
+  }
+
+  if (normalized === '/skills') {
+    const page = context.skillsPage;
+    return {
+      title: 'Skills',
+      tabs: [{id: 'skills', title: 'Skills', ...tabContent(page?.skills ?? [])},
+        {id: 'archived', title: 'Archived', ...tabContent(page?.archived ?? []), ...(page?.archivedActions.length ? {actions: page.archivedActions} : {})}],
+      initialTab: 'skills',
     };
   }
 

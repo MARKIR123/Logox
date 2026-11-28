@@ -34,6 +34,7 @@ import {openInEditor} from './editor.js';
 import type {ModelSelection} from './model-selection.js';
 import {modelsRows} from './models-page.js';
 import type {ProvidersPage} from './providers-page.js';
+import type {SkillsPage} from './skills-page.js';
 import {shortcutRows} from './shortcuts.js';
 import {tabContent} from './tab-rows.js';
 import type {CommandSurfaces, PageActions, ThemeActions} from './surfaces.js';
@@ -67,6 +68,7 @@ export interface PagesDeps {
   registry: ProviderRegistry; modelPool: ModelPool;
   modelSelection: Pick<ModelSelection, 'saveEffort' | 'openModels'>;
   providersPage: Pick<ProvidersPage, 'action'>;
+  skillsPage: Pick<SkillsPage, 'action'>;
   status: Pick<SessionStatus, 'status' | 'actorUsage'>;
   /** The data record the tabbed pages render from. */
   buildContext(): ApplicationCommandContext;
@@ -76,7 +78,7 @@ export interface PagesDeps {
 
 export function createPages(deps: PagesDeps) {
   const {session, cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry, extensions,
-    registry, modelPool, modelSelection, providersPage, status, buildContext, profileReady} = deps;
+    registry, modelPool, modelSelection, providersPage, skillsPage, status, buildContext, profileReady} = deps;
   const resources = extensions.resources;
   const pageIsOpen = () => {const open = surfaces.getSnapshot(); return open?.kind === 'page' || open?.kind === 'settings' && open.sub !== undefined;};
   const refreshCurrentPage = () => {
@@ -113,6 +115,7 @@ export function createPages(deps: PagesDeps) {
         return {message: 'Permission rule added (' + checked.rule.decision + ' ' + checked.rule.tool + ' · ' + checked.rule.scope + ')', presentation: 'status'};
       }
       if (tabId === 'providers') return providersPage.action(action);
+      if (tabId === 'archived') return skillsPage.action(action);
       return {};
     },
   });

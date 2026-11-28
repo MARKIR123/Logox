@@ -1,7 +1,7 @@
 # Module: Resources & Skills (`src/resources/`)
 
 ## 1. Scope
-- **Owns**: Guideline loading (project-level LOGOX, AGENTS and CLAUDE markdown files), the hierarchical skill library and its built-in seed copy (`builtin-skills/`), custom slash command templates (`.logox/commands/`), skill prompt sections, skill usage counting (`skill-usage.ts`), and `/reload`.
+- **Owns**: Guideline loading (project-level LOGOX, AGENTS and CLAUDE markdown files), the hierarchical skill library and its built-in seed copy (`builtin-skills/`), custom slash command templates (`.logox/commands/`), skill prompt sections, skill usage counting (`skill-usage.ts`), the skill curator and its archive (`skill-curator.ts`, `skill-archive.ts`), and `/reload`.
 - **Does not own**: Tool execution ([`src/tools/AGENTS.md`](../tools/AGENTS.md), [`src/actors/AGENTS.md`](../actors/AGENTS.md)); prompt topic ordering ([`src/prompts/AGENTS.md`](../prompts/AGENTS.md)); MCP, Playwright and hook code (`src/extensions/`, routed through [`src/tools/AGENTS.md`](../tools/AGENTS.md)).
 - **Design rationale**: [docs/modules/resources-and-extensions.md](../../docs/modules/resources-and-extensions.md)
 
@@ -17,6 +17,8 @@
 | Change `/reload` behavior or its report | `reload.ts:reloadResources()` | `/reload` branch in `src/app/submit.ts` |
 | Add or expand a custom slash command | `manager.ts:Resources.expand()` | `.logox/commands/*.md`, `src/commands.ts:commandCatalog` (built-in names are reserved) |
 | Change how skill use is counted (what counts, where it is stored, active days) | `skill-usage.ts:SkillUsage` | `manager.ts:Resources.skillAt()`, the `Read` branch of `src/tools/index.ts:Tools.execute()` (`onSkillRead`), wiring in `src/project-host.ts` |
+| Change when idle skills turn stale or are archived, how archive and restore move files, or the restore count | `skill-curator.ts:SkillCurator`, the `STALE_ACTIVE_DAYS` and `ARCHIVE_ACTIVE_DAYS` constants | `skill-archive.ts:archiveSkillFile()`, `skill-archive.ts:restoreSkillFile()`, `skill-usage.ts:SkillUsage.update()`, run in `src/project-host.ts:ProjectHost.createSession()` |
+| Change the `/skills` page (stale marks, Archived tab, restore keys) | `src/commands/skills-page.ts:createSkillsPage` | `src/application-commands.ts:createCommandTabsFor()`, `src/commands/pages.ts`, `/<name>` restore in `src/app/submit.ts` |
 | Meta-procedure for adopting a third-party skill | `builtin-skills/public/skill-internalization.md` | `builtin-skills/<actor>/agent.md` |
 
 ## 3. Common Changes
@@ -49,6 +51,8 @@
 - **Custom commands cannot shadow built-ins**: names in `commandCatalog` are rejected with an issue. Enforced by `tests/resources.test.ts`.
 - **Usage counts never live in the project**: user and built-in skills count in `~/.logox/skills/.usage.json`, project skills in `<project data>/skill-usage.json`; a skill counts once per activity (worker reads included), `agent.md` and failed reads never. Writes are fire-and-forget and never fail a tool call. Enforced by `tests/skill-usage.test.ts`.
 - **Learned skills are written by the harvest, never by `reload()`**: `src/anamnesis/skills.ts:SkillStore` creates `<root>/<actor>/<category>/<name>.md` (frontmatter `origin: learned`, `learned_at`, `learned_by`, built by the runtime) and registers a new category under `categories:` of `<root>/<actor>/agent.md` through the yaml document API (comments and other keys survive; a missing agent.md is created with only that frontmatter). Nothing here reloads: `Resources` reads them on the next `/reload` or start, which is why the prompt prefix never changes mid-session; a name that already exists (built-in included) is never overwritten, and only `origin: learned` skills may be patched. Enforced by `tests/harvest-skills.test.ts`.
+- **The curator never deletes**: `skill-curator.ts:SkillCurator.run()` runs once per session start in `src/project-host.ts:ProjectHost.createSession()`, after `SkillUsage.recordDay()`. Idle time counts active days, not calendar days: stale after `STALE_ACTIVE_DAYS` (14, shown in `/skills` only), archived after `ARCHIVE_ACTIVE_DAYS` (30) without a use. Archiving moves the file (or the SKILL.md folder) to `<skill root>/.archive/<same relative path>` in the user or project root; a move whose target exists is refused. A skill never seen before starts its clock at first sight (`seen` in the usage file), `pinned: true` in the frontmatter exempts it, learned and user-installed skills are both archived, and a built-in skill is archived through its seeded copy. The archive record (`archivedAt`, `restores`) lives in the usage store. Enforced by `tests/skill-curator.test.ts`.
+- **Archived skills are invisible except to search and recovery**: skill scans skip every dot folder, `ensureUserSkillsSeeded()` and the shipped-root scan in `reload()` skip a skill whose copy sits in the user skill root's .archive folder, and the prompt carries only the one line `N archived skills — searchable with Skill search` (N > 0, counted at reload like the ranks). `Skill` search lists them marked `archived`; `Skill` load, `/<name>` and the Archived tab of `/skills` call `SkillCurator.restore()`, which moves the skill back, restarts its idle clock and counts the restore; the skill is usable at once (`Resources.adopt()`) but the prompt only lists it again after the next reload. The second restore posts a read notice suggesting `pinned: true`. Enforced by `tests/skill-curator.test.ts`.
 - **Resource roots are `~/.logox/` and `<cwd>/.logox/` only**: no other legacy home directory is read. *Unenforced*.
 
 ## 5. Dependencies
@@ -56,6 +60,6 @@
 - **Used by**: `src/application.ts` (instantiates `Resources`), `src/app/submit.ts` (`/reload`, `/skills`), `src/kernel/agent.ts` (skill and guideline prompt sections), `src/tui/commands/` (custom command suggestions).
 
 ## 6. Verification & Gaps
-- Fast run: `node --test dist/tests/skill-usage.test.js dist/tests/skill-tool.test.js dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/prompt-composition.test.js dist/tests/prompt-disclosure-integration.test.js`
+- Fast run: `node --test dist/tests/skill-usage.test.js dist/tests/skill-curator.test.js dist/tests/skill-tool.test.js dist/tests/resources.test.js dist/tests/hierarchical-skills.test.js dist/tests/prompt-composition.test.js dist/tests/prompt-disclosure-integration.test.js`
 - Not covered offline: provider-native skill search does not exist; discovery is file-based with no automatic body injection.
 - The mixed `prompt()` formatter remains a compatibility wrapper; production assembly consumes `promptSections()` and snapshots.

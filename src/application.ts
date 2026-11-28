@@ -59,6 +59,7 @@ import {applyTheme} from './tui/appearance/theme.js';
 import type {CommandContext} from './commands.js';
 import {createModelSelection} from './commands/model-selection.js';
 import {createProvidersPage} from './commands/providers-page.js';
+import {createSkillsPage} from './commands/skills-page.js';
 import {createCommandContext} from './commands/command-context.js';
 import {createPages, loadUiPreferences} from './commands/pages.js';
 import {createSessionStatus} from './app/status.js';
@@ -399,10 +400,11 @@ export async function createSessionApplication(options: SessionApplicationOption
   surfaces.sidebarTabsStore = {get: () => ({open: ui.get().sidebarTabs, active: ui.get().sidebarActive}), set: tabs => {void ui.save({sidebarTabs: [...tabs.open], sidebarActive: tabs.active}).catch(() => {});}};
   const providersPage = createProvidersPage({registry, modelPool, management: providers, signal: commands.signal, selection: modelSelection.current,
     isEnsembleBusy: () => ensemble.isBusy(), commandOwner: () => state.commandOwner, refreshPage: () => pages.refreshCurrentPage()});
+  const skillsPage = createSkillsPage({resources, actors, pageOwner: () => state.pageOwner, refreshPage: () => pages.refreshCurrentPage()});
   const buildContext = createCommandContext({session, config, state, store, permissions, tools, statusbar, extensions, contexts, taskModels,
-    status: sessionStatus, actors, providersPage, selection: modelSelection.current});
+    status: sessionStatus, actors, providersPage, skillsPage, selection: modelSelection.current});
   const pages = createPages({session, cwd, homeDir, config, state, store, surfaces, statusbar, permissions, ui, actors, actorServices, toolRegistry,
-    extensions, registry, modelPool, modelSelection, providersPage, status: sessionStatus, buildContext, profileReady});
+    extensions, registry, modelPool, modelSelection, providersPage, skillsPage, status: sessionStatus, buildContext, profileReady});
   // Store changes and status bumps (usage recorded, subscriptions found) both refresh an open page, so `/usage` grows with the session.
   const stopPageUpdates = sessionStatus.subscribe(() => {if (pages.pageIsOpen()) pages.refreshCurrentPage();});
   // `Notify when done`: a bell or OSC 9 notification when a stretch of work longer than 30 s ends (see `tui/terminal/notify.ts`).
@@ -429,6 +431,11 @@ export async function createSessionApplication(options: SessionApplicationOption
   });
   const replayed = await replaySession({session, journal, store, ensemble, actors, actorServices, notice, ...recovered});
   const notices = await createNotices({session, journal, notice});
+  // A skill restored twice is one the person keeps needing: suggest pinning it (read notice; the same skill replaces its own notice).
+  if (resources.curator) resources.curator.onRestored = ({skill, pinSuggested}) => {
+    if (pinSuggested) notices.board.postNotice({kind: 'read', tone: 'info', id: 'skill-pin:' + skill.name,
+      parts: [{text: 'Restored ' + skill.name + ' twice — add `pinned: true` to keep it'}, {text: skill.path}]});
+  };
   const welcomeTitle = 'Session ' + session;
   const welcomeSelection = modelSelection.current();
   const welcomeBody = welcomeSelection.model

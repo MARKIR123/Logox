@@ -218,7 +218,6 @@ test('settings saves and clear use short status receipts while welcome is never 
 test('long command queries open matching read-only result surfaces and cancellation never runs the task provider', async () => withFixture(async f => {
   const panelIds: string[] = [];
   for (const [command, title, expected] of [
-    ['/skills', 'Skills', /skill|No skills/i],
     ['/models', 'Available models', /first +T\d.*\nsecond +T\d/],
     ['/help', 'Help & Commands', /\/help/],
     ['/commands', 'Help & Commands', /\/model/],
